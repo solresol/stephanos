@@ -44,3 +44,65 @@ Single table `images`:
 ### OpenAI Integration
 
 Uses OpenAI SDK with `client.responses.create()` API (non-standard endpoint). The system prompt emphasizes strict JSON output and accurate polytonic Greek extraction. The user prompt instructs the model to ignore critical apparatus and segment entries by number.
+
+## Design Principles
+
+### 1. Idempotency
+
+Every image must be processed exactly once unless explicitly reprocessed. The `processed` flag in SQLite enforces this. When adding new processing scripts:
+- Always check `processed=0` before fetching work
+- Always set `processed=1` after successful completion
+- Never mark as processed if extraction fails
+
+### 2. Lemma Text vs. Apparatus Separation
+
+**Critical:** The apparatus criticus (critical apparatus) is NOT extracted in the initial pipeline. Why:
+- High-noise for entity extraction
+- Token-expensive
+- Not needed for first-pass knowledge graph
+
+When working with extraction prompts or processing logic:
+- Always instruct models to ignore apparatus
+- Focus only on the main lemma text
+- Apparatus processing can be added later as "advanced mode"
+
+### 3. Provenance First
+
+Every extracted fact must be traceable back to:
+- An image filename (page witness)
+- An entry number
+- Ideally a cited ancient author passage if present
+
+When designing new tables or output formats, always include these provenance fields.
+
+### 4. Structured Output Only
+
+The vision model MUST return strict JSON. Any non-JSON output is treated as failure:
+- If `json.loads()` fails, do NOT mark image as processed
+- Log the raw output for debugging
+- The image remains in the work queue for retry
+
+## Error Handling Expectations
+
+When writing new processing code:
+- **Invalid JSON:** Log output, do not mark processed, raise exception
+- **Missing images:** Raise `FileNotFoundError` with the path
+- **API failures:** Let them bubble up; implement retry at the batch level later
+- **Empty/null fields:** Allow and track with `confidence: "low"` flag
+
+## Constraints and Assumptions
+
+### Input Files
+- Images are named like `e9783110219630_i0092.jpg`
+- HTML structure: `div.illustype_image_text img[src="..."]`
+- Database: Single SQLite file at `stephanos.db` in project root
+
+### Model Behavior
+- gpt-5.1-mini supports vision input and JSON mode
+- Output is "best effort" - expect occasional errors or low-confidence readings
+- Polytonic Greek should be preserved exactly as rendered in images
+
+### Processing Order
+- Images can be processed in any order (they're independent)
+- Entry numbers within a page should be sequential
+- Cross-page validation happens later in the pipeline
