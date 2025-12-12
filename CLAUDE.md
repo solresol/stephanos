@@ -106,3 +106,4 @@ When writing new processing code:
 - Images can be processed in any order (they're independent)
 - Entry numbers within a page should be sequential
 - Cross-page validation happens later in the pipeline
+- Deploy by running rsync to stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
