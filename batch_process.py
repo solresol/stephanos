@@ -101,15 +101,14 @@ def main():
         print(f"Processing {image_filename} ({processed_count + 1}/{len(unprocessed)})...", end=" ", flush=True)
 
         try:
-            # Read image file and encode as base64
+            # Read and encode image as base64
             import base64
             image_data = image_path.read_bytes()
             base64_image = base64.b64encode(image_data).decode('utf-8')
-            image_mime = "image/jpeg"
 
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",  # Using gpt-4o-mini for vision
-                messages=[
+            response = client.responses.create(
+                model="gpt-5-mini",
+                input=[
                     {
                         "role": "system",
                         "content": SYSTEM_PROMPT
@@ -117,24 +116,21 @@ def main():
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": USER_PROMPT_TEMPLATE},
+                            {"type": "input_text", "text": USER_PROMPT_TEMPLATE},
                             {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{image_mime};base64,{base64_image}"
-                                }
+                                "type": "input_image",
+                                "image_url": f"data:image/jpeg;base64,{base64_image}"
                             }
                         ]
                     }
-                ],
-                response_format={"type": "json_object"}
+                ]
             )
 
             # Extract text output
-            output_text = response.choices[0].message.content.strip()
+            output_text = response.output_text.strip()
 
             # Extract token usage
-            tokens_used = response.usage.total_tokens if response.usage else 0
+            tokens_used = response.usage.total_tokens if hasattr(response, 'usage') and response.usage else 0
 
             # Validate JSON
             try:
