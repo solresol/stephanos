@@ -3,60 +3,82 @@
 Batch process all unprocessed images with token tracking.
 Stops when daily token limit is reached.
 """
-import sqlite3
 import argparse
 import json
 import time
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 from openai import OpenAI
-from process_image import (
-    DB_PATH, SYSTEM_PROMPT, USER_PROMPT_TEMPLATE,
-    init_db, load_api_key, mark_processed
-)
+from process_image import load_api_key, process_image_with_model
+from db import get_connection
 
-DEFAULT_DAILY_TOKEN_LIMIT = 1_000_000
+DEFAULT_DAILY_TOKEN_LIMIT = 100_000
+DEFAULT_MODEL = "gpt-5.1"
 
-def get_tokens_used_today(conn):
+def get_tokens_used_today(cur):
     """Get total tokens used today"""
-    today = datetime.utcnow().date().isoformat()
-    row = conn.execute(
+    today = datetime.now(timezone.utc).date().isoformat()
+    cur.execute(
         """
         SELECT COALESCE(SUM(tokens_used), 0)
         FROM images
-        WHERE DATE(processed_at) = ?
+        WHERE DATE(processed_at) = %s
         """,
         (today,)
-    ).fetchone()
+    )
+    row = cur.fetchone()
     return row[0] if row else 0
 
-def fetch_unprocessed_images(conn):
-    """Fetch all unprocessed images"""
-    rows = conn.execute(
-        "SELECT id, image_filename FROM images WHERE processed = 0 ORDER BY id"
-    ).fetchall()
-    return rows
+def fetch_unprocessed_images(cur):
+    """Fetch all unprocessed images with their image directories"""
+    cur.execute(
+        """
+        SELECT i.id, i.image_filename, COALESCE(h.image_dir, i.image_dir) AS image_dir
+        FROM images i
+        LEFT JOIN html_files h ON i.html_file_id = h.id
+        WHERE i.processed = 0
+        ORDER BY i.id
+        """
+    )
+    return cur.fetchall()
+
+def mark_processed(conn, cur, image_id, lemma_json, tokens_used, model):
+    cur.execute(
+        """
+        UPDATE images
+        SET processed = 1,
+            lemma_json = %s,
+            processed_at = %s,
+            tokens_used = %s,
+            ocr_model = %s
+        WHERE id = %s
+        """,
+        (lemma_json, datetime.now(timezone.utc).isoformat(), tokens_used, model, image_id)
+    )
+    conn.commit()
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image-dir", required=True, help="Directory containing image files")
+    parser.add_argument("--image-dir", help="Default directory containing image files (fallback if not in DB)")
     parser.add_argument("--limit", type=int, help="Max number of images to process in this run")
     parser.add_argument("--daily-token-limit", type=int, default=DEFAULT_DAILY_TOKEN_LIMIT,
                        help=f"Daily token limit (default: {DEFAULT_DAILY_TOKEN_LIMIT:,})")
     parser.add_argument("--delay", type=float, default=1.0,
                        help="Delay in seconds between API calls (default: 1.0)")
+    parser.add_argument("--model", default=DEFAULT_MODEL,
+                       help=f"Model to use for OCR (default: {DEFAULT_MODEL})")
     args = parser.parse_args()
 
-    image_dir = Path(args.image_dir)
-    if not image_dir.exists():
-        raise FileNotFoundError(image_dir)
+    default_image_dir = Path(args.image_dir) if args.image_dir else None
+    if default_image_dir and not default_image_dir.exists():
+        raise FileNotFoundError(default_image_dir)
 
-    conn = sqlite3.connect(DB_PATH)
-    init_db(conn)
+    conn = get_connection()
+    cur = conn.cursor()
 
     # Check tokens used today
-    tokens_today = get_tokens_used_today(conn)
+    tokens_today = get_tokens_used_today(cur)
     print(f"Tokens used today: {tokens_today:,} / {args.daily_token_limit:,}")
 
     if tokens_today >= args.daily_token_limit:
@@ -65,7 +87,7 @@ def main():
         return
 
     # Get unprocessed images
-    unprocessed = fetch_unprocessed_images(conn)
+    unprocessed = fetch_unprocessed_images(cur)
     print(f"Unprocessed images: {len(unprocessed)}")
 
     if not unprocessed:
@@ -81,7 +103,7 @@ def main():
     processed_count = 0
     total_tokens_this_run = 0
 
-    for image_id, image_filename in unprocessed:
+    for image_id, image_filename, db_image_dir in unprocessed:
         # Check if we've hit the limit
         if args.limit and processed_count >= args.limit:
             print(f"Reached processing limit ({args.limit} images).")
@@ -93,6 +115,12 @@ def main():
             print(f"Daily token limit reached ({current_tokens_today:,} tokens).")
             break
 
+        # Determine image directory (database takes precedence)
+        image_dir = Path(db_image_dir) if db_image_dir else default_image_dir
+        if not image_dir:
+            print(f"Warning: No image directory for {image_filename}, skipping")
+            continue
+
         image_path = image_dir / image_filename
         if not image_path.exists():
             print(f"Warning: Image not found: {image_path}")
@@ -101,47 +129,11 @@ def main():
         print(f"Processing {image_filename} ({processed_count + 1}/{len(unprocessed)})...", end=" ", flush=True)
 
         try:
-            # Read and encode image as base64
-            import base64
-            image_data = image_path.read_bytes()
-            base64_image = base64.b64encode(image_data).decode('utf-8')
-
-            response = client.responses.create(
-                model="gpt-5-mini",
-                input=[
-                    {
-                        "role": "system",
-                        "content": SYSTEM_PROMPT
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "input_text", "text": USER_PROMPT_TEMPLATE},
-                            {
-                                "type": "input_image",
-                                "image_url": f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        ]
-                    }
-                ]
-            )
-
-            # Extract text output
-            output_text = response.output_text.strip()
-
-            # Extract token usage
-            tokens_used = response.usage.total_tokens if hasattr(response, 'usage') and response.usage else 0
-
-            # Validate JSON
-            try:
-                parsed = json.loads(output_text)
-            except json.JSONDecodeError as e:
-                print(f"FAILED (invalid JSON)")
-                print(f"Output: {output_text[:200]}...")
-                continue
+            # Process image with specified model (returns entries list via tool calling)
+            entries, tokens_used = process_image_with_model(client, image_path, args.model)
 
             # Save to database
-            mark_processed(conn, image_id, json.dumps(parsed, ensure_ascii=False), tokens_used)
+            mark_processed(conn, cur, image_id, json.dumps(entries, ensure_ascii=False), tokens_used, args.model)
 
             processed_count += 1
             total_tokens_this_run += tokens_used
