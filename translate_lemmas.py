@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """
 Translate Greek lemmas to English using gpt-5.1.
-Processes images that have been extracted but not yet translated.
+Processes assembled lemmas that have been extracted but not yet translated.
 Enforces a daily token limit of 100,000 tokens.
 """
-import sqlite3
 import argparse
 import json
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 from openai import OpenAI
 
-DB_PATH = "stephanos.db"
+from db import get_connection
+
 DEFAULT_DAILY_TOKEN_LIMIT = 100_000
 
 TRANSLATION_SYSTEM_PROMPT = """You are an expert classical philologist and translator specializing in Byzantine Greek geographical texts.
-You will receive JSON data containing Greek lemma entries from Stephanos of Byzantium's Ethnika.
-Translate each entry's Greek text into clear, scholarly English.
+You will receive JSON data for a single lemma entry from Stephanos of Byzantium's Ethnika.
+Translate its Greek text into clear, scholarly English.
 Preserve technical terminology and place names appropriately.
-Return the same JSON structure with added English translations."""
+Return the same JSON structure with an added English translation."""
 
 def load_api_key():
     """Load OpenAI API key from ~/.openai.key"""
@@ -29,58 +29,59 @@ def load_api_key():
         raise FileNotFoundError(f"API key file not found: {key_path}")
     return key_path.read_text().strip()
 
-def init_db(conn):
-    """Ensure translation columns exist"""
-    # Columns should already exist from schema updates
-    pass
-
-def get_translation_tokens_today(conn):
+def get_translation_tokens_today(cur):
     """Get total translation tokens used today"""
-    today = datetime.utcnow().date().isoformat()
-    row = conn.execute(
+    today = datetime.now(timezone.utc).date().isoformat()
+    cur.execute(
         """
         SELECT COALESCE(SUM(translation_tokens), 0)
-        FROM images
-        WHERE DATE(translated_at) = ?
+        FROM assembled_lemmas
+        WHERE DATE(translated_at) = %s
         """,
         (today,)
-    ).fetchone()
+    )
+    row = cur.fetchone()
     return row[0] if row else 0
 
-def fetch_untranslated_images(conn):
-    """Fetch images that are processed but not translated"""
-    rows = conn.execute(
+def fetch_lemmas_needing_translation(cur):
+    """
+    Fetch assembled lemmas that need translation:
+    1. Never translated (translated = 0)
+    2. Updated after last translation (updated_at > translated_at)
+    """
+    cur.execute(
         """
-        SELECT id, image_filename, lemma_json
-        FROM images
-        WHERE processed = 1 AND translated = 0
+        SELECT id, lemma, entry_number, type, greek_text, human_greek_text, human_notes, confidence, assembled_json
+        FROM assembled_lemmas
+        WHERE translated = 0
+           OR (translated_at IS NOT NULL AND updated_at > translated_at)
         ORDER BY id
         """
-    ).fetchall()
-    return rows
+    )
+    return cur.fetchall()
 
-def mark_translated(conn, image_id, translation_json, tokens_used):
-    conn.execute(
+def mark_translated(conn, cur, lemma_id, translation_json, tokens_used):
+    cur.execute(
         """
-        UPDATE images
+        UPDATE assembled_lemmas
         SET translated = 1,
-            translation_json = ?,
-            translated_at = ?,
-            translation_tokens = ?
-        WHERE id = ?
+            translation_json = %s,
+            translated_at = %s,
+            translation_tokens = %s
+        WHERE id = %s
         """,
-        (translation_json, datetime.utcnow().isoformat(), tokens_used, image_id)
+        (translation_json, datetime.now(timezone.utc).isoformat(), tokens_used, lemma_id)
     )
     conn.commit()
 
-def translate_lemmas(client, lemma_json_str):
-    """Send lemma JSON to gpt-5.1 for translation"""
+def translate_lemma(client, lemma_payload):
+    """Send lemma payload to gpt-5.1 for translation"""
 
-    prompt = f"""Here is the JSON data from a page of Stephanos of Byzantium's Ethnika:
+    prompt = f"""Here is the JSON data for a single lemma from Stephanos of Byzantium's Ethnika:
 
-{lemma_json_str}
+{lemma_payload}
 
-Please translate all Greek text in the entries to English. For each entry, add a "translation" field with the English translation of the greek_text. Preserve the JSON structure and all existing fields. Return only valid JSON."""
+Please translate the Greek text to English. Add a "translation" field with the English translation of the greek_text. Preserve the JSON structure and all existing fields. Return only valid JSON."""
 
     response = client.responses.create(
         model="gpt-5.1",
@@ -103,20 +104,30 @@ Please translate all Greek text in the entries to English. For each entry, add a
 
     return output_text, tokens_used
 
+
+def should_skip_translation(greek_text: str):
+    """
+    Decide whether to skip translation (no Greek to translate).
+    Returns (skip: bool, reason: str | None)
+    """
+    if not greek_text or not greek_text.strip():
+        return True, "no_greek_text"
+    return False, None
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, help="Max number of images to translate in this run")
+    parser.add_argument("--limit", type=int, help="Max number of lemmas to translate in this run")
     parser.add_argument("--daily-token-limit", type=int, default=DEFAULT_DAILY_TOKEN_LIMIT,
                        help=f"Daily token limit (default: {DEFAULT_DAILY_TOKEN_LIMIT:,})")
     parser.add_argument("--delay", type=float, default=1.0,
                        help="Delay in seconds between API calls (default: 1.0)")
     args = parser.parse_args()
 
-    conn = sqlite3.connect(DB_PATH)
-    init_db(conn)
+    conn = get_connection()
+    cur = conn.cursor()
 
     # Check tokens used today
-    tokens_today = get_translation_tokens_today(conn)
+    tokens_today = get_translation_tokens_today(cur)
     print(f"Translation tokens used today: {tokens_today:,} / {args.daily_token_limit:,}")
 
     if tokens_today >= args.daily_token_limit:
@@ -124,12 +135,13 @@ def main():
         conn.close()
         return
 
-    # Get untranslated images
-    untranslated = fetch_untranslated_images(conn)
-    print(f"Untranslated images: {len(untranslated)}")
+    # Get lemmas needing translation (untranslated or stale)
+    needs_translation = fetch_lemmas_needing_translation(cur)
 
-    if not untranslated:
-        print("No untranslated images found.")
+    print(f"Lemmas needing translation: {len(needs_translation)}")
+
+    if not needs_translation:
+        print("No lemmas need translation.")
         conn.close()
         return
 
@@ -137,14 +149,14 @@ def main():
     api_key = load_api_key()
     client = OpenAI(api_key=api_key)
 
-    # Process images
+    # Process lemmas
     translated_count = 0
     total_tokens_this_run = 0
 
-    for image_id, image_filename, lemma_json_str in untranslated:
+    for lemma_id, lemma_text, entry_number, lemma_type, greek_text, human_greek_text, human_notes, confidence, assembled_json in needs_translation:
         # Check if we've hit the limit
         if args.limit and translated_count >= args.limit:
-            print(f"Reached translation limit ({args.limit} images).")
+            print(f"Reached translation limit ({args.limit} lemmas).")
             break
 
         # Check daily token limit
@@ -153,14 +165,29 @@ def main():
             print(f"Daily translation token limit reached ({current_tokens_today:,} tokens).")
             break
 
-        if not lemma_json_str:
-            print(f"Skipping {image_filename}: no lemma data")
+        source_greek = human_greek_text or greek_text
+        skip, reason = should_skip_translation(source_greek)
+        display_name = f"{lemma_text or '(unknown lemma)'} (#{entry_number})"
+
+        if skip:
+            # Record as translated without spending tokens
+            mark_translated(conn, cur, lemma_id, assembled_json, 0)
+            translated_count += 1
+            print(f"SKIPPED {display_name} (reason: {reason})")
             continue
 
-        print(f"Translating {image_filename} ({translated_count + 1}/{len(untranslated)})...", end=" ", flush=True)
+        payload = {
+            "lemma": lemma_text,
+            "entry_number": entry_number,
+            "type": lemma_type,
+            "greek_text": source_greek,
+            "confidence": confidence or "normal"
+        }
+
+        print(f"Translating {display_name} ({translated_count + 1}/{len(needs_translation)})...", end=" ", flush=True)
 
         try:
-            translation_output, tokens_used = translate_lemmas(client, lemma_json_str)
+            translation_output, tokens_used = translate_lemma(client, json.dumps(payload, ensure_ascii=False))
 
             # Validate JSON
             try:
@@ -171,7 +198,7 @@ def main():
                 continue
 
             # Save to database
-            mark_translated(conn, image_id, json.dumps(parsed, ensure_ascii=False), tokens_used)
+            mark_translated(conn, cur, lemma_id, json.dumps(parsed, ensure_ascii=False), tokens_used)
 
             translated_count += 1
             total_tokens_this_run += tokens_used
@@ -187,7 +214,7 @@ def main():
 
     conn.close()
     print(f"\nTranslation batch complete:")
-    print(f"  Translated: {translated_count} images")
+    print(f"  Translated: {translated_count} lemmas")
     print(f"  Tokens this run: {total_tokens_this_run:,}")
     print(f"  Total tokens today: {tokens_today + total_tokens_this_run:,}")
 
