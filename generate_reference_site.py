@@ -1,71 +1,336 @@
 #!/usr/bin/env python3
 """
-Generate a reference website showing all lemmas and their translations.
+Generate a reference website showing all lemmas and their translations, grouped by Greek letter.
 """
-import sqlite3
 import json
+import unicodedata
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
-DB_PATH = "stephanos.db"
+from db import get_connection
+
 OUTPUT_DIR = "reference_site"
 
-def get_all_lemmas(conn):
-    """Get all translated lemmas from database"""
-    rows = conn.execute(
+# Greek letters and filenames for per-letter pages
+GREEK_LETTERS = [
+    ("Α", "Alpha", "alpha"),
+    ("Β", "Beta", "beta"),
+    ("Γ", "Gamma", "gamma"),
+    ("Δ", "Delta", "delta"),
+    ("Ε", "Epsilon", "epsilon"),
+    ("Ζ", "Zeta", "zeta"),
+    ("Η", "Eta", "eta"),
+    ("Θ", "Theta", "theta"),
+    ("Ι", "Iota", "iota"),
+    ("Κ", "Kappa", "kappa"),
+    ("Λ", "Lambda", "lambda"),
+    ("Μ", "Mu", "mu"),
+    ("Ν", "Nu", "nu"),
+    ("Ξ", "Xi", "xi"),
+    ("Ο", "Omicron", "omicron"),
+    ("Π", "Pi", "pi"),
+    ("Ρ", "Rho", "rho"),
+    ("Σ", "Sigma", "sigma"),
+    ("Τ", "Tau", "tau"),
+    ("Υ", "Upsilon", "upsilon"),
+    ("Φ", "Phi", "phi"),
+    ("Χ", "Chi", "chi"),
+    ("Ψ", "Psi", "psi"),
+    ("Ω", "Omega", "omega"),
+]
+
+LETTER_BY_CHAR = {char: slug for char, _, slug in GREEK_LETTERS}
+
+
+def strip_combining(char: str) -> str:
+    """Return base character without combining marks."""
+    decomposed = unicodedata.normalize("NFD", char)
+    for c in decomposed:
+        if not unicodedata.combining(c):
+            return c
+    return char
+
+
+def get_initial_slug(text: str) -> str:
+    """Find the slug for the first Greek letter in the text."""
+    if not text:
+        return "other"
+    for ch in text:
+        base = strip_combining(ch).upper()
+        if base in LETTER_BY_CHAR:
+            return LETTER_BY_CHAR[base]
+    return "other"
+
+
+def get_all_lemmas(cur):
+    """Get all translated lemmas from assembled_lemmas"""
+    cur.execute(
         """
-        SELECT id, image_filename, lemma_json, translation_json
-        FROM images
-        WHERE processed = 1 AND translated = 1
+        SELECT id, lemma, entry_number, type, greek_text, human_greek_text, confidence, translation_json
+        FROM assembled_lemmas
+        WHERE translated = 1
         ORDER BY id
         """
-    ).fetchall()
+    )
+    rows = cur.fetchall()
 
     all_lemmas = []
-    for image_id, filename, lemma_json, translation_json in rows:
+    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_json in rows:
         try:
-            # Try to load translation first (it contains everything)
-            if translation_json:
-                data = json.loads(translation_json)
-            elif lemma_json:
-                data = json.loads(lemma_json)
-            else:
-                continue
-
-            # Handle different JSON structures
-            if isinstance(data, dict):
-                if 'entries' in data:
-                    entries = data['entries']
-                elif 'lemmas' in data:
-                    entries = data['lemmas']
-                else:
-                    # Assume the dict itself is a single entry
-                    entries = [data]
-            elif isinstance(data, list):
-                entries = data
-            else:
-                continue
-
-            for entry in entries:
-                lemma_data = {
-                    'image_id': image_id,
-                    'image_filename': filename,
-                    'entry_number': entry.get('entry_number', ''),
-                    'lemma': entry.get('lemma', ''),
-                    'type': entry.get('type', ''),
-                    'greek_text': entry.get('greek_text', ''),
-                    'english_translation': entry.get('english_translation', ''),
-                    'translation': entry.get('translation', ''),
-                    'confidence': entry.get('confidence', 'normal')
-                }
-                all_lemmas.append(lemma_data)
+            data = json.loads(translation_json) if translation_json else None
         except json.JSONDecodeError:
-            continue
+            data = None
+
+        # Prefer human override for Greek display
+        greek = (human_greek_text or greek_text or "").strip()
+
+        translation = ""
+        english_translation = ""
+        if isinstance(data, dict):
+            translation = data.get("translation", "")
+            english_translation = data.get("english_translation", "")
+
+        lemma_data = {
+            "lemma_id": lemma_id,
+            "entry_number": entry_number or "",
+            "lemma": lemma or "",
+            "type": lemma_type or "",
+            "greek_text": greek,
+            "english_translation": english_translation,
+            "translation": translation,
+            "confidence": confidence or "normal",
+        }
+        lemma_data["letter_slug"] = get_initial_slug(lemma_data["lemma"])
+        all_lemmas.append(lemma_data)
 
     return all_lemmas
 
-def generate_index_html(lemmas, stats):
-    """Generate main index page"""
+
+def render_lemma_cards(lemmas):
+    """Render HTML cards for a list of lemmas"""
+    cards_html = []
+    for lemma in lemmas:
+        confidence_class = "low-confidence" if lemma.get('confidence') == 'low' else ""
+        confidence_badge = '<span class="confidence-badge">Low Confidence</span>' if lemma.get('confidence') == 'low' else ""
+        translation = lemma.get('translation') or lemma.get('english_translation') or "(Translation pending)"
+        cards_html.append(
+            f"""
+            <div class="lemma-card">
+                <div class="lemma-header">
+                    <div>
+                        <div class="lemma-title">{lemma['lemma']}{confidence_badge}</div>
+                        {f'<span class="lemma-type">{lemma["type"]}</span>' if lemma['type'] else ''}
+                    </div>
+                    <div class="lemma-meta">
+                        Entry #{lemma['entry_number']}<br>
+                        <small>{lemma['image_filename']}</small>
+                    </div>
+                </div>
+                {f'<div class="greek-text {confidence_class}">{lemma["greek_text"]}</div>' if lemma['greek_text'] else ''}
+                <div class="translation">{translation}</div>
+            </div>
+            """
+        )
+    return "\n".join(cards_html)
+
+
+def common_styles():
+    """Shared CSS for index and letter pages."""
+    return """
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f5f5f5;
+        }
+        .header {
+            background: linear-gradient(135deg, #3f51b5 0%, #0d47a1 100%);
+            color: white;
+            padding: 32px 20px;
+            text-align: center;
+        }
+        .header h1 {
+            font-size: 2.2em;
+            margin-bottom: 8px;
+        }
+        .header p {
+            font-size: 1.05em;
+            opacity: 0.9;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .nav-links {
+            text-align: right;
+            margin: 12px 0;
+        }
+        .nav-links a {
+            color: #0d47a1;
+            text-decoration: none;
+            font-weight: 600;
+            margin-left: 12px;
+            white-space: nowrap;
+        }
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+        .letter-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin: 24px 0;
+        }
+        .letter-card {
+            background: white;
+            padding: 16px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            text-align: center;
+            text-decoration: none;
+            color: #1a237e;
+            transition: transform 0.15s, box-shadow 0.15s;
+        }
+        .letter-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+        }
+        .letter-char {
+            font-size: 1.8em;
+            font-weight: 700;
+        }
+        .letter-name {
+            font-size: 0.95em;
+            color: #555;
+            margin-top: 4px;
+        }
+        .letter-count {
+            margin-top: 6px;
+            font-weight: 600;
+            color: #0d47a1;
+        }
+        .lemma-grid {
+            display: grid;
+            gap: 16px;
+            margin-top: 20px;
+        }
+        .lemma-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .lemma-card:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+        }
+        .lemma-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 12px;
+            border-bottom: 2px solid #f0f0f0;
+            padding-bottom: 8px;
+        }
+        .lemma-title {
+            font-size: 1.6em;
+            font-weight: 700;
+            color: #1a237e;
+        }
+        .lemma-type {
+            display: inline-block;
+            padding: 4px 10px;
+            background: #3949ab;
+            color: white;
+            border-radius: 4px;
+            font-size: 0.85em;
+            margin-top: 4px;
+        }
+        .lemma-meta {
+            text-align: right;
+            font-size: 0.9em;
+            color: #666;
+        }
+        .greek-text {
+            font-family: 'Times New Roman', serif;
+            font-size: 1.05em;
+            line-height: 1.8;
+            color: #3a3a3a;
+            margin: 12px 0;
+            padding: 12px;
+            background: #fafafa;
+            border-left: 4px solid #3949ab;
+            border-radius: 4px;
+        }
+        .low-confidence {
+            border-left-color: #ff9800;
+        }
+        .confidence-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            background: #ff9800;
+            color: white;
+            border-radius: 3px;
+            font-size: 0.75em;
+            margin-left: 10px;
+        }
+        .translation {
+            font-size: 1em;
+            color: #2c2c2c;
+            line-height: 1.6;
+            margin: 10px 0;
+        }
+        .footer {
+            text-align: center;
+            padding: 30px 20px;
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 40px;
+            border-top: 1px solid #ddd;
+        }
+        .no-results {
+            text-align: center;
+            padding: 40px 20px;
+            color: #999;
+            font-size: 1.1em;
+        }
+        .breadcrumb {
+            margin: 12px 0 18px;
+            font-size: 0.95em;
+            color: #0d47a1;
+        }
+        .breadcrumb a {
+            color: #0d47a1;
+            text-decoration: none;
+        }
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+    """
+
+
+def generate_index_html(letter_counts, stats):
+    """Generate main index page with letter selector"""
+
+    letters_html = []
+    for char, name, slug in GREEK_LETTERS:
+        count = letter_counts.get(slug, 0)
+        letters_html.append(
+            f"""
+            <a class="letter-card" href="letter_{slug}.html">
+                <div class="letter-char">{char}</div>
+                <div class="letter-name">{name}</div>
+                <div class="letter-count">{count} lemmas</div>
+            </a>
+            """
+        )
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -74,160 +339,7 @@ def generate_index_html(lemmas, stats):
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Stephanos of Byzantium - Ethnika Reference</title>
     <style>
-        * {{
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }}
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background: #f5f5f5;
-        }}
-        .header {{
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 40px 20px;
-            text-align: center;
-        }}
-        .header h1 {{
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }}
-        .header p {{
-            font-size: 1.2em;
-            opacity: 0.9;
-        }}
-        .container {{
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-        }}
-        .stats {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin: 20px 0;
-        }}
-        .stat-card {{
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            text-align: center;
-        }}
-        .stat-value {{
-            font-size: 2em;
-            font-weight: bold;
-            color: #667eea;
-        }}
-        .stat-label {{
-            color: #666;
-            font-size: 0.9em;
-            margin-top: 5px;
-        }}
-        .search-box {{
-            margin: 30px 0;
-            text-align: center;
-        }}
-        .search-box input {{
-            width: 100%;
-            max-width: 600px;
-            padding: 15px 20px;
-            font-size: 1.1em;
-            border: 2px solid #ddd;
-            border-radius: 8px;
-            outline: none;
-        }}
-        .search-box input:focus {{
-            border-color: #667eea;
-        }}
-        .lemma-grid {{
-            display: grid;
-            gap: 20px;
-        }}
-        .lemma-card {{
-            background: white;
-            padding: 25px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            transition: transform 0.2s, box-shadow 0.2s;
-        }}
-        .lemma-card:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-        }}
-        .lemma-header {{
-            display: flex;
-            justify-content: space-between;
-            align-items: start;
-            margin-bottom: 15px;
-            border-bottom: 2px solid #f0f0f0;
-            padding-bottom: 10px;
-        }}
-        .lemma-title {{
-            font-size: 1.8em;
-            font-weight: bold;
-            color: #667eea;
-        }}
-        .lemma-meta {{
-            text-align: right;
-            font-size: 0.9em;
-            color: #666;
-        }}
-        .lemma-type {{
-            display: inline-block;
-            padding: 4px 12px;
-            background: #764ba2;
-            color: white;
-            border-radius: 4px;
-            font-size: 0.85em;
-            margin-top: 5px;
-        }}
-        .greek-text {{
-            font-family: 'Times New Roman', serif;
-            font-size: 1.1em;
-            line-height: 1.8;
-            color: #444;
-            margin: 15px 0;
-            padding: 15px;
-            background: #f9f9f9;
-            border-left: 4px solid #667eea;
-            border-radius: 4px;
-        }}
-        .translation {{
-            font-size: 1.05em;
-            color: #333;
-            line-height: 1.7;
-            margin: 15px 0;
-        }}
-        .low-confidence {{
-            border-left-color: #ff9800;
-        }}
-        .confidence-badge {{
-            display: inline-block;
-            padding: 3px 8px;
-            background: #ff9800;
-            color: white;
-            border-radius: 3px;
-            font-size: 0.75em;
-            margin-left: 10px;
-        }}
-        .footer {{
-            text-align: center;
-            padding: 40px 20px;
-            color: #666;
-            font-size: 0.9em;
-            margin-top: 40px;
-            border-top: 1px solid #ddd;
-        }}
-        .no-results {{
-            text-align: center;
-            padding: 60px 20px;
-            color: #999;
-            font-size: 1.2em;
-        }}
+    {common_styles()}
     </style>
 </head>
 <body>
@@ -237,7 +349,11 @@ def generate_index_html(lemmas, stats):
     </div>
 
     <div class="container">
-        <div class="stats">
+        <div class="nav-links">
+            <a href="progress.html">Processing Progress</a>
+            <a href="lemmas.csv">CSV Export</a>
+        </div>
+        <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
             <div class="stat-card">
                 <div class="stat-value">{stats['total_lemmas']:,}</div>
                 <div class="stat-label">Total Lemmas</div>
@@ -252,82 +368,71 @@ def generate_index_html(lemmas, stats):
             </div>
         </div>
 
-        <div class="search-box">
-            <input type="text" id="search" placeholder="Search lemmas, Greek text, or translations..." onkeyup="filterLemmas()">
-        </div>
-
-        <div class="lemma-grid" id="lemmaGrid">
-"""
-
-    for lemma in lemmas:
-        confidence_class = "low-confidence" if lemma.get('confidence') == 'low' else ""
-        confidence_badge = '<span class="confidence-badge">Low Confidence</span>' if lemma.get('confidence') == 'low' else ""
-
-        translation = lemma.get('translation') or lemma.get('english_translation') or "(Translation pending)"
-
-        html += f"""
-            <div class="lemma-card" data-search="{lemma['lemma'].lower()} {lemma['greek_text'].lower()} {translation.lower()}">
-                <div class="lemma-header">
-                    <div>
-                        <div class="lemma-title">{lemma['lemma']}{confidence_badge}</div>
-                        {f'<span class="lemma-type">{lemma["type"]}</span>' if lemma['type'] else ''}
-                    </div>
-                    <div class="lemma-meta">
-                        Entry #{lemma['entry_number']}<br>
-                        <small>{lemma['image_filename']}</small>
-                    </div>
-                </div>
-                {f'<div class="greek-text {confidence_class}">{lemma["greek_text"]}</div>' if lemma['greek_text'] else ''}
-                <div class="translation">{translation}</div>
-            </div>
-"""
-
-    html += """
-        </div>
-
-        <div class="no-results" id="noResults" style="display: none;">
-            No lemmas found matching your search.
+        <div class="letter-grid">
+            {''.join(letters_html)}
         </div>
 
         <div class="footer">
-            <p>Last updated: """ + datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC') + """</p>
-            <p>Stephanos of Byzantium (6th century CE) • Edited by Margarethe Billerbeck (2006)</p>
-            <p>Greek text extraction: OpenAI gpt-5-mini • English translation: OpenAI gpt-5.1</p>
+            <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+            <p>Select a letter to view lemma entries. Empty letters will display a placeholder until processed.</p>
         </div>
     </div>
+</body>
+</html>
+"""
+    return html
 
-    <script>
-        function filterLemmas() {
-            const searchTerm = document.getElementById('search').value.toLowerCase();
-            const cards = document.querySelectorAll('.lemma-card');
-            const noResults = document.getElementById('noResults');
-            let visibleCount = 0;
 
-            cards.forEach(card => {
-                const searchData = card.getAttribute('data-search');
-                if (searchData.includes(searchTerm)) {
-                    card.style.display = 'block';
-                    visibleCount++;
-                } else {
-                    card.style.display = 'none';
-                }
-            });
+def generate_letter_page(letter_char, letter_name, slug, lemmas):
+    """Generate a per-letter page."""
+    body = (
+        f"""
+        <div class="breadcrumb"><a href="index.html">All Letters</a> / {letter_char} {letter_name}</div>
+        <h2>{letter_char} {letter_name}</h2>
+        <div class="lemma-grid">
+        {render_lemma_cards(lemmas) if lemmas else '<div class="no-results">No lemmas processed for this letter yet.</div>'}
+        </div>
+        """
+    )
 
-            noResults.style.display = visibleCount === 0 ? 'block' : 'none';
-        }
-    </script>
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{letter_char} {letter_name} - Stephanos Ethnika</title>
+    <style>
+    {common_styles()}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{letter_char} {letter_name}</h1>
+        <p>Stephanos of Byzantium - Ethnika</p>
+    </div>
+    <div class="container">
+        <div class="nav-links">
+            <a href="index.html">All Letters</a>
+            <a href="progress.html">Processing Progress</a>
+            <a href="lemmas.csv">CSV Export</a>
+        </div>
+        {body}
+        <div class="footer">
+            <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+        </div>
+    </div>
 </body>
 </html>
 """
     return html
 
 def main():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
+    cur = conn.cursor()
 
     # Get statistics
-    stats_row = conn.execute(
-        "SELECT COUNT(*), SUM(processed), SUM(translated) FROM images"
-    ).fetchone()
+    cur.execute("SELECT COUNT(*), SUM(processed), SUM(translated) FROM images")
+    stats_row = cur.fetchone()
 
     stats = {
         'total_images': stats_row[0],
@@ -336,9 +441,18 @@ def main():
         'total_lemmas': 0
     }
 
-    # Get all lemmas
-    lemmas = get_all_lemmas(conn)
+    # Get all lemmas and bucket by letter
+    lemmas = get_all_lemmas(cur)
     stats['total_lemmas'] = len(lemmas)
+
+    buckets = {slug: [] for _, _, slug in GREEK_LETTERS}
+    buckets["other"] = []
+    for lemma in lemmas:
+        buckets.setdefault(lemma['letter_slug'], []).append(lemma)
+
+    # Sort lemmas within each bucket by lemma text then entry number
+    for slug in buckets:
+        buckets[slug].sort(key=lambda x: (x['lemma'], x.get('entry_number', '')))
 
     conn.close()
 
@@ -346,14 +460,17 @@ def main():
     output_dir = Path(OUTPUT_DIR)
     output_dir.mkdir(exist_ok=True)
 
-    # Generate HTML
-    html = generate_index_html(lemmas, stats)
+    # Generate index
+    letter_counts = {slug: len(items) for slug, items in buckets.items()}
+    index_html = generate_index_html(letter_counts, stats)
+    (output_dir / "index.html").write_text(index_html, encoding='utf-8')
 
-    # Write to file
-    output_file = output_dir / "index.html"
-    output_file.write_text(html, encoding='utf-8')
+    # Generate per-letter pages (include empty placeholders)
+    for char, name, slug in GREEK_LETTERS:
+        page_html = generate_letter_page(char, name, slug, buckets.get(slug, []))
+        (output_dir / f"letter_{slug}.html").write_text(page_html, encoding='utf-8')
 
-    print(f"Reference website generated: {output_file.absolute()}")
+    print(f"Reference website generated in {output_dir.absolute()}")
     print(f"  Total lemmas: {stats['total_lemmas']}")
     print(f"  Translated pages: {stats['translated_images']} / {stats['total_images']}")
 
