@@ -51,10 +51,20 @@ uv add openai
 
 ### Running the Pipeline
 
+#### Extract Page Images from PDF (volume 1)
+Use this for PDFs (e.g., volume 1) instead of EPUB HTML. Extract every second page in a range to JPEGs:
+```bash
+uv run extract_pdf_pages.py \
+  --pdf "../Billerbeck vol 1 alpha - gamma  [2006] -  by Margarethe-Billerbeck (1).pdf" \
+  --start 5 --end 120 --every 2 \
+  --output-dir pdf_pages
+```
+Images will be named like `page_0005.jpg` in `pdf_pages/`.
+
 #### Stage 1: Extract Image References from EPUB HTML
 
 ```bash
-uv run extract_images_to_sqlite.py <html_file>
+uv run extract_images_to_postgres.py <html_file>
 ```
 
 Extracts image filenames from `div.illustype_image_text img` elements and stores them in `stephanos.db`.
@@ -69,6 +79,13 @@ uv run process_image.py --image-dir <directory_with_images>
 Process a specific image:
 ```bash
 uv run process_image.py --image-dir <directory_with_images> --image <filename>
+```
+
+#### Export Lemmas to CSV
+
+Create a CSV with headword, Greek text, and translation:
+```bash
+uv run generate_csv_export.py --output exports/lemmas.csv
 ```
 
 ## Pipeline Architecture
@@ -93,7 +110,7 @@ Tracks image ingestion and extraction status:
 
 **Input:** EPUB HTML (or extracted XHTML/HTML files)
 **Goal:** Find all "Greek scan" image filenames from `illustype_image_text` and store them in SQLite
-**Tool:** `extract_images_to_sqlite.py`
+**Tool:** `extract_images_to_postgres.py`
 **Output:** `images` table populated with filenames; `processed=0`
 
 #### Stage 2: Extract Lemma Text into Structured JSON

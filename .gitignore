@@ -3,3 +3,7 @@ progress.html
 reference_site/
 pipeline.log
 __pycache__/
+*.pyc
+config.py
+pdf_pages/
+exports/

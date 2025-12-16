@@ -2,30 +2,32 @@
 """
 Generate a static HTML progress website showing processing status.
 """
-import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
-DB_PATH = "stephanos.db"
+from db import get_connection
+
 OUTPUT_FILE = "progress.html"
 
-def get_stats(conn):
+def get_stats(cur):
     """Get processing statistics"""
     # Total counts
-    total_row = conn.execute("SELECT COUNT(*), SUM(processed), SUM(tokens_used) FROM images").fetchone()
+    cur.execute("SELECT COUNT(*), SUM(processed), SUM(tokens_used) FROM images")
+    total_row = cur.fetchone()
     total_images = total_row[0]
     processed_images = total_row[1] or 0
     total_tokens = total_row[2] or 0
 
     # Today's tokens
-    today = datetime.utcnow().date().isoformat()
-    today_tokens = conn.execute(
-        "SELECT COALESCE(SUM(tokens_used), 0) FROM images WHERE DATE(processed_at) = ?",
+    today = datetime.now(timezone.utc).date().isoformat()
+    cur.execute(
+        "SELECT COALESCE(SUM(tokens_used), 0) FROM images WHERE DATE(processed_at) = %s",
         (today,)
-    ).fetchone()[0]
+    )
+    today_tokens = cur.fetchone()[0]
 
     # Recent processed images
-    recent = conn.execute(
+    cur.execute(
         """
         SELECT image_filename, processed_at, tokens_used,
                LENGTH(lemma_json) as json_length
@@ -33,8 +35,9 @@ def get_stats(conn):
         WHERE processed = 1
         ORDER BY processed_at DESC
         LIMIT 20
-        """,
-    ).fetchall()
+        """
+    )
+    recent = cur.fetchall()
 
     return {
         'total_images': total_images,
@@ -83,6 +86,14 @@ def generate_html(stats):
             padding: 40px;
             text-align: center;
         }}
+        .header a {{
+            color: #e0e7ff;
+            text-decoration: none;
+            font-weight: 600;
+        }}
+        .header a:hover {{
+            text-decoration: underline;
+        }}
         .header h1 {{
             font-size: 2.5em;
             margin-bottom: 10px;
@@ -93,7 +104,7 @@ def generate_html(stats):
         }}
         .stats {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
             gap: 20px;
             padding: 40px;
             background: #f8f9fa;
@@ -196,6 +207,9 @@ def generate_html(stats):
         <div class="header">
             <h1>Stephanos Processing Progress</h1>
             <p>Billerbeck 2006 Edition - Image Extraction Pipeline</p>
+            <p style="margin-top: 8px; font-size: 0.95em;">
+                CSV export: <a href="lemmas.csv">lemmas.csv</a>
+            </p>
         </div>
 
         <div class="stats">
@@ -208,7 +222,7 @@ def generate_html(stats):
                 <div class="stat-value">{stats['processed_images']:,}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Remaining</div>
+                <div class="stat-label">Unprocessed (queue)</div>
                 <div class="stat-value">{stats['remaining_images']:,}</div>
             </div>
             <div class="stat-card">
@@ -235,6 +249,9 @@ def generate_html(stats):
                     {stats['processed_images']} / {stats['total_images']}
                 </div>
             </div>
+            <p style="margin-top: 12px; color: #555; font-size: 0.95em;">
+                Queue contains <strong>{stats['remaining_images']:,}</strong> pages still to process (new EPUB/PDF inputs show up here).
+            </p>
         </div>
 
         <div class="recent-table">
@@ -255,10 +272,13 @@ def generate_html(stats):
         filename, processed_at, tokens, json_len = row
         # Format timestamp
         try:
-            dt = datetime.fromisoformat(processed_at.replace('Z', '+00:00'))
-            formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
+            if hasattr(processed_at, 'strftime'):
+                formatted_time = processed_at.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                dt = datetime.fromisoformat(str(processed_at).replace('Z', '+00:00'))
+                formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
         except:
-            formatted_time = processed_at
+            formatted_time = str(processed_at)
 
         html += f"""
                     <tr>
@@ -275,8 +295,8 @@ def generate_html(stats):
         </div>
 
         <div class="footer">
-            <p>Last updated: """ + datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC') + """</p>
-            <p>Pipeline: HTML → SQLite → OpenAI Vision (gpt-4o-mini) → Structured JSON</p>
+            <p>Last updated: """ + datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') + """</p>
+            <p>Pipeline: HTML → PostgreSQL → OpenAI Vision (gpt-5.1) → Structured JSON</p>
         </div>
     </div>
 </body>
@@ -285,8 +305,9 @@ def generate_html(stats):
     return html
 
 def main():
-    conn = sqlite3.connect(DB_PATH)
-    stats = get_stats(conn)
+    conn = get_connection()
+    cur = conn.cursor()
+    stats = get_stats(cur)
     conn.close()
 
     html = generate_html(stats)
