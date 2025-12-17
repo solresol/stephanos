@@ -10,7 +10,14 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from openai import OpenAI
-from process_image import load_api_key, process_image_with_model
+from process_image import (
+    DEFAULT_GENERATION_NAME,
+    load_api_key,
+    process_image_with_model,
+    load_allowed_headwords,
+    ensure_ocr_generation_table,
+    get_or_create_generation,
+)
 from db import get_connection
 
 DEFAULT_DAILY_TOKEN_LIMIT = 100_000
@@ -34,16 +41,25 @@ def fetch_unprocessed_images(cur):
     """Fetch all unprocessed images with their image directories"""
     cur.execute(
         """
-        SELECT i.id, i.image_filename, COALESCE(h.image_dir, i.image_dir) AS image_dir
+        SELECT
+            i.id,
+            i.image_filename,
+            COALESCE(h.image_dir, i.image_dir) AS image_dir,
+            COALESCE(i.volume_number, e.volume_number, p.volume_number) AS volume_number,
+            COALESCE(i.volume_label, e.volume_label, p.volume_label) AS volume_label,
+            COALESCE(i.letter_range, e.letter_range, p.letter_range) AS letter_range
         FROM images i
         LEFT JOIN html_files h ON i.html_file_id = h.id
+        LEFT JOIN epubs e ON h.epub_id = e.id
+        LEFT JOIN pdf_files p ON i.pdf_file_id = p.id
         WHERE i.processed = 0
-        ORDER BY i.id
+        ORDER BY CASE WHEN COALESCE(i.volume_number, e.volume_number, p.volume_number) = 3 THEN 0 ELSE 1 END,
+                 i.id
         """
     )
     return cur.fetchall()
 
-def mark_processed(conn, cur, image_id, lemma_json, tokens_used, model):
+def mark_processed(conn, cur, image_id, lemma_json, tokens_used, model, generation_id):
     cur.execute(
         """
         UPDATE images
@@ -51,10 +67,11 @@ def mark_processed(conn, cur, image_id, lemma_json, tokens_used, model):
             lemma_json = %s,
             processed_at = %s,
             tokens_used = %s,
-            ocr_model = %s
+            ocr_model = %s,
+            ocr_generation_id = %s
         WHERE id = %s
         """,
-        (lemma_json, datetime.now(timezone.utc).isoformat(), tokens_used, model, image_id)
+        (lemma_json, datetime.now(timezone.utc).isoformat(), tokens_used, model, generation_id, image_id)
     )
     conn.commit()
 
@@ -68,6 +85,8 @@ def main():
                        help="Delay in seconds between API calls (default: 1.0)")
     parser.add_argument("--model", default=DEFAULT_MODEL,
                        help=f"Model to use for OCR (default: {DEFAULT_MODEL})")
+    parser.add_argument("--ocr-generation", default=DEFAULT_GENERATION_NAME,
+                       help='OCR generation label (e.g., "simple request", "headword constrained")')
     args = parser.parse_args()
 
     default_image_dir = Path(args.image_dir) if args.image_dir else None
@@ -76,6 +95,14 @@ def main():
 
     conn = get_connection()
     cur = conn.cursor()
+    ensure_ocr_generation_table(cur)
+    generation_descriptions = {
+        "simple request": "Original OCR without headword constraints",
+        "headword constrained": "OCR constrained to Meineke headword list for the volume",
+    }
+    generation_id = get_or_create_generation(
+        cur, args.ocr_generation, generation_descriptions.get(args.ocr_generation, args.ocr_generation)
+    )
 
     # Check tokens used today
     tokens_today = get_tokens_used_today(cur)
@@ -103,7 +130,7 @@ def main():
     processed_count = 0
     total_tokens_this_run = 0
 
-    for image_id, image_filename, db_image_dir in unprocessed:
+    for image_id, image_filename, db_image_dir, vol_number, vol_label, letter_range in unprocessed:
         # Check if we've hit the limit
         if args.limit and processed_count >= args.limit:
             print(f"Reached processing limit ({args.limit} images).")
@@ -126,14 +153,37 @@ def main():
             print(f"Warning: Image not found: {image_path}")
             continue
 
+        volume_meta = None
+        if vol_number or vol_label or letter_range:
+            volume_meta = {
+                "volume_number": vol_number,
+                "volume_label": vol_label,
+                "letter_range": letter_range,
+            }
+        allowed_headwords = load_allowed_headwords(cur, volume_meta) if volume_meta else []
+
         print(f"Processing {image_filename} ({processed_count + 1}/{len(unprocessed)})...", end=" ", flush=True)
 
         try:
             # Process image with specified model (returns entries list via tool calling)
-            entries, tokens_used = process_image_with_model(client, image_path, args.model)
+            entries, tokens_used = process_image_with_model(
+                client,
+                image_path,
+                args.model,
+                volume_meta=volume_meta,
+                allowed_headwords=allowed_headwords,
+            )
 
             # Save to database
-            mark_processed(conn, cur, image_id, json.dumps(entries, ensure_ascii=False), tokens_used, args.model)
+            mark_processed(
+                conn,
+                cur,
+                image_id,
+                json.dumps(entries, ensure_ascii=False),
+                tokens_used,
+                args.model,
+                generation_id,
+            )
 
             processed_count += 1
             total_tokens_this_run += tokens_used

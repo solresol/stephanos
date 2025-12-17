@@ -11,14 +11,62 @@ Usage:
 import argparse
 import json
 import base64
+import re
 from pathlib import Path
 from datetime import datetime, timezone
+import unicodedata
 
 from openai import OpenAI
 
 from db import get_connection
 
 DEFAULT_MODEL = "gemini-3.0-flash"
+DEFAULT_GENERATION_NAME = "headword constrained"
+
+# Greek base alphabet order for headword filtering
+GREEK_ORDER = ["α", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ", "λ", "μ", "ν", "ξ", "ο", "π", "ρ", "σ", "τ", "υ", "φ", "χ", "ψ", "ω"]
+GREEK_INDEX = {letter: idx for idx, letter in enumerate(GREEK_ORDER)}
+
+
+def ensure_ocr_generation_table(cur):
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ocr_generations (
+            id SERIAL PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """
+    )
+    cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS ocr_generation_id INTEGER")
+    cur.execute(
+        """
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE table_name = 'images' AND constraint_name = 'images_ocr_generation_fk'
+        """
+    )
+    if not cur.fetchone():
+        cur.execute(
+            """
+            ALTER TABLE images
+            ADD CONSTRAINT images_ocr_generation_fk
+            FOREIGN KEY (ocr_generation_id) REFERENCES ocr_generations(id)
+            """
+        )
+
+
+def get_or_create_generation(cur, name: str, description: str):
+    cur.execute(
+        """
+        INSERT INTO ocr_generations (name, description)
+        VALUES (%s, %s)
+        ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description
+        RETURNING id
+        """,
+        (name, description),
+    )
+    return cur.fetchone()[0]
 
 def load_api_key():
     """Load OpenAI API key from ~/.openai.key"""
@@ -136,11 +184,120 @@ def get_image_dir_from_db(cur, image_filename):
     row = cur.fetchone()
     return Path(row[0]) if row else None
 
+
+def get_volume_for_image(cur, image_id):
+    """Return volume metadata for an image if available."""
+    cur.execute(
+        """
+        SELECT
+            COALESCE(i.volume_number, e.volume_number, p.volume_number) AS volume_number,
+            COALESCE(i.volume_label, e.volume_label, p.volume_label) AS volume_label,
+            COALESCE(i.letter_range, e.letter_range, p.letter_range) AS letter_range
+        FROM images i
+        LEFT JOIN html_files h ON i.html_file_id = h.id
+        LEFT JOIN epubs e ON h.epub_id = e.id
+        LEFT JOIN pdf_files p ON i.pdf_file_id = p.id
+        WHERE i.id = %s
+        """,
+        (image_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    volume_number, volume_label, letter_range = row
+    if not (volume_number or volume_label or letter_range):
+        return None
+    return {
+        "volume_number": volume_number,
+        "volume_label": volume_label,
+        "letter_range": letter_range,
+    }
+
+
+def strip_greek_base_letter(text: str) -> str | None:
+    """Return the base Greek letter (stripped of diacritics) of the first Greek character in text."""
+    if not text:
+        return None
+    normalized = unicodedata.normalize("NFD", text.lower())
+    for ch in normalized:
+        # Skip combining marks and non-letters
+        if unicodedata.category(ch).startswith("M"):
+            continue
+        if "α" <= ch <= "ω":
+            base = "σ" if ch == "ς" else ch
+            return "".join(
+                c for c in unicodedata.normalize("NFC", base) if not unicodedata.category(c).startswith("M")
+            )
+    return None
+
+
+def is_within_range(letter: str, start: str, end: str) -> bool:
+    if letter not in GREEK_INDEX or start not in GREEK_INDEX or end not in GREEK_INDEX:
+        return False
+    return GREEK_INDEX[start] <= GREEK_INDEX[letter] <= GREEK_INDEX[end]
+
+
+def get_letter_bounds(letter_range: str):
+    """Return (start_letter, end_letter) for a string like 'kappa-omicron' or 'phi - omega'."""
+    if not letter_range:
+        return None
+    parts = [part.strip().lower() for part in re.split(r"[-–]", letter_range) if part.strip()]
+    if len(parts) != 2:
+        return None
+    mapping = {
+        "alpha": "α",
+        "beta": "β",
+        "gamma": "γ",
+        "delta": "δ",
+        "epsilon": "ε",
+        "zeta": "ζ",
+        "eta": "η",
+        "theta": "θ",
+        "iota": "ι",
+        "kappa": "κ",
+        "lambda": "λ",
+        "mu": "μ",
+        "nu": "ν",
+        "xi": "ξ",
+        "omicron": "ο",
+        "pi": "π",
+        "rho": "ρ",
+        "sigma": "σ",
+        "tau": "τ",
+        "upsilon": "υ",
+        "phi": "φ",
+        "chi": "χ",
+        "psi": "ψ",
+        "omega": "ω",
+    }
+    start = mapping.get(parts[0])
+    end = mapping.get(parts[1])
+    if not start or not end:
+        return None
+    return start, end
+
+
+def load_allowed_headwords(cur, volume_meta):
+    """Return a list of allowed headwords (dicts) for the volume range."""
+    if not volume_meta or not volume_meta.get("letter_range"):
+        return []
+    bounds = get_letter_bounds(volume_meta["letter_range"])
+    if not bounds:
+        return []
+    start, end = bounds
+    cur.execute("SELECT nodegoat_id, greek_headword FROM meineke_headwords")
+    allowed = []
+    for nodegoat_id, greek_headword in cur.fetchall():
+        base = strip_greek_base_letter(greek_headword)
+        if base and is_within_range(base, start, end):
+            allowed.append({"nodegoat_id": nodegoat_id, "greek_headword": greek_headword})
+    return allowed
+
 def fetch_next_image(cur, specific=None):
     if specific:
         cur.execute(
             "SELECT id, image_filename FROM images WHERE image_filename = %s",
-            (specific,)
+            (specific,),
         )
     else:
         cur.execute(
@@ -148,7 +305,7 @@ def fetch_next_image(cur, specific=None):
         )
     return cur.fetchone()
 
-def mark_processed(conn, cur, image_id, lemma_json, tokens_used=0, model=None):
+def mark_processed(conn, cur, image_id, lemma_json, tokens_used=0, model=None, generation_id=None):
     cur.execute(
         """
         UPDATE images
@@ -156,17 +313,38 @@ def mark_processed(conn, cur, image_id, lemma_json, tokens_used=0, model=None):
             lemma_json = %s,
             processed_at = %s,
             tokens_used = %s,
-            ocr_model = %s
+            ocr_model = %s,
+            ocr_generation_id = %s
         WHERE id = %s
         """,
-        (lemma_json, datetime.now(timezone.utc).isoformat(), tokens_used, model, image_id)
+        (lemma_json, datetime.now(timezone.utc).isoformat(), tokens_used, model, generation_id, image_id)
     )
     conn.commit()
 
-def process_image_with_model(client, image_path, model):
+def process_image_with_model(client, image_path, model, volume_meta=None, allowed_headwords=None):
     """Process image with specified model using tool calling, returns (payload_dict, tokens_used)"""
     image_data = image_path.read_bytes()
     base64_image = base64.b64encode(image_data).decode('utf-8')
+
+    extra_instructions = ""
+    if volume_meta:
+        vol_label = volume_meta.get("volume_label") or f"volume {volume_meta.get('volume_number')}"
+        extra_instructions += f"\nThis page is from {vol_label} (letters: {volume_meta.get('letter_range')})."
+        if allowed_headwords:
+            headword_lines = "\n".join(
+                f"- {item['greek_headword']} (nodegoat_id: {item['nodegoat_id']})"
+                for item in allowed_headwords
+            )
+            extra_instructions += (
+                "\nAllowed headwords for this volume (pick the closest match for each lemma; "
+                "do not invent new headwords; if uncertain choose the nearest from this list):\n"
+                f"{headword_lines}"
+            )
+            extra_instructions += (
+                "\nEvery extracted lemma headword MUST be chosen from the allowed list above. "
+                "If no headwords apply because the page is continuation_only, apparatus_only, or non_greek_error, "
+                "set the appropriate status and leave entries empty."
+            )
 
     response = client.chat.completions.create(
         model=model,
@@ -178,7 +356,7 @@ def process_image_with_model(client, image_path, model):
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": USER_PROMPT},
+                    {"type": "text", "text": USER_PROMPT + extra_instructions},
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
@@ -206,10 +384,20 @@ def main():
                         help=f"Model to use for OCR (default: {DEFAULT_MODEL})")
     parser.add_argument("--force", action="store_true",
                         help="Force reprocessing of already-processed images")
+    parser.add_argument("--ocr-generation", default=DEFAULT_GENERATION_NAME,
+                        help='OCR generation label (e.g., "simple request", "headword constrained")')
     args = parser.parse_args()
 
     conn = get_connection()
     cur = conn.cursor()
+    ensure_ocr_generation_table(cur)
+    generation_descriptions = {
+        "simple request": "Original OCR without headword constraints",
+        "headword constrained": "OCR constrained to Meineke headword list for the volume",
+    }
+    generation_id = get_or_create_generation(
+        cur, args.ocr_generation, generation_descriptions.get(args.ocr_generation, args.ocr_generation)
+    )
 
     # Determine image directory
     image_dir = None
@@ -253,16 +441,30 @@ def main():
     api_key = load_api_key()
     client = OpenAI(api_key=api_key)
 
+    volume_meta = get_volume_for_image(cur, image_id)
+    allowed_headwords = load_allowed_headwords(cur, volume_meta) if volume_meta else []
+
     print(f"Processing {image_filename} with {args.model}...", end=" ", flush=True)
 
-    payload, tokens_used = process_image_with_model(client, image_path, args.model)
+    payload, tokens_used = process_image_with_model(
+        client, image_path, args.model, volume_meta=volume_meta, allowed_headwords=allowed_headwords
+    )
 
     # Save results (as JSON array for compatibility)
-    mark_processed(conn, cur, image_id, json.dumps(payload, ensure_ascii=False), tokens_used, args.model)
+    mark_processed(
+        conn,
+        cur,
+        image_id,
+        json.dumps(payload, ensure_ascii=False),
+        tokens_used,
+        args.model,
+        generation_id,
+    )
 
     conn.close()
 
-    print(f"OK ({len(entries)} entries, {tokens_used} tokens, model: {args.model})")
+    entry_count = len(payload.get("entries", [])) if isinstance(payload, dict) else 0
+    print(f"OK ({entry_count} entries, {tokens_used} tokens, model: {args.model})")
 
 if __name__ == "__main__":
     main()

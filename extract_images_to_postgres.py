@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 
 from db import get_connection
+from volume_metadata import ensure_volume_columns, infer_volume_metadata
 
 
 def extract_images(html_path: Path) -> list[str]:
@@ -29,26 +30,40 @@ def extract_images(html_path: Path) -> list[str]:
     return images
 
 
-def process_html_file(conn, cur, html_path: Path, html_file_id: int = None) -> int:
+def process_html_file(conn, cur, html_path: Path, html_file_id: int = None, volume_meta: dict | None = None) -> int:
     """
     Process a single HTML file and insert images.
     Returns number of images inserted.
     """
     images = extract_images(html_path)
     inserted = 0
+    volume_number = volume_meta["volume_number"] if volume_meta else None
+    volume_label = volume_meta["volume_label"] if volume_meta else None
+    letter_range = volume_meta["letter_range"] if volume_meta else None
 
     for img in images:
         try:
             cur.execute(
                 """
-                INSERT INTO images (image_filename, html_file_id)
-                VALUES (%s, %s)
+                INSERT INTO images (image_filename, html_file_id, volume_number, volume_label, letter_range)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (image_filename) DO NOTHING
                 """,
-                (img, html_file_id)
+                (img, html_file_id, volume_number, volume_label, letter_range)
             )
             if cur.rowcount > 0:
                 inserted += 1
+            if volume_meta:
+                cur.execute(
+                    """
+                    UPDATE images
+                    SET volume_number = COALESCE(%s, volume_number),
+                        volume_label = COALESCE(%s, volume_label),
+                        letter_range = COALESCE(%s, letter_range)
+                    WHERE image_filename = %s
+                    """,
+                    (volume_number, volume_label, letter_range, img),
+                )
         except Exception as e:
             print(f"Error inserting {img}: {e}")
 
@@ -58,7 +73,7 @@ def process_html_file(conn, cur, html_path: Path, html_file_id: int = None) -> i
 def get_unprocessed_html_files(cur, limit: int = None) -> list[tuple]:
     """Get HTML files that haven't had their images extracted yet"""
     query = """
-        SELECT h.id, h.html_path, h.image_dir, e.epub_path
+        SELECT h.id, h.html_path, h.image_dir, e.epub_path, e.volume_number, e.volume_label, e.letter_range
         FROM html_files h
         JOIN epubs e ON h.epub_id = e.id
         WHERE h.processed = 0
@@ -94,7 +109,7 @@ def process_from_database(conn, cur, limit: int = None):
     print(f"Found {len(unprocessed)} unprocessed HTML files")
 
     total_images = 0
-    for html_id, html_path, image_dir, epub_path in unprocessed:
+    for html_id, html_path, image_dir, epub_path, vol_number, vol_label, letter_range in unprocessed:
         html_path = Path(html_path)
         html_filename = html_path.name
 
@@ -103,8 +118,18 @@ def process_from_database(conn, cur, limit: int = None):
             continue
 
         epub_name = Path(epub_path).name
+        volume_meta = None
+        if vol_number or vol_label or letter_range:
+            volume_meta = {
+                "volume_number": vol_number,
+                "volume_label": vol_label,
+                "letter_range": letter_range,
+            }
+        else:
+            volume_meta = infer_volume_metadata(epub_path)
+
         print(f"Processing {epub_name}/{html_filename}...", end=" ")
-        inserted = process_html_file(conn, cur, html_path, html_id)
+        inserted = process_html_file(conn, cur, html_path, html_id, volume_meta=volume_meta)
         mark_html_processed(conn, cur, html_id, inserted)
         conn.commit()
 
@@ -129,6 +154,7 @@ def main():
 
     conn = get_connection()
     cur = conn.cursor()
+    ensure_volume_columns(cur)
 
     if args.from_db:
         process_from_database(conn, cur, args.limit)
@@ -137,7 +163,8 @@ def main():
         if not html_file.exists():
             raise FileNotFoundError(html_file)
 
-        inserted = process_html_file(conn, cur, html_file)
+        volume_meta = infer_volume_metadata(html_file)
+        inserted = process_html_file(conn, cur, html_file, volume_meta=volume_meta)
         conn.commit()
         print(f"Inserted {inserted} image references.")
 
