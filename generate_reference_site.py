@@ -63,19 +63,21 @@ def get_initial_slug(text: str) -> str:
 
 
 def get_all_lemmas(cur):
-    """Get all translated lemmas from assembled_lemmas"""
+    """Get all lemmas (translated and untranslated) from assembled_lemmas"""
     cur.execute(
         """
-        SELECT id, lemma, entry_number, type, greek_text, human_greek_text, confidence, translation_json
-        FROM assembled_lemmas
-        WHERE translated = 1
-        ORDER BY id
+        SELECT a.id, a.lemma, a.entry_number, a.type, a.greek_text, a.human_greek_text, a.confidence,
+               a.translation_json, a.translated, a.ocr_processed_at, g.name as ocr_generation_name,
+               a.meineke_id, a.billerbeck_id
+        FROM assembled_lemmas a
+        LEFT JOIN ocr_generations g ON a.ocr_generation_id = g.id
+        ORDER BY a.id
         """
     )
     rows = cur.fetchall()
 
     all_lemmas = []
-    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_json in rows:
+    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_json, translated, ocr_processed_at, ocr_generation_name, meineke_id, billerbeck_id in rows:
         try:
             data = json.loads(translation_json) if translation_json else None
         except json.JSONDecodeError:
@@ -99,6 +101,11 @@ def get_all_lemmas(cur):
             "english_translation": english_translation,
             "translation": translation,
             "confidence": confidence or "normal",
+            "ocr_processed_at": ocr_processed_at,
+            "ocr_generation_name": ocr_generation_name or "unknown",
+            "meineke_id": meineke_id or "",
+            "billerbeck_id": billerbeck_id or "",
+            "translated": bool(translated),
         }
         lemma_data["letter_slug"] = get_initial_slug(lemma_data["lemma"])
         all_lemmas.append(lemma_data)
@@ -112,7 +119,29 @@ def render_lemma_cards(lemmas):
     for lemma in lemmas:
         confidence_class = "low-confidence" if lemma.get('confidence') == 'low' else ""
         confidence_badge = '<span class="confidence-badge">Low Confidence</span>' if lemma.get('confidence') == 'low' else ""
-        translation = lemma.get('translation') or lemma.get('english_translation') or "(Translation pending)"
+        is_translated = lemma.get("translated")
+        translation = lemma.get('translation') or lemma.get('english_translation') or ""
+        if not is_translated or not translation:
+            translation = '<span class="pending-translation">Translation pending</span>'
+        meta_lines = []
+        if lemma.get("entry_number"):
+            meta_lines.append(f"Entry #{lemma['entry_number']}")
+        if lemma.get("meineke_id") or lemma.get("billerbeck_id"):
+            meta_lines.append(
+                f"Meineke: {lemma.get('meineke_id') or '-'} | Billerbeck: {lemma.get('billerbeck_id') or '-'}"
+            )
+        if lemma.get("ocr_generation_name") or lemma.get("ocr_processed_at"):
+            when = ""
+            if lemma.get("ocr_processed_at"):
+                ts = lemma["ocr_processed_at"]
+                if isinstance(ts, str):
+                    when = datetime.fromisoformat(ts).strftime("%Y-%m-%d")
+                else:
+                    when = ts.strftime("%Y-%m-%d")
+            meta_lines.append(
+                f"OCR: {lemma.get('ocr_generation_name', 'unknown')}{f' on {when}' if when else ''}"
+            )
+        meta_html = "<br>".join(meta_lines)
         cards_html.append(
             f"""
             <div class="lemma-card">
@@ -122,8 +151,7 @@ def render_lemma_cards(lemmas):
                         {f'<span class="lemma-type">{lemma["type"]}</span>' if lemma['type'] else ''}
                     </div>
                     <div class="lemma-meta">
-                        Entry #{lemma['entry_number']}<br>
-                        <small>{lemma['image_filename']}</small>
+                        {meta_html}
                     </div>
                 </div>
                 {f'<div class="greek-text {confidence_class}">{lemma["greek_text"]}</div>' if lemma['greek_text'] else ''}
@@ -359,8 +387,12 @@ def generate_index_html(letter_counts, stats):
                 <div class="stat-label">Total Lemmas</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">{stats['translated_images']}</div>
-                <div class="stat-label">Pages Translated</div>
+                <div class="stat-value">{stats['translated_lemmas']:,}</div>
+                <div class="stat-label">Translated Lemmas</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{stats['processed_images']}</div>
+                <div class="stat-label">Pages OCR’d</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value">{stats['total_images']}</div>
@@ -430,20 +462,20 @@ def main():
     conn = get_connection()
     cur = conn.cursor()
 
-    # Get statistics
-    cur.execute("SELECT COUNT(*), SUM(processed), SUM(translated) FROM images")
-    stats_row = cur.fetchone()
-
-    stats = {
-        'total_images': stats_row[0],
-        'processed_images': stats_row[1] or 0,
-        'translated_images': stats_row[2] or 0,
-        'total_lemmas': 0
-    }
-
     # Get all lemmas and bucket by letter
     lemmas = get_all_lemmas(cur)
-    stats['total_lemmas'] = len(lemmas)
+    stats = {
+        'total_lemmas': len(lemmas),
+        'translated_lemmas': sum(1 for l in lemmas if l.get('translated')),
+        'total_images': 0,
+        'processed_images': 0,
+    }
+
+    # Page counts
+    cur.execute("SELECT COUNT(*), SUM(processed) FROM images")
+    img_row = cur.fetchone()
+    stats['total_images'] = img_row[0] or 0
+    stats['processed_images'] = img_row[1] or 0
 
     buckets = {slug: [] for _, _, slug in GREEK_LETTERS}
     buckets["other"] = []
@@ -472,7 +504,8 @@ def main():
 
     print(f"Reference website generated in {output_dir.absolute()}")
     print(f"  Total lemmas: {stats['total_lemmas']}")
-    print(f"  Translated pages: {stats['translated_images']} / {stats['total_images']}")
+    print(f"  Translated lemmas: {stats['translated_lemmas']}")
+    print(f"  Pages OCR'd: {stats['processed_images']} / {stats['total_images']}")
 
 if __name__ == "__main__":
     main()

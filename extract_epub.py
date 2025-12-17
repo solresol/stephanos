@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 
 from db import get_connection
+from volume_metadata import ensure_volume_columns, infer_volume_metadata
 
 EPUBS_DIR = Path.home() / "epubs"
 
@@ -56,16 +57,40 @@ def find_content_html_files(extract_dir: Path) -> list[tuple[Path, Path, int]]:
 def register_epub(conn, cur, epub_path: Path) -> int:
     """Register EPUB in database, returns epub_id"""
     epub_filename = epub_path.name
+    volume_meta = infer_volume_metadata(epub_path)
 
     # Check if already registered
     cur.execute(
-        "SELECT id, extract_dir FROM epubs WHERE epub_path = %s",
+        """
+        SELECT id, extract_dir, volume_number, volume_label, letter_range
+        FROM epubs
+        WHERE epub_path = %s
+        """,
         (str(epub_path),)
     )
     row = cur.fetchone()
 
     if row:
-        epub_id, extract_dir = row
+        epub_id, extract_dir, existing_number, existing_label, existing_range = row
+        if volume_meta and (
+            existing_number != volume_meta["volume_number"]
+            or existing_label != volume_meta["volume_label"]
+            or existing_range != volume_meta["letter_range"]
+        ):
+            cur.execute(
+                """
+                UPDATE epubs
+                SET volume_number = %s, volume_label = %s, letter_range = %s
+                WHERE id = %s
+                """,
+                (
+                    volume_meta["volume_number"],
+                    volume_meta["volume_label"],
+                    volume_meta["letter_range"],
+                    epub_id,
+                ),
+            )
+            conn.commit()
         print(f"EPUB {epub_filename} already registered (extract_dir: {extract_dir})")
         return epub_id
 
@@ -80,6 +105,21 @@ def register_epub(conn, cur, epub_path: Path) -> int:
     )
     epub_id = cur.fetchone()[0]
 
+    if volume_meta:
+        cur.execute(
+            """
+            UPDATE epubs
+            SET volume_number = %s, volume_label = %s, letter_range = %s
+            WHERE id = %s
+            """,
+            (
+                volume_meta["volume_number"],
+                volume_meta["volume_label"],
+                volume_meta["letter_range"],
+                epub_id,
+            ),
+        )
+
     conn.commit()
     return epub_id
 
@@ -91,6 +131,7 @@ def process_epub(epub_path: Path):
 
     conn = get_connection()
     cur = conn.cursor()
+    ensure_volume_columns(cur)
 
     # Register EPUB
     epub_id = register_epub(conn, cur, epub_path)

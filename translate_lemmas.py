@@ -55,7 +55,7 @@ def fetch_lemmas_needing_translation(cur):
         FROM assembled_lemmas
         WHERE translated = 0
            OR (translated_at IS NOT NULL AND updated_at > translated_at)
-        ORDER BY id
+        ORDER BY CASE WHEN volume_number = 3 THEN 0 ELSE 1 END, id
         """
     )
     return cur.fetchall()

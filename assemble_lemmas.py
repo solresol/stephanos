@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 
 from db import get_connection
+from volume_metadata import ensure_volume_columns
+from volume_metadata import ensure_volume_columns
 
 
 def ensure_table(cur):
@@ -30,12 +32,29 @@ def ensure_table(cur):
             translated INTEGER NOT NULL DEFAULT 0,
             translation_json TEXT,
             translation_tokens INTEGER DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            translated_at DATETIME
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            translated_at TIMESTAMPTZ,
+            ocr_generation_id INTEGER,
+            ocr_processed_at TIMESTAMPTZ,
+            nodegoat_id TEXT,
+            meineke_id TEXT,
+            billerbeck_id TEXT,
+            volume_number INTEGER,
+            volume_label TEXT,
+            letter_range TEXT
         )
         """
     )
+    # Backfill columns if table already existed
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS volume_number INTEGER")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS volume_label TEXT")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS letter_range TEXT")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS ocr_generation_id INTEGER")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS ocr_processed_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS nodegoat_id TEXT")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS meineke_id TEXT")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS billerbeck_id TEXT")
     cur.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS assembled_lemmas_source_image_ids_idx
@@ -44,10 +63,29 @@ def ensure_table(cur):
     )
 
 
+def load_headword_lookup(cur):
+    """Load mapping of greek_headword -> ids from meineke_headwords."""
+    cur.execute(
+        """
+        SELECT greek_headword, nodegoat_id, meineke_id, billerbeck_id
+        FROM meineke_headwords
+        """
+    )
+    lookup = {}
+    for greek_headword, nodegoat_id, meineke_id, billerbeck_id in cur.fetchall():
+        lookup[greek_headword.strip()] = {
+            "nodegoat_id": nodegoat_id,
+            "meineke_id": meineke_id,
+            "billerbeck_id": billerbeck_id,
+        }
+    return lookup
+
+
 def load_processed_images(cur):
     cur.execute(
         """
-        SELECT id, image_filename, lemma_json
+        SELECT id, image_filename, lemma_json, volume_number, volume_label, letter_range,
+               ocr_generation_id, processed_at
         FROM images
         WHERE processed = 1
         ORDER BY id
@@ -56,11 +94,11 @@ def load_processed_images(cur):
     return cur.fetchall()
 
 
-def build_assembled_entries(rows):
+def build_assembled_entries(rows, headword_lookup):
     entries = []
     last_entry = None
 
-    for image_id, filename, lemma_json in rows:
+    for image_id, filename, lemma_json, volume_number, volume_label, letter_range, ocr_generation_id, processed_at in rows:
         if not lemma_json:
             continue
 
@@ -94,6 +132,14 @@ def build_assembled_entries(rows):
                 last_entry["source_image_ids"].append(image_id)
                 if notes:
                     last_entry["greek_text"] = (last_entry["greek_text"] + " " + notes).strip()
+                if volume_number and not last_entry.get("volume_number"):
+                    last_entry["volume_number"] = volume_number
+                    last_entry["volume_label"] = volume_label
+                    last_entry["letter_range"] = letter_range
+                if ocr_generation_id and not last_entry.get("ocr_generation_id"):
+                    last_entry["ocr_generation_id"] = ocr_generation_id
+                if processed_at and (not last_entry.get("ocr_processed_at") or processed_at > last_entry["ocr_processed_at"]):
+                    last_entry["ocr_processed_at"] = processed_at
             else:
                 print(f"Continuation with no prior lemma on {filename}, ignoring")
             continue
@@ -109,7 +155,17 @@ def build_assembled_entries(rows):
                 "greek_text": entry.get("greek_text", "").strip(),
                 "confidence": entry.get("confidence", "normal"),
                 "source_image_ids": [image_id],
+                "volume_number": volume_number,
+                "volume_label": volume_label,
+                "letter_range": letter_range,
+                "ocr_generation_id": ocr_generation_id,
+                "ocr_processed_at": processed_at,
             }
+            meta = headword_lookup.get(assembled["lemma"])
+            if meta:
+                assembled["nodegoat_id"] = meta["nodegoat_id"]
+                assembled["meineke_id"] = meta["meineke_id"]
+                assembled["billerbeck_id"] = meta["billerbeck_id"]
             entries.append(assembled)
             last_entry = assembled
 
@@ -131,11 +187,35 @@ def upsert_assembled(cur, assembled_entries):
             },
             ensure_ascii=False,
         )
-        cur.execute(
-            """
+        ocr_processed_at = entry.get("ocr_processed_at")
+        if isinstance(ocr_processed_at, datetime):
+            ocr_processed_at = ocr_processed_at.isoformat()
+
+        params = (
+            entry["lemma"],
+            entry["entry_number"],
+            entry["type"],
+            entry["greek_text"],
+            entry["confidence"],
+            source_ids_json,
+            assembled_json,
+            entry.get("volume_number"),
+            entry.get("volume_label"),
+            entry.get("letter_range"),
+            entry.get("ocr_generation_id"),
+            ocr_processed_at,
+            entry.get("nodegoat_id"),
+            entry.get("meineke_id"),
+            entry.get("billerbeck_id"),
+        )
+        try:
+            sql = cur.mogrify(
+                """
             INSERT INTO assembled_lemmas
-            (lemma, entry_number, type, greek_text, confidence, source_image_ids, assembled_json, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            (lemma, entry_number, type, greek_text, confidence, source_image_ids, assembled_json, updated_at,
+             volume_number, volume_label, letter_range, ocr_generation_id, ocr_processed_at,
+             nodegoat_id, meineke_id, billerbeck_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (source_image_ids) DO UPDATE SET
                 lemma = EXCLUDED.lemma,
                 entry_number = EXCLUDED.entry_number,
@@ -147,18 +227,24 @@ def upsert_assembled(cur, assembled_entries):
                 translated = 0,
                 translation_json = NULL,
                 translation_tokens = 0,
-                translated_at = NULL
+                translated_at = NULL,
+                volume_number = COALESCE(EXCLUDED.volume_number, assembled_lemmas.volume_number),
+                volume_label = COALESCE(EXCLUDED.volume_label, assembled_lemmas.volume_label),
+                letter_range = COALESCE(EXCLUDED.letter_range, assembled_lemmas.letter_range),
+                ocr_generation_id = COALESCE(EXCLUDED.ocr_generation_id, assembled_lemmas.ocr_generation_id),
+                ocr_processed_at = COALESCE(EXCLUDED.ocr_processed_at, assembled_lemmas.ocr_processed_at),
+                nodegoat_id = COALESCE(EXCLUDED.nodegoat_id, assembled_lemmas.nodegoat_id),
+                meineke_id = COALESCE(EXCLUDED.meineke_id, assembled_lemmas.meineke_id),
+                billerbeck_id = COALESCE(EXCLUDED.billerbeck_id, assembled_lemmas.billerbeck_id)
             """,
-            (
-                entry["lemma"],
-                entry["entry_number"],
-                entry["type"],
-                entry["greek_text"],
-                entry["confidence"],
-                source_ids_json,
-                assembled_json,
-            ),
-        )
+                params,
+            )
+        except TypeError:
+            print("Params length:", len(params))
+            print("Params content:", params)
+            print("Entry:", entry)
+            raise
+        cur.execute(sql)
         upserts += 1
     return upserts
 
@@ -171,7 +257,9 @@ def main():
     conn = get_connection()
     cur = conn.cursor()
 
+    ensure_volume_columns(cur)
     ensure_table(cur)
+    headword_lookup = load_headword_lookup(cur)
 
     if args.rebuild:
         cur.execute("DELETE FROM assembled_lemmas")
@@ -181,7 +269,7 @@ def main():
     rows = load_processed_images(cur)
     print(f"Loaded {len(rows)} processed images.")
 
-    assembled_entries = build_assembled_entries(rows)
+    assembled_entries = build_assembled_entries(rows, headword_lookup)
     if not assembled_entries:
         print("No assembled lemmas found.")
         conn.close()

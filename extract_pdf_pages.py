@@ -16,6 +16,7 @@ from typing import Optional
 
 import pypdfium2 as pdfium
 from db import get_connection
+from volume_metadata import ensure_volume_columns, infer_volume_metadata
 
 DEFAULT_DPI = 300
 PHRASE = "textus et versio germanica"
@@ -40,44 +41,74 @@ def ensure_pdf_support(cur):
         )
         """
     )
+    cur.execute("ALTER TABLE pdf_files ADD COLUMN IF NOT EXISTS volume_number INTEGER")
+    cur.execute("ALTER TABLE pdf_files ADD COLUMN IF NOT EXISTS volume_label TEXT")
+    cur.execute("ALTER TABLE pdf_files ADD COLUMN IF NOT EXISTS letter_range TEXT")
     cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS pdf_file_id INTEGER")
     cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS page_number INTEGER")
     cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS image_dir TEXT")
+    cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS volume_number INTEGER")
+    cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS volume_label TEXT")
+    cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS letter_range TEXT")
 
 
-def get_or_create_pdf(cur, pdf_path: Path) -> int:
+def get_or_create_pdf(cur, pdf_path: Path, volume_meta: Optional[dict]) -> int:
     """Return pdf_file_id, inserting if needed."""
     cur.execute(
         """
-        INSERT INTO pdf_files (pdf_path)
-        VALUES (%s)
-        ON CONFLICT (pdf_path) DO UPDATE SET pdf_path = EXCLUDED.pdf_path
+        INSERT INTO pdf_files (pdf_path, volume_number, volume_label, letter_range)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (pdf_path) DO UPDATE SET
+            pdf_path = EXCLUDED.pdf_path,
+            volume_number = COALESCE(EXCLUDED.volume_number, pdf_files.volume_number),
+            volume_label = COALESCE(EXCLUDED.volume_label, pdf_files.volume_label),
+            letter_range = COALESCE(EXCLUDED.letter_range, pdf_files.letter_range)
         RETURNING id
         """,
-        (str(pdf_path),),
+        (
+            str(pdf_path),
+            volume_meta["volume_number"] if volume_meta else None,
+            volume_meta["volume_label"] if volume_meta else None,
+            volume_meta["letter_range"] if volume_meta else None,
+        ),
     )
     return cur.fetchone()[0]
 
 
 def register_image(cur, image_filename: str, pdf_file_id: Optional[int], page_number: int,
-                   image_dir: Path) -> bool:
+                   image_dir: Path, volume_meta: Optional[dict]) -> bool:
     """Insert/refresh image into DB queue."""
+    volume_number = volume_meta["volume_number"] if volume_meta else None
+    volume_label = volume_meta["volume_label"] if volume_meta else None
+    letter_range = volume_meta["letter_range"] if volume_meta else None
     cur.execute(
         """
-        INSERT INTO images (image_filename, pdf_file_id, page_number, image_dir)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO images (image_filename, pdf_file_id, page_number, image_dir, volume_number, volume_label, letter_range)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (image_filename) DO UPDATE
             SET pdf_file_id = EXCLUDED.pdf_file_id,
                 page_number = EXCLUDED.page_number,
-                image_dir = EXCLUDED.image_dir
+                image_dir = EXCLUDED.image_dir,
+                volume_number = COALESCE(EXCLUDED.volume_number, images.volume_number),
+                volume_label = COALESCE(EXCLUDED.volume_label, images.volume_label),
+                letter_range = COALESCE(EXCLUDED.letter_range, images.letter_range)
         """,
-        (image_filename, pdf_file_id, page_number, str(image_dir)),
+        (
+            image_filename,
+            pdf_file_id,
+            page_number,
+            str(image_dir),
+            volume_number,
+            volume_label,
+            letter_range,
+        ),
     )
     return cur.rowcount > 0
 
 
 def render_pages(pdf_path: Path, output_dir: Path, pages: list[int], dpi: int, prefix: str,
-                 db_conn=None, db_cur=None, pdf_file_id: Optional[int] = None) -> tuple[int, int]:
+                 db_conn=None, db_cur=None, pdf_file_id: Optional[int] = None,
+                 volume_meta: Optional[dict] = None) -> tuple[int, int]:
     scale = dpi / 72.0  # PDF points are 72 DPI
     digits = len(str(max(pages))) if pages else 1
 
@@ -101,7 +132,9 @@ def render_pages(pdf_path: Path, output_dir: Path, pages: list[int], dpi: int, p
             saved += 1
 
             if db_cur:
-                registered += int(register_image(db_cur, filename, pdf_file_id, page_number, output_dir))
+                registered += int(
+                    register_image(db_cur, filename, pdf_file_id, page_number, output_dir, volume_meta)
+                )
             print(f"Saved page {page_number} -> {output_dir / filename}")
 
     if db_conn:
@@ -158,11 +191,14 @@ def main():
     pages = build_page_list(start_page, total_pages, args.every)
     db_conn = db_cur = None
     pdf_file_id = None
+    volume_meta = None
     if not args.skip_db:
         db_conn = get_connection()
         db_cur = db_conn.cursor()
         ensure_pdf_support(db_cur)
-        pdf_file_id = get_or_create_pdf(db_cur, pdf_path)
+        ensure_volume_columns(db_cur)
+        volume_meta = infer_volume_metadata(pdf_path)
+        pdf_file_id = get_or_create_pdf(db_cur, pdf_path, volume_meta)
 
     saved, registered = render_pages(
         pdf_path,
@@ -173,6 +209,7 @@ def main():
         db_conn=db_conn,
         db_cur=db_cur,
         pdf_file_id=pdf_file_id,
+        volume_meta=volume_meta,
     )
 
     if db_conn:
