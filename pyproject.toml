@@ -10,4 +10,5 @@ dependencies = [
     "psycopg2-binary>=2.9.11",
     "pypdfium2>=4.30.0",
     "pillow>=10.3.0",
+    "google-genai>=1.55.0",
 ]

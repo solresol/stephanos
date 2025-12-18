@@ -172,6 +172,7 @@ def main():
     parser = argparse.ArgumentParser(description="Extract every Nth page from a PDF as images.")
     parser.add_argument("--pdf", required=True, help="Path to the PDF file")
     parser.add_argument("--every", type=int, default=2, help="Step interval; default extracts every second page")
+    parser.add_argument("--start-page", type=int, help="Force start at this page (skips auto-detection)")
     parser.add_argument("--output-dir", type=Path, default=Path("pdf_pages"),
                         help="Directory to write images (default: ./pdf_pages)")
     parser.add_argument("--dpi", type=int, default=DEFAULT_DPI, help=f"Render DPI (default: {DEFAULT_DPI})")
@@ -184,7 +185,13 @@ def main():
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
-    start_page = find_start_page(pdf_path)
+    if args.start_page:
+        start_page = args.start_page
+        print(f"Using manually specified start page: {start_page}")
+    else:
+        start_page = find_start_page(pdf_path)
+        print(f"Auto-detected start page: {start_page}")
+
     with pdfium.PdfDocument(pdf_path) as pdf:
         total_pages = len(pdf)
 
