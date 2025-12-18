@@ -6,7 +6,7 @@ Usage:
   uv run process_image.py --image-dir <dir>                    # Process next unprocessed image
   uv run process_image.py --image-dir <dir> --image <file>     # Process specific image
   uv run process_image.py --image <file> --force               # Reprocess (auto-finds image dir)
-  uv run process_image.py --image <file> --force --model gpt-5.1  # Reprocess with different model
+  uv run process_image.py --image <file> --force --model gemini-3.0-flash  # Reprocess with different model
 """
 import argparse
 import json
@@ -18,7 +18,7 @@ from openai import OpenAI
 
 from db import get_connection
 
-DEFAULT_MODEL = "gpt-5.1"
+DEFAULT_MODEL = "gemini-3.0-flash"
 
 def load_api_key():
     """Load OpenAI API key from ~/.openai.key"""
