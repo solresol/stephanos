@@ -199,7 +199,7 @@ Useful for textual criticism, not essential for the place-name graph.
 - Images are named like `e9783110219630_i0092.jpg` and exist on disk
 
 ### Model Assumptions
-- gpt-5.1-mini supports vision input and JSON output
+- Gemini 3.0 Flash supports vision input and JSON output
 - We treat its output as "best effort" and keep confidence flags for uncertain readings
 
 ### Error Handling
