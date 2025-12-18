@@ -25,7 +25,7 @@ def ensure_table(cur):
             type TEXT,
             greek_text TEXT,
             confidence TEXT,
-            source_image_ids TEXT NOT NULL UNIQUE,
+            source_image_ids TEXT NOT NULL,
             assembled_json TEXT,
             human_greek_text TEXT,
             human_notes TEXT,
@@ -55,10 +55,13 @@ def ensure_table(cur):
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS nodegoat_id TEXT")
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS meineke_id TEXT")
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS billerbeck_id TEXT")
+    # Drop old unique index if it exists
+    cur.execute("DROP INDEX IF EXISTS assembled_lemmas_source_image_ids_idx")
+    # Create composite unique index on (source_image_ids, entry_number)
     cur.execute(
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS assembled_lemmas_source_image_ids_idx
-        ON assembled_lemmas (source_image_ids)
+        CREATE UNIQUE INDEX IF NOT EXISTS assembled_lemmas_composite_idx
+        ON assembled_lemmas (source_image_ids, entry_number)
         """
     )
 
@@ -216,7 +219,7 @@ def upsert_assembled(cur, assembled_entries):
              volume_number, volume_label, letter_range, ocr_generation_id, ocr_processed_at,
              nodegoat_id, meineke_id, billerbeck_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (source_image_ids) DO UPDATE SET
+            ON CONFLICT (source_image_ids, entry_number) DO UPDATE SET
                 lemma = EXCLUDED.lemma,
                 entry_number = EXCLUDED.entry_number,
                 type = EXCLUDED.type,

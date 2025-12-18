@@ -30,9 +30,9 @@ def extract_images(html_path: Path) -> list[str]:
     return images
 
 
-def process_html_file(conn, cur, html_path: Path, html_file_id: int = None, volume_meta: dict | None = None) -> int:
+def process_html_file(conn, cur, html_path: Path, html_file_id: int = None, volume_meta: dict | None = None, image_dir: Path = None) -> int:
     """
-    Process a single HTML file and insert images.
+    Process a single HTML file and insert images with BLOB data.
     Returns number of images inserted.
     """
     images = extract_images(html_path)
@@ -41,15 +41,39 @@ def process_html_file(conn, cur, html_path: Path, html_file_id: int = None, volu
     volume_label = volume_meta["volume_label"] if volume_meta else None
     letter_range = volume_meta["letter_range"] if volume_meta else None
 
+    # If no image_dir provided, try to infer from html_path
+    if not image_dir:
+        image_dir = html_path.parent
+
     for img in images:
         try:
+            # Read image file data
+            image_path = image_dir / img
+            image_data = None
+            mime_type = 'image/jpeg'
+
+            if image_path.exists():
+                image_data = image_path.read_bytes()
+                # Determine MIME type from extension
+                ext = image_path.suffix.lower()
+                if ext == '.png':
+                    mime_type = 'image/png'
+                elif ext == '.gif':
+                    mime_type = 'image/gif'
+                elif ext == '.webp':
+                    mime_type = 'image/webp'
+            else:
+                print(f"Warning: Image file not found: {image_path}")
+
             cur.execute(
                 """
-                INSERT INTO images (image_filename, html_file_id, volume_number, volume_label, letter_range)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (image_filename) DO NOTHING
+                INSERT INTO images (image_filename, html_file_id, volume_number, volume_label, letter_range, image_data, image_mime_type)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (image_filename) DO UPDATE SET
+                    image_data = COALESCE(EXCLUDED.image_data, images.image_data),
+                    image_mime_type = COALESCE(EXCLUDED.image_mime_type, images.image_mime_type)
                 """,
-                (img, html_file_id, volume_number, volume_label, letter_range)
+                (img, html_file_id, volume_number, volume_label, letter_range, image_data, mime_type)
             )
             if cur.rowcount > 0:
                 inserted += 1
@@ -129,7 +153,7 @@ def process_from_database(conn, cur, limit: int = None):
             volume_meta = infer_volume_metadata(epub_path)
 
         print(f"Processing {epub_name}/{html_filename}...", end=" ")
-        inserted = process_html_file(conn, cur, html_path, html_id, volume_meta=volume_meta)
+        inserted = process_html_file(conn, cur, html_path, html_id, volume_meta=volume_meta, image_dir=Path(image_dir))
         mark_html_processed(conn, cur, html_id, inserted)
         conn.commit()
 
