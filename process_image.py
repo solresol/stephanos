@@ -3,11 +3,11 @@
 Process images with OpenAI or Gemini vision models to extract Greek lemma text.
 
 Usage:
-  uv run process_image.py --image-dir <dir>                           # Process next unprocessed image (OpenAI)
-  uv run process_image.py --image-dir <dir> --provider gemini         # Process with Gemini
+  uv run process_image.py --image-dir <dir>                           # Process next unprocessed image (Gemini)
+  uv run process_image.py --image-dir <dir> --provider openai         # Process with OpenAI
   uv run process_image.py --image-dir <dir> --image <file>            # Process specific image
   uv run process_image.py --image <file> --force                      # Reprocess (auto-finds image dir)
-  uv run process_image.py --image <file> --force --provider gemini    # Reprocess with Gemini
+  uv run process_image.py --image <file> --force --provider openai    # Reprocess with OpenAI
 """
 import argparse
 import json
@@ -23,9 +23,9 @@ from google import genai
 from db import get_connection
 
 DEFAULT_MODEL = "gpt-5.1"
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 DEFAULT_GENERATION_NAME = "headword constrained"
-DEFAULT_PROVIDER = "openai"
+DEFAULT_PROVIDER = "gemini"
 
 # Greek base alphabet order for headword filtering
 GREEK_ORDER = ["α", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ", "λ", "μ", "ν", "ξ", "ο", "π", "ρ", "σ", "τ", "υ", "φ", "χ", "ψ", "ω"]
