@@ -14,7 +14,7 @@ from process_image import load_api_key, process_image_with_model
 from db import get_connection
 
 DEFAULT_DAILY_TOKEN_LIMIT = 100_000
-DEFAULT_MODEL = "gpt-5.1"
+DEFAULT_MODEL = "gemini-3.0-flash"
 
 def get_tokens_used_today(cur):
     """Get total tokens used today"""

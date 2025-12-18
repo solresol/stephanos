@@ -38,7 +38,7 @@ To add dependencies: `uv add <package>`
 3. **Image Processing** (`batch_process.py` / `process_image.py`)
    - Fetches unprocessed images from database
    - Automatically finds image directory from linked HTML file
-   - Sends to OpenAI vision model (gpt-5.1) with specialized prompts
+   - Sends to Gemini 3.0 Flash with specialized prompts
    - Expects JSON output with lemma entries
    - Stores JSON in `lemma_json` column and marks `processed=1`
 
@@ -144,7 +144,7 @@ When writing new processing code:
 - Database: PostgreSQL on localhost (see `db.py` and `config.py`)
 
 ### Model Behavior
-- gpt-5.1 is used for both image processing (OCR) and translation
+- Gemini 3.0 Flash is used for image processing (OCR); gpt-5.1 handles translation
 - Output is "best effort" - expect occasional errors or low-confidence readings
 - Polytonic Greek should be preserved exactly as rendered in images
 
