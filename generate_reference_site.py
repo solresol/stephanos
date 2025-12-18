@@ -68,7 +68,18 @@ def get_all_lemmas(cur):
         """
         SELECT a.id, a.lemma, a.entry_number, a.type, a.greek_text, a.human_greek_text, a.confidence,
                a.translation_json, a.translated, a.ocr_processed_at, g.name as ocr_generation_name,
-               a.meineke_id, a.billerbeck_id
+               (SELECT i.ocr_model FROM images i WHERE i.id = ANY(
+                   SELECT jsonb_array_elements_text(a.source_image_ids::jsonb)::int
+               ) ORDER BY i.id LIMIT 1) as ocr_model,
+               a.meineke_id, a.billerbeck_id, a.source_image_ids,
+               COALESCE(
+                   (SELECT json_agg(i.image_filename ORDER BY i.id)
+                    FROM images i
+                    WHERE i.id = ANY(
+                        SELECT jsonb_array_elements_text(a.source_image_ids::jsonb)::int
+                    )),
+                   '[]'::json
+               ) as image_filenames
         FROM assembled_lemmas a
         LEFT JOIN ocr_generations g ON a.ocr_generation_id = g.id
         ORDER BY a.id
@@ -77,7 +88,7 @@ def get_all_lemmas(cur):
     rows = cur.fetchall()
 
     all_lemmas = []
-    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_json, translated, ocr_processed_at, ocr_generation_name, meineke_id, billerbeck_id in rows:
+    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, source_image_ids, image_filenames in rows:
         try:
             data = json.loads(translation_json) if translation_json else None
         except json.JSONDecodeError:
@@ -92,6 +103,17 @@ def get_all_lemmas(cur):
             translation = data.get("translation", "")
             english_translation = data.get("english_translation", "")
 
+        # Parse image filenames (psycopg2 auto-deserializes JSON)
+        if isinstance(image_filenames, list):
+            images = image_filenames
+        elif image_filenames:
+            try:
+                images = json.loads(image_filenames)
+            except (json.JSONDecodeError, TypeError):
+                images = []
+        else:
+            images = []
+
         lemma_data = {
             "lemma_id": lemma_id,
             "entry_number": entry_number or "",
@@ -103,9 +125,11 @@ def get_all_lemmas(cur):
             "confidence": confidence or "normal",
             "ocr_processed_at": ocr_processed_at,
             "ocr_generation_name": ocr_generation_name or "unknown",
+            "ocr_model": ocr_model,
             "meineke_id": meineke_id or "",
             "billerbeck_id": billerbeck_id or "",
             "translated": bool(translated),
+            "image_filenames": images,
         }
         lemma_data["letter_slug"] = get_initial_slug(lemma_data["lemma"])
         all_lemmas.append(lemma_data)
@@ -138,13 +162,24 @@ def render_lemma_cards(lemmas):
                     when = datetime.fromisoformat(ts).strftime("%Y-%m-%d")
                 else:
                     when = ts.strftime("%Y-%m-%d")
-            meta_lines.append(
-                f"OCR: {lemma.get('ocr_generation_name', 'unknown')}{f' on {when}' if when else ''}"
-            )
+            ocr_info = f"{lemma.get('ocr_generation_name', 'unknown')}"
+            if lemma.get('ocr_model'):
+                ocr_info += f" ({lemma['ocr_model']})"
+            if when:
+                ocr_info += f" on {when}"
+            meta_lines.append(f"OCR: {ocr_info}")
+        # Add page image links (to HTML wrappers)
+        if lemma.get("image_filenames"):
+            image_links = []
+            for img in lemma["image_filenames"]:
+                # Link to HTML wrapper page instead of raw image
+                html_page = img.replace('.jpg', '.html').replace('.png', '.html')
+                image_links.append(f'<a href="protected/{html_page}" target="_blank">{img}</a>')
+            meta_lines.append(f"Source: {', '.join(image_links)}")
         meta_html = "<br>".join(meta_lines)
         cards_html.append(
             f"""
-            <div class="lemma-card">
+            <div class="lemma-card" id="lemma-{lemma['lemma_id']}">
                 <div class="lemma-header">
                     <div>
                         <div class="lemma-title">{lemma['lemma']}{confidence_badge}</div>
@@ -379,6 +414,7 @@ def generate_index_html(letter_counts, stats):
     <div class="container">
         <div class="nav-links">
             <a href="progress.html">Processing Progress</a>
+            <a href="protected/">Page Scans [Password Protected]</a>
             <a href="lemmas.csv">CSV Export</a>
         </div>
         <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
@@ -458,6 +494,42 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
 """
     return html
 
+def extract_images_from_database(cur, output_dir: Path):
+    """Extract image BLOBs from database to protected directory"""
+    protected_dir = output_dir / "protected"
+    protected_dir.mkdir(exist_ok=True)
+
+    # Get all unique image filenames used in assembled lemmas
+    cur.execute(
+        """
+        SELECT DISTINCT i.image_filename, i.image_data, i.image_mime_type
+        FROM images i
+        WHERE i.id IN (
+            SELECT DISTINCT unnest(
+                ARRAY(
+                    SELECT jsonb_array_elements_text(a.source_image_ids::jsonb)::int
+                    FROM assembled_lemmas a
+                )
+            )
+        )
+        AND i.image_data IS NOT NULL
+        """
+    )
+
+    images = cur.fetchall()
+    extracted = 0
+
+    for filename, image_data, mime_type in images:
+        if not image_data:
+            continue
+
+        image_path = protected_dir / filename
+        image_path.write_bytes(image_data)
+        extracted += 1
+
+    return extracted
+
+
 def main():
     conn = get_connection()
     cur = conn.cursor()
@@ -486,11 +558,14 @@ def main():
     for slug in buckets:
         buckets[slug].sort(key=lambda x: (x['lemma'], x.get('entry_number', '')))
 
-    conn.close()
-
     # Create output directory
     output_dir = Path(OUTPUT_DIR)
     output_dir.mkdir(exist_ok=True)
+
+    # Extract images from database to protected directory
+    images_extracted = extract_images_from_database(cur, output_dir)
+
+    conn.close()
 
     # Generate index
     letter_counts = {slug: len(items) for slug, items in buckets.items()}
@@ -506,6 +581,7 @@ def main():
     print(f"  Total lemmas: {stats['total_lemmas']}")
     print(f"  Translated lemmas: {stats['translated_lemmas']}")
     print(f"  Pages OCR'd: {stats['processed_images']} / {stats['total_images']}")
+    print(f"  Images extracted from database: {images_extracted}")
 
 if __name__ == "__main__":
     main()
