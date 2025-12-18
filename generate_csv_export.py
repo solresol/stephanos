@@ -3,7 +3,8 @@
 Export processed + translated lemmas to CSV.
 
 Columns:
-  lemma, greek_text, translation
+  lemma, entry_number, type, greek_text, translation, confidence,
+  ocr_generation, ocr_model, ocr_processed_at, meineke_id, billerbeck_id
 
 Usage:
   uv run generate_csv_export.py --output exports/lemmas.csv
@@ -22,10 +23,16 @@ def fetch_translated_rows(cur):
         """
         SELECT
             a.lemma,
+            a.entry_number,
+            a.type,
             COALESCE(a.human_greek_text, a.greek_text) AS greek_text,
             a.translation_json,
+            a.confidence,
             a.ocr_processed_at,
             g.name AS ocr_generation,
+            (SELECT i.ocr_model FROM images i WHERE i.id = ANY(
+                SELECT jsonb_array_elements_text(a.source_image_ids::jsonb)::int
+            ) ORDER BY i.id LIMIT 1) as ocr_model,
             a.meineke_id,
             a.billerbeck_id
         FROM assembled_lemmas a
@@ -71,22 +78,30 @@ def main():
         writer.writerow(
             [
                 "lemma",
+                "entry_number",
+                "type",
                 "greek_text",
                 "translation",
+                "confidence",
                 "ocr_generation",
+                "ocr_model",
                 "ocr_processed_at",
                 "meineke_id",
                 "billerbeck_id",
             ]
         )
-        for lemma, greek_text, translation_json, ocr_processed_at, ocr_generation, meineke_id, billerbeck_id in rows:
+        for lemma, entry_number, lemma_type, greek_text, translation_json, confidence, ocr_processed_at, ocr_generation, ocr_model, meineke_id, billerbeck_id in rows:
             translation = parse_translation_json(translation_json)
             writer.writerow(
                 [
                     (lemma or "").strip(),
+                    entry_number or "",
+                    (lemma_type or "").strip(),
                     (greek_text or "").strip(),
                     translation.strip(),
+                    confidence or "",
                     ocr_generation or "",
+                    ocr_model or "",
                     ocr_processed_at or "",
                     meineke_id or "",
                     billerbeck_id or "",
