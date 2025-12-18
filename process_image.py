@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Process images with OpenAI vision models to extract Greek lemma text.
+Process images with OpenAI or Gemini vision models to extract Greek lemma text.
 
 Usage:
-  uv run process_image.py --image-dir <dir>                    # Process next unprocessed image
-  uv run process_image.py --image-dir <dir> --image <file>     # Process specific image
-  uv run process_image.py --image <file> --force               # Reprocess (auto-finds image dir)
-  uv run process_image.py --image <file> --force --model gemini-3.0-flash  # Reprocess with different model
+  uv run process_image.py --image-dir <dir>                           # Process next unprocessed image (OpenAI)
+  uv run process_image.py --image-dir <dir> --provider gemini         # Process with Gemini
+  uv run process_image.py --image-dir <dir> --image <file>            # Process specific image
+  uv run process_image.py --image <file> --force                      # Reprocess (auto-finds image dir)
+  uv run process_image.py --image <file> --force --provider gemini    # Reprocess with Gemini
 """
 import argparse
 import json
@@ -17,11 +18,14 @@ from datetime import datetime, timezone
 import unicodedata
 
 from openai import OpenAI
+from google import genai
 
 from db import get_connection
 
-DEFAULT_MODEL = "gemini-3.0-flash"
+DEFAULT_MODEL = "gpt-5.1"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_GENERATION_NAME = "headword constrained"
+DEFAULT_PROVIDER = "openai"
 
 # Greek base alphabet order for headword filtering
 GREEK_ORDER = ["α", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ", "λ", "μ", "ν", "ξ", "ο", "π", "ρ", "σ", "τ", "υ", "φ", "χ", "ψ", "ω"]
@@ -73,6 +77,13 @@ def load_api_key():
     key_path = Path.home() / ".openai.key"
     if not key_path.exists():
         raise FileNotFoundError(f"API key file not found: {key_path}")
+    return key_path.read_text().strip()
+
+def load_gemini_api_key():
+    """Load Gemini API key from ~/.gemini.key"""
+    key_path = Path.home() / ".gemini.key"
+    if not key_path.exists():
+        raise FileNotFoundError(f"Gemini API key file not found: {key_path}")
     return key_path.read_text().strip()
 
 SYSTEM_PROMPT = """You are a classical philologist specializing in Byzantine Greek geographical texts.
@@ -231,6 +242,20 @@ def strip_greek_base_letter(text: str) -> str | None:
     return None
 
 
+def normalize_for_sorting(text: str) -> str:
+    """Normalize Greek text for alphabetical sorting by removing diacritics."""
+    if not text:
+        return ""
+    # Decompose to NFD (separate base characters from combining marks)
+    decomposed = unicodedata.normalize("NFD", text)
+    # Remove combining characters (accents, breathing marks, etc.)
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    # Normalize back to NFC and lowercase for consistent comparison
+    # Replace final sigma with regular sigma for sorting
+    result = unicodedata.normalize("NFC", stripped).lower()
+    return result.replace("ς", "σ")
+
+
 def is_within_range(letter: str, start: str, end: str) -> bool:
     if letter not in GREEK_INDEX or start not in GREEK_INDEX or end not in GREEK_INDEX:
         return False
@@ -277,21 +302,79 @@ def get_letter_bounds(letter_range: str):
     return start, end
 
 
-def load_allowed_headwords(cur, volume_meta):
-    """Return a list of allowed headwords (dicts) for the volume range."""
+def get_previous_image_last_lemma(cur, image_id, volume_number):
+    """Get the last lemma from the previous image in the same volume."""
+    if not volume_number:
+        return None
+
+    cur.execute("""
+        SELECT i.id, i.lemma_json
+        FROM images i
+        WHERE i.volume_number = %s
+        AND i.id < %s
+        AND i.processed = 1
+        AND i.lemma_json IS NOT NULL
+        ORDER BY i.id DESC
+        LIMIT 1
+    """, (volume_number, image_id))
+
+    row = cur.fetchone()
+    if not row:
+        return None
+
+    try:
+        data = json.loads(row[1])
+        entries = data.get("entries", []) if isinstance(data, dict) else data
+        if entries:
+            # Return the last entry's lemma
+            return entries[-1].get("lemma")
+    except:
+        pass
+
+    return None
+
+def load_allowed_headwords(cur, volume_meta, start_after_headword=None, limit=50):
+    """
+    Return a list of allowed headwords (dicts) for the volume range.
+
+    If start_after_headword is provided, return up to 'limit' headwords after that one.
+    Otherwise, return the first 'limit' headwords for the volume.
+    """
     if not volume_meta or not volume_meta.get("letter_range"):
         return []
     bounds = get_letter_bounds(volume_meta["letter_range"])
     if not bounds:
         return []
     start, end = bounds
+
+    # Get all headwords for this volume
     cur.execute("SELECT nodegoat_id, greek_headword FROM meineke_headwords")
-    allowed = []
+    all_headwords = []
     for nodegoat_id, greek_headword in cur.fetchall():
         base = strip_greek_base_letter(greek_headword)
         if base and is_within_range(base, start, end):
-            allowed.append({"nodegoat_id": nodegoat_id, "greek_headword": greek_headword})
-    return allowed
+            all_headwords.append({"nodegoat_id": nodegoat_id, "greek_headword": greek_headword})
+
+    # Sort by normalized Greek headword (alphabetical order)
+    all_headwords.sort(key=lambda hw: normalize_for_sorting(hw["greek_headword"]))
+
+    # If we have a starting point, find it and return the next 'limit' headwords
+    if start_after_headword and all_headwords:
+        # Normalize for comparison (handles OXIA vs TONOS differences)
+        normalized_start = unicodedata.normalize("NFC", start_after_headword)
+
+        # Find the index of the starting headword
+        start_idx = None
+        for idx, hw in enumerate(all_headwords):
+            if unicodedata.normalize("NFC", hw["greek_headword"]) == normalized_start:
+                start_idx = idx + 1  # Start after this one
+                break
+
+        if start_idx is not None:
+            return all_headwords[start_idx:start_idx + limit]
+
+    # Otherwise return the first 'limit' headwords
+    return all_headwords[:limit]
 
 def fetch_next_image(cur, specific=None):
     if specific:
@@ -305,7 +388,8 @@ def fetch_next_image(cur, specific=None):
         )
     return cur.fetchone()
 
-def mark_processed(conn, cur, image_id, lemma_json, tokens_used=0, model=None, generation_id=None):
+def mark_processed(conn, cur, image_id, lemma_json, tokens_used=0, model=None, generation_id=None,
+                   first_headword=None, last_headword=None):
     cur.execute(
         """
         UPDATE images
@@ -314,16 +398,32 @@ def mark_processed(conn, cur, image_id, lemma_json, tokens_used=0, model=None, g
             processed_at = %s,
             tokens_used = %s,
             ocr_model = %s,
-            ocr_generation_id = %s
+            ocr_generation_id = %s,
+            ocr_first_headword = %s,
+            ocr_last_headword = %s
         WHERE id = %s
         """,
-        (lemma_json, datetime.now(timezone.utc).isoformat(), tokens_used, model, generation_id, image_id)
+        (lemma_json, datetime.now(timezone.utc).isoformat(), tokens_used, model, generation_id,
+         first_headword, last_headword, image_id)
     )
     conn.commit()
 
-def process_image_with_model(client, image_path, model, volume_meta=None, allowed_headwords=None):
-    """Process image with specified model using tool calling, returns (payload_dict, tokens_used)"""
-    image_data = image_path.read_bytes()
+def process_image_with_model(client, image_path=None, model=None, volume_meta=None, allowed_headwords=None, image_data=None):
+    """
+    Process image with specified model using tool calling, returns (payload_dict, tokens_used).
+
+    Args:
+        image_path: Path to image file (legacy, optional if image_data provided)
+        image_data: Image bytes (preferred, read from database)
+        model: OpenAI model name
+        volume_meta: Volume metadata dict
+        allowed_headwords: List of allowed headwords
+    """
+    if image_data is None:
+        if image_path is None:
+            raise ValueError("Either image_path or image_data must be provided")
+        image_data = image_path.read_bytes()
+
     base64_image = base64.b64encode(image_data).decode('utf-8')
 
     extra_instructions = ""
@@ -376,24 +476,169 @@ def process_image_with_model(client, image_path, model, volume_meta=None, allowe
 
     return arguments, tokens_used
 
+def process_image_with_gemini(model_name, image_path=None, volume_meta=None, allowed_headwords=None, image_data=None):
+    """
+    Process image with Gemini model, returns (payload_dict, tokens_used).
+
+    Args:
+        model_name: Gemini model name (e.g., "gemini-2.5-flash")
+        image_path: Path to image file (legacy, optional if image_data provided)
+        image_data: Image bytes (preferred, read from database)
+        volume_meta: Volume metadata dict
+        allowed_headwords: List of allowed headwords
+    """
+    if image_data is None:
+        if image_path is None:
+            raise ValueError("Either image_path or image_data must be provided")
+        image_data = image_path.read_bytes()
+
+    # Convert memoryview to bytes if needed (PostgreSQL returns memoryview)
+    if isinstance(image_data, memoryview):
+        image_data = bytes(image_data)
+
+    # Configure Gemini API client
+    api_key = load_gemini_api_key()
+    client = genai.Client(api_key=api_key)
+
+    # Define JSON schema for structured output
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": [
+                    "lemmas_present",
+                    "continuation_only",
+                    "apparatus_only",
+                    "non_greek_error"
+                ],
+                "description": "Overall page classification"
+            },
+            "notes": {
+                "type": "string",
+                "description": "Optional notes (continuation text, apparatus summary, or error description)"
+            },
+            "entries": {
+                "type": "array",
+                "description": "List of lemma entries found on the page (empty if none)",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "entry_number": {
+                            "type": "integer",
+                            "description": "The entry number as shown on the page"
+                        },
+                        "lemma": {
+                            "type": "string",
+                            "description": "The headword/lemma in Greek"
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": [
+                                "city", "island", "river", "mountain", "region",
+                                "people", "place", "spring", "promontory", "fortress",
+                                "lake", "village", "country", "other"
+                            ],
+                            "description": "The type of geographical entity"
+                        },
+                        "greek_text": {
+                            "type": "string",
+                            "description": "The full Greek text of the lemma entry"
+                        },
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["normal", "low"],
+                            "description": "Confidence level - use 'low' if text is unclear"
+                        }
+                    },
+                    "required": ["entry_number", "lemma", "type", "greek_text"]
+                }
+            }
+        },
+        "required": ["status", "entries"]
+    }
+
+    # Build prompt with volume context and constraints
+    extra_instructions = ""
+    if volume_meta:
+        vol_label = volume_meta.get("volume_label") or f"volume {volume_meta.get('volume_number')}"
+        extra_instructions += f"\nThis page is from {vol_label} (letters: {volume_meta.get('letter_range')})."
+        if allowed_headwords:
+            headword_lines = "\n".join(
+                f"- {item['greek_headword']} (nodegoat_id: {item['nodegoat_id']})"
+                for item in allowed_headwords
+            )
+            extra_instructions += (
+                "\nAllowed headwords for this volume (pick the closest match for each lemma; "
+                "do not invent new headwords; if uncertain choose the nearest from this list):\n"
+                f"{headword_lines}"
+            )
+            extra_instructions += (
+                "\nEvery extracted lemma headword MUST be chosen from the allowed list above. "
+                "If no headwords apply because the page is continuation_only, apparatus_only, or non_greek_error, "
+                "set the appropriate status and leave entries empty."
+            )
+
+    full_prompt = SYSTEM_PROMPT + "\n\n" + USER_PROMPT + extra_instructions
+
+    # Generate response with structured output
+    # Use types.Part for image data
+    from google.genai import types
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=[
+            types.Part.from_text(text=full_prompt),
+            types.Part.from_bytes(data=image_data, mime_type="image/jpeg")
+        ],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=response_schema
+        )
+    )
+
+    # Parse JSON response
+    payload = json.loads(response.text)
+
+    # Get token usage from metadata
+    tokens_used = 0
+    if hasattr(response, 'usage_metadata') and response.usage_metadata:
+        tokens_used = response.usage_metadata.total_token_count
+
+    return payload, tokens_used
+
 def main():
-    parser = argparse.ArgumentParser(description="Process images with OpenAI vision")
+    parser = argparse.ArgumentParser(description="Process images with OpenAI or Gemini vision")
     parser.add_argument("--image-dir", help="Directory containing image files")
     parser.add_argument("--image", help="Specific image filename to process")
-    parser.add_argument("--model", default=DEFAULT_MODEL,
-                        help=f"Model to use for OCR (default: {DEFAULT_MODEL})")
+    parser.add_argument("--provider", default=DEFAULT_PROVIDER, choices=["openai", "gemini"],
+                        help=f"API provider to use (default: {DEFAULT_PROVIDER})")
+    parser.add_argument("--model",
+                        help=f"Model to use for OCR (default: gpt-5.1 for openai, gemini-2.5-flash for gemini)")
     parser.add_argument("--force", action="store_true",
                         help="Force reprocessing of already-processed images")
-    parser.add_argument("--ocr-generation", default=DEFAULT_GENERATION_NAME,
-                        help='OCR generation label (e.g., "simple request", "headword constrained")')
+    parser.add_argument("--ocr-generation",
+                        help='OCR generation label (default: auto-detected from provider)')
     args = parser.parse_args()
+
+    # Set defaults based on provider
+    if args.model is None:
+        args.model = DEFAULT_MODEL if args.provider == "openai" else DEFAULT_GEMINI_MODEL
+
+    if args.ocr_generation is None:
+        if args.provider == "gemini":
+            args.ocr_generation = "gemini-constrained"
+        else:
+            args.ocr_generation = DEFAULT_GENERATION_NAME
 
     conn = get_connection()
     cur = conn.cursor()
     ensure_ocr_generation_table(cur)
     generation_descriptions = {
         "simple request": "Original OCR without headword constraints",
-        "headword constrained": "OCR constrained to Meineke headword list for the volume",
+        "headword constrained": "OCR constrained to Meineke headword list for the volume (OpenAI gpt-5.1)",
+        "gemini-constrained": "OCR constrained to Meineke headword list for the volume (Gemini 2.5 Flash)",
+        "gemini-3-flash": "OCR constrained to Meineke headword list for the volume (Gemini 3 Flash)",
     }
     generation_id = get_or_create_generation(
         cur, args.ocr_generation, generation_descriptions.get(args.ocr_generation, args.ocr_generation)
@@ -437,18 +682,34 @@ def main():
     if not image_path.exists():
         raise FileNotFoundError(f"Image file not found: {image_path}")
 
-    # Process with OpenAI
-    api_key = load_api_key()
-    client = OpenAI(api_key=api_key)
-
     volume_meta = get_volume_for_image(cur, image_id)
-    allowed_headwords = load_allowed_headwords(cur, volume_meta) if volume_meta else []
 
-    print(f"Processing {image_filename} with {args.model}...", end=" ", flush=True)
+    # Smart headword selection: get next 50 headwords after previous image's last lemma
+    start_after = None
+    if volume_meta:
+        prev_last_lemma = get_previous_image_last_lemma(cur, image_id, volume_meta.get("volume_number"))
+        if prev_last_lemma:
+            start_after = prev_last_lemma
 
-    payload, tokens_used = process_image_with_model(
-        client, image_path, args.model, volume_meta=volume_meta, allowed_headwords=allowed_headwords
-    )
+    allowed_headwords = load_allowed_headwords(cur, volume_meta, start_after_headword=start_after, limit=50) if volume_meta else []
+
+    # Track the first and last headwords we're sending
+    first_headword = allowed_headwords[0]["greek_headword"] if allowed_headwords else None
+    last_headword = allowed_headwords[-1]["greek_headword"] if allowed_headwords else None
+
+    print(f"Processing {image_filename} with {args.provider}/{args.model} ({len(allowed_headwords)} headwords)...", end=" ", flush=True)
+
+    # Process with selected provider
+    if args.provider == "gemini":
+        payload, tokens_used = process_image_with_gemini(
+            args.model, image_path, volume_meta=volume_meta, allowed_headwords=allowed_headwords
+        )
+    else:  # openai
+        api_key = load_api_key()
+        client = OpenAI(api_key=api_key)
+        payload, tokens_used = process_image_with_model(
+            client, image_path, args.model, volume_meta=volume_meta, allowed_headwords=allowed_headwords
+        )
 
     # Save results (as JSON array for compatibility)
     mark_processed(
@@ -459,6 +720,8 @@ def main():
         tokens_used,
         args.model,
         generation_id,
+        first_headword=first_headword,
+        last_headword=last_headword,
     )
 
     conn.close()
