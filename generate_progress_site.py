@@ -39,6 +39,35 @@ def get_stats(cur):
     )
     recent = cur.fetchall()
 
+    # Calculate processing rate and projection
+    cur.execute(
+        """
+        SELECT MIN(processed_at), MAX(processed_at), COUNT(*)
+        FROM images
+        WHERE processed = 1 AND processed_at IS NOT NULL
+        """
+    )
+    first_time, last_time, count = cur.fetchone()
+
+    processing_rate = None
+    days_remaining = None
+    completion_date = None
+
+    if first_time and last_time and count > 1:
+        # Calculate days elapsed
+        time_span = last_time - first_time
+        days_elapsed = time_span.total_seconds() / 86400
+
+        if days_elapsed > 0:
+            # Images per day
+            processing_rate = count / days_elapsed
+
+            # Days remaining at current rate
+            remaining = total_images - processed_images
+            if processing_rate > 0:
+                days_remaining = remaining / processing_rate
+                completion_date = datetime.now(timezone.utc) + (last_time - first_time) * (remaining / count)
+
     return {
         'total_images': total_images,
         'processed_images': processed_images,
@@ -47,7 +76,12 @@ def get_stats(cur):
         'total_tokens': total_tokens,
         'today_tokens': today_tokens,
         'avg_tokens_per_image': (total_tokens / processed_images) if processed_images > 0 else 0,
-        'recent_images': recent
+        'recent_images': recent,
+        'processing_rate': processing_rate,
+        'days_remaining': days_remaining,
+        'completion_date': completion_date,
+        'first_processed': first_time,
+        'last_processed': last_time
     }
 
 def generate_html(stats):
@@ -237,6 +271,8 @@ def generate_html(stats):
                 <div class="stat-label">Avg Tokens/Image</div>
                 <div class="stat-value">{stats['avg_tokens_per_image']:,.0f}</div>
             </div>
+            {'<div class="stat-card"><div class="stat-label">Processing Rate</div><div class="stat-value">' + f"{stats['processing_rate']:.1f}" + '</div><div style="margin-top: 8px; font-size: 0.85em; color: #666;">images/day</div></div>' if stats['processing_rate'] else ''}
+            {'<div class="stat-card"><div class="stat-label">Est. Days Remaining</div><div class="stat-value">' + f"{stats['days_remaining']:.0f}" + '</div></div>' if stats['days_remaining'] else ''}
         </div>
 
         <div class="progress-bar">
@@ -252,6 +288,7 @@ def generate_html(stats):
             <p style="margin-top: 12px; color: #555; font-size: 0.95em;">
                 Queue contains <strong>{stats['remaining_images']:,}</strong> pages still to process (new EPUB/PDF inputs show up here).
             </p>
+            {f'<p style="margin-top: 8px; color: #667eea; font-weight: 600; font-size: 1.05em;">📅 Estimated completion: {stats["completion_date"].strftime("%B %d, %Y")}</p>' if stats.get('completion_date') else ''}
         </div>
 
         <div class="recent-table">
@@ -280,9 +317,11 @@ def generate_html(stats):
         except:
             formatted_time = str(processed_at)
 
+        # Link to HTML wrapper page in protected area
+        html_page = filename.replace('.jpg', '.html').replace('.png', '.html')
         html += f"""
                     <tr>
-                        <td class="filename">{filename}</td>
+                        <td class="filename"><a href="protected/{html_page}" target="_blank">{filename}</a></td>
                         <td class="timestamp">{formatted_time}</td>
                         <td>{tokens:,}</td>
                         <td>{json_len:,} bytes</td>
