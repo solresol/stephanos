@@ -296,7 +296,7 @@ def generate_html(stats):
 
         <div class="footer">
             <p>Last updated: """ + datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') + """</p>
-            <p>Pipeline: HTML → PostgreSQL → OpenAI Vision (gpt-5.1) → Structured JSON</p>
+            <p>Pipeline: HTML → PostgreSQL → Gemini 3.0 Flash → Structured JSON</p>
         </div>
     </div>
 </body>
