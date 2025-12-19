@@ -441,14 +441,14 @@ def generate_image_page(image_data, lemmas, prev_filename=None, next_filename=No
             </div>
 
             <div class="lemmas-column">
+                {raw_entries_html}
+
                 {f'''
         <div class="section">
             <h2>Assembled Lemmas ({len(lemmas)})</h2>
             {''.join(lemma_cards)}
         </div>
         ''' if lemmas else ('<div class="section"><h2>Assembled Lemmas</h2><p>No assembled lemmas found for this page.</p></div>' if processed else '')}
-
-                {raw_entries_html}
             </div>
         </div>
     </div>

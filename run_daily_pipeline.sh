@@ -50,6 +50,18 @@ uv run translate_lemmas.py \
     --delay 1 \
     2>&1 | tee -a "$LOGFILE"
 
+# Step 5a: Count words in Greek text
+echo "Step 5a: Counting words in Greek text..." | tee -a "$LOGFILE"
+uv run count_words.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 5b: Extract proper nouns
+echo "Step 5b: Extracting proper nouns..." | tee -a "$LOGFILE"
+uv run extract_proper_nouns.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 5c: Extract etymologies
+echo "Step 5c: Extracting etymologies..." | tee -a "$LOGFILE"
+uv run extract_etymologies.py 2>&1 | tee -a "$LOGFILE"
+
 # Step 6: Generate progress website
 echo "Step 6: Generating progress website..." | tee -a "$LOGFILE"
 uv run generate_progress_site.py 2>&1 | tee -a "$LOGFILE"
@@ -58,6 +70,10 @@ uv run generate_progress_site.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 7: Generating reference website..." | tee -a "$LOGFILE"
 uv run generate_reference_site.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 7a: Generate statistics website
+echo "Step 7a: Generating statistics website..." | tee -a "$LOGFILE"
+uv run generate_statistics_site.py 2>&1 | tee -a "$LOGFILE"
+
 # Step 8: Export lemmas CSV
 echo "Step 8: Exporting lemmas CSV..." | tee -a "$LOGFILE"
 uv run generate_csv_export.py --output exports/lemmas.csv 2>&1 | tee -a "$LOGFILE"
@@ -65,6 +81,8 @@ uv run generate_csv_export.py --output exports/lemmas.csv 2>&1 | tee -a "$LOGFIL
 # Step 9: Deploy to merah
 echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
 rsync -avz progress.html stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+rsync -avz statistics.html stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+rsync -avz statistics_images/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/statistics_images/ 2>&1 | tee -a "$LOGFILE"
 rsync -avz reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 rsync -avz exports/lemmas.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 

@@ -79,7 +79,8 @@ def get_all_lemmas(cur):
                         SELECT jsonb_array_elements_text(a.source_image_ids::jsonb)::int
                     )),
                    '[]'::json
-               ) as image_filenames
+               ) as image_filenames,
+               a.word_count
         FROM assembled_lemmas a
         LEFT JOIN ocr_generations g ON a.ocr_generation_id = g.id
         ORDER BY a.id
@@ -87,8 +88,35 @@ def get_all_lemmas(cur):
     )
     rows = cur.fetchall()
 
+    # Fetch proper nouns for all lemmas
+    cur.execute("""
+        SELECT lemma_id,
+               json_agg(json_build_object(
+                   'text_form', proper_noun,
+                   'lemma_form', lemma_form,
+                   'english', english_translation,
+                   'type', noun_type
+               ) ORDER BY id) as nouns
+        FROM proper_nouns
+        GROUP BY lemma_id
+    """)
+    proper_nouns_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
+
+    # Fetch etymologies for all lemmas
+    cur.execute("""
+        SELECT lemma_id,
+               json_agg(json_build_object(
+                   'greek_text', greek_text,
+                   'english', english_translation,
+                   'category', category
+               ) ORDER BY id) as etyms
+        FROM etymologies
+        GROUP BY lemma_id
+    """)
+    etymologies_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
+
     all_lemmas = []
-    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, source_image_ids, image_filenames in rows:
+    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, source_image_ids, image_filenames, word_count in rows:
         try:
             data = json.loads(translation_json) if translation_json else None
         except json.JSONDecodeError:
@@ -130,6 +158,9 @@ def get_all_lemmas(cur):
             "billerbeck_id": billerbeck_id or "",
             "translated": bool(translated),
             "image_filenames": images,
+            "word_count": word_count,
+            "proper_nouns": proper_nouns_by_lemma.get(lemma_id, []),
+            "etymologies": etymologies_by_lemma.get(lemma_id, []),
         }
         lemma_data["letter_slug"] = get_initial_slug(lemma_data["lemma"])
         all_lemmas.append(lemma_data)
@@ -168,6 +199,35 @@ def render_lemma_cards(lemmas):
             if when:
                 ocr_info += f" on {when}"
             meta_lines.append(f"OCR: {ocr_info}")
+        # Add word count
+        if lemma.get("word_count") is not None:
+            meta_lines.append(f"Word count: {lemma['word_count']}")
+
+        # Add proper nouns
+        if lemma.get("proper_nouns"):
+            noun_list = []
+            for noun in lemma["proper_nouns"]:
+                noun_str = f"{noun['lemma_form']}"
+                if noun.get('english'):
+                    noun_str += f" ({noun['english']})"
+                if noun.get('type'):
+                    noun_str += f" [{noun['type']}]"
+                noun_list.append(noun_str)
+            if noun_list:
+                meta_lines.append(f"Proper nouns: {', '.join(noun_list)}")
+
+        # Add etymologies
+        if lemma.get("etymologies"):
+            etym_list = []
+            for etym in lemma["etymologies"]:
+                cat = etym.get('category', '').replace('_', ' ').title()
+                etym_str = cat
+                if etym.get('english'):
+                    etym_str += f": {etym['english']}"
+                etym_list.append(etym_str)
+            if etym_list:
+                meta_lines.append(f"Etymologies: {'; '.join(etym_list)}")
+
         # Add page image links (to HTML wrappers)
         if lemma.get("image_filenames"):
             image_links = []
@@ -413,6 +473,8 @@ def generate_index_html(letter_counts, stats):
 
     <div class="container">
         <div class="nav-links">
+            <a href="people.html">People</a>
+            <a href="statistics.html">Statistics</a>
             <a href="progress.html">Processing Progress</a>
             <a href="protected/">Page Scans [Password Protected]</a>
             <a href="lemmas.csv">CSV Export</a>
@@ -481,6 +543,8 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
     <div class="container">
         <div class="nav-links">
             <a href="index.html">All Letters</a>
+            <a href="people.html">People</a>
+            <a href="statistics.html">Statistics</a>
             <a href="progress.html">Processing Progress</a>
             <a href="lemmas.csv">CSV Export</a>
         </div>
