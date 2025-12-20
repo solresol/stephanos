@@ -74,6 +74,14 @@ uv run generate_reference_site.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 7a: Generating statistics website..." | tee -a "$LOGFILE"
 uv run generate_statistics_site.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 7b: Generate people page
+echo "Step 7b: Generating people page..." | tee -a "$LOGFILE"
+uv run generate_people_page.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 7c: Generate protected pages
+echo "Step 7c: Generating protected pages..." | tee -a "$LOGFILE"
+uv run generate_protected_pages.py 2>&1 | tee -a "$LOGFILE"
+
 # Step 8: Export lemmas CSV
 echo "Step 8: Exporting lemmas CSV..." | tee -a "$LOGFILE"
 uv run generate_csv_export.py --output exports/lemmas.csv 2>&1 | tee -a "$LOGFILE"
@@ -83,6 +91,7 @@ echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
 rsync -avz progress.html stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 rsync -avz statistics.html stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 rsync -avz statistics_images/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/statistics_images/ 2>&1 | tee -a "$LOGFILE"
+rsync -avz people.html stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 rsync -avz reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 rsync -avz exports/lemmas.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 
