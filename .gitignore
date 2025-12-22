@@ -1,5 +1,9 @@
 stephanos.db
 progress.html
+people.html
+statistics.html
+statistics/
+statistics_images/
 reference_site/
 pipeline.log
 __pycache__/
@@ -8,3 +12,10 @@ config.py
 stephanos.ini
 pdf_pages/
 exports/
+
+# Temporary migration/testing scripts
+add_parisinus_column.sql
+check_column.py
+migrate_add_parisinus_column.py
+refactor_terminology.py
+REFACTORING_SUMMARY.md
