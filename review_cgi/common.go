@@ -180,9 +180,9 @@ func GetReviewStats(db *sql.DB) (total, reviewed, reviewedOK, reviewedCorrection
 	query := `
 		SELECT
 			COUNT(*) as total,
-			SUM(CASE WHEN review_status != 'not_reviewed' THEN 1 ELSE 0 END) as reviewed,
-			SUM(CASE WHEN review_status = 'reviewed_ok' THEN 1 ELSE 0 END) as reviewed_ok,
-			SUM(CASE WHEN review_status = 'reviewed_corrections' THEN 1 ELSE 0 END) as reviewed_corrections
+			COALESCE(SUM(CASE WHEN review_status != 'not_reviewed' THEN 1 ELSE 0 END), 0) as reviewed,
+			COALESCE(SUM(CASE WHEN review_status = 'reviewed_ok' THEN 1 ELSE 0 END), 0) as reviewed_ok,
+			COALESCE(SUM(CASE WHEN review_status = 'reviewed_corrections' THEN 1 ELSE 0 END), 0) as reviewed_corrections
 		FROM reviews
 	`
 
