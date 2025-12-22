@@ -112,7 +112,7 @@ CREATE INDEX idx_reviewer ON reviews(reviewer_username);
 - `letter=<letter>` - Filter to specific Greek letter
 
 **Features:**
-- Progress counter: "Reviewed X of 302 entries (Y%)"
+- Progress counter: "Reviewed X of 573 entries (Y%)"
 - Show lemma metadata (entry number, volume, Meineke/Billerbeck IDs)
 - Display original Greek text and English translation
 - Show version badge (Parisinus/Epitome)
@@ -194,18 +194,19 @@ Since CGI on merah can't easily query PostgreSQL on raksasa, we need to export d
     },
     ...
   ],
-  "total_count": 302,
+  "total_count": 573,
   "exported_at": "2025-12-22T10:30:00Z"
 }
 ```
 
 **Ordering:** Entries are sorted by:
-1. Greek letter (alphabetical: alpha, beta, gamma, delta, epsilon, kappa, ...)
-2. Volume (Billerbeck vol 1, vol 2, vol 3, ...)
-3. Entry number
-4. Version (parisinus before epitome)
+1. Lemma headword (Greek alphabetical order: Δ entries, then Ἐ/Ἔ/Ἑ entries, then Κ entries)
+2. Version (parisinus before epitome for same lemma)
 
+Note: Each volume covers different, non-overlapping letters (Vol 2: Δ+Ε, Vol 3: Κ).
 The `sort_order` field provides a simple integer for Previous/Next navigation.
+
+**Total entries to review: 573** (including both Parisinus and epitome versions)
 
 **Deployment:**
 - Run on raksasa
@@ -364,10 +365,11 @@ sudo htpasswd -c /var/www/vhosts/stephanos.symmachus.org/.htpasswd reviewer1
 ## Decisions Made
 
 1. **Image Display:** ✅ Embed images inline (base64 in JSON)
-2. **Entry Order:** ✅ By Greek letter + volume + entry number (kappa first in Greek alphabet)
-3. **Progress Tracking:** ✅ Show "X of 302 reviewed" counter
+2. **Entry Order:** ✅ By lemma headword (Greek alphabetical) + version (parisinus before epitome)
+3. **Progress Tracking:** ✅ Show "X of 573 reviewed" counter
 4. **Navigation:** ✅ Previous/Next + "Next Unreviewed in Letter"
 5. **Column Names:** ✅ `corrected_greek_scan`, `corrected_english_translation`
+6. **Total Entries:** ✅ 573 (both Parisinus and epitome versions)
 
 ## Open Questions / Decisions Needed
 
