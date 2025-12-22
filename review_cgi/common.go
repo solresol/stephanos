@@ -59,8 +59,8 @@ type Config struct {
 // GetConfig returns the application configuration
 func GetConfig() Config {
 	return Config{
-		DataFile:     "/vhosts/stephanos.symmachus.org/db/review_data.json",
-		DBPath:       "/vhosts/stephanos.symmachus.org/db/reviews.db",
+		DataFile:     "../db/review_data.json",
+		DBPath:       "../db/reviews.db",
 		ProtectedURL: "/protected/",
 	}
 }
