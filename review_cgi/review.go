@@ -23,6 +23,7 @@ type PageData struct {
 	NextID            int
 	HasNextUnreviewed bool
 	LetterName        string
+	LetterNav         []LetterNav
 }
 
 func main() {
@@ -137,6 +138,7 @@ func main() {
 		HasNext:           nextLemma != nil,
 		HasNextUnreviewed: nextUnreviewed != nil,
 		LetterName:        GetGreekLetterName(currentLemma.Letter),
+		LetterNav:         GetLetterNavigation(data),
 	}
 
 	if prevLemma != nil {

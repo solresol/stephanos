@@ -45,6 +45,45 @@ const reviewTemplate = `<!DOCTYPE html>
             font-size: 0.85em;
             font-weight: bold;
         }
+        .letter-nav {
+            background: white;
+            border-bottom: 2px solid #ecf0f1;
+            padding: 15px 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .letter-nav-inner {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .letter-nav-label {
+            font-weight: bold;
+            color: #2c3e50;
+            margin-right: 10px;
+        }
+        .letter-nav a {
+            display: inline-block;
+            padding: 8px 16px;
+            background: #ecf0f1;
+            color: #2c3e50;
+            text-decoration: none;
+            border-radius: 4px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .letter-nav a:hover {
+            background: #3498db;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .letter-nav a.active {
+            background: #2c3e50;
+            color: white;
+        }
         .container {
             max-width: 1200px;
             margin: 20px auto;
@@ -227,6 +266,19 @@ const reviewTemplate = `<!DOCTYPE html>
             <div class="progress-bar" style="width: {{.PercentComplete}}%;">
                 {{.PercentComplete}}%
             </div>
+        </div>
+    </div>
+
+    <div class="letter-nav">
+        <div class="letter-nav-inner">
+            <span class="letter-nav-label">Jump to letter:</span>
+            {{range .LetterNav}}
+                {{if eq .Letter $.Lemma.Letter}}
+                    <a href="?id={{.FirstID}}" class="active">{{.DisplayName}}</a>
+                {{else}}
+                    <a href="?id={{.FirstID}}">{{.DisplayName}}</a>
+                {{end}}
+            {{end}}
         </div>
     </div>
 

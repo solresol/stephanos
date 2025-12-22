@@ -289,3 +289,38 @@ func HTMLEscape(s string) string {
 	s = strings.ReplaceAll(s, "'", "&#39;")
 	return s
 }
+
+// LetterNav represents a letter in the navigation bar
+type LetterNav struct {
+	Letter      string
+	DisplayName string
+	FirstID     int
+}
+
+// GetLetterNavigation returns navigation info for all letters
+func GetLetterNavigation(data *LemmaData) []LetterNav {
+	letterMap := make(map[string]int) // letter -> first ID
+	var letters []string
+
+	// Find first entry for each letter
+	for i := range data.Lemmas {
+		lemma := &data.Lemmas[i]
+		letter := lemma.Letter
+		if _, exists := letterMap[letter]; !exists {
+			letterMap[letter] = lemma.ID
+			letters = append(letters, letter)
+		}
+	}
+
+	// Build navigation list
+	var nav []LetterNav
+	for _, letter := range letters {
+		nav = append(nav, LetterNav{
+			Letter:      letter,
+			DisplayName: GetGreekLetterName(letter),
+			FirstID:     letterMap[letter],
+		})
+	}
+
+	return nav
+}
