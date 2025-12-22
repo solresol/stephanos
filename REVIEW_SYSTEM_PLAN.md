@@ -187,7 +187,6 @@ Since CGI on merah can't easily query PostgreSQL on raksasa, we need to export d
       "billerbeck_id": "K15",
       "word_count": 50,
       "image_filenames": ["e9783110219630_i0046.jpg"],
-      "image_data_base64": ["<base64>", ...],
       "confidence": "normal",
       "letter": "kappa",
       "sort_order": 150
@@ -364,7 +363,7 @@ sudo htpasswd -c /var/www/vhosts/stephanos.symmachus.org/.htpasswd reviewer1
 
 ## Decisions Made
 
-1. **Image Display:** ✅ Embed images inline (base64 in JSON)
+1. **Image Display:** ✅ Link to /protected/ directory (no base64 encoding needed)
 2. **Entry Order:** ✅ By lemma headword (Greek alphabetical) + version (parisinus before epitome)
 3. **Progress Tracking:** ✅ Show "X of 573 reviewed" counter
 4. **Navigation:** ✅ Previous/Next + "Next Unreviewed in Letter"

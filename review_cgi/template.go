@@ -288,14 +288,14 @@ const reviewTemplate = `<!DOCTYPE html>
             <div class="section-title">Original English Translation</div>
             <div class="original-text">{{.Lemma.EnglishTranslation}}</div>
 
-            {{if .Lemma.ImageDataBase64}}
+            {{if .Lemma.ImageFilenames}}
             <div class="section-title">Source Page Images</div>
             <div class="images">
-                {{range $idx, $img := .Lemma.ImageDataBase64}}
+                {{range $filename := .Lemma.ImageFilenames}}
                 <div>
-                    <img src="data:image/jpeg;base64,{{$img}}" alt="Page {{$idx}}">
+                    <img src="/protected/{{$filename}}" alt="{{$filename}}">
                     <div style="text-align: center; font-size: 0.85em; color: #7f8c8d; margin-top: 5px;">
-                        {{index $.Lemma.ImageFilenames $idx}}
+                        {{$filename}}
                     </div>
                 </div>
                 {{end}}

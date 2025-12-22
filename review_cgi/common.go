@@ -26,7 +26,6 @@ type Lemma struct {
 	BillerbeckID          string   `json:"billerbeck_id"`
 	WordCount             int      `json:"word_count"`
 	ImageFilenames        []string `json:"image_filenames"`
-	ImageDataBase64       []string `json:"image_data_base64"`
 	Confidence            string   `json:"confidence"`
 	Letter                string   `json:"letter"`
 	SortOrder             int      `json:"sort_order"`
