@@ -24,10 +24,13 @@ cat > "$CRON_FILE" <<'EOF'
 # 5. Deploy websites to merah (2:30 AM)
 30 2 * * * rsync -avz --delete ~/stephanos/reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ >> logs/deploy_site.log 2>&1
 
-# 6. Backup database (3:00 AM, keep 7 days)
+# 6. Backup review database on merah (2:45 AM, keep 7 days)
+45 2 * * * ssh stephanos@merah.cassia.ifost.org.au "bash ~/stephanos/backup_review_db.sh"
+
+# 7. Backup PostgreSQL database (3:00 AM, keep 7 days)
 0 3 * * * pg_dump -U stephanos stephanos | gzip > ~/stephanos/backups/stephanos_$(date +\%Y\%m\%d).sql.gz && find ~/stephanos/backups -name "stephanos_*.sql.gz" -mtime +7 -delete
 
-# 7. Upload database backup to merah (3:10 AM)
+# 8. Upload PostgreSQL backup to merah (3:10 AM)
 10 3 * * * rsync ~/stephanos/backups/stephanos_$(date +\%Y\%m\%d).sql.gz stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/datadumps.ifost.org.au/htdocs/stephanos/ >> logs/backup_upload.log 2>&1
 EOF
 
@@ -85,8 +88,9 @@ echo "  2:00 AM - Pull review database from merah"
 echo "  2:10 AM - Import reviews to PostgreSQL"
 echo "  2:20 AM - Regenerate websites"
 echo "  2:30 AM - Deploy to merah"
-echo "  3:00 AM - Backup database (7-day retention)"
-echo "  3:10 AM - Upload backup to merah"
+echo "  2:45 AM - Backup review database on merah (7-day retention)"
+echo "  3:00 AM - Backup PostgreSQL database (7-day retention)"
+echo "  3:10 AM - Upload PostgreSQL backup to merah"
 echo
 
 # Cleanup
