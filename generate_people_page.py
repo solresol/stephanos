@@ -178,7 +178,9 @@ def main():
 """
 
     # Write output
-    output_path = Path("people.html")
+    output_dir = Path("reference_site")
+    output_dir.mkdir(exist_ok=True)
+    output_path = output_dir / "people.html"
     output_path.write_text(html, encoding='utf-8')
 
     conn.close()
