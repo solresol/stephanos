@@ -80,7 +80,9 @@ def get_all_lemmas(cur):
                     )),
                    '[]'::json
                ) as image_filenames,
-               a.word_count, a.version
+               a.word_count, a.version,
+               a.corrected_greek_scan, a.corrected_english_translation,
+               a.review_status, a.reviewed_by, a.reviewed_at
         FROM assembled_lemmas a
         LEFT JOIN ocr_generations g ON a.ocr_generation_id = g.id
         ORDER BY a.id
@@ -116,20 +118,25 @@ def get_all_lemmas(cur):
     etymologies_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
 
     all_lemmas = []
-    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, source_image_ids, image_filenames, word_count, version in rows:
+    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, source_image_ids, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at in rows:
         try:
             data = json.loads(translation_json) if translation_json else None
         except json.JSONDecodeError:
             data = None
 
-        # Prefer human override for Greek display
-        greek = (human_greek_text or greek_text or "").strip()
+        # Prefer corrected versions, fallback to human_greek_text, then OCR
+        greek = (corrected_greek_scan or human_greek_text or greek_text or "").strip()
 
         translation = ""
         english_translation = ""
         if isinstance(data, dict):
             translation = data.get("translation", "")
             english_translation = data.get("english_translation", "")
+
+        # Prefer corrected English translation
+        if corrected_english_translation:
+            english_translation = corrected_english_translation
+            translation = corrected_english_translation
 
         # Parse image filenames (psycopg2 auto-deserializes JSON)
         if isinstance(image_filenames, list):
@@ -162,6 +169,10 @@ def get_all_lemmas(cur):
             "proper_nouns": proper_nouns_by_lemma.get(lemma_id, []),
             "etymologies": etymologies_by_lemma.get(lemma_id, []),
             "version": version or "epitome",
+            "review_status": review_status or "not_reviewed",
+            "reviewed_by": reviewed_by,
+            "reviewed_at": reviewed_at,
+            "has_corrections": bool(corrected_greek_scan or corrected_english_translation),
         }
         lemma_data["letter_slug"] = get_initial_slug(lemma_data["lemma"])
         all_lemmas.append(lemma_data)
@@ -178,6 +189,15 @@ def render_lemma_cards(lemmas):
         is_parisinus = lemma.get('version') == 'parisinus'
         parisinus_class = "parisinus-version" if is_parisinus else ""
         version_badge = '<span class="version-badge">Parisinus</span>' if is_parisinus else ""
+
+        # Review status badges
+        review_status = lemma.get('review_status', 'not_reviewed')
+        reviewed_class = "reviewed" if review_status != 'not_reviewed' else ""
+        review_badge = ""
+        if review_status == 'reviewed_ok':
+            review_badge = '<span class="review-badge review-ok">Reviewed ✓</span>'
+        elif review_status == 'reviewed_corrections':
+            review_badge = '<span class="review-badge review-corrected">Corrected ✓</span>'
         is_translated = lemma.get("translated")
         translation = lemma.get('translation') or lemma.get('english_translation') or ""
         if not is_translated or not translation:
@@ -243,10 +263,10 @@ def render_lemma_cards(lemmas):
         meta_html = "<br>".join(meta_lines)
         cards_html.append(
             f"""
-            <div class="lemma-card {parisinus_class}" id="lemma-{lemma['lemma_id']}">
+            <div class="lemma-card {parisinus_class} {reviewed_class}" id="lemma-{lemma['lemma_id']}">
                 <div class="lemma-header">
                     <div>
-                        <div class="lemma-title">{lemma['lemma']}{confidence_badge}{version_badge}</div>
+                        <div class="lemma-title">{lemma['lemma']}{confidence_badge}{version_badge}{review_badge}</div>
                         {f'<span class="lemma-type">{lemma["type"]}</span>' if lemma['type'] else ''}
                     </div>
                     <div class="lemma-meta">
@@ -423,6 +443,23 @@ def common_styles():
         }
         .parisinus-version:hover {
             box-shadow: 0 4px 16px rgba(156, 39, 176, 0.2);
+        }
+        .review-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            color: white;
+            border-radius: 3px;
+            font-size: 0.75em;
+            margin-left: 10px;
+        }
+        .review-ok {
+            background: #27ae60;
+        }
+        .review-corrected {
+            background: #2980b9;
+        }
+        .reviewed {
+            border: 2px solid #27ae60;
         }
         .translation {
             font-size: 1em;
