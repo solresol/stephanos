@@ -41,6 +41,9 @@ To add dependencies: `uv add <package>`
    - Sends to Gemini 3.0 Flash with specialized prompts
    - Expects JSON output with lemma entries
    - Stores JSON in `lemma_json` column and marks `processed=1`
+   - Special flags:
+     - `--dual-column`: Used for Billerbeck volume 2 pages with side-by-side Parisinus (left) and epitome (right) text. All dual-column pages have been imported, so this flag is no longer needed for routine processing.
+     - `--no-headword-constraint`: Disables headword validation against the Meineke list. Useful for processing pages outside the expected headword range.
 
 4. **Translation** (`translate_lemmas.py`)
    - Processes extracted Greek text through gpt-5.1 for translation
@@ -58,6 +61,7 @@ Tables:
 - `epubs`: Tracks EPUB files and their extraction directories
 - `html_files`: Tracks HTML files that need image extraction
 - `images`: Stores image references and processing results
+- `assembled_lemmas`: Main lemma table with metadata and text
 
 Key columns in `images`:
 - `id` (primary key)
@@ -69,6 +73,33 @@ Key columns in `images`:
 - `translation_json` (TEXT, stores English translations)
 - `tokens_used`, `translation_tokens` (token tracking)
 - `created_at`, `processed_at`, `translated_at` (timestamps)
+
+Key columns in `assembled_lemmas`:
+- `id` (primary key)
+- `lemma` (headword in Greek)
+- `greek_text` (full Greek text from OCR)
+- `version` (TEXT, 'epitome' or 'parisinus' - distinguishes between Byzantine epitome and unabridged Parisinus text)
+- `is_parisinus_228` (BOOLEAN, marks if lemma is from Parisinus Coislinianus 228)
+- `source_image_ids` (JSON array of image IDs, for provenance and continuation tracking)
+- `volume_number`, `volume_label`, `letter_range` (source volume metadata)
+- `word_count` (for statistical analysis)
+- Other metadata and nodegoat integration fields
+- Unique constraint: `(source_image_ids, entry_number, version)` allows same headword to have both epitome and parisinus versions
+
+### Parisinus Coislinianus 228 vs Epitomised Version
+
+The Stephanos text exists in two forms:
+- **Parisinus Coislinianus 228**: The unabridged, original text found in Billerbeck volume 2 for delta and epsilon entries
+- **Epitomised version**: The Byzantine epitome - shortened/summarized version that covers most entries
+
+**Database representation:**
+- The `version` column distinguishes entries: 'parisinus' for unabridged text, 'epitome' for Byzantine summary
+- Some lemmas exist in both versions (stored as separate rows with same entry_number but different version values)
+- The `is_parisinus_228` column provides backward compatibility for statistical analysis
+- Currently 13 Parisinus entries have been imported from Billerbeck volume 2, with the longest (Δωδώνη) spanning 6 pages
+
+**Dual-column pages:**
+Billerbeck volume 2 presented Parisinus and epitome text side-by-side on many pages. These have all been processed using `process_image.py --dual-column` and are now in the database. Examples include entries 140-151 (Δύμη through Δώτιον).
 
 ### Automated Pipeline
 
@@ -156,3 +187,46 @@ When writing new processing code:
 ### Deployment
 - Deploy by running rsync to stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
 - Database backups go to stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/datadumps.ifost.org.au/htdocs/stephanos/
+
+## nodegoat Integration (In Progress)
+
+**Status:** Phase 1 complete, awaiting API credentials for Phase 2
+**Documentation:** See `NODEGOAT_STATUS.md` for detailed status and `NODEGOAT_SETUP.md` for setup instructions
+
+### Overview
+
+The project uses nodegoat (Uppsala University instance at nodegoat.abm.uu.se) for collaborative curation. Data flows bidirectionally:
+- **Export:** Push new lemmas from database to nodegoat (replaces manual CSV import)
+- **Import:** Pull human corrections from nodegoat back to database
+
+### Files
+
+- `stephanos.ini` - Configuration with API token (gitignored, see `stephanos.ini.example`)
+- `nodegoat_client.py` - REST API client library (OAuth 2.0)
+- `nodegoat_cli.py` - CLI tool for exploring nodegoat structure
+- `sync_to_nodegoat.py` - Export script (not yet built, awaiting field mappings)
+- `sync_from_nodegoat.py` - Import script (not yet built, awaiting field mappings)
+
+### Database Schema
+
+The `assembled_lemmas` table has columns for nodegoat integration:
+- `nodegoat_id` - Links to nodegoat Object ID (NULL until synced)
+- `human_greek_text` - Corrected Greek from curators (overrides OCR `greek_text`)
+- `human_notes` - Curator annotations
+- `last_synced_to_nodegoat_at` - Export timestamp (to be added)
+- `last_synced_from_nodegoat_at` - Import timestamp (to be added)
+
+### Design Principles
+
+1. **OCR Never Overwritten:** `greek_text` column preserves original OCR output, corrections go to `human_greek_text`
+2. **Curator Authority:** When conflicts occur, nodegoat version wins (human corrections are authoritative)
+3. **Graceful Degradation:** Website uses `COALESCE(human_greek_text, greek_text)` - shows best available version
+4. **Idempotent Sync:** Export only sends records where `nodegoat_id IS NULL`, import uses timestamps to avoid re-processing
+
+### Next Steps (Blocked on API Token)
+
+1. Get API token from Uppsala nodegoat administrator
+2. Run `uv run nodegoat_cli.py list-types` to discover Type IDs
+3. Document field mappings between database and nodegoat
+4. Build `sync_to_nodegoat.py` and `sync_from_nodegoat.py`
+5. Integrate into `run_daily_pipeline.sh`

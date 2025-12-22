@@ -170,6 +170,11 @@ EXTRACT_LEMMAS_TOOL = {
                                 "type": "string",
                                 "enum": ["normal", "low"],
                                 "description": "Confidence level - use 'low' if text is unclear or hard to read"
+                            },
+                            "version": {
+                                "type": "string",
+                                "enum": ["epitome", "parisinus"],
+                                "description": "Version type - 'epitome' for short Byzantine summary, 'parisinus' for full unabridged text"
                             }
                         },
                         "required": ["entry_number", "lemma", "type", "greek_text"]
@@ -408,7 +413,7 @@ def mark_processed(conn, cur, image_id, lemma_json, tokens_used=0, model=None, g
     )
     conn.commit()
 
-def process_image_with_model(client, image_path=None, model=None, volume_meta=None, allowed_headwords=None, image_data=None):
+def process_image_with_model(client, image_path=None, model=None, volume_meta=None, allowed_headwords=None, image_data=None, dual_column=False):
     """
     Process image with specified model using tool calling, returns (payload_dict, tokens_used).
 
@@ -418,6 +423,7 @@ def process_image_with_model(client, image_path=None, model=None, volume_meta=No
         model: OpenAI model name
         volume_meta: Volume metadata dict
         allowed_headwords: List of allowed headwords
+        dual_column: If True, expect long Parisinus entry on left, short epitome on right
     """
     if image_data is None:
         if image_path is None:
@@ -427,6 +433,18 @@ def process_image_with_model(client, image_path=None, model=None, volume_meta=No
     base64_image = base64.b64encode(image_data).decode('utf-8')
 
     extra_instructions = ""
+    if dual_column:
+        extra_instructions += (
+            "\n\nDUAL-COLUMN LAYOUT INSTRUCTIONS:"
+            "\nThis page has a special two-column layout:"
+            "\n- LEFT COLUMN: Long, detailed Parisinus Coislinianus 228 version (unabridged original text)"
+            "\n- RIGHT COLUMN: Short epitome version (Byzantine summary) OR may be empty/blank"
+            "\n\nYou MUST extract BOTH versions if present:"
+            "\n- Mark the long left-column entry with version='parisinus'"
+            "\n- Mark the short right-column entry with version='epitome' (only if text is present)"
+            "\n- Both entries will have the same headword but different greek_text content"
+            "\n- If the right column is blank/empty, only extract the left column Parisinus version"
+        )
     if volume_meta:
         vol_label = volume_meta.get("volume_label") or f"volume {volume_meta.get('volume_number')}"
         extra_instructions += f"\nThis page is from {vol_label} (letters: {volume_meta.get('letter_range')})."
@@ -476,7 +494,7 @@ def process_image_with_model(client, image_path=None, model=None, volume_meta=No
 
     return arguments, tokens_used
 
-def process_image_with_gemini(model_name, image_path=None, volume_meta=None, allowed_headwords=None, image_data=None):
+def process_image_with_gemini(model_name, image_path=None, volume_meta=None, allowed_headwords=None, image_data=None, dual_column=False):
     """
     Process image with Gemini model, returns (payload_dict, tokens_used).
 
@@ -486,6 +504,7 @@ def process_image_with_gemini(model_name, image_path=None, volume_meta=None, all
         image_data: Image bytes (preferred, read from database)
         volume_meta: Volume metadata dict
         allowed_headwords: List of allowed headwords
+        dual_column: If True, expect long Parisinus entry on left, short epitome on right
     """
     if image_data is None:
         if image_path is None:
@@ -549,6 +568,11 @@ def process_image_with_gemini(model_name, image_path=None, volume_meta=None, all
                             "type": "string",
                             "enum": ["normal", "low"],
                             "description": "Confidence level - use 'low' if text is unclear"
+                        },
+                        "version": {
+                            "type": "string",
+                            "enum": ["epitome", "parisinus"],
+                            "description": "Version type - 'epitome' for short Byzantine summary, 'parisinus' for full unabridged text"
                         }
                     },
                     "required": ["entry_number", "lemma", "type", "greek_text"]
@@ -560,6 +584,18 @@ def process_image_with_gemini(model_name, image_path=None, volume_meta=None, all
 
     # Build prompt with volume context and constraints
     extra_instructions = ""
+    if dual_column:
+        extra_instructions += (
+            "\n\nDUAL-COLUMN LAYOUT INSTRUCTIONS:"
+            "\nThis page has a special two-column layout:"
+            "\n- LEFT COLUMN: Long, detailed Parisinus Coislinianus 228 version (unabridged original text)"
+            "\n- RIGHT COLUMN: Short epitome version (Byzantine summary) OR may be empty/blank"
+            "\n\nYou MUST extract BOTH versions if present:"
+            "\n- Mark the long left-column entry with version='parisinus'"
+            "\n- Mark the short right-column entry with version='epitome' (only if text is present)"
+            "\n- Both entries will have the same headword but different greek_text content"
+            "\n- If the right column is blank/empty, only extract the left column Parisinus version"
+        )
     if volume_meta:
         vol_label = volume_meta.get("volume_label") or f"volume {volume_meta.get('volume_number')}"
         extra_instructions += f"\nThis page is from {vol_label} (letters: {volume_meta.get('letter_range')})."
@@ -619,6 +655,10 @@ def main():
                         help="Force reprocessing of already-processed images")
     parser.add_argument("--ocr-generation",
                         help='OCR generation label (default: auto-detected from provider)')
+    parser.add_argument("--dual-column", action="store_true",
+                        help="Page has dual layout: long Parisinus entry on left, short epitome on right (or nothing)")
+    parser.add_argument("--no-headword-constraint", action="store_true",
+                        help="Disable headword constraint - allow any headword to be extracted")
     args = parser.parse_args()
 
     # Set defaults based on provider
@@ -691,24 +731,31 @@ def main():
         if prev_last_lemma:
             start_after = prev_last_lemma
 
-    allowed_headwords = load_allowed_headwords(cur, volume_meta, start_after_headword=start_after, limit=50) if volume_meta else []
+    # Load allowed headwords unless constraint is disabled
+    if args.no_headword_constraint:
+        allowed_headwords = []
+    else:
+        allowed_headwords = load_allowed_headwords(cur, volume_meta, start_after_headword=start_after, limit=50) if volume_meta else []
 
     # Track the first and last headwords we're sending
     first_headword = allowed_headwords[0]["greek_headword"] if allowed_headwords else None
     last_headword = allowed_headwords[-1]["greek_headword"] if allowed_headwords else None
 
-    print(f"Processing {image_filename} with {args.provider}/{args.model} ({len(allowed_headwords)} headwords)...", end=" ", flush=True)
+    constraint_msg = "no constraint" if args.no_headword_constraint else f"{len(allowed_headwords)} headwords"
+    print(f"Processing {image_filename} with {args.provider}/{args.model} ({constraint_msg})...", end=" ", flush=True)
 
     # Process with selected provider
     if args.provider == "gemini":
         payload, tokens_used = process_image_with_gemini(
-            args.model, image_path, volume_meta=volume_meta, allowed_headwords=allowed_headwords
+            args.model, image_path, volume_meta=volume_meta, allowed_headwords=allowed_headwords,
+            dual_column=args.dual_column
         )
     else:  # openai
         api_key = load_api_key()
         client = OpenAI(api_key=api_key)
         payload, tokens_used = process_image_with_model(
-            client, image_path, args.model, volume_meta=volume_meta, allowed_headwords=allowed_headwords
+            client, image_path, args.model, volume_meta=volume_meta, allowed_headwords=allowed_headwords,
+            dual_column=args.dual_column
         )
 
     # Save results (as JSON array for compatibility)

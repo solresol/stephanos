@@ -6,7 +6,7 @@ Produces statistics and visualizations for:
 - Word count distributions by entry type and starting letter
 - Ridge regression predicting word count from proper nouns
 - Etymology category distributions
-- Delta vs non-delta comparisons
+- Parisinus Coislinianus 228 vs Epitomised version comparisons
 """
 from pathlib import Path
 from datetime import datetime
@@ -21,12 +21,14 @@ from sklearn.preprocessing import StandardScaler
 from scipy import stats
 
 from db import get_connection
+import plotly.graph_objects as go
+import plotly.express as px
 
 
 def save_plot_to_file(fig, filename):
     """Save matplotlib figure to file."""
-    output_dir = Path("statistics_images")
-    output_dir.mkdir(exist_ok=True)
+    output_dir = Path("reference_site/statistics_images")
+    output_dir.mkdir(parents=True, exist_ok=True)
     filepath = output_dir / filename
     fig.savefig(filepath, format='png', dpi=100, bbox_inches='tight')
     plt.close(fig)
@@ -43,30 +45,34 @@ def get_word_count_data(cur):
             a.type,
             LEFT(a.lemma, 1) as first_letter,
             COUNT(DISTINCT p.id) as proper_noun_count,
-            a.lemma LIKE 'Δ%' as is_delta
+            CASE WHEN a.version = 'parisinus' THEN TRUE ELSE FALSE END as is_parisinus
         FROM assembled_lemmas a
         LEFT JOIN proper_nouns p ON p.lemma_id = a.id
         WHERE a.word_count IS NOT NULL
-        GROUP BY a.id, a.lemma, a.word_count, a.type
+        GROUP BY a.id, a.lemma, a.word_count, a.type, a.version
     """)
 
     rows = cur.fetchall()
     df = pd.DataFrame(rows, columns=[
         'id', 'lemma', 'word_count', 'type', 'first_letter',
-        'proper_noun_count', 'is_delta'
+        'proper_noun_count', 'is_parisinus'
     ])
     return df
 
 
 def get_proper_noun_features(cur):
     """Build feature matrix of proper noun lemmas for regression."""
-    # Get all unique proper noun lemmas
+    # Get proper noun lemmas that appear in at least 2 entries
     cur.execute("""
-        SELECT DISTINCT lemma_form
+        SELECT lemma_form, COUNT(DISTINCT lemma_id) as entry_count
         FROM proper_nouns
+        GROUP BY lemma_form
+        HAVING COUNT(DISTINCT lemma_id) >= 2
         ORDER BY lemma_form
     """)
     noun_lemmas = [row[0] for row in cur.fetchall()]
+
+    print(f"    Using {len(noun_lemmas)} proper nouns that appear in 2+ entries (filtered from total)")
 
     # Get word counts and proper nouns per lemma
     cur.execute("""
@@ -74,12 +80,12 @@ def get_proper_noun_features(cur):
             a.id,
             a.lemma,
             a.word_count,
-            a.lemma LIKE 'Δ%' as is_delta,
+            CASE WHEN a.version = 'parisinus' THEN TRUE ELSE FALSE END as is_parisinus,
             COALESCE(json_agg(p.lemma_form) FILTER (WHERE p.lemma_form IS NOT NULL), '[]') as nouns
         FROM assembled_lemmas a
         LEFT JOIN proper_nouns p ON p.lemma_id = a.id
         WHERE a.word_count IS NOT NULL
-        GROUP BY a.id, a.lemma, a.word_count
+        GROUP BY a.id, a.lemma, a.word_count, a.version
     """)
 
     rows = cur.fetchall()
@@ -88,9 +94,9 @@ def get_proper_noun_features(cur):
     X = []
     y = []
     lemma_names = []
-    is_delta_list = []
+    is_parisinus_list = []
 
-    for lemma_id, lemma_name, word_count, is_delta, nouns_json in rows:
+    for lemma_id, lemma_name, word_count, is_parisinus, nouns_json in rows:
         # Create feature vector
         feature_vec = [0] * len(noun_lemmas)
         if nouns_json:
@@ -104,9 +110,9 @@ def get_proper_noun_features(cur):
         X.append(feature_vec)
         y.append(word_count)
         lemma_names.append(lemma_name)
-        is_delta_list.append(is_delta)
+        is_parisinus_list.append(is_parisinus)
 
-    return np.array(X), np.array(y), noun_lemmas, lemma_names, np.array(is_delta_list)
+    return np.array(X), np.array(y), noun_lemmas, lemma_names, np.array(is_parisinus_list)
 
 
 def get_etymology_data(cur):
@@ -114,16 +120,16 @@ def get_etymology_data(cur):
     cur.execute("""
         SELECT
             e.category,
-            a.lemma LIKE 'Δ%' as is_delta,
+            CASE WHEN a.version = 'parisinus' THEN TRUE ELSE FALSE END as is_parisinus,
             COUNT(*) as count
         FROM etymologies e
         JOIN assembled_lemmas a ON a.id = e.lemma_id
-        GROUP BY e.category, is_delta
+        GROUP BY e.category, a.version
         ORDER BY count DESC
     """)
 
     rows = cur.fetchall()
-    df = pd.DataFrame(rows, columns=['category', 'is_delta', 'count'])
+    df = pd.DataFrame(rows, columns=['category', 'is_parisinus', 'count'])
     return df
 
 
@@ -174,36 +180,67 @@ def generate_word_count_statistics(df):
 
 def generate_histograms(df):
     """Generate word count histogram visualizations."""
-    # Histogram by entry type
+    from scipy.stats import gaussian_kde
+
+    # Histogram by entry type - normalized with KDE curves
+    # Filter types with at least 10 entries
+    type_counts = df['type'].value_counts()
+    valid_types = type_counts[type_counts >= 10].index
+
     fig1, ax1 = plt.subplots(figsize=(12, 6))
-    types = df['type'].dropna().unique()
-    for type_val in sorted(types):
-        subset = df[df['type'] == type_val]['word_count']
-        ax1.hist(subset, alpha=0.5, label=type_val, bins=30)
+    for type_val in sorted(valid_types):
+        subset = df[df['type'] == type_val]['word_count'].values
+
+        # Normalized histogram
+        ax1.hist(subset, alpha=0.3, label=type_val, bins=30, density=True)
+
+        # Add KDE curve
+        if len(subset) > 1:
+            kde = gaussian_kde(subset)
+            x_range = np.linspace(subset.min(), subset.max(), 200)
+            ax1.plot(x_range, kde(x_range), linewidth=2, label=f'{type_val} (KDE)')
+
     ax1.set_xlabel('Word Count')
-    ax1.set_ylabel('Frequency')
-    ax1.set_title('Word Count Distribution by Entry Type')
-    ax1.legend()
+    ax1.set_ylabel('Probability Density')
+    ax1.set_title('Word Count Distribution by Entry Type (Normalized, Types with ≥10 entries)')
+    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     ax1.grid(True, alpha=0.3)
+    plt.tight_layout()
     img1 = save_plot_to_file(fig1, "word_count_by_type.png")
 
-    # Histogram by starting letter (top 10 letters by count)
-    fig2, ax2 = plt.subplots(figsize=(14, 6))
-    top_letters = df['first_letter'].value_counts().head(10).index
-    for letter in top_letters:
-        subset = df[df['first_letter'] == letter]['word_count']
-        ax2.hist(subset, alpha=0.5, label=letter, bins=20)
+    # Histogram by Parisinus vs Epitomised - normalized with KDE curves
+    fig2, ax2 = plt.subplots(figsize=(12, 6))
+
+    parisinus_subset = df[df['is_parisinus'] == True]['word_count'].values
+    epitomised_subset = df[df['is_parisinus'] == False]['word_count'].values
+
+    # Normalized histograms
+    ax2.hist(parisinus_subset, alpha=0.3, label='Parisinus Coislinianus 228', bins=30, density=True, color='blue')
+    ax2.hist(epitomised_subset, alpha=0.3, label='Epitomised version', bins=30, density=True, color='orange')
+
+    # Add KDE curves
+    if len(parisinus_subset) > 1:
+        kde_parisinus = gaussian_kde(parisinus_subset)
+        x_range_parisinus = np.linspace(parisinus_subset.min(), parisinus_subset.max(), 200)
+        ax2.plot(x_range_parisinus, kde_parisinus(x_range_parisinus), linewidth=2, label='Parisinus (KDE)', color='darkblue')
+
+    if len(epitomised_subset) > 1:
+        kde_epitomised = gaussian_kde(epitomised_subset)
+        x_range_epitomised = np.linspace(epitomised_subset.min(), epitomised_subset.max(), 200)
+        ax2.plot(x_range_epitomised, kde_epitomised(x_range_epitomised), linewidth=2, label='Epitomised (KDE)', color='darkorange')
+
     ax2.set_xlabel('Word Count')
-    ax2.set_ylabel('Frequency')
-    ax2.set_title('Word Count Distribution by Starting Letter (Top 10)')
+    ax2.set_ylabel('Probability Density')
+    ax2.set_title('Word Count Distribution: Parisinus Coislinianus 228 vs Epitomised version (Normalized)')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
+    plt.tight_layout()
     img2 = save_plot_to_file(fig2, "word_count_by_letter.png")
 
     return img1, img2
 
 
-def perform_ridge_regression(X, y, noun_lemmas, is_delta):
+def perform_ridge_regression(X, y, noun_lemmas, is_parisinus):
     """
     Perform ridge regression analysis.
 
@@ -267,6 +304,230 @@ def generate_regression_visualization(top_20, bottom_20, filename):
     return save_plot_to_file(fig, filename)
 
 
+def compare_parisinus_epitomised_coefficients(parisinus_coefs, epitomised_coefs, noun_lemmas, noun_details):
+    """
+    Compare Parisinus vs Epitomised coefficients to identify what each cared about.
+
+    Returns:
+        - comparison_df: DataFrame with Parisinus and Epitomised coefficients for each noun
+        - top_20_parisinus_over_epitomised: Nouns Parisinus emphasized (lost in epitome)
+        - top_20_epitomised_over_parisinus: Nouns epitomizer emphasized
+    """
+    if parisinus_coefs is None or epitomised_coefs is None:
+        return None, None, None, None, None
+
+    # Create comparison dataframe
+    comparison_df = pd.DataFrame({
+        'noun': noun_lemmas,
+        'parisinus_coef': parisinus_coefs,
+        'epitomised_coef': epitomised_coefs,
+        'difference': parisinus_coefs - epitomised_coefs
+    })
+
+    # Add entry count information
+    comparison_df['entry_count'] = comparison_df['noun'].apply(
+        lambda n: len(noun_details.get(n, {}).get('entries', []))
+    )
+
+    # Add English translation
+    comparison_df['english'] = comparison_df['noun'].apply(
+        lambda n: noun_details.get(n, {}).get('english', '')
+    )
+
+    # Filter out near-zero coefficients (uninteresting)
+    threshold = 0.1
+    comparison_df['is_interesting'] = (
+        (np.abs(comparison_df['parisinus_coef']) > threshold) |
+        (np.abs(comparison_df['epitomised_coef']) > threshold)
+    )
+
+    # Top 20: Parisinus >> Epitomised (what we lost from Parisinus Coislinianus 228)
+    top_parisinus = comparison_df.nlargest(20, 'difference')[
+        ['noun', 'english', 'parisinus_coef', 'epitomised_coef', 'difference', 'entry_count']
+    ]
+
+    # Bottom 20: Epitomised >> Parisinus (what epitomizer emphasized)
+    top_epitomised = comparison_df.nsmallest(20, 'difference')[
+        ['noun', 'english', 'parisinus_coef', 'epitomised_coef', 'difference', 'entry_count']
+    ]
+
+    return comparison_df, top_parisinus, top_epitomised
+
+
+def generate_coefficient_comparison_plots(comparison_df, noun_details):
+    """Generate visualizations comparing Parisinus Coislinianus 228 vs Epitomised version coefficients."""
+    if comparison_df is None:
+        return None, None
+
+    interesting = comparison_df[comparison_df['is_interesting']]
+
+    # 1. 2D KDE density plot
+    from scipy.stats import gaussian_kde
+
+    fig1, ax1 = plt.subplots(figsize=(10, 10))
+
+    # Scatter plot
+    ax1.scatter(interesting['parisinus_coef'], interesting['epitomised_coef'],
+                alpha=0.3, s=20, color='steelblue')
+
+    # Add diagonal line (where Parisinus = Epitomised)
+    max_val = max(interesting['parisinus_coef'].max(), interesting['epitomised_coef'].max())
+    min_val = min(interesting['parisinus_coef'].min(), interesting['epitomised_coef'].min())
+    ax1.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.5, linewidth=2)
+
+    # 2D KDE contours
+    if len(interesting) > 10:
+        try:
+            xy = np.vstack([interesting['parisinus_coef'], interesting['epitomised_coef']])
+            kde = gaussian_kde(xy)
+
+            # Create grid for contour
+            parisinus_range = np.linspace(interesting['parisinus_coef'].min(),
+                                     interesting['parisinus_coef'].max(), 100)
+            epitomised_range = np.linspace(interesting['epitomised_coef'].min(),
+                                        interesting['epitomised_coef'].max(), 100)
+            D, N = np.meshgrid(parisinus_range, epitomised_range)
+            positions = np.vstack([D.ravel(), N.ravel()])
+            Z = kde(positions).reshape(D.shape)
+
+            # Add contours
+            ax1.contour(D, N, Z, levels=5, colors='darkblue', alpha=0.5, linewidths=1.5)
+        except:
+            pass  # Skip KDE if it fails
+
+    ax1.set_xlabel('Parisinus Coislinianus 228 Coefficient', fontsize=12)
+    ax1.set_ylabel('Epitomised version Coefficient', fontsize=12)
+    ax1.set_title('Coefficient Comparison: Parisinus Coislinianus 228 vs Epitomised version\n(with 2D KDE density contours)', fontsize=14)
+    ax1.grid(True, alpha=0.3)
+    ax1.axhline(y=0, color='k', linestyle='-', alpha=0.2)
+    ax1.axvline(x=0, color='k', linestyle='-', alpha=0.2)
+
+    # Add quadrant labels
+    ax1.text(0.95, 0.05, 'Original\nStephanos\nemphasized', transform=ax1.transAxes,
+             ha='right', va='bottom', fontsize=10, style='italic', alpha=0.6)
+    ax1.text(0.05, 0.95, 'Epitomizer\nemphasized', transform=ax1.transAxes,
+             ha='left', va='top', fontsize=10, style='italic', alpha=0.6)
+    ax1.text(0.95, 0.95, 'Both\nemphasized', transform=ax1.transAxes,
+             ha='right', va='top', fontsize=10, style='italic', alpha=0.6)
+
+    plt.tight_layout()
+    density_img = save_plot_to_file(fig1, "coefficient_comparison_density.png")
+
+    # 2. Interactive scatter plot with plotly
+    # Select nouns to label (avoid clutter)
+    # Label: top delta, top non-delta, and extremes
+    interesting_sorted = interesting.copy()
+    interesting_sorted['abs_diff'] = np.abs(interesting_sorted['difference'])
+
+    # Get nouns to label
+    to_label = set()
+    # Top 10 by delta > non-delta
+    to_label.update(interesting_sorted.nlargest(10, 'difference')['noun'])
+    # Top 10 by non-delta > delta
+    to_label.update(interesting_sorted.nsmallest(10, 'difference')['noun'])
+    # Top 10 by absolute coefficient size
+    to_label.update(interesting_sorted.nlargest(10, 'parisinus_coef')['noun'])
+    to_label.update(interesting_sorted.nlargest(10, 'epitomised_coef')['noun'])
+
+    interesting_sorted['show_label'] = interesting_sorted['noun'].isin(to_label)
+
+    # Create plotly figure
+    fig2 = go.Figure()
+
+    # Add scatter points
+    for show_label in [False, True]:
+        subset = interesting_sorted[interesting_sorted['show_label'] == show_label]
+
+        hover_text = []
+        for _, row in subset.iterrows():
+            entries = noun_details.get(row['noun'], {}).get('entries', [])
+            entry_names = [e['name'] for e in entries[:5]]
+            if len(entries) > 5:
+                entry_names.append(f"... ({len(entries)} total)")
+            entries_str = ', '.join(entry_names)
+
+            hover_text.append(
+                f"<b>{row['noun']}</b><br>" +
+                f"{row['english']}<br><br>" +
+                f"Parisinus coef: {row['parisinus_coef']:.3f}<br>" +
+                f"Non-Parisinus coef: {row['epitomised_coef']:.3f}<br>" +
+                f"Difference: {row['difference']:.3f}<br>" +
+                f"Appears in: {entries_str}"
+            )
+
+        # Size points based on entry count (scale: min 5, grows with entry count)
+        marker_sizes = subset['entry_count'] * 2 + 3
+
+        fig2.add_trace(go.Scatter(
+            x=subset['parisinus_coef'],
+            y=subset['epitomised_coef'],
+            mode='markers+text' if show_label else 'markers',
+            text=subset['noun'] if show_label else None,
+            textposition='top center' if show_label else None,
+            textfont=dict(size=9),
+            marker=dict(
+                size=marker_sizes,
+                color=subset['difference'],
+                colorscale='RdBu_r',
+                showscale=show_label,
+                colorbar=dict(title="Delta - Non-Delta") if show_label else None,
+                line=dict(width=1, color='white') if show_label else None
+            ),
+            hovertext=hover_text,
+            hoverinfo='text',
+            name='Labeled' if show_label else 'Unlabeled',
+            showlegend=False
+        ))
+
+    # Add diagonal line
+    max_val = max(interesting['parisinus_coef'].max(), interesting['epitomised_coef'].max())
+    min_val = min(interesting['parisinus_coef'].min(), interesting['epitomised_coef'].min())
+
+    fig2.add_trace(go.Scatter(
+        x=[min_val, max_val],
+        y=[min_val, max_val],
+        mode='lines',
+        line=dict(color='red', dash='dash', width=2),
+        hoverinfo='skip',
+        showlegend=False
+    ))
+
+    fig2.update_layout(
+        title='Interactive Coefficient Comparison: Parisinus Coislinianus 228 vs Epitomised version<br><sub>Hover for details, color shows difference (red=Stephanos emphasized, blue=Epitomizer emphasized)</sub>',
+        xaxis_title='Parisinus Coislinianus 228 Coefficient',
+        yaxis_title='Epitomised version Coefficient',
+        width=900,
+        height=900,
+        hovermode='closest',
+        plot_bgcolor='white',
+        xaxis=dict(gridcolor='lightgray', zeroline=True, zerolinecolor='black', zerolinewidth=1),
+        yaxis=dict(gridcolor='lightgray', zeroline=True, zerolinecolor='black', zerolinewidth=1),
+        annotations=[
+            # Lower right: Original Stephanos emphasized
+            dict(x=0.95, y=0.05, xref='paper', yref='paper',
+                 text='<i>Original<br>Stephanos<br>emphasized</i>',
+                 showarrow=False, font=dict(size=11, color='gray'),
+                 xanchor='right', yanchor='bottom'),
+            # Upper left: Epitomizer emphasized
+            dict(x=0.05, y=0.95, xref='paper', yref='paper',
+                 text='<i>Epitomizer<br>emphasized</i>',
+                 showarrow=False, font=dict(size=11, color='gray'),
+                 xanchor='left', yanchor='top'),
+            # Upper right: Both emphasized
+            dict(x=0.95, y=0.95, xref='paper', yref='paper',
+                 text='<i>Both<br>emphasized</i>',
+                 showarrow=False, font=dict(size=11, color='gray'),
+                 xanchor='right', yanchor='top'),
+        ]
+    )
+
+    # Save as HTML
+    interactive_path = Path("reference_site/statistics_images/coefficient_comparison_interactive.html")
+    fig2.write_html(str(interactive_path))
+
+    return density_img, "statistics_images/coefficient_comparison_interactive.html"
+
+
 def generate_etymology_visualization(etym_df):
     """Generate etymology category distribution visualizations."""
     # Overall distribution
@@ -281,60 +542,88 @@ def generate_etymology_visualization(etym_df):
     plt.tight_layout()
     img1 = save_plot_to_file(fig1, "etymology_overall.png")
 
-    # Delta vs non-delta comparison
+    # Parisinus Coislinianus 228 vs Epitomised version comparison
     fig2, ax2 = plt.subplots(figsize=(12, 6))
 
     categories = etym_df['category'].unique()
-    delta_counts = []
-    non_delta_counts = []
+    parisinus_counts = []
+    epitomised_counts = []
 
     for cat in categories:
-        delta_count = etym_df[(etym_df['category'] == cat) & (etym_df['is_delta'] == True)]['count'].sum()
-        non_delta_count = etym_df[(etym_df['category'] == cat) & (etym_df['is_delta'] == False)]['count'].sum()
-        delta_counts.append(delta_count)
-        non_delta_counts.append(non_delta_count)
+        parisinus_count = etym_df[(etym_df['category'] == cat) & (etym_df['is_parisinus'] == True)]['count'].sum()
+        non_parisinus_count = etym_df[(etym_df['category'] == cat) & (etym_df['is_parisinus'] == False)]['count'].sum()
+        parisinus_counts.append(parisinus_count)
+        epitomised_counts.append(non_parisinus_count)
 
     x = np.arange(len(categories))
     width = 0.35
 
-    ax2.bar(x - width/2, delta_counts, width, label='Delta (Original)', alpha=0.8)
-    ax2.bar(x + width/2, non_delta_counts, width, label='Non-Delta (Epitome)', alpha=0.8)
+    ax2.bar(x - width/2, parisinus_counts, width, label='Parisinus Coislinianus 228', alpha=0.8)
+    ax2.bar(x + width/2, epitomised_counts, width, label='Epitomised version', alpha=0.8)
     ax2.set_ylabel('Count')
-    ax2.set_title('Etymology Categories: Delta vs Non-Delta')
+    ax2.set_title('Etymology Categories: Parisinus Coislinianus 228 vs Epitomised version')
     ax2.set_xticks(x)
     ax2.set_xticklabels([c.replace('_', ' ') for c in categories], rotation=45, ha='right')
     ax2.legend()
     ax2.grid(True, alpha=0.3, axis='y')
     plt.tight_layout()
-    img2 = save_plot_to_file(fig2, "etymology_delta_comparison.png")
+    img2 = save_plot_to_file(fig2, "etymology_parisinus_comparison.png")
 
     return img1, img2
 
 
 def get_proper_noun_details(cur, noun_lemmas):
     """Get details for proper nouns including English and entries where they appear."""
+    import unicodedata
+
+    # Greek letter mapping for file names
+    greek_letters = {
+        'Α': 'alpha', 'Β': 'beta', 'Γ': 'gamma', 'Δ': 'delta', 'Ε': 'epsilon',
+        'Ζ': 'zeta', 'Η': 'eta', 'Θ': 'theta', 'Ι': 'iota', 'Κ': 'kappa',
+        'Λ': 'lambda', 'Μ': 'mu', 'Ν': 'nu', 'Ξ': 'xi', 'Ο': 'omicron',
+        'Π': 'pi', 'Ρ': 'rho', 'Σ': 'sigma', 'Τ': 'tau', 'Υ': 'upsilon',
+        'Φ': 'phi', 'Χ': 'chi', 'Ψ': 'psi', 'Ω': 'omega'
+    }
+
     details = {}
 
     for noun in noun_lemmas:
         cur.execute("""
             SELECT
-                p.english_translation,
-                json_agg(DISTINCT a.lemma ORDER BY a.lemma) as lemmas
-            FROM proper_nouns p
-            JOIN assembled_lemmas a ON a.id = p.lemma_id
-            WHERE p.lemma_form = %s
-            GROUP BY p.english_translation
-            LIMIT 1
+                MIN(distinct_entries.english_translation) as english_translation,
+                json_agg(json_build_object('lemma', distinct_entries.lemma, 'id', distinct_entries.id)) as lemma_data
+            FROM (
+                SELECT DISTINCT ON (a.id) p.english_translation, a.lemma, a.id
+                FROM proper_nouns p
+                JOIN assembled_lemmas a ON a.id = p.lemma_id
+                WHERE p.lemma_form = %s
+            ) AS distinct_entries
         """, (noun,))
 
         row = cur.fetchone()
         if row:
-            english, lemmas_json = row
+            english, lemma_data_json = row
             import json
-            lemmas = json.loads(lemmas_json) if isinstance(lemmas_json, str) else lemmas_json
+            lemma_data = json.loads(lemma_data_json) if isinstance(lemma_data_json, str) else lemma_data_json
+
+            # Build entry info with proper links
+            entry_info = []
+            for item in lemma_data:
+                lemma_name = item['lemma']
+                lemma_id = item['id']
+                first_letter = lemma_name[0] if lemma_name else ''
+                letter_file = greek_letters.get(first_letter, 'unknown')
+                entry_info.append({
+                    'name': lemma_name,
+                    'link': f'../letter_{letter_file}.html#lemma-{lemma_id}'
+                })
+
+            # Sort entries alphabetically
+            entry_info.sort(key=lambda x: x['name'])
+
             details[noun] = {
                 'english': english or '',
-                'entries': lemmas
+                'entries': entry_info
             }
         else:
             details[noun] = {
@@ -345,10 +634,10 @@ def get_proper_noun_details(cur, noun_lemmas):
     return details
 
 
-def compare_delta_vs_non_delta(df):
-    """Perform statistical tests comparing delta vs non-delta entries."""
-    delta = df[df['is_delta'] == True]['word_count']
-    non_delta = df[df['is_delta'] == False]['word_count']
+def compare_parisinus_vs_epitomised(df):
+    """Perform statistical tests comparing Parisinus Coislinianus 228 vs Epitomised version entries."""
+    delta = df[df['is_parisinus'] == True]['word_count']
+    non_delta = df[df['is_parisinus'] == False]['word_count']
 
     # Only perform tests if both groups have data
     if len(delta) > 0 and len(non_delta) > 0:
@@ -361,7 +650,7 @@ def compare_delta_vs_non_delta(df):
         t_stat, t_pval = np.nan, np.nan
         u_stat, u_pval = np.nan, np.nan
 
-    delta_stats = {
+    parisinus_stats = {
         'count': len(delta),
         'mean': delta.mean() if len(delta) > 0 else np.nan,
         'median': delta.median() if len(delta) > 0 else np.nan,
@@ -370,7 +659,7 @@ def compare_delta_vs_non_delta(df):
         'max': delta.max() if len(delta) > 0 else np.nan
     }
 
-    non_delta_stats = {
+    epitomised_stats = {
         'count': len(non_delta),
         'mean': non_delta.mean() if len(non_delta) > 0 else np.nan,
         'median': non_delta.median() if len(non_delta) > 0 else np.nan,
@@ -379,7 +668,7 @@ def compare_delta_vs_non_delta(df):
         'max': non_delta.max() if len(non_delta) > 0 else np.nan
     }
 
-    return delta_stats, non_delta_stats, t_stat, t_pval, u_stat, u_pval
+    return parisinus_stats, epitomised_stats, t_stat, t_pval, u_stat, u_pval
 
 
 def format_stat(value, is_float=True, decimal_places=2):
@@ -392,91 +681,58 @@ def format_stat(value, is_float=True, decimal_places=2):
         return str(int(value))
 
 
-def generate_coefficient_table(top_20, bottom_20, noun_details, title_prefix=""):
-    """Generate HTML table for regression coefficients."""
-    html = f"""
-    <h4>{title_prefix}Top 20 Positive Coefficients</h4>
-    <table>
-        <tr>
-            <th>Rank</th>
-            <th>Proper Noun (Greek)</th>
-            <th>English Translation</th>
-            <th>Number of extra words we see when this proper noun is mentioned</th>
-            <th>Appears in Entries</th>
-        </tr>
-"""
+def generate_navigation(current_page='index', in_subdirectory=False):
+    """Generate navigation menu for statistics pages.
 
-    for idx, (_, row) in enumerate(top_20.iterrows(), 1):
-        noun = row['noun']
-        coef = row['coefficient']
-        details = noun_details.get(noun, {'english': '', 'entries': []})
-        entries_str = ', '.join(details['entries'][:10])  # Limit to first 10 entries
-        if len(details['entries']) > 10:
-            entries_str += f", ... ({len(details['entries'])} total)"
+    Args:
+        current_page: Which page is currently active
+        in_subdirectory: True if the page is in statistics/ subdirectory, False if at root
+    """
+    pages = {
+        'index': 'Overview',
+        'word_count': 'Word Count Statistics',
+        'regression': 'Stephanos vs Epitomizer Emphasis',
+        'etymology': 'Etymology Analysis',
+        'parisinus_comparison': 'Parisinus Coislinianus 228 vs Epitomised version'
+    }
 
-        html += f"""        <tr>
-            <td>{idx}</td>
-            <td><strong>{noun}</strong></td>
-            <td>{details['english']}</td>
-            <td><strong>{coef:.2f}</strong></td>
-            <td style="font-size: 0.9em;">{entries_str}</td>
-        </tr>
-"""
+    nav_html = '<nav style="background-color: #34495e; padding: 15px; margin-bottom: 20px; border-radius: 5px;">\n'
+    nav_html += '  <div style="display: flex; gap: 20px; flex-wrap: wrap;">\n'
 
-    html += f"""    </table>
+    for page_key, page_title in pages.items():
+        # Generate correct URL based on current location
+        if in_subdirectory:
+            # We're in statistics/ subdirectory
+            if page_key == 'index':
+                url = '../statistics.html'
+            else:
+                url = f'{page_key}.html'
+        else:
+            # We're at root (statistics.html)
+            if page_key == 'index':
+                url = 'statistics.html'
+            else:
+                url = f'statistics/{page_key}.html'
 
-    <h4>{title_prefix}Top 20 Negative Coefficients</h4>
-    <table>
-        <tr>
-            <th>Rank</th>
-            <th>Proper Noun (Greek)</th>
-            <th>English Translation</th>
-            <th>Number of extra words we see when this proper noun is mentioned</th>
-            <th>Appears in Entries</th>
-        </tr>
-"""
+        if page_key == current_page:
+            nav_html += f'    <a href="{url}" style="color: #3498db; text-decoration: none; font-weight: bold;">{page_title}</a>\n'
+        else:
+            nav_html += f'    <a href="{url}" style="color: white; text-decoration: none;">{page_title}</a>\n'
 
-    for idx, (_, row) in enumerate(bottom_20.iterrows(), 1):
-        noun = row['noun']
-        coef = row['coefficient']
-        details = noun_details.get(noun, {'english': '', 'entries': []})
-        entries_str = ', '.join(details['entries'][:10])
-        if len(details['entries']) > 10:
-            entries_str += f", ... ({len(details['entries'])} total)"
+    nav_html += '  </div>\n'
+    nav_html += '</nav>\n'
 
-        html += f"""        <tr>
-            <td>{idx}</td>
-            <td><strong>{noun}</strong></td>
-            <td>{details['english']}</td>
-            <td><strong>{coef:.2f}</strong></td>
-            <td style="font-size: 0.9em;">{entries_str}</td>
-        </tr>
-"""
-
-    html += "    </table>\n"
-    return html
+    return nav_html
 
 
-def generate_html(
-    stats_by_type, stats_by_letter,
-    hist_by_type_img, hist_by_letter_img,
-    global_ridge, global_cv, global_top20, global_bottom20,
-    delta_ridge, delta_cv, delta_top20, delta_bottom20,
-    non_delta_ridge, non_delta_cv, non_delta_top20, non_delta_bottom20,
-    global_regression_img, delta_regression_img, non_delta_regression_img,
-    etym_overall_img, etym_comparison_img,
-    etym_df,
-    delta_stats, non_delta_stats, t_stat, t_pval, u_stat, u_pval,
-    noun_details
-):
-    """Generate comprehensive statistics HTML page."""
-
-    html = f"""<!DOCTYPE html>
+def generate_page_header(title, current_page='index', in_subdirectory=False):
+    """Generate common page header with navigation."""
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stephanos of Byzantium - Statistical Analysis</title>
+    <title>{title} - Stephanos of Byzantium</title>
     <style>
         body {{
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -557,15 +813,176 @@ def generate_html(
             color: #777;
             font-size: 0.9em;
         }}
+        nav a {{
+            transition: opacity 0.2s;
+        }}
+        nav a:hover {{
+            opacity: 0.8;
+        }}
+        .section-card {{
+            background-color: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: box-shadow 0.2s;
+        }}
+        .section-card:hover {{
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }}
+        .section-card h3 {{
+            margin-top: 0;
+            color: #2c3e50;
+        }}
+        .section-card a {{
+            color: #3498db;
+            text-decoration: none;
+            font-weight: bold;
+        }}
+        .section-card a:hover {{
+            text-decoration: underline;
+        }}
     </style>
 </head>
 <body>
-    <h1>Stephanos of Byzantium - Statistical Analysis</h1>
+    {generate_navigation(current_page, in_subdirectory)}
+    <h1>{title}</h1>
     <p><em>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</em></p>
+"""
 
-    <h2>1. Word Count Statistics</h2>
 
-    <h3>By Entry Type</h3>
+def generate_page_footer():
+    """Generate common page footer."""
+    return """
+    <div class="footer">
+        <p>Statistical analysis of Stephanos of Byzantium's Ethnika</p>
+        <p>Generated from PostgreSQL database | <a href="/">Back to main site</a></p>
+    </div>
+</body>
+</html>
+"""
+
+
+def generate_coefficient_table(top_20, bottom_20, noun_details, title_prefix=""):
+    """Generate HTML table for regression coefficients."""
+    html = f"""
+    <h4>{title_prefix}Top 20 Positive Coefficients</h4>
+    <table>
+        <tr>
+            <th>Rank</th>
+            <th>Proper Noun (Greek)</th>
+            <th>English Translation</th>
+            <th>Number of extra words we see when this proper noun is mentioned</th>
+            <th>Number of Entries</th>
+            <th>Appears in Entries</th>
+        </tr>
+"""
+
+    for idx, (_, row) in enumerate(top_20.iterrows(), 1):
+        noun = row['noun']
+        coef = row['coefficient']
+        details = noun_details.get(noun, {'english': '', 'entries': []})
+        entry_count = len(details['entries'])
+
+        # Create hyperlinks for entries
+        entry_links = []
+        for entry_info in details['entries'][:10]:
+            entry_links.append(f'<a href="{entry_info["link"]}">{entry_info["name"]}</a>')
+        entries_str = ', '.join(entry_links)
+        if entry_count > 10:
+            entries_str += f", ... ({entry_count} total)"
+
+        html += f"""        <tr>
+            <td>{idx}</td>
+            <td><strong>{noun}</strong></td>
+            <td>{details['english']}</td>
+            <td><strong>{coef:.2f}</strong></td>
+            <td>{entry_count}</td>
+            <td style="font-size: 0.9em;">{entries_str}</td>
+        </tr>
+"""
+
+    html += f"""    </table>
+
+    <h4>{title_prefix}Top 20 Negative Coefficients</h4>
+    <table>
+        <tr>
+            <th>Rank</th>
+            <th>Proper Noun (Greek)</th>
+            <th>English Translation</th>
+            <th>Number of extra words we see when this proper noun is mentioned</th>
+            <th>Number of Entries</th>
+            <th>Appears in Entries</th>
+        </tr>
+"""
+
+    for idx, (_, row) in enumerate(bottom_20.iterrows(), 1):
+        noun = row['noun']
+        coef = row['coefficient']
+        details = noun_details.get(noun, {'english': '', 'entries': []})
+        entry_count = len(details['entries'])
+
+        # Create hyperlinks for entries
+        entry_links = []
+        for entry_info in details['entries'][:10]:
+            entry_links.append(f'<a href="{entry_info["link"]}">{entry_info["name"]}</a>')
+        entries_str = ', '.join(entry_links)
+        if entry_count > 10:
+            entries_str += f", ... ({entry_count} total)"
+
+        html += f"""        <tr>
+            <td>{idx}</td>
+            <td><strong>{noun}</strong></td>
+            <td>{details['english']}</td>
+            <td><strong>{coef:.2f}</strong></td>
+            <td>{entry_count}</td>
+            <td style="font-size: 0.9em;">{entries_str}</td>
+        </tr>
+"""
+
+    html += "    </table>\n"
+    return html
+
+
+def generate_index_page():
+    """Generate index page with links to all statistics sections."""
+    html = generate_page_header('Statistical Analysis - Overview', 'index')
+
+    html += """
+    <p>This site provides comprehensive statistical analysis of Stephanos of Byzantium's Ethnika.
+    Select a section below to explore different aspects of the text.</p>
+
+    <div class="section-card">
+        <h3><a href="statistics/word_count.html">1. Word Count Statistics</a></h3>
+        <p>Explore word count distributions by entry type and starting letter. Includes normalized histograms with KDE curves and statistical tests comparing different entry types.</p>
+    </div>
+
+    <div class="section-card">
+        <h3><a href="statistics/regression.html">2. Stephanos vs Epitomizer Emphasis</a></h3>
+        <p>Discover what the original Stephanos emphasized versus what the Byzantine epitomizer emphasized. Interactive visualizations reveal what was lost in the epitome and what was added or expanded.</p>
+    </div>
+
+    <div class="section-card">
+        <h3><a href="statistics/etymology.html">3. Etymology Analysis</a></h3>
+        <p>Examine the distribution of etymology categories across the corpus, with comparisons between Delta and Non-Delta entries.</p>
+    </div>
+
+    <div class="section-card">
+        <h3><a href="statistics/parisinus_comparison.html">4. Parisinus Coislinianus 228 vs Epitomised version Comparison</a></h3>
+        <p>Statistical comparison of word counts between entries from the original Stephanos (Delta) and the Byzantine epitome (Non-Delta).</p>
+    </div>
+"""
+
+    html += generate_page_footer()
+    return html
+
+
+def generate_word_count_page(stats_by_type, stats_by_letter, hist_by_type_img, hist_by_letter_img):
+    """Generate word count statistics page."""
+    html = generate_page_header('Word Count Statistics', 'word_count', in_subdirectory=True)
+
+    html += """
+    <h2>By Entry Type</h2>
     <table>
         <tr>
             <th>Entry Type</th>
@@ -604,7 +1021,7 @@ def generate_html(
 
     html += """    </table>
 
-    <h3>By Starting Letter</h3>
+    <h2>By Starting Letter</h2>
     <table>
         <tr>
             <th>Letter</th>
@@ -631,11 +1048,113 @@ def generate_html(
 
     html += f"""    </table>
 
-    <h3>Histograms</h3>
-    <img src="{hist_by_type_img}" alt="Word Count Distribution by Entry Type">
-    <img src="{hist_by_letter_img}" alt="Word Count Distribution by Starting Letter">
+    <h2>Histograms</h2>
+    <img src="../{hist_by_type_img}" alt="Word Count Distribution by Entry Type">
+    <img src="../{hist_by_letter_img}" alt="Word Count Distribution by Starting Letter">
+"""
 
-    <h2>2. Ridge Regression: Predicting Word Count from Proper Nouns</h2>
+    html += generate_page_footer()
+    return html
+
+
+def generate_regression_page(
+    global_ridge, global_cv, global_top20, global_bottom20,
+    parisinus_ridge, parisinus_cv, parisinus_top20, parisinus_bottom20,
+    epitomised_ridge, epitomised_cv, epitomised_top20, epitomised_bottom20,
+    global_regression_img, parisinus_regression_img, epitomised_regression_img,
+    noun_details,
+    comparison_density_img=None, comparison_interactive_path=None,
+    top_parisinus_emphasis=None, top_epitomised_emphasis=None
+):
+    """Generate Stephanos vs Epitomizer emphasis comparison page."""
+    html = generate_page_header('Stephanos vs Epitomizer Emphasis', 'regression', in_subdirectory=True)
+
+    html += """
+    <p>This analysis compares how the original Stephanos and the Byzantine epitomizer treated different topics.
+    Using ridge regression on proper noun occurrences, we identify which subjects were emphasized by each author.</p>
+"""
+
+    # Put comparison section FIRST if available
+    if comparison_density_img and comparison_interactive_path:
+        html += """
+    <h2>Comparing Original Stephanos vs Epitomizer</h2>
+    <p>This visualization reveals what was lost in the epitome and what the epitomizer emphasized:</p>
+    <ul>
+        <li><strong>Lower right quadrant:</strong> Original Stephanos emphasized these topics (longer entries), but they were shortened in the epitome</li>
+        <li><strong>Upper left quadrant:</strong> The epitomizer expanded or emphasized these topics beyond the original</li>
+        <li><strong>Upper right quadrant:</strong> Both authors treated these topics extensively</li>
+    </ul>
+
+    <h3>Interactive Visualization</h3>
+    <p><em>Hover over points for details. Blue points = Stephanos emphasized, red = epitomizer emphasized. Zoom and pan to explore.</em></p>
+    <iframe src="../{interactive_path}" width="950" height="950" style="border: 1px solid #ddd; margin: 20px 0;"></iframe>
+
+    <h3>Density Visualization</h3>
+    <img src="../{density_img}" alt="Parisinus Coislinianus 228 vs Epitomised version Coefficient Comparison with 2D KDE">
+
+    <h3>Top 20: What We Lost from Original Stephanos</h3>
+    <p><em>Proper nouns with much higher coefficients in Delta than Non-Delta (original Stephanos emphasized these, but they were shortened in the epitome)</em></p>
+    <table>
+        <tr>
+            <th>Rank</th>
+            <th>Proper Noun (Greek)</th>
+            <th>English Translation</th>
+            <th>Parisinus Coefficient</th>
+            <th>Non-Parisinus Coefficient</th>
+            <th>Difference</th>
+            <th>Number of Entries</th>
+        </tr>
+""".format(density_img=comparison_density_img, interactive_path=comparison_interactive_path)
+
+        if top_parisinus_emphasis is not None:
+            for idx, (_, row) in enumerate(top_parisinus_emphasis.iterrows(), 1):
+                html += f"""        <tr>
+            <td>{idx}</td>
+            <td><strong>{row['noun']}</strong></td>
+            <td>{row['english']}</td>
+            <td>{row['parisinus_coef']:.3f}</td>
+            <td>{row['epitomised_coef']:.3f}</td>
+            <td class="significance"><strong>+{row['difference']:.3f}</strong></td>
+            <td>{int(row['entry_count'])}</td>
+        </tr>
+"""
+
+        html += """    </table>
+
+    <h3>Top 20: What the Epitomizer Emphasized</h3>
+    <p><em>Proper nouns with much higher coefficients in Non-Delta than Delta (epitomizer expanded or emphasized these beyond the original)</em></p>
+    <table>
+        <tr>
+            <th>Rank</th>
+            <th>Proper Noun (Greek)</th>
+            <th>English Translation</th>
+            <th>Parisinus Coefficient</th>
+            <th>Non-Parisinus Coefficient</th>
+            <th>Difference</th>
+            <th>Number of Entries</th>
+        </tr>
+"""
+
+        if top_epitomised_emphasis is not None:
+            for idx, (_, row) in enumerate(top_epitomised_emphasis.iterrows(), 1):
+                html += f"""        <tr>
+            <td>{idx}</td>
+            <td><strong>{row['noun']}</strong></td>
+            <td>{row['english']}</td>
+            <td>{row['parisinus_coef']:.3f}</td>
+            <td>{row['epitomised_coef']:.3f}</td>
+            <td class="significance"><strong>{row['difference']:.3f}</strong></td>
+            <td>{int(row['entry_count'])}</td>
+        </tr>
+"""
+
+        html += "    </table>\n\n"
+
+    # Now add the individual model sections
+    html += """
+    <h2>Supporting Analysis: Individual Ridge Regression Models</h2>
+    <p><em>Ridge regression models predict entry word count based on which proper nouns appear.
+    These individual models support the comparison above.</em></p>
 
     <h3>Global Model (All Entries)</h3>
     <div class="stats-box">
@@ -663,145 +1182,160 @@ def generate_html(
     html += "    </div>\n"
 
     if global_regression_img:
-        html += f'    <img src="{global_regression_img}" alt="Global Regression Coefficients">\n'
+        html += f'    <img src="../{global_regression_img}" alt="Global Regression Coefficients">\n'
         html += generate_coefficient_table(global_top20, global_bottom20, noun_details, "Global Model: ")
 
     html += """
-    <h3>Delta Model (Original Stephanos Only)</h3>
+    <h3>Parisinus Model (Original Stephanos Only)</h3>
     <div class="stats-box">
 """
 
-    if delta_ridge:
+    if parisinus_ridge:
         html += f"""        <div class="metric">
             <span class="metric-label">Alpha (Regularization):</span>
-            <span class="metric-value">{delta_ridge.alpha_:.4f}</span>
+            <span class="metric-value">{parisinus_ridge.alpha_:.4f}</span>
         </div>
         <div class="metric">
             <span class="metric-label">CV R² Mean:</span>
-            <span class="metric-value">{delta_cv.mean():.4f}</span>
+            <span class="metric-value">{parisinus_cv.mean():.4f}</span>
         </div>
         <div class="metric">
             <span class="metric-label">CV R² Std:</span>
-            <span class="metric-value">{delta_cv.std():.4f}</span>
+            <span class="metric-value">{parisinus_cv.std():.4f}</span>
         </div>
 """
     else:
-        html += """        <p><strong>Delta regression analysis not available.</strong></p>
-        <p>Either proper nouns need to be extracted, or there are too few delta entries.</p>
+        html += """        <p><strong>Parisinus regression analysis not available.</strong></p>
+        <p>Either proper nouns need to be extracted, or there are too few Parisinus entries.</p>
 """
 
     html += "    </div>\n"
 
-    if delta_regression_img:
-        html += f'    <img src="{delta_regression_img}" alt="Delta Regression Coefficients">\n'
-        html += generate_coefficient_table(delta_top20, delta_bottom20, noun_details, "Delta Model: ")
+    if parisinus_regression_img:
+        html += f'    <img src="../{parisinus_regression_img}" alt="Parisinus Regression Coefficients">\n'
+        html += generate_coefficient_table(parisinus_top20, parisinus_bottom20, noun_details, "Parisinus Model: ")
 
     html += """
-    <h3>Non-Delta Model (Epitome Only)</h3>
+    <h3>Non-Parisinus Model (Epitome Only)</h3>
     <div class="stats-box">
 """
 
-    if non_delta_ridge:
+    if epitomised_ridge:
         html += f"""        <div class="metric">
             <span class="metric-label">Alpha (Regularization):</span>
-            <span class="metric-value">{non_delta_ridge.alpha_:.4f}</span>
+            <span class="metric-value">{epitomised_ridge.alpha_:.4f}</span>
         </div>
         <div class="metric">
             <span class="metric-label">CV R² Mean:</span>
-            <span class="metric-value">{non_delta_cv.mean():.4f}</span>
+            <span class="metric-value">{epitomised_cv.mean():.4f}</span>
         </div>
         <div class="metric">
             <span class="metric-label">CV R² Std:</span>
-            <span class="metric-value">{non_delta_cv.std():.4f}</span>
+            <span class="metric-value">{epitomised_cv.std():.4f}</span>
         </div>
 """
     else:
-        html += """        <p><strong>Non-delta regression analysis not available.</strong></p>
-        <p>Either proper nouns need to be extracted, or there are too few non-delta entries.</p>
+        html += """        <p><strong>Epitomised regression analysis not available.</strong></p>
+        <p>Either proper nouns need to be extracted, or there are too few non-Parisinus entries.</p>
 """
 
     html += "    </div>\n"
 
-    if non_delta_regression_img:
-        html += f'    <img src="{non_delta_regression_img}" alt="Non-Delta Regression Coefficients">\n'
-        html += generate_coefficient_table(non_delta_top20, non_delta_bottom20, noun_details, "Non-Delta Model: ")
+    if epitomised_regression_img:
+        html += f'    <img src="../{epitomised_regression_img}" alt="Non-Parisinus Regression Coefficients">\n'
+        html += generate_coefficient_table(epitomised_top20, epitomised_bottom20, noun_details, "Non-Parisinus Model: ")
+
+    html += generate_page_footer()
+    return html
+
+
+def generate_etymology_page(etym_overall_img, etym_comparison_img, etym_df):
+    """Generate etymology analysis page."""
+    html = generate_page_header('Etymology Analysis', 'etymology', in_subdirectory=True)
 
     html += f"""
-    <h2>3. Etymology Analysis</h2>
+    <h2>Overall Distribution</h2>
+    <img src="../{etym_overall_img}" alt="Etymology Category Distribution">
 
-    <h3>Overall Distribution</h3>
-    <img src="{etym_overall_img}" alt="Etymology Category Distribution">
-
-    <h3>Delta vs Non-Delta Comparison</h3>
-    <img src="{etym_comparison_img}" alt="Etymology Categories Delta vs Non-Delta">
+    <h2>Parisinus Coislinianus 228 vs Epitomised version Comparison</h2>
+    <img src="../{etym_comparison_img}" alt="Etymology Categories Parisinus Coislinianus 228 vs Epitomised version">
 
     <table>
         <tr>
             <th>Category</th>
-            <th>Delta Count</th>
-            <th>Non-Delta Count</th>
+            <th>Parisinus Count</th>
+            <th>Non-Parisinus Count</th>
             <th>Total</th>
         </tr>
 """
 
-    categories = etym_df['category'].unique()
-    for cat in sorted(categories):
-        delta_count = etym_df[(etym_df['category'] == cat) & (etym_df['is_delta'] == True)]['count'].sum()
-        non_delta_count = etym_df[(etym_df['category'] == cat) & (etym_df['is_delta'] == False)]['count'].sum()
-        total = delta_count + non_delta_count
-        html += f"""        <tr>
+    if not etym_df.empty:
+        categories = etym_df['category'].unique()
+        for cat in sorted(categories):
+            parisinus_count = etym_df[(etym_df['category'] == cat) & (etym_df['is_parisinus'] == True)]['count'].sum()
+            non_parisinus_count = etym_df[(etym_df['category'] == cat) & (etym_df['is_parisinus'] == False)]['count'].sum()
+            total = parisinus_count + non_parisinus_count
+            html += f"""        <tr>
             <td>{cat.replace('_', ' ')}</td>
-            <td>{int(delta_count)}</td>
-            <td>{int(non_delta_count)}</td>
+            <td>{int(parisinus_count)}</td>
+            <td>{int(non_parisinus_count)}</td>
             <td>{int(total)}</td>
         </tr>
 """
 
-    html += f"""    </table>
+    html += "    </table>\n"
+    html += generate_page_footer()
+    return html
 
-    <h2>4. Delta vs Non-Delta Statistical Comparison</h2>
 
+def generate_parisinus_comparison_page(parisinus_stats, epitomised_stats, t_stat, t_pval, u_stat, u_pval):
+    """Generate Parisinus Coislinianus 228 vs Epitomised version comparison page."""
+    html = generate_page_header('Parisinus Coislinianus 228 vs Epitomised version Comparison', 'parisinus_comparison', in_subdirectory=True)
+
+    html += f"""
+    <h2>Descriptive Statistics</h2>
     <div class="stats-box">
-        <h3>Descriptive Statistics</h3>
         <table>
             <tr>
                 <th>Metric</th>
-                <th>Delta (Original)</th>
-                <th>Non-Delta (Epitome)</th>
+                <th>Parisinus Coislinianus 228</th>
+                <th>Epitomised version</th>
             </tr>
             <tr>
                 <td>Count</td>
-                <td>{delta_stats['count']}</td>
-                <td>{non_delta_stats['count']}</td>
+                <td>{parisinus_stats['count']}</td>
+                <td>{epitomised_stats['count']}</td>
             </tr>
             <tr>
                 <td>Mean Word Count</td>
-                <td>{format_stat(delta_stats['mean'])}</td>
-                <td>{format_stat(non_delta_stats['mean'])}</td>
+                <td>{format_stat(parisinus_stats['mean'])}</td>
+                <td>{format_stat(epitomised_stats['mean'])}</td>
             </tr>
             <tr>
                 <td>Median Word Count</td>
-                <td>{format_stat(delta_stats['median'])}</td>
-                <td>{format_stat(non_delta_stats['median'])}</td>
+                <td>{format_stat(parisinus_stats['median'])}</td>
+                <td>{format_stat(epitomised_stats['median'])}</td>
             </tr>
             <tr>
                 <td>Std Dev</td>
-                <td>{format_stat(delta_stats['std'])}</td>
-                <td>{format_stat(non_delta_stats['std'])}</td>
+                <td>{format_stat(parisinus_stats['std'])}</td>
+                <td>{format_stat(epitomised_stats['std'])}</td>
             </tr>
             <tr>
                 <td>Min</td>
-                <td>{format_stat(delta_stats['min'], is_float=False)}</td>
-                <td>{format_stat(non_delta_stats['min'], is_float=False)}</td>
+                <td>{format_stat(parisinus_stats['min'], is_float=False)}</td>
+                <td>{format_stat(epitomised_stats['min'], is_float=False)}</td>
             </tr>
             <tr>
                 <td>Max</td>
-                <td>{format_stat(delta_stats['max'], is_float=False)}</td>
-                <td>{format_stat(non_delta_stats['max'], is_float=False)}</td>
+                <td>{format_stat(parisinus_stats['max'], is_float=False)}</td>
+                <td>{format_stat(epitomised_stats['max'], is_float=False)}</td>
             </tr>
         </table>
+    </div>
 
-        <h3>Statistical Tests</h3>
+    <h2>Statistical Tests</h2>
+    <div class="stats-box">
 """
 
     if not pd.isna(t_stat) and not pd.isna(t_pval):
@@ -828,25 +1362,16 @@ def generate_html(
 
         <p style="margin-top: 20px;">
             <strong>Interpretation:</strong>
-            {'The difference in word counts between Delta (original Stephanos) and Non-Delta (epitome) entries is statistically significant.' if is_significant else 'There is no statistically significant difference in word counts between Delta and Non-Delta entries.'}
+            {'The difference in word counts between Parisinus Coislinianus 228 and Epitomised version entries is statistically significant.' if is_significant else 'There is no statistically significant difference in word counts between Parisinus Coislinianus 228 and Epitomised version entries.'}
         </p>
 """
     else:
         html += """        <p><strong>Statistical tests not available.</strong></p>
-        <p>Both Delta and Non-Delta groups need data for comparison. Currently, there are only entries from one group.</p>
+        <p>Both Parisinus Coislinianus 228 and Epitomised groups need data for comparison. Currently, there are only entries from one group.</p>
 """
 
-    html += """
-    </div>
-
-    <div class="footer">
-        <p>Statistical analysis of Stephanos of Byzantium's Ethnika</p>
-        <p>Generated from PostgreSQL database | <a href="/">Back to main site</a></p>
-    </div>
-</body>
-</html>
-"""
-
+    html += "    </div>\n"
+    html += generate_page_footer()
     return html
 
 
@@ -875,49 +1400,81 @@ def main():
 
     # 4. Ridge regression analysis
     print("  Building feature matrix for ridge regression...")
-    X, y, noun_lemmas, lemma_names, is_delta = get_proper_noun_features(cur)
+    X, y, noun_lemmas, lemma_names, is_parisinus = get_proper_noun_features(cur)
 
     print("  Performing global ridge regression...")
-    global_ridge, global_cv, global_top20, global_bottom20 = perform_ridge_regression(X, y, noun_lemmas, is_delta)
+    global_ridge, global_cv, global_top20, global_bottom20 = perform_ridge_regression(X, y, noun_lemmas, is_parisinus)
 
     if global_ridge:
         global_regression_img = generate_regression_visualization(global_top20, global_bottom20, "regression_global.png")
     else:
         global_regression_img = None
 
-    # Delta-only regression
-    print("  Performing delta-only ridge regression...")
-    delta_mask = is_delta
-    if delta_mask.sum() > 10:  # Need at least 10 samples
-        delta_ridge, delta_cv, delta_top20, delta_bottom20 = perform_ridge_regression(
-            X[delta_mask], y[delta_mask], noun_lemmas, is_delta[delta_mask]
+    # Parisinus-only regression
+    print("  Performing Parisinus-only ridge regression...")
+    parisinus_mask = is_parisinus
+    if parisinus_mask.sum() > 10:  # Need at least 10 samples
+        parisinus_ridge, parisinus_cv, parisinus_top20, parisinus_bottom20 = perform_ridge_regression(
+            X[parisinus_mask], y[parisinus_mask], noun_lemmas, is_parisinus[parisinus_mask]
         )
-        if delta_ridge:
-            delta_regression_img = generate_regression_visualization(delta_top20, delta_bottom20, "regression_delta.png")
+        if parisinus_ridge:
+            parisinus_regression_img = generate_regression_visualization(parisinus_top20, parisinus_bottom20, "regression_delta.png")
         else:
-            delta_regression_img = None
+            parisinus_regression_img = None
     else:
-        delta_ridge, delta_cv, delta_top20, delta_bottom20 = None, None, None, None
-        delta_regression_img = None
+        parisinus_ridge, parisinus_cv, parisinus_top20, parisinus_bottom20 = None, None, None, None
+        parisinus_regression_img = None
 
-    # Non-delta regression
-    print("  Performing non-delta ridge regression...")
-    non_delta_mask = ~is_delta
-    if non_delta_mask.sum() > 10:
-        non_delta_ridge, non_delta_cv, non_delta_top20, non_delta_bottom20 = perform_ridge_regression(
-            X[non_delta_mask], y[non_delta_mask], noun_lemmas, is_delta[non_delta_mask]
+    # Epitomised regression
+    print("  Performing Epitomised ridge regression...")
+    epitomised_mask = ~is_parisinus
+    if epitomised_mask.sum() > 10:
+        epitomised_ridge, epitomised_cv, epitomised_top20, epitomised_bottom20 = perform_ridge_regression(
+            X[epitomised_mask], y[epitomised_mask], noun_lemmas, is_parisinus[epitomised_mask]
         )
-        if non_delta_ridge:
-            non_delta_regression_img = generate_regression_visualization(non_delta_top20, non_delta_bottom20, "regression_non_delta.png")
+        if epitomised_ridge:
+            epitomised_regression_img = generate_regression_visualization(epitomised_top20, epitomised_bottom20, "regression_non_delta.png")
         else:
-            non_delta_regression_img = None
+            epitomised_regression_img = None
     else:
-        non_delta_ridge, non_delta_cv, non_delta_top20, non_delta_bottom20 = None, None, None, None
-        non_delta_regression_img = None
+        epitomised_ridge, epitomised_cv, epitomised_top20, epitomised_bottom20 = None, None, None, None
+        epitomised_regression_img = None
 
     # Get proper noun details for tables
     print("  Fetching proper noun details...")
     noun_details = get_proper_noun_details(cur, noun_lemmas)
+
+    # 4.5. Parisinus Coislinianus 228 vs Epitomised version coefficient comparison
+    print("  Comparing Parisinus Coislinianus 228 vs Epitomised version coefficients...")
+    comparison_df = None
+    top_parisinus_emphasis = None
+    top_epitomised_emphasis = None
+    comparison_density_img = None
+    comparison_interactive_path = None
+
+    if parisinus_ridge and epitomised_ridge:
+        parisinus_coefs = parisinus_top20['coefficient'].tolist() if parisinus_top20 is not None else None
+        epitomised_coefs = epitomised_top20['coefficient'].tolist() if epitomised_top20 is not None else None
+
+        # Get coefficients for all nouns
+        if parisinus_ridge and epitomised_ridge:
+            parisinus_coef_df = pd.DataFrame({
+                'noun': noun_lemmas,
+                'coefficient': parisinus_ridge.coef_
+            })
+            epitomised_coef_df = pd.DataFrame({
+                'noun': noun_lemmas,
+                'coefficient': epitomised_ridge.coef_
+            })
+
+            comparison_df, top_parisinus_emphasis, top_epitomised_emphasis = compare_parisinus_epitomised_coefficients(
+                parisinus_ridge.coef_, epitomised_ridge.coef_, noun_lemmas, noun_details
+            )
+
+            if comparison_df is not None:
+                comparison_density_img, comparison_interactive_path = generate_coefficient_comparison_plots(
+                    comparison_df, noun_details
+                )
 
     # 5. Etymology analysis
     print("  Analyzing etymologies...")
@@ -937,35 +1494,70 @@ def main():
         ax2.text(0.5, 0.5, 'No etymology data available yet',
                 ha='center', va='center', fontsize=16)
         ax2.axis('off')
-        etym_comparison_img = save_plot_to_file(fig2, "etymology_delta_comparison.png")
+        etym_comparison_img = save_plot_to_file(fig2, "etymology_parisinus_comparison.png")
 
-    # 6. Delta vs non-delta comparison
-    print("  Comparing delta vs non-delta entries...")
-    delta_stats, non_delta_stats, t_stat, t_pval, u_stat, u_pval = compare_delta_vs_non_delta(df)
+    # 6. Parisinus Coislinianus 228 vs Epitomised version comparison
+    print("  Comparing Parisinus Coislinianus 228 vs Epitomised version entries...")
+    parisinus_stats, epitomised_stats, t_stat, t_pval, u_stat, u_pval = compare_parisinus_vs_epitomised(df)
 
-    # 7. Generate HTML
-    print("  Generating HTML...")
-    html = generate_html(
+    # 7. Generate HTML pages
+    print("  Generating HTML pages...")
+
+    # Create reference_site and statistics directories
+    ref_site_dir = Path("reference_site")
+    ref_site_dir.mkdir(exist_ok=True)
+    stats_dir = ref_site_dir / "statistics"
+    stats_dir.mkdir(exist_ok=True)
+
+    # Generate index page
+    print("    - Generating index page...")
+    index_html = generate_index_page()
+    (ref_site_dir / "statistics.html").write_text(index_html, encoding='utf-8')
+
+    # Generate word count page
+    print("    - Generating word count page...")
+    word_count_html = generate_word_count_page(
         stats_by_type, stats_by_letter,
-        hist_by_type_img, hist_by_letter_img,
-        global_ridge, global_cv, global_top20, global_bottom20,
-        delta_ridge, delta_cv, delta_top20, delta_bottom20,
-        non_delta_ridge, non_delta_cv, non_delta_top20, non_delta_bottom20,
-        global_regression_img, delta_regression_img, non_delta_regression_img,
-        etym_overall_img, etym_comparison_img,
-        etym_df,
-        delta_stats, non_delta_stats, t_stat, t_pval, u_stat, u_pval,
-        noun_details
+        hist_by_type_img, hist_by_letter_img
     )
+    (stats_dir / "word_count.html").write_text(word_count_html, encoding='utf-8')
 
-    # 8. Write output
-    output_path = Path("statistics.html")
-    output_path.write_text(html, encoding='utf-8')
+    # Generate regression page
+    print("    - Generating regression page...")
+    regression_html = generate_regression_page(
+        global_ridge, global_cv, global_top20, global_bottom20,
+        parisinus_ridge, parisinus_cv, parisinus_top20, parisinus_bottom20,
+        epitomised_ridge, epitomised_cv, epitomised_top20, epitomised_bottom20,
+        global_regression_img, parisinus_regression_img, epitomised_regression_img,
+        noun_details,
+        comparison_density_img, comparison_interactive_path,
+        top_parisinus_emphasis, top_epitomised_emphasis
+    )
+    (stats_dir / "regression.html").write_text(regression_html, encoding='utf-8')
+
+    # Generate etymology page
+    print("    - Generating etymology page...")
+    etymology_html = generate_etymology_page(
+        etym_overall_img, etym_comparison_img, etym_df
+    )
+    (stats_dir / "etymology.html").write_text(etymology_html, encoding='utf-8')
+
+    # Generate delta comparison page
+    print("    - Generating delta comparison page...")
+    delta_html = generate_parisinus_comparison_page(
+        parisinus_stats, epitomised_stats, t_stat, t_pval, u_stat, u_pval
+    )
+    (stats_dir / "parisinus_comparison.html").write_text(delta_html, encoding='utf-8')
 
     conn.close()
 
-    print(f"\nStatistics website generated: {output_path.absolute()}")
-    print("Open in browser to view comprehensive analysis.")
+    print(f"\nStatistics website generated:")
+    print(f"  - Main page: {(ref_site_dir / 'statistics.html').absolute()}")
+    print(f"  - Word count: {(stats_dir / 'word_count.html').absolute()}")
+    print(f"  - Regression: {(stats_dir / 'regression.html').absolute()}")
+    print(f"  - Etymology: {(stats_dir / 'etymology.html').absolute()}")
+    print(f"  - Delta comparison: {(stats_dir / 'parisinus_comparison.html').absolute()}")
+    print("\nOpen reference_site/statistics.html in browser to view comprehensive analysis.")
 
 
 if __name__ == "__main__":
