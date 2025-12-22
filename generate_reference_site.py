@@ -80,7 +80,7 @@ def get_all_lemmas(cur):
                     )),
                    '[]'::json
                ) as image_filenames,
-               a.word_count
+               a.word_count, a.version
         FROM assembled_lemmas a
         LEFT JOIN ocr_generations g ON a.ocr_generation_id = g.id
         ORDER BY a.id
@@ -116,7 +116,7 @@ def get_all_lemmas(cur):
     etymologies_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
 
     all_lemmas = []
-    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, source_image_ids, image_filenames, word_count in rows:
+    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, source_image_ids, image_filenames, word_count, version in rows:
         try:
             data = json.loads(translation_json) if translation_json else None
         except json.JSONDecodeError:
@@ -161,6 +161,7 @@ def get_all_lemmas(cur):
             "word_count": word_count,
             "proper_nouns": proper_nouns_by_lemma.get(lemma_id, []),
             "etymologies": etymologies_by_lemma.get(lemma_id, []),
+            "version": version or "epitome",
         }
         lemma_data["letter_slug"] = get_initial_slug(lemma_data["lemma"])
         all_lemmas.append(lemma_data)
@@ -174,6 +175,9 @@ def render_lemma_cards(lemmas):
     for lemma in lemmas:
         confidence_class = "low-confidence" if lemma.get('confidence') == 'low' else ""
         confidence_badge = '<span class="confidence-badge">Low Confidence</span>' if lemma.get('confidence') == 'low' else ""
+        is_parisinus = lemma.get('version') == 'parisinus'
+        parisinus_class = "parisinus-version" if is_parisinus else ""
+        version_badge = '<span class="version-badge">Parisinus</span>' if is_parisinus else ""
         is_translated = lemma.get("translated")
         translation = lemma.get('translation') or lemma.get('english_translation') or ""
         if not is_translated or not translation:
@@ -239,10 +243,10 @@ def render_lemma_cards(lemmas):
         meta_html = "<br>".join(meta_lines)
         cards_html.append(
             f"""
-            <div class="lemma-card" id="lemma-{lemma['lemma_id']}">
+            <div class="lemma-card {parisinus_class}" id="lemma-{lemma['lemma_id']}">
                 <div class="lemma-header">
                     <div>
-                        <div class="lemma-title">{lemma['lemma']}{confidence_badge}</div>
+                        <div class="lemma-title">{lemma['lemma']}{confidence_badge}{version_badge}</div>
                         {f'<span class="lemma-type">{lemma["type"]}</span>' if lemma['type'] else ''}
                     </div>
                     <div class="lemma-meta">
@@ -403,6 +407,22 @@ def common_styles():
             border-radius: 3px;
             font-size: 0.75em;
             margin-left: 10px;
+        }
+        .version-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            background: #7b1fa2;
+            color: white;
+            border-radius: 3px;
+            font-size: 0.75em;
+            margin-left: 10px;
+        }
+        .parisinus-version {
+            background: #f3e5f5;
+            border: 2px solid #9c27b0;
+        }
+        .parisinus-version:hover {
+            box-shadow: 0 4px 16px rgba(156, 39, 176, 0.2);
         }
         .translation {
             font-size: 1em;

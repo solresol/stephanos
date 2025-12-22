@@ -55,13 +55,15 @@ def ensure_table(cur):
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS nodegoat_id TEXT")
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS meineke_id TEXT")
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS billerbeck_id TEXT")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS version TEXT")
     # Drop old unique index if it exists
     cur.execute("DROP INDEX IF EXISTS assembled_lemmas_source_image_ids_idx")
-    # Create composite unique index on (source_image_ids, entry_number)
+    cur.execute("DROP INDEX IF EXISTS assembled_lemmas_composite_idx")
+    # Create composite unique index on (source_image_ids, entry_number, version)
     cur.execute(
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS assembled_lemmas_composite_idx
-        ON assembled_lemmas (source_image_ids, entry_number)
+        CREATE UNIQUE INDEX IF NOT EXISTS assembled_lemmas_composite_version_idx
+        ON assembled_lemmas (source_image_ids, entry_number, version)
         """
     )
 
@@ -157,6 +159,7 @@ def build_assembled_entries(rows, headword_lookup):
                 "type": entry.get("type", ""),
                 "greek_text": entry.get("greek_text", "").strip(),
                 "confidence": entry.get("confidence", "normal"),
+                "version": entry.get("version"),  # epitome or parisinus
                 "source_image_ids": [image_id],
                 "volume_number": volume_number,
                 "volume_label": volume_label,
@@ -200,6 +203,7 @@ def upsert_assembled(cur, assembled_entries):
             entry["type"],
             entry["greek_text"],
             entry["confidence"],
+            entry.get("version"),
             source_ids_json,
             assembled_json,
             entry.get("volume_number"),
@@ -215,16 +219,17 @@ def upsert_assembled(cur, assembled_entries):
             sql = cur.mogrify(
                 """
             INSERT INTO assembled_lemmas
-            (lemma, entry_number, type, greek_text, confidence, source_image_ids, assembled_json, updated_at,
+            (lemma, entry_number, type, greek_text, confidence, version, source_image_ids, assembled_json, updated_at,
              volume_number, volume_label, letter_range, ocr_generation_id, ocr_processed_at,
              nodegoat_id, meineke_id, billerbeck_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (source_image_ids, entry_number) DO UPDATE SET
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (source_image_ids, entry_number, version) DO UPDATE SET
                 lemma = EXCLUDED.lemma,
                 entry_number = EXCLUDED.entry_number,
                 type = EXCLUDED.type,
                 greek_text = EXCLUDED.greek_text,
                 confidence = EXCLUDED.confidence,
+                version = EXCLUDED.version,
                 assembled_json = EXCLUDED.assembled_json,
                 updated_at = CURRENT_TIMESTAMP,
                 translated = 0,

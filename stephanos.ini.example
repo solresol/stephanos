@@ -1,0 +1,15 @@
+# Stephanos Configuration File
+# Copy this to stephanos.ini and fill in your actual values
+
+[database]
+host = localhost
+port = 5432
+database = stephanos
+user = stephanos
+
+[nodegoat]
+url = https://nodegoat.abm.uu.se
+token = YOUR_BEARER_TOKEN_HERE
+# Get token from: nodegoat.abm.uu.se → Management → API → Create Client → Assign User
+project_id =
+lemma_type_id =
