@@ -8,6 +8,10 @@ config.py
 stephanos.ini
 pdf_pages/
 exports/
+backups/
+logs/
+review_data/
+review_data.json
 
 # Temporary migration/testing scripts
 add_parisinus_column.sql
