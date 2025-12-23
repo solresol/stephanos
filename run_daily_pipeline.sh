@@ -86,6 +86,18 @@ uv run generate_protected_pages.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 8: Exporting lemmas CSV..." | tee -a "$LOGFILE"
 uv run generate_csv_export.py --output exports/lemmas.csv 2>&1 | tee -a "$LOGFILE"
 
+# Step 8a: Export lemma data for review interface
+echo "Step 8a: Exporting lemma data for review interface..." | tee -a "$LOGFILE"
+uv run export_for_review.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 8b: Sync review database from merah
+echo "Step 8b: Syncing review database from merah..." | tee -a "$LOGFILE"
+./sync_review_db.sh 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to sync review database" | tee -a "$LOGFILE"
+
+# Step 8c: Import reviews into PostgreSQL
+echo "Step 8c: Importing reviews into PostgreSQL..." | tee -a "$LOGFILE"
+uv run import_reviews.py 2>&1 | tee -a "$LOGFILE"
+
 # Step 9: Deploy to merah
 echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
 # Deploy reference_site/ (contains statistics.html, statistics/, statistics_images/, people.html, and all lemma pages)
@@ -94,22 +106,40 @@ rsync -avz reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/s
 rsync -avz progress.html stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 # Deploy CSV export
 rsync -avz exports/lemmas.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+# Deploy review data JSON
+rsync -avz review_data.json stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ 2>&1 | tee -a "$LOGFILE"
 
-# Step 10: Backup database with rolling history
-echo "Step 10: Backing up database..." | tee -a "$LOGFILE"
+# Step 10: Backup databases with rolling history
+echo "Step 10: Backing up databases..." | tee -a "$LOGFILE"
 BACKUP_DIR="stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/datadumps.ifost.org.au/htdocs/stephanos"
-DB_PATH="$HOME/stephanos.db"
 
-# Create dated backup
-BACKUP_NAME="stephanos_${DATE}.db"
-scp "$DB_PATH" "${BACKUP_DIR}/${BACKUP_NAME}" 2>&1 | tee -a "$LOGFILE"
+# Backup SQLite database if it exists
+if [ -f "$HOME/stephanos.db" ]; then
+    echo "  Backing up SQLite database..." | tee -a "$LOGFILE"
+    DB_PATH="$HOME/stephanos.db"
+    BACKUP_NAME="stephanos_${DATE}.db"
+    scp "$DB_PATH" "${BACKUP_DIR}/${BACKUP_NAME}" 2>&1 | tee -a "$LOGFILE"
+    scp "$DB_PATH" "${BACKUP_DIR}/stephanos_latest.db" 2>&1 | tee -a "$LOGFILE"
+fi
 
-# Also copy as 'latest' for convenience
-scp "$DB_PATH" "${BACKUP_DIR}/stephanos_latest.db" 2>&1 | tee -a "$LOGFILE"
+# Backup PostgreSQL database
+echo "  Backing up PostgreSQL database..." | tee -a "$LOGFILE"
+mkdir -p backups
+pg_dump -U stephanos stephanos | gzip > backups/stephanos_${DATE}.sql.gz 2>&1 | tee -a "$LOGFILE"
+# Upload PostgreSQL backup to merah
+rsync -avz backups/stephanos_${DATE}.sql.gz ${BACKUP_DIR}/ 2>&1 | tee -a "$LOGFILE"
 
-# Remove backups older than 7 days (keep rolling history)
-echo "  Cleaning up old backups (keeping last 7 days)..." | tee -a "$LOGFILE"
-ssh stephanos@merah.cassia.ifost.org.au "find /var/www/vhosts/datadumps.ifost.org.au/htdocs/stephanos -name 'stephanos_*.db' -mtime +7 -delete" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to cleanup old backups" | tee -a "$LOGFILE"
+# Backup review database on merah
+echo "  Backing up review database on merah..." | tee -a "$LOGFILE"
+ssh stephanos@merah.cassia.ifost.org.au "bash ~/stephanos/backup_review_db.sh" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to backup review database" | tee -a "$LOGFILE"
+
+# Remove local backups older than 7 days
+echo "  Cleaning up old local backups (keeping last 7 days)..." | tee -a "$LOGFILE"
+find backups -name "stephanos_*.sql.gz" -mtime +7 -delete 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to cleanup old local backups" | tee -a "$LOGFILE"
+
+# Remove remote backups older than 7 days (keep rolling history)
+echo "  Cleaning up old remote backups (keeping last 7 days)..." | tee -a "$LOGFILE"
+ssh stephanos@merah.cassia.ifost.org.au "find /var/www/vhosts/datadumps.ifost.org.au/htdocs/stephanos -name 'stephanos_*.db' -o -name 'stephanos_*.sql.gz' -mtime +7 -delete" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to cleanup old remote backups" | tee -a "$LOGFILE"
 
 echo "Pipeline complete: $(date)" | tee -a "$LOGFILE"
 echo "" | tee -a "$LOGFILE"
