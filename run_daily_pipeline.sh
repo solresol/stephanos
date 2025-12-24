@@ -86,16 +86,20 @@ uv run generate_protected_pages.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 8: Exporting lemmas CSV..." | tee -a "$LOGFILE"
 uv run generate_csv_export.py --output exports/lemmas.csv 2>&1 | tee -a "$LOGFILE"
 
-# Step 8a: Export lemma data for review interface
-echo "Step 8a: Exporting lemma data for review interface..." | tee -a "$LOGFILE"
+# Step 8a: Export proper nouns CSV
+echo "Step 8a: Exporting proper nouns CSV..." | tee -a "$LOGFILE"
+uv run export_proper_nouns_csv.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 8b: Export lemma data for review interface
+echo "Step 8b: Exporting lemma data for review interface..." | tee -a "$LOGFILE"
 uv run export_for_review.py 2>&1 | tee -a "$LOGFILE"
 
-# Step 8b: Sync review database from merah
-echo "Step 8b: Syncing review database from merah..." | tee -a "$LOGFILE"
+# Step 8c: Sync review database from merah
+echo "Step 8c: Syncing review database from merah..." | tee -a "$LOGFILE"
 ./sync_review_db.sh 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to sync review database" | tee -a "$LOGFILE"
 
-# Step 8c: Import reviews into PostgreSQL
-echo "Step 8c: Importing reviews into PostgreSQL..." | tee -a "$LOGFILE"
+# Step 8d: Import reviews into PostgreSQL
+echo "Step 8d: Importing reviews into PostgreSQL..." | tee -a "$LOGFILE"
 uv run import_reviews.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 9: Deploy to merah
@@ -104,8 +108,9 @@ echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
 rsync -avz reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 # Deploy progress.html (kept at root for backwards compatibility)
 rsync -avz progress.html stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
-# Deploy CSV export
+# Deploy CSV exports
 rsync -avz exports/lemmas.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+rsync -avz exports/proper_nouns.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 # Deploy review data JSON
 rsync -avz review_data.json stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ 2>&1 | tee -a "$LOGFILE"
 

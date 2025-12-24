@@ -39,6 +39,18 @@ For each proper noun, provide:
 1. The form as it appears in the text (in any case)
 2. The lemma/canonical form (nominative singular for most, but keep conventional forms)
 3. English translation
+4. Type: person, place, people, deity, or other
+5. Role: CRITICAL - distinguish between:
+   - "source": Authors/historians/poets who WROTE about the place (e.g., Homer, Hecataeus, Strabo, Pausanias, Herodotus)
+     → These are usually followed by citations like "FGrHist 1 F 290" or work titles
+   - "entity": People/deities IN the place's story or etymology (e.g., Zeus it was named after, Apollodoros who founded it)
+6. Citation: If role is "source", extract any citation that follows:
+   - "FGrHist X F Y" format
+   - "fr. X Editor" format (e.g., "fr. 32 Borries")
+   - Combined: "FGrHist X F Y = fr. Z Editor"
+   - Book references: "(I 529)" means Iliad book 1, line 529
+   - Leave empty if no citation present
+7. Work title: If the source mentions a specific work (e.g., "Ἀσίᾳ" = "Asia", "Εὐρώπῃ" = "Europe"), extract it
 
 Do NOT extract:
 - Common nouns (river, mountain, city, etc.)
@@ -78,9 +90,22 @@ EXTRACT_PROPER_NOUNS_TOOL = {
                                 "type": "string",
                                 "enum": ["person", "place", "people", "deity", "other"],
                                 "description": "Type of proper noun"
+                            },
+                            "role": {
+                                "type": "string",
+                                "enum": ["entity", "source"],
+                                "description": "Role: 'source' for authors/writers being cited, 'entity' for people/deities in the story"
+                            },
+                            "citation": {
+                                "type": "string",
+                                "description": "Citation string (e.g., 'FGrHist 1 F 290', 'fr. 32 Borries') - only for sources"
+                            },
+                            "work_title": {
+                                "type": "string",
+                                "description": "Title of work mentioned (e.g., 'Asia', 'Europe') - only for sources"
                             }
                         },
-                        "required": ["text_form", "lemma_form", "english", "type"]
+                        "required": ["text_form", "lemma_form", "english", "type", "role"]
                     }
                 }
             },
@@ -161,14 +186,17 @@ def main():
             for noun in proper_nouns:
                 cur.execute("""
                     INSERT INTO proper_nouns
-                    (lemma_id, proper_noun, lemma_form, english_translation, noun_type)
-                    VALUES (%s, %s, %s, %s, %s)
+                    (lemma_id, proper_noun, lemma_form, english_translation, noun_type, role, citation, work_title)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     lemma_id,
                     noun["text_form"],
                     noun["lemma_form"],
                     noun["english"],
-                    noun["type"]
+                    noun["type"],
+                    noun["role"],
+                    noun.get("citation"),
+                    noun.get("work_title")
                 ))
 
             # Mark as analyzed
