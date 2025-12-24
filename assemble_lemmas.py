@@ -25,6 +25,7 @@ def ensure_table(cur):
             type TEXT,
             greek_text TEXT,
             confidence TEXT,
+            version TEXT NOT NULL DEFAULT 'epitome',
             source_image_ids TEXT NOT NULL,
             assembled_json TEXT,
             human_greek_text TEXT,
@@ -56,6 +57,13 @@ def ensure_table(cur):
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS meineke_id TEXT")
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS billerbeck_id TEXT")
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS version TEXT")
+    # Ensure version column has default and NOT NULL constraint
+    cur.execute("ALTER TABLE assembled_lemmas ALTER COLUMN version SET DEFAULT 'epitome'")
+    try:
+        cur.execute("ALTER TABLE assembled_lemmas ALTER COLUMN version SET NOT NULL")
+    except Exception:
+        # If there are NULL values, this will fail - that's expected during migration
+        pass
     # Drop old unique index if it exists
     cur.execute("DROP INDEX IF EXISTS assembled_lemmas_source_image_ids_idx")
     cur.execute("DROP INDEX IF EXISTS assembled_lemmas_composite_idx")
@@ -159,7 +167,7 @@ def build_assembled_entries(rows, headword_lookup):
                 "type": entry.get("type", ""),
                 "greek_text": entry.get("greek_text", "").strip(),
                 "confidence": entry.get("confidence", "normal"),
-                "version": entry.get("version"),  # epitome or parisinus
+                "version": entry.get("version") or "epitome",  # default to epitome if not specified
                 "source_image_ids": [image_id],
                 "volume_number": volume_number,
                 "volume_label": volume_label,

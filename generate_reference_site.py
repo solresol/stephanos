@@ -97,7 +97,10 @@ def get_all_lemmas(cur):
                    'text_form', proper_noun,
                    'lemma_form', lemma_form,
                    'english', english_translation,
-                   'type', noun_type
+                   'type', noun_type,
+                   'role', role,
+                   'citation', citation,
+                   'work_title', work_title
                ) ORDER BY id) as nouns
         FROM proper_nouns
         GROUP BY lemma_id
@@ -227,18 +230,36 @@ def render_lemma_cards(lemmas):
         if lemma.get("word_count") is not None:
             meta_lines.append(f"Word count: {lemma['word_count']}")
 
-        # Add proper nouns
+        # Add proper nouns (separated by role)
         if lemma.get("proper_nouns"):
-            noun_list = []
-            for noun in lemma["proper_nouns"]:
-                noun_str = f"{noun['lemma_form']}"
-                if noun.get('english'):
-                    noun_str += f" ({noun['english']})"
-                if noun.get('type'):
-                    noun_str += f" [{noun['type']}]"
-                noun_list.append(noun_str)
-            if noun_list:
-                meta_lines.append(f"Proper nouns: {', '.join(noun_list)}")
+            sources = [n for n in lemma["proper_nouns"] if n.get('role') == 'source']
+            entities = [n for n in lemma["proper_nouns"] if n.get('role') == 'entity']
+
+            # Display sources (authors/citations)
+            if sources:
+                source_list = []
+                for noun in sources:
+                    noun_str = f"{noun['lemma_form']}"
+                    if noun.get('english'):
+                        noun_str += f" ({noun['english']})"
+                    if noun.get('citation'):
+                        noun_str += f" {noun['citation']}"
+                    if noun.get('work_title'):
+                        noun_str += f" [{noun['work_title']}]"
+                    source_list.append(noun_str)
+                meta_lines.append(f"Sources: {', '.join(source_list)}")
+
+            # Display entities (people/places in the story)
+            if entities:
+                entity_list = []
+                for noun in entities:
+                    noun_str = f"{noun['lemma_form']}"
+                    if noun.get('english'):
+                        noun_str += f" ({noun['english']})"
+                    if noun.get('type'):
+                        noun_str += f" [{noun['type']}]"
+                    entity_list.append(noun_str)
+                meta_lines.append(f"Entities: {', '.join(entity_list)}")
 
         # Add etymologies
         if lemma.get("etymologies"):
@@ -534,7 +555,8 @@ def generate_index_html(letter_counts, stats):
             <a href="statistics.html">Statistics</a>
             <a href="progress.html">Processing Progress</a>
             <a href="protected/">Page Scans [Password Protected]</a>
-            <a href="lemmas.csv">CSV Export</a>
+            <a href="lemmas.csv">Lemmas CSV</a>
+            <a href="proper_nouns.csv">Proper Nouns CSV</a>
         </div>
         <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
             <div class="stat-card">
@@ -603,7 +625,8 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
             <a href="people.html">People</a>
             <a href="statistics.html">Statistics</a>
             <a href="progress.html">Processing Progress</a>
-            <a href="lemmas.csv">CSV Export</a>
+            <a href="lemmas.csv">Lemmas CSV</a>
+            <a href="proper_nouns.csv">Proper Nouns CSV</a>
         </div>
         {body}
         <div class="footer">
