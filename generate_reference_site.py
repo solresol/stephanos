@@ -699,8 +699,13 @@ def main():
         buckets.setdefault(lemma['letter_slug'], []).append(lemma)
 
     # Sort lemmas within each bucket by lemma text then entry number
+    # Normalize Greek text by stripping accents/diacritics for alphabetical sorting
+    def normalize_for_sort(text: str) -> str:
+        """Normalize Greek text for alphabetical sorting by removing accents."""
+        return ''.join(strip_combining(ch) for ch in text)
+
     for slug in buckets:
-        buckets[slug].sort(key=lambda x: (x['lemma'], x.get('entry_number', '')))
+        buckets[slug].sort(key=lambda x: (normalize_for_sort(x['lemma']), x.get('entry_number', '')))
 
     # Create output directory
     output_dir = Path(OUTPUT_DIR)
