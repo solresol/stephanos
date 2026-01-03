@@ -30,11 +30,11 @@ from process_image import (
 )
 from db import get_connection
 
-DEFAULT_DAILY_TOKEN_LIMIT = 100_000
+DEFAULT_OCR_DAILY_TOKEN_LIMIT = 100_000
 DEFAULT_MODEL = "gemini-3.0-flash"
 
-def get_tokens_used_today(cur):
-    """Get total tokens used today"""
+def get_ocr_tokens_used_today(cur):
+    """Get total OCR tokens used today (from images table)"""
     today = datetime.now(timezone.utc).date().isoformat()
     cur.execute(
         """
@@ -94,8 +94,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image-dir", help="Default directory containing image files (fallback if not in DB)")
     parser.add_argument("--limit", type=int, help="Max number of images to process in this run")
-    parser.add_argument("--daily-token-limit", type=int, default=DEFAULT_DAILY_TOKEN_LIMIT,
-                       help=f"Daily token limit (default: {DEFAULT_DAILY_TOKEN_LIMIT:,})")
+    parser.add_argument("--ocr-daily-token-limit", type=int, default=DEFAULT_OCR_DAILY_TOKEN_LIMIT,
+                       help=f"Daily OCR token limit for Gemini/OpenAI vision (default: {DEFAULT_OCR_DAILY_TOKEN_LIMIT:,})")
     parser.add_argument("--delay", type=float, default=1.0,
                        help="Delay in seconds between API calls (default: 1.0)")
     parser.add_argument("--provider", default=DEFAULT_PROVIDER, choices=["openai", "gemini"],
@@ -132,12 +132,12 @@ def main():
         cur, args.ocr_generation, generation_descriptions.get(args.ocr_generation, args.ocr_generation)
     )
 
-    # Check tokens used today
-    tokens_today = get_tokens_used_today(cur)
-    print(f"Tokens used today: {tokens_today:,} / {args.daily_token_limit:,}")
+    # Check OCR tokens used today
+    tokens_today = get_ocr_tokens_used_today(cur)
+    print(f"OCR tokens used today: {tokens_today:,} / {args.ocr_daily_token_limit:,}")
 
-    if tokens_today >= args.daily_token_limit:
-        print("Daily token limit reached. Exiting.")
+    if tokens_today >= args.ocr_daily_token_limit:
+        print("Daily OCR token limit reached. Exiting.")
         conn.close()
         return
 
@@ -166,10 +166,10 @@ def main():
             print(f"Reached processing limit ({args.limit} images).")
             break
 
-        # Check daily token limit
+        # Check daily OCR token limit
         current_tokens_today = tokens_today + total_tokens_this_run
-        if current_tokens_today >= args.daily_token_limit:
-            print(f"Daily token limit reached ({current_tokens_today:,} tokens).")
+        if current_tokens_today >= args.ocr_daily_token_limit:
+            print(f"Daily OCR token limit reached ({current_tokens_today:,} tokens).")
             break
 
         # Use image data from database if available, otherwise fall back to file system
