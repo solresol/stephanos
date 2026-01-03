@@ -16,15 +16,26 @@ def get_stats(cur):
     total_row = cur.fetchone()
     total_images = total_row[0]
     processed_images = total_row[1] or 0
-    total_tokens = total_row[2] or 0
+    total_ocr_tokens = total_row[2] or 0
 
-    # Today's tokens
+    # Today's OCR tokens (from images table)
     today = datetime.now(timezone.utc).date().isoformat()
     cur.execute(
         "SELECT COALESCE(SUM(tokens_used), 0) FROM images WHERE DATE(processed_at) = %s",
         (today,)
     )
-    today_tokens = cur.fetchone()[0]
+    today_ocr_tokens = cur.fetchone()[0]
+
+    # Total translation tokens (from assembled_lemmas table)
+    cur.execute("SELECT COALESCE(SUM(translation_tokens), 0) FROM assembled_lemmas")
+    total_translation_tokens = cur.fetchone()[0]
+
+    # Today's translation tokens
+    cur.execute(
+        "SELECT COALESCE(SUM(translation_tokens), 0) FROM assembled_lemmas WHERE DATE(translated_at) = %s",
+        (today,)
+    )
+    today_translation_tokens = cur.fetchone()[0]
 
     # Recent processed images
     cur.execute(
@@ -73,9 +84,11 @@ def get_stats(cur):
         'processed_images': processed_images,
         'remaining_images': total_images - processed_images,
         'progress_percent': (processed_images / total_images * 100) if total_images > 0 else 0,
-        'total_tokens': total_tokens,
-        'today_tokens': today_tokens,
-        'avg_tokens_per_image': (total_tokens / processed_images) if processed_images > 0 else 0,
+        'total_ocr_tokens': total_ocr_tokens,
+        'today_ocr_tokens': today_ocr_tokens,
+        'total_translation_tokens': total_translation_tokens,
+        'today_translation_tokens': today_translation_tokens,
+        'avg_tokens_per_image': (total_ocr_tokens / processed_images) if processed_images > 0 else 0,
         'recent_images': recent,
         'processing_rate': processing_rate,
         'days_remaining': days_remaining,
@@ -260,15 +273,17 @@ def generate_html(stats):
                 <div class="stat-value">{stats['remaining_images']:,}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Total Tokens Used</div>
-                <div class="stat-value">{stats['total_tokens']:,}</div>
+                <div class="stat-label">OCR Tokens (Gemini)</div>
+                <div class="stat-value">{stats['total_ocr_tokens']:,}</div>
+                <div style="margin-top: 8px; font-size: 0.85em; color: #666;">Today: {stats['today_ocr_tokens']:,}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Today's Tokens</div>
-                <div class="stat-value">{stats['today_tokens']:,}</div>
+                <div class="stat-label">Translation Tokens (GPT)</div>
+                <div class="stat-value">{stats['total_translation_tokens']:,}</div>
+                <div style="margin-top: 8px; font-size: 0.85em; color: #666;">Today: {stats['today_translation_tokens']:,}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Avg Tokens/Image</div>
+                <div class="stat-label">Avg OCR Tokens/Image</div>
                 <div class="stat-value">{stats['avg_tokens_per_image']:,.0f}</div>
             </div>
             {'<div class="stat-card"><div class="stat-label">Processing Rate</div><div class="stat-value">' + f"{stats['processing_rate']:.1f}" + '</div><div style="margin-top: 8px; font-size: 0.85em; color: #666;">images/day</div></div>' if stats['processing_rate'] else ''}
@@ -356,8 +371,8 @@ def main():
 
     print(f"Progress website generated: {output_path.absolute()}")
     print(f"  Processed: {stats['processed_images']} / {stats['total_images']} ({stats['progress_percent']:.1f}%)")
-    print(f"  Total tokens: {stats['total_tokens']:,}")
-    print(f"  Today's tokens: {stats['today_tokens']:,}")
+    print(f"  OCR tokens (Gemini): {stats['total_ocr_tokens']:,} total, {stats['today_ocr_tokens']:,} today")
+    print(f"  Translation tokens (GPT): {stats['total_translation_tokens']:,} total, {stats['today_translation_tokens']:,} today")
 
 if __name__ == "__main__":
     main()

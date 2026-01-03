@@ -14,7 +14,7 @@ from openai import OpenAI
 
 from db import get_connection
 
-DEFAULT_DAILY_TOKEN_LIMIT = 100_000
+DEFAULT_TRANSLATION_DAILY_TOKEN_LIMIT = 100_000
 
 TRANSLATION_SYSTEM_PROMPT = """You are an expert classical philologist and translator specializing in Byzantine Greek geographical texts.
 You will receive JSON data for a single lemma entry from Stephanos of Byzantium's Ethnika.
@@ -117,8 +117,8 @@ def should_skip_translation(greek_text: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, help="Max number of lemmas to translate in this run")
-    parser.add_argument("--daily-token-limit", type=int, default=DEFAULT_DAILY_TOKEN_LIMIT,
-                       help=f"Daily token limit (default: {DEFAULT_DAILY_TOKEN_LIMIT:,})")
+    parser.add_argument("--translation-daily-token-limit", type=int, default=DEFAULT_TRANSLATION_DAILY_TOKEN_LIMIT,
+                       help=f"Daily translation token limit for GPT (default: {DEFAULT_TRANSLATION_DAILY_TOKEN_LIMIT:,})")
     parser.add_argument("--delay", type=float, default=1.0,
                        help="Delay in seconds between API calls (default: 1.0)")
     args = parser.parse_args()
@@ -126,11 +126,11 @@ def main():
     conn = get_connection()
     cur = conn.cursor()
 
-    # Check tokens used today
+    # Check translation tokens used today
     tokens_today = get_translation_tokens_today(cur)
-    print(f"Translation tokens used today: {tokens_today:,} / {args.daily_token_limit:,}")
+    print(f"Translation tokens used today: {tokens_today:,} / {args.translation_daily_token_limit:,}")
 
-    if tokens_today >= args.daily_token_limit:
+    if tokens_today >= args.translation_daily_token_limit:
         print("Daily translation token limit reached. Exiting.")
         conn.close()
         return
@@ -159,9 +159,9 @@ def main():
             print(f"Reached translation limit ({args.limit} lemmas).")
             break
 
-        # Check daily token limit
+        # Check daily translation token limit
         current_tokens_today = tokens_today + total_tokens_this_run
-        if current_tokens_today >= args.daily_token_limit:
+        if current_tokens_today >= args.translation_daily_token_limit:
             print(f"Daily translation token limit reached ({current_tokens_today:,} tokens).")
             break
 
