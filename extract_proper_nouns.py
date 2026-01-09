@@ -140,6 +140,13 @@ def extract_proper_nouns_for_lemma(client, greek_text, model="gpt-5-mini"):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Extract proper nouns from lemmas")
+    parser.add_argument("--include-untranslated", action="store_true",
+                        help="Also process lemmas that haven't been translated yet")
+    parser.add_argument("--limit", type=int, help="Limit number of lemmas to process")
+    args = parser.parse_args()
+
     api_key = load_api_key()
     client = OpenAI(api_key=api_key)
 
@@ -147,13 +154,22 @@ def main():
     cur = conn.cursor()
 
     # Get unanalyzed lemmas
-    cur.execute("""
-        SELECT id, lemma, COALESCE(human_greek_text, greek_text) AS greek_text
-        FROM assembled_lemmas
-        WHERE proper_nouns_analyzed = FALSE
-        AND translated = 1
-        ORDER BY id
-    """)
+    if args.include_untranslated:
+        cur.execute("""
+            SELECT id, lemma, COALESCE(human_greek_text, greek_text) AS greek_text
+            FROM assembled_lemmas
+            WHERE proper_nouns_analyzed = FALSE
+            AND greek_text IS NOT NULL
+            ORDER BY id
+        """)
+    else:
+        cur.execute("""
+            SELECT id, lemma, COALESCE(human_greek_text, greek_text) AS greek_text
+            FROM assembled_lemmas
+            WHERE proper_nouns_analyzed = FALSE
+            AND translated = 1
+            ORDER BY id
+        """)
 
     lemmas = cur.fetchall()
 
@@ -161,6 +177,10 @@ def main():
         print("No lemmas need proper noun extraction.")
         conn.close()
         return
+
+    # Apply limit if specified
+    if args.limit:
+        lemmas = lemmas[:args.limit]
 
     print(f"Extracting proper nouns from {len(lemmas)} lemmas...")
 
@@ -184,6 +204,11 @@ def main():
 
             # Insert proper nouns
             for noun in proper_nouns:
+                # Validate role - must be 'entity' or 'source', default to 'entity'
+                role = noun.get("role", "entity")
+                if role not in ("entity", "source"):
+                    role = "entity"
+
                 cur.execute("""
                     INSERT INTO proper_nouns
                     (lemma_id, proper_noun, lemma_form, english_translation, noun_type, role, citation, work_title)
@@ -194,7 +219,7 @@ def main():
                     noun["lemma_form"],
                     noun["english"],
                     noun["type"],
-                    noun["role"],
+                    role,
                     noun.get("citation"),
                     noun.get("work_title")
                 ))
