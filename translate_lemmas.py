@@ -3,6 +3,8 @@
 Translate Greek lemmas to English using gpt-5.1.
 Processes assembled lemmas that have been extracted but not yet translated.
 Enforces a daily token limit of 100,000 tokens.
+
+Uses OpenAI tool calling for structured output.
 """
 import argparse
 import json
@@ -15,12 +17,31 @@ from openai import OpenAI
 from db import get_connection
 
 DEFAULT_TRANSLATION_DAILY_TOKEN_LIMIT = 100_000
+DEFAULT_MODEL = "gpt-5.1"
 
 TRANSLATION_SYSTEM_PROMPT = """You are an expert classical philologist and translator specializing in Byzantine Greek geographical texts.
-You will receive JSON data for a single lemma entry from Stephanos of Byzantium's Ethnika.
-Translate its Greek text into clear, scholarly English.
-Preserve technical terminology and place names appropriately.
-Return the same JSON structure with an added English translation."""
+You will receive Greek text from a lemma entry in Stephanos of Byzantium's Ethnika.
+Translate the Greek text into clear, scholarly English.
+Preserve technical terminology and place names appropriately."""
+
+# Tool definition for structured translation output
+TRANSLATE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "submit_translation",
+        "description": "Submit the English translation of a Greek lemma entry",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "translation": {
+                    "type": "string",
+                    "description": "The scholarly English translation of the Greek text"
+                }
+            },
+            "required": ["translation"]
+        }
+    }
+}
 
 def load_api_key():
     """Load OpenAI API key from ~/.openai.key"""
@@ -60,49 +81,80 @@ def fetch_lemmas_needing_translation(cur):
     )
     return cur.fetchall()
 
-def mark_translated(conn, cur, lemma_id, translation_json, tokens_used):
+def mark_translated(conn, cur, lemma_id, translation: str, tokens_used: int, lemma_data: dict = None):
+    """
+    Mark a lemma as translated, storing the translation in the normalized column.
+
+    Also updates translation_json for backward compatibility during migration period.
+    """
+    # Build translation_json for backward compatibility
+    translation_json = None
+    if lemma_data and translation:
+        translation_json = json.dumps({
+            "lemma": lemma_data.get("lemma"),
+            "entry_number": lemma_data.get("entry_number"),
+            "type": lemma_data.get("type"),
+            "greek_text": lemma_data.get("greek_text"),
+            "confidence": lemma_data.get("confidence", "normal"),
+            "translation": translation
+        }, ensure_ascii=False)
+
     cur.execute(
         """
         UPDATE assembled_lemmas
         SET translated = 1,
+            translation = %s,
             translation_json = %s,
             translated_at = %s,
             translation_tokens = %s
         WHERE id = %s
         """,
-        (translation_json, datetime.now(timezone.utc).isoformat(), tokens_used, lemma_id)
+        (translation, translation_json, datetime.now(timezone.utc).isoformat(), tokens_used, lemma_id)
     )
     conn.commit()
 
-def translate_lemma(client, lemma_payload):
-    """Send lemma payload to gpt-5.1 for translation"""
+def translate_lemma(client, lemma_text: str, greek_text: str, entry_number: int, model: str = DEFAULT_MODEL):
+    """
+    Translate Greek text using tool calling for structured output.
 
-    prompt = f"""Here is the JSON data for a single lemma from Stephanos of Byzantium's Ethnika:
+    Args:
+        client: OpenAI client
+        lemma_text: The headword/lemma
+        greek_text: The Greek text to translate
+        entry_number: Entry number for context
+        model: OpenAI model to use
 
-{lemma_payload}
+    Returns:
+        (translation: str, tokens_used: int)
+    """
+    prompt = f"""Translate this lemma entry from Stephanos of Byzantium's Ethnika:
 
-Please translate the Greek text to English. Add a "translation" field with the English translation of the greek_text. Preserve the JSON structure and all existing fields. Return only valid JSON."""
+Headword: {lemma_text}
+Entry #{entry_number}
 
-    response = client.responses.create(
-        model="gpt-5.1",
-        input=[
-            {
-                "role": "system",
-                "content": TRANSLATION_SYSTEM_PROMPT
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt}
-                ]
-            }
-        ]
+Greek text:
+{greek_text}
+
+Provide a scholarly English translation. Preserve place names and technical terminology."""
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": TRANSLATION_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ],
+        tools=[TRANSLATE_TOOL],
+        tool_choice={"type": "function", "function": {"name": "submit_translation"}}
     )
 
-    output_text = response.output_text.strip()
-    tokens_used = response.usage.total_tokens if hasattr(response, 'usage') and response.usage else 0
+    tokens_used = response.usage.total_tokens if response.usage else 0
 
-    return output_text, tokens_used
+    # Extract translation from tool call
+    tool_call = response.choices[0].message.tool_calls[0]
+    arguments = json.loads(tool_call.function.arguments)
+    translation = arguments.get("translation", "")
+
+    return translation, tokens_used
 
 
 def should_skip_translation(greek_text: str):
@@ -121,6 +173,8 @@ def main():
                        help=f"Daily translation token limit for GPT (default: {DEFAULT_TRANSLATION_DAILY_TOKEN_LIMIT:,})")
     parser.add_argument("--delay", type=float, default=1.0,
                        help="Delay in seconds between API calls (default: 1.0)")
+    parser.add_argument("--model", default=DEFAULT_MODEL,
+                       help=f"OpenAI model to use (default: {DEFAULT_MODEL})")
     args = parser.parse_args()
 
     conn = get_connection()
@@ -171,12 +225,13 @@ def main():
 
         if skip:
             # Record as translated without spending tokens
-            mark_translated(conn, cur, lemma_id, assembled_json, 0)
+            mark_translated(conn, cur, lemma_id, "", 0)
             translated_count += 1
             print(f"SKIPPED {display_name} (reason: {reason})")
             continue
 
-        payload = {
+        # Build lemma data for backward compatibility
+        lemma_data = {
             "lemma": lemma_text,
             "entry_number": entry_number,
             "type": lemma_type,
@@ -187,18 +242,21 @@ def main():
         print(f"Translating {display_name} ({translated_count + 1}/{len(needs_translation)})...", end=" ", flush=True)
 
         try:
-            translation_output, tokens_used = translate_lemma(client, json.dumps(payload, ensure_ascii=False))
+            # Use tool calling for structured translation output
+            translation, tokens_used = translate_lemma(
+                client,
+                lemma_text=lemma_text or "",
+                greek_text=source_greek,
+                entry_number=entry_number or 0,
+                model=args.model
+            )
 
-            # Validate JSON
-            try:
-                parsed = json.loads(translation_output)
-            except json.JSONDecodeError as e:
-                print(f"FAILED (invalid JSON)")
-                print(f"Output: {translation_output[:200]}...")
+            if not translation:
+                print("FAILED (empty translation)")
                 continue
 
-            # Save to database
-            mark_translated(conn, cur, lemma_id, json.dumps(parsed, ensure_ascii=False), tokens_used)
+            # Save to database (both new column and legacy JSON for compatibility)
+            mark_translated(conn, cur, lemma_id, translation, tokens_used, lemma_data)
 
             translated_count += 1
             total_tokens_this_run += tokens_used

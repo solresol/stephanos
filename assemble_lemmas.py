@@ -187,9 +187,16 @@ def build_assembled_entries(rows, headword_lookup):
 
 
 def upsert_assembled(cur, assembled_entries):
+    """
+    Upsert assembled lemma entries into the database.
+
+    Also populates the lemma_images junction table for normalized image tracking.
+    Keeps source_image_ids JSON for backward compatibility during migration.
+    """
     upserts = 0
     for entry in assembled_entries:
         source_ids_json = json.dumps(entry["source_image_ids"])
+        # assembled_json is deprecated but kept for backward compatibility
         assembled_json = json.dumps(
             {
                 "lemma": entry["lemma"],
@@ -241,6 +248,7 @@ def upsert_assembled(cur, assembled_entries):
                 assembled_json = EXCLUDED.assembled_json,
                 updated_at = CURRENT_TIMESTAMP,
                 translated = 0,
+                translation = NULL,
                 translation_json = NULL,
                 translation_tokens = 0,
                 translated_at = NULL,
@@ -252,6 +260,7 @@ def upsert_assembled(cur, assembled_entries):
                 nodegoat_id = COALESCE(EXCLUDED.nodegoat_id, assembled_lemmas.nodegoat_id),
                 meineke_id = COALESCE(EXCLUDED.meineke_id, assembled_lemmas.meineke_id),
                 billerbeck_id = COALESCE(EXCLUDED.billerbeck_id, assembled_lemmas.billerbeck_id)
+            RETURNING id
             """,
                 params,
             )
@@ -261,6 +270,24 @@ def upsert_assembled(cur, assembled_entries):
             print("Entry:", entry)
             raise
         cur.execute(sql)
+        result = cur.fetchone()
+        lemma_id = result[0] if result else None
+
+        # Update junction table for normalized image tracking
+        if lemma_id and entry["source_image_ids"]:
+            # Clear existing links for this lemma (in case of update)
+            cur.execute("DELETE FROM lemma_images WHERE lemma_id = %s", (lemma_id,))
+            # Insert new links
+            for position, image_id in enumerate(entry["source_image_ids"]):
+                cur.execute(
+                    """
+                    INSERT INTO lemma_images (lemma_id, image_id, position)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (lemma_id, image_id) DO UPDATE SET position = EXCLUDED.position
+                    """,
+                    (lemma_id, image_id, position)
+                )
+
         upserts += 1
     return upserts
 

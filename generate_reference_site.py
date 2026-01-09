@@ -67,17 +67,17 @@ def get_all_lemmas(cur):
     cur.execute(
         """
         SELECT a.id, a.lemma, a.entry_number, a.type, a.greek_text, a.human_greek_text, a.confidence,
-               a.translation_json, a.translated, a.ocr_processed_at, g.name as ocr_generation_name,
-               (SELECT i.ocr_model FROM images i WHERE i.id = ANY(
-                   SELECT jsonb_array_elements_text(a.source_image_ids::jsonb)::int
-               ) ORDER BY i.id LIMIT 1) as ocr_model,
-               a.meineke_id, a.billerbeck_id, a.source_image_ids,
+               a.translation, a.translation_json, a.translated, a.ocr_processed_at, g.name as ocr_generation_name,
+               (SELECT i.ocr_model FROM images i
+                JOIN lemma_images li ON li.image_id = i.id
+                WHERE li.lemma_id = a.id
+                ORDER BY li.position LIMIT 1) as ocr_model,
+               a.meineke_id, a.billerbeck_id,
                COALESCE(
-                   (SELECT json_agg(i.image_filename ORDER BY i.id)
+                   (SELECT json_agg(i.image_filename ORDER BY li.position)
                     FROM images i
-                    WHERE i.id = ANY(
-                        SELECT jsonb_array_elements_text(a.source_image_ids::jsonb)::int
-                    )),
+                    JOIN lemma_images li ON li.image_id = i.id
+                    WHERE li.lemma_id = a.id),
                    '[]'::json
                ) as image_filenames,
                a.word_count, a.version,
@@ -121,20 +121,21 @@ def get_all_lemmas(cur):
     etymologies_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
 
     all_lemmas = []
-    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, source_image_ids, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at in rows:
-        try:
-            data = json.loads(translation_json) if translation_json else None
-        except json.JSONDecodeError:
-            data = None
-
+    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at in rows:
         # Prefer corrected versions, fallback to human_greek_text, then OCR
         greek = (corrected_greek_scan or human_greek_text or greek_text or "").strip()
 
-        translation = ""
-        english_translation = ""
-        if isinstance(data, dict):
-            translation = data.get("translation", "")
-            english_translation = data.get("english_translation", "")
+        # Use normalized translation column, fall back to parsing translation_json for legacy data
+        translation = translation_col or ""
+        english_translation = translation_col or ""
+        if not translation and translation_json:
+            try:
+                data = json.loads(translation_json)
+                if isinstance(data, dict):
+                    translation = data.get("translation", "")
+                    english_translation = data.get("english_translation", translation)
+            except json.JSONDecodeError:
+                pass
 
         # Prefer corrected English translation
         if corrected_english_translation:
@@ -551,12 +552,15 @@ def generate_index_html(letter_counts, stats):
 
     <div class="container">
         <div class="nav-links">
-            <a href="people.html">People</a>
+            <a href="sources.html">Ancient Sources</a>
+            <a href="works.html">Works Cited</a>
+            <a href="fgrhist.html">FGrHist Index</a>
+            <a href="entities.html">People &amp; Deities</a>
+            <a href="peoples.html">Ethnic Groups</a>
             <a href="statistics.html">Statistics</a>
             <a href="progress.html">Processing Progress</a>
-            <a href="protected/">Page Scans [Password Protected]</a>
-            <a href="lemmas.csv">Lemmas CSV</a>
-            <a href="proper_nouns.csv">Proper Nouns CSV</a>
+            <a href="protected/">Page Scans</a>
+            <a href="cgi-bin/review.cgi">Human Review</a>
         </div>
         <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
             <div class="stat-card">
@@ -622,11 +626,13 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
     <div class="container">
         <div class="nav-links">
             <a href="index.html">All Letters</a>
-            <a href="people.html">People</a>
+            <a href="sources.html">Ancient Sources</a>
+            <a href="works.html">Works Cited</a>
+            <a href="fgrhist.html">FGrHist Index</a>
+            <a href="entities.html">People &amp; Deities</a>
+            <a href="peoples.html">Ethnic Groups</a>
             <a href="statistics.html">Statistics</a>
-            <a href="progress.html">Processing Progress</a>
-            <a href="lemmas.csv">Lemmas CSV</a>
-            <a href="proper_nouns.csv">Proper Nouns CSV</a>
+            <a href="cgi-bin/review.cgi">Human Review</a>
         </div>
         {body}
         <div class="footer">
