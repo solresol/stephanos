@@ -46,8 +46,9 @@ To add dependencies: `uv add <package>`
      - `--no-headword-constraint`: Disables headword validation against the Meineke list. Useful for processing pages outside the expected headword range.
 
 4. **Translation** (`translate_lemmas.py`)
-   - Processes extracted Greek text through gpt-5.1 for translation
-   - Stores translations in `translation_json` column
+   - Processes extracted Greek text through gpt-5.1 for translation using tool calling
+   - Stores translations in `translation` column (normalized)
+   - Also updates `translation_json` for backward compatibility during migration
 
 5. **Website Generation** (`generate_progress_site.py`, `generate_reference_site.py`)
    - Generates static HTML showing processing progress and translated lemmas
@@ -62,29 +63,40 @@ Tables:
 - `html_files`: Tracks HTML files that need image extraction
 - `images`: Stores image references and processing results
 - `assembled_lemmas`: Main lemma table with metadata and text
+- `lemma_images`: Junction table linking lemmas to their source images (normalized from `source_image_ids` JSON)
+- `proper_nouns`: Extracted proper nouns from lemmas
+- `etymologies`: Extracted etymologies from lemmas
 
 Key columns in `images`:
 - `id` (primary key)
 - `image_filename` (unique, source reference)
 - `html_file_id` (foreign key to html_files, for finding image directory)
 - `processed` (0/1 flag for OCR state)
-- `lemma_json` (TEXT, stores extracted Greek data)
-- `translated` (0/1 flag for translation state)
-- `translation_json` (TEXT, stores English translations)
-- `tokens_used`, `translation_tokens` (token tracking)
-- `created_at`, `processed_at`, `translated_at` (timestamps)
+- `lemma_json` (TEXT, stores extracted Greek data from OCR)
+- `tokens_used` (token tracking)
+- `created_at`, `processed_at` (timestamps)
 
 Key columns in `assembled_lemmas`:
 - `id` (primary key)
 - `lemma` (headword in Greek)
 - `greek_text` (full Greek text from OCR)
+- `translation` (TEXT, English translation - normalized)
+- `translated` (0/1 flag), `translated_at`, `translation_tokens` (translation tracking)
 - `version` (TEXT, 'epitome' or 'parisinus' - distinguishes between Byzantine epitome and unabridged Parisinus text)
-- `is_parisinus_228` (BOOLEAN, marks if lemma is from Parisinus Coislinianus 228)
-- `source_image_ids` (JSON array of image IDs, for provenance and continuation tracking)
 - `volume_number`, `volume_label`, `letter_range` (source volume metadata)
 - `word_count` (for statistical analysis)
+- `human_greek_text`, `human_notes` (for curator corrections)
 - Other metadata and nodegoat integration fields
-- Unique constraint: `(source_image_ids, entry_number, version)` allows same headword to have both epitome and parisinus versions
+
+**Deprecated columns** (kept for backward compatibility, will be removed):
+- `source_image_ids` (JSON) → use `lemma_images` junction table instead
+- `translation_json` (JSON) → use `translation` column instead
+- `assembled_json` (JSON) → redundant, all fields available as columns
+
+Key columns in `lemma_images` (junction table):
+- `lemma_id` (foreign key to assembled_lemmas)
+- `image_id` (foreign key to images)
+- `position` (order of images within a multi-page lemma)
 
 ### Parisinus Coislinianus 228 vs Epitomised Version
 
