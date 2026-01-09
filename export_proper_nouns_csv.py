@@ -36,6 +36,8 @@ def main():
             p.role,
             p.citation,
             p.work_title,
+            p.wikidata_qid,
+            p.wikidata_confidence,
             p.created_at
         FROM proper_nouns p
         JOIN assembled_lemmas l ON p.lemma_id = l.id
@@ -58,6 +60,8 @@ def main():
             'Role',
             'Citation',
             'Work Title',
+            'Wikidata QID',
+            'Wikidata Confidence',
             'Extracted At'
         ])
 
@@ -69,6 +73,7 @@ def main():
     print(f"Exported {len(rows)} proper nouns to {OUTPUT_FILE}")
     print(f"  Sources (with citations): {sum(1 for r in rows if r[7] == 'source')}")
     print(f"  Entities: {sum(1 for r in rows if r[7] == 'entity')}")
+    print(f"  Wikidata linked: {sum(1 for r in rows if r[10])}")
 
 
 if __name__ == "__main__":
