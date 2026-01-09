@@ -65,7 +65,7 @@ def get_all_images_with_lemmas(cur):
 
 
 def get_lemmas_for_image(cur, image_id):
-    """Get all assembled lemmas that reference this image"""
+    """Get all assembled lemmas that reference this image via junction table"""
     cur.execute(
         """
         SELECT
@@ -75,14 +75,19 @@ def get_lemmas_for_image(cur, image_id):
             a.type,
             a.greek_text,
             a.confidence,
-            a.source_image_ids,
             a.translated,
-            a.translation_json
+            COALESCE(a.translation, (
+                SELECT COALESCE(
+                    (a.translation_json::json)->>'translation',
+                    (a.translation_json::json)->>'english_translation'
+                ) WHERE a.translation_json IS NOT NULL
+            )) as translation
         FROM assembled_lemmas a
-        WHERE a.source_image_ids::jsonb @> %s::jsonb
+        JOIN lemma_images li ON li.lemma_id = a.id
+        WHERE li.image_id = %s
         ORDER BY a.entry_number
         """,
-        (json.dumps([image_id]),)
+        (image_id,)
     )
     return cur.fetchall()
 
@@ -139,19 +144,11 @@ def generate_image_page(image_data, lemmas, prev_filename=None, next_filename=No
     lemma_cards = []
     if lemmas:
         for (lem_id, lemma, entry_num, lem_type, greek_text, confidence,
-             source_ids, translated, translation_json) in lemmas:
+             translated, translation) in lemmas:
 
             conf_badge = ""
             if confidence == "low":
                 conf_badge = '<span class="confidence-badge">Low Confidence</span>'
-
-            translation = ""
-            if translation_json:
-                try:
-                    trans_data = json.loads(translation_json)
-                    translation = trans_data.get("translation", trans_data.get("english_translation", ""))
-                except:
-                    pass
 
             if not translation:
                 translation = '<span class="pending">Translation pending</span>'

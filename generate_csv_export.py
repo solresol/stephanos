@@ -11,7 +11,6 @@ Usage:
 """
 import argparse
 import csv
-import json
 from pathlib import Path
 
 from db import get_connection
@@ -26,13 +25,19 @@ def fetch_translated_rows(cur):
             a.entry_number,
             a.type,
             COALESCE(a.human_greek_text, a.greek_text) AS greek_text,
-            a.translation_json,
+            COALESCE(a.translation, (
+                SELECT COALESCE(
+                    (a.translation_json::json)->>'translation',
+                    (a.translation_json::json)->>'english_translation'
+                ) WHERE a.translation_json IS NOT NULL
+            )) AS translation,
             a.confidence,
             a.ocr_processed_at,
             g.name AS ocr_generation,
-            (SELECT i.ocr_model FROM images i WHERE i.id = ANY(
-                SELECT jsonb_array_elements_text(a.source_image_ids::jsonb)::int
-            ) ORDER BY i.id LIMIT 1) as ocr_model,
+            (SELECT i.ocr_model FROM images i
+             JOIN lemma_images li ON li.image_id = i.id
+             WHERE li.lemma_id = a.id
+             ORDER BY li.position LIMIT 1) as ocr_model,
             a.meineke_id,
             a.billerbeck_id
         FROM assembled_lemmas a
@@ -42,18 +47,6 @@ def fetch_translated_rows(cur):
         """
     )
     return cur.fetchall()
-
-
-def parse_translation_json(translation_json):
-    if not translation_json:
-        return ""
-    try:
-        data = json.loads(translation_json)
-    except json.JSONDecodeError:
-        return ""
-    if isinstance(data, dict):
-        return data.get("translation") or data.get("english_translation") or ""
-    return ""
 
 
 def main():
@@ -90,8 +83,7 @@ def main():
                 "billerbeck_id",
             ]
         )
-        for lemma, entry_number, lemma_type, greek_text, translation_json, confidence, ocr_processed_at, ocr_generation, ocr_model, meineke_id, billerbeck_id in rows:
-            translation = parse_translation_json(translation_json)
+        for lemma, entry_number, lemma_type, greek_text, translation, confidence, ocr_processed_at, ocr_generation, ocr_model, meineke_id, billerbeck_id in rows:
             writer.writerow(
                 [
                     (lemma or "").strip(),

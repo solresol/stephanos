@@ -85,7 +85,7 @@ def export_lemmas():
     conn = get_connection()
     cur = conn.cursor()
 
-    # Query all lemmas with their data
+    # Query all lemmas with their data using normalized schema
     query = """
         SELECT
             a.id,
@@ -93,19 +93,22 @@ def export_lemmas():
             a.entry_number,
             a.version,
             COALESCE(a.greek_text, '') as greek_text,
-            a.translation_json,
+            COALESCE(a.translation, (
+                SELECT COALESCE(
+                    (a.translation_json::json)->>'translation',
+                    (a.translation_json::json)->>'english_translation'
+                ) WHERE a.translation_json IS NOT NULL
+            )) as english_translation,
             a.type,
             a.volume_label,
             a.meineke_id,
             a.billerbeck_id,
             a.word_count,
-            a.source_image_ids,
             a.confidence,
-            (SELECT json_agg(i.image_filename ORDER BY i.id)
+            (SELECT json_agg(i.image_filename ORDER BY li.position)
              FROM images i
-             WHERE i.id = ANY(
-                 SELECT jsonb_array_elements_text(a.source_image_ids::jsonb)::int
-             )) as image_filenames
+             JOIN lemma_images li ON li.image_id = i.id
+             WHERE li.lemma_id = a.id) as image_filenames
         FROM assembled_lemmas a
         ORDER BY a.lemma, a.version
     """
@@ -115,20 +118,11 @@ def export_lemmas():
 
     lemmas = []
     for row in rows:
-        (lemma_id, lemma, entry_number, version, greek_text, translation_json,
+        (lemma_id, lemma, entry_number, version, greek_text, english_translation,
          lemma_type, volume_label, meineke_id, billerbeck_id, word_count,
-         source_image_ids, confidence, image_filenames) = row
+         confidence, image_filenames) = row
 
-        # Parse translation JSON for English text
-        english_translation = ""
-        if translation_json:
-            try:
-                trans_data = json.loads(translation_json)
-                english_translation = trans_data.get("translation", "") or trans_data.get("english_translation", "")
-            except json.JSONDecodeError:
-                pass
-
-        # Parse image filenames
+        # Parse image filenames (psycopg2 auto-deserializes JSON in some cases)
         if isinstance(image_filenames, str):
             try:
                 image_filenames = json.loads(image_filenames)
