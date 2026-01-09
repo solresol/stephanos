@@ -115,6 +115,138 @@ def get_proper_noun_features(cur):
     return np.array(X), np.array(y), noun_lemmas, lemma_names, np.array(is_parisinus_list)
 
 
+def get_proper_noun_type_features(cur):
+    """Build feature matrix using role+noun_type counts (7 features) instead of individual nouns.
+
+    Separates authors (source+person) from historical figures (entity+person).
+    """
+    # Get counts of each role+noun_type combination per lemma
+    cur.execute("""
+        SELECT
+            a.id,
+            a.lemma,
+            a.word_count,
+            CASE WHEN a.version = 'parisinus' THEN TRUE ELSE FALSE END as is_parisinus,
+            COALESCE(SUM(CASE WHEN p.role = 'source' AND p.noun_type = 'person' THEN 1 ELSE 0 END), 0) as author_count,
+            COALESCE(SUM(CASE WHEN p.role = 'entity' AND p.noun_type = 'person' THEN 1 ELSE 0 END), 0) as person_count,
+            COALESCE(SUM(CASE WHEN p.noun_type = 'place' THEN 1 ELSE 0 END), 0) as place_count,
+            COALESCE(SUM(CASE WHEN p.noun_type = 'people' THEN 1 ELSE 0 END), 0) as people_count,
+            COALESCE(SUM(CASE WHEN p.noun_type = 'deity' THEN 1 ELSE 0 END), 0) as deity_count,
+            COALESCE(SUM(CASE WHEN p.noun_type = 'other' THEN 1 ELSE 0 END), 0) as other_count
+        FROM assembled_lemmas a
+        LEFT JOIN proper_nouns p ON p.lemma_id = a.id
+        WHERE a.word_count IS NOT NULL
+        GROUP BY a.id, a.lemma, a.word_count, a.version
+    """)
+
+    rows = cur.fetchall()
+    # Distinguish authors from historical figures
+    noun_types = ['author (source)', 'person (entity)', 'place', 'people', 'deity', 'other']
+
+    X = []
+    y = []
+    lemma_names = []
+    is_parisinus_list = []
+
+    for lemma_id, lemma_name, word_count, is_parisinus, author, person, place, people, deity, other in rows:
+        feature_vec = [author, person, place, people, deity, other]
+        X.append(feature_vec)
+        y.append(word_count)
+        lemma_names.append(lemma_name)
+        is_parisinus_list.append(is_parisinus)
+
+    return np.array(X), np.array(y), noun_types, lemma_names, np.array(is_parisinus_list)
+
+
+def get_category_specific_features(cur, role=None, noun_type=None, min_occurrences=2, exclude_self_reference=False):
+    """Build feature matrix for a specific category of proper nouns.
+
+    Args:
+        role: Filter by role ('source' or 'entity'), or None for all
+        noun_type: Filter by noun_type ('person', 'place', 'people', 'deity', 'other'), or None for all
+        min_occurrences: Minimum number of entries a noun must appear in
+        exclude_self_reference: If True, exclude mentions of place names that match the entry's lemma
+                               (e.g., don't count "Δωδώνη" as a feature for the Δωδώνη entry)
+
+    Returns: X, y, noun_lemmas, lemma_names, is_parisinus
+    """
+    import unicodedata
+
+    def normalize_greek(s):
+        """Normalize Greek text for comparison (remove accents, lowercase)."""
+        if not s:
+            return ''
+        # Normalize to decomposed form, remove combining characters (accents), lowercase
+        normalized = unicodedata.normalize('NFD', s)
+        without_accents = ''.join(c for c in normalized if not unicodedata.combining(c))
+        return without_accents.lower()
+
+    # Build WHERE clause for filtering
+    where_parts = []
+    if role:
+        where_parts.append(f"p.role = '{role}'")
+    if noun_type:
+        where_parts.append(f"p.noun_type = '{noun_type}'")
+
+    where_clause = " AND ".join(where_parts) if where_parts else "TRUE"
+
+    # Get proper noun lemmas in this category that appear in at least min_occurrences entries
+    cur.execute(f"""
+        SELECT lemma_form, COUNT(DISTINCT lemma_id) as entry_count
+        FROM proper_nouns p
+        WHERE {where_clause}
+        GROUP BY lemma_form
+        HAVING COUNT(DISTINCT lemma_id) >= {min_occurrences}
+        ORDER BY lemma_form
+    """)
+    noun_lemmas = [row[0] for row in cur.fetchall()]
+
+    if not noun_lemmas:
+        return None, None, None, None, None
+
+    # Get word counts and proper nouns per lemma (only nouns in this category)
+    cur.execute(f"""
+        SELECT
+            a.id,
+            a.lemma,
+            a.word_count,
+            CASE WHEN a.version = 'parisinus' THEN TRUE ELSE FALSE END as is_parisinus,
+            COALESCE(json_agg(p.lemma_form) FILTER (WHERE p.lemma_form IS NOT NULL AND {where_clause}), '[]') as nouns
+        FROM assembled_lemmas a
+        LEFT JOIN proper_nouns p ON p.lemma_id = a.id
+        WHERE a.word_count IS NOT NULL
+        GROUP BY a.id, a.lemma, a.word_count, a.version
+    """)
+
+    rows = cur.fetchall()
+
+    # Build feature matrix: each column is "count of noun X"
+    X = []
+    y = []
+    lemma_names = []
+    is_parisinus_list = []
+
+    for lemma_id, lemma_name, word_count, is_parisinus, nouns_json in rows:
+        feature_vec = [0] * len(noun_lemmas)
+        if nouns_json:
+            import json
+            nouns = json.loads(nouns_json) if isinstance(nouns_json, str) else nouns_json
+            for noun in nouns:
+                if noun in noun_lemmas:
+                    # Skip self-references if requested (for place names)
+                    if exclude_self_reference and normalize_greek(noun) == normalize_greek(lemma_name):
+                        continue
+                    idx = noun_lemmas.index(noun)
+                    feature_vec[idx] += 1  # Count occurrences, not just presence
+
+        X.append(feature_vec)
+        y.append(word_count)
+        lemma_names.append(lemma_name)
+        is_parisinus_list.append(is_parisinus)
+
+    return np.array(X), np.array(y), noun_lemmas, lemma_names, np.array(is_parisinus_list)
+
+
 def get_etymology_data(cur):
     """Fetch etymology category distributions."""
     cur.execute("""
@@ -260,12 +392,19 @@ def generate_histograms(df):
     return img1, img2
 
 
-def perform_ridge_regression(X, y, noun_lemmas, is_parisinus):
+def perform_ridge_regression(X, y, noun_lemmas, is_parisinus, use_loocv=False):
     """
     Perform ridge regression analysis.
 
+    Args:
+        use_loocv: If True, use Leave-One-Out CV instead of 5-fold (better for small samples)
+
     Returns: model, cv_scores, top_features, bottom_features
     """
+    import warnings
+    from sklearn.model_selection import LeaveOneOut, cross_val_predict
+    from sklearn.linear_model import Ridge, ElasticNet
+
     # Filter out entries with no variance or no features
     if len(X) == 0 or len(y) == 0 or X.shape[1] == 0 or len(noun_lemmas) == 0:
         return None, None, None, None
@@ -274,13 +413,51 @@ def perform_ridge_regression(X, y, noun_lemmas, is_parisinus):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # Ridge regression with cross-validation for alpha selection
-    alphas = np.logspace(-2, 4, 50)
-    ridge = RidgeCV(alphas=alphas, cv=5)
-    ridge.fit(X_scaled, y)
+    # Choose CV strategy based on sample size or explicit flag
+    if use_loocv or len(X) < 30:
+        print(f"      Using Leave-One-Out CV ({len(X)} samples)")
+        # For small samples with p >> n, try both Ridge and ElasticNet
+        # and pick the one with better LOOCV R²
+        loo = LeaveOneOut()
 
-    # Cross-validation scores
-    cv_scores = cross_val_score(ridge, X_scaled, y, cv=5, scoring='r2')
+        # Try Ridge first
+        ridge_model = Ridge(alpha=1.0)
+        ridge_model.fit(X_scaled, y)
+        ridge_pred = cross_val_predict(ridge_model, X_scaled, y, cv=loo)
+        ridge_ss_res = np.sum((y - ridge_pred) ** 2)
+        ridge_ss_tot = np.sum((y - np.mean(y)) ** 2)
+        ridge_r2 = 1 - (ridge_ss_res / ridge_ss_tot)
+
+        # Try ElasticNet with various alphas
+        best_r2 = ridge_r2
+        best_model = ridge_model
+        best_name = "Ridge"
+
+        for alpha in [0.1, 0.5, 1.0, 2.0, 5.0]:
+            for l1_ratio in [0.3, 0.5, 0.7, 0.9]:
+                en_model = ElasticNet(alpha=alpha, l1_ratio=l1_ratio, max_iter=10000)
+                en_model.fit(X_scaled, y)
+                en_pred = cross_val_predict(en_model, X_scaled, y, cv=loo)
+                en_ss_res = np.sum((y - en_pred) ** 2)
+                en_r2 = 1 - (en_ss_res / ridge_ss_tot)
+                n_nonzero = np.sum(en_model.coef_ != 0)
+                if en_r2 > best_r2:
+                    best_r2 = en_r2
+                    best_model = en_model
+                    best_name = f"ElasticNet(α={alpha}, l1={l1_ratio}, {n_nonzero} features)"
+
+        r2 = best_r2
+        cv_scores = np.array([r2])
+        ridge = best_model
+        print(f"      LOOCV R² = {r2:.4f} ({best_name})")
+    else:
+        print(f"      Using 5-fold CV ({len(X)} samples)")
+        # Ridge regression with cross-validation for alpha selection
+        alphas = np.logspace(-2, 4, 50)
+        ridge = RidgeCV(alphas=alphas, cv=5)
+        ridge.fit(X_scaled, y)
+        # Traditional k-fold CV scores
+        cv_scores = cross_val_score(ridge, X_scaled, y, cv=5, scoring='r2')
 
     # Get coefficients
     coefficients = ridge.coef_
@@ -298,30 +475,95 @@ def perform_ridge_regression(X, y, noun_lemmas, is_parisinus):
     return ridge, cv_scores, top_20, bottom_20
 
 
-def generate_regression_visualization(top_20, bottom_20, filename):
-    """Generate visualization of top/bottom regression coefficients."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+def generate_regression_visualization(top_20, bottom_20, filename, noun_details=None):
+    """Generate interactive Plotly visualization of top/bottom regression coefficients."""
+    from plotly.subplots import make_subplots
 
-    # Top 20
-    ax1.barh(range(len(top_20)), top_20['coefficient'].values)
-    ax1.set_yticks(range(len(top_20)))
-    ax1.set_yticklabels(top_20['noun'].values, fontsize=10)
-    ax1.set_xlabel('Average number of words different if the proper noun appears')
-    ax1.set_title('Top 20 Positive Coefficients')
-    ax1.grid(True, alpha=0.3)
-    ax1.invert_yaxis()
+    # Create Plotly figure with subplots
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=('Top 20 Positive Coefficients', 'Top 20 Negative Coefficients'),
+        horizontal_spacing=0.15
+    )
 
-    # Bottom 20
-    ax2.barh(range(len(bottom_20)), bottom_20['coefficient'].values)
-    ax2.set_yticks(range(len(bottom_20)))
-    ax2.set_yticklabels(bottom_20['noun'].values, fontsize=10)
-    ax2.set_xlabel('Average number of words different if the proper noun appears')
-    ax2.set_title('Top 20 Negative Coefficients')
-    ax2.grid(True, alpha=0.3)
-    ax2.invert_yaxis()
+    # Top 20 (reverse order for proper display - largest at top)
+    top_20_display = top_20.iloc[::-1]
 
-    plt.tight_layout()
-    return save_plot_to_file(fig, filename)
+    # Build hover text with translations
+    top_hover_texts = []
+    for _, row in top_20_display.iterrows():
+        english = noun_details.get(row['noun'], {}).get('english', '') if noun_details else ''
+        if english:
+            top_hover_texts.append(f"<b>{row['noun']}</b><br>{english}<br><br>Coefficient: {row['coefficient']:.1f} words")
+        else:
+            top_hover_texts.append(f"<b>{row['noun']}</b><br><br>Coefficient: {row['coefficient']:.1f} words")
+
+    fig.add_trace(
+        go.Bar(
+            y=top_20_display['noun'].values,
+            x=top_20_display['coefficient'].values,
+            orientation='h',
+            marker_color='#3498db',
+            text=[f'{c:.1f}' for c in top_20_display['coefficient'].values],
+            textposition='outside',
+            hovertext=top_hover_texts,
+            hovertemplate='%{hovertext}<extra></extra>',
+            showlegend=False
+        ),
+        row=1, col=1
+    )
+
+    # Bottom 20 (reverse order for proper display - most negative at top)
+    bottom_20_display = bottom_20.iloc[::-1]
+
+    # Build hover text with translations
+    bottom_hover_texts = []
+    for _, row in bottom_20_display.iterrows():
+        english = noun_details.get(row['noun'], {}).get('english', '') if noun_details else ''
+        if english:
+            bottom_hover_texts.append(f"<b>{row['noun']}</b><br>{english}<br><br>Coefficient: {row['coefficient']:.1f} words")
+        else:
+            bottom_hover_texts.append(f"<b>{row['noun']}</b><br><br>Coefficient: {row['coefficient']:.1f} words")
+
+    fig.add_trace(
+        go.Bar(
+            y=bottom_20_display['noun'].values,
+            x=bottom_20_display['coefficient'].values,
+            orientation='h',
+            marker_color='#e74c3c',
+            text=[f'{c:.1f}' for c in bottom_20_display['coefficient'].values],
+            textposition='outside',
+            hovertext=bottom_hover_texts,
+            hovertemplate='%{hovertext}<extra></extra>',
+            showlegend=False
+        ),
+        row=1, col=2
+    )
+
+    # Update layout
+    fig.update_layout(
+        height=600,
+        width=1200,
+        plot_bgcolor='white',
+        paper_bgcolor='white'
+    )
+
+    # Update axes
+    fig.update_xaxes(title_text='Extra words when mentioned', gridcolor='lightgray', row=1, col=1)
+    fig.update_xaxes(title_text='Fewer words when mentioned', gridcolor='lightgray', row=1, col=2)
+    fig.update_yaxes(tickfont=dict(size=10), row=1, col=1)
+    fig.update_yaxes(tickfont=dict(size=10), row=1, col=2)
+
+    # Save as HTML
+    output_dir = Path("reference_site/statistics_images")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Change extension from .png to .html
+    html_filename = filename.replace('.png', '.html')
+    html_path = output_dir / html_filename
+    fig.write_html(str(html_path), include_plotlyjs='cdn')
+
+    return f"statistics_images/{html_filename}"
 
 
 def compare_parisinus_epitomised_coefficients(parisinus_coefs, epitomised_coefs, noun_lemmas, noun_details):
@@ -712,8 +954,15 @@ def generate_navigation(current_page='index', in_subdirectory=False):
         'index': 'Overview',
         'word_count': 'Word Count Statistics',
         'regression': 'Stephanos vs Epitomizer Emphasis',
+        'categories': 'By Category',
+        'category_authors': 'Authors',
+        'category_persons': 'Historical Figures',
+        'category_places': 'Places',
+        'category_peoples': 'Ethnic Groups',
+        'category_deities': 'Deities',
         'etymology': 'Etymology Analysis',
-        'parisinus_comparison': 'Parisinus Coislinianus 228 vs Epitomised version'
+        'parisinus_comparison': 'Parisinus vs Epitome',
+        'pausanias_analysis': 'Pausanias Citations'
     }
 
     nav_html = '<nav style="background-color: #34495e; padding: 15px; margin-bottom: 20px; border-radius: 5px;">\n'
@@ -871,6 +1120,14 @@ def generate_page_header(title, current_page='index', in_subdirectory=False):
 """
 
 
+def generate_chart_embed(path, alt_text, height=650):
+    """Generate HTML to embed a chart - iframe for HTML, img for PNG."""
+    if path.endswith('.html'):
+        return f'    <iframe src="../{path}" width="100%" height="{height}" style="border: 1px solid #ddd; margin: 20px 0;"></iframe>\n'
+    else:
+        return f'    <img src="../{path}" alt="{alt_text}">\n'
+
+
 def generate_page_footer():
     """Generate common page footer."""
     return """
@@ -990,6 +1247,26 @@ def generate_index_page():
     <div class="section-card">
         <h3><a href="statistics/parisinus_comparison.html">4. Parisinus Coislinianus 228 vs Epitomised version Comparison</a></h3>
         <p>Statistical comparison of word counts between entries from the original Stephanos (Delta) and the Byzantine epitome (Non-Delta).</p>
+    </div>
+
+    <div class="section-card">
+        <h3><a href="statistics/categories.html">5. Analysis by Category</a></h3>
+        <p>Detailed analysis of how different categories of proper nouns correlate with entry length.
+        Explore which authors, historical figures, places, ethnic groups, and deities Stephanos emphasized.</p>
+        <div style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 10px;">
+            <a href="statistics/category_authors.html" style="padding: 5px 10px; background-color: #ecf0f1; border-radius: 3px; color: #3498db; text-decoration: none;">Authors</a>
+            <a href="statistics/category_persons.html" style="padding: 5px 10px; background-color: #ecf0f1; border-radius: 3px; color: #3498db; text-decoration: none;">Historical Figures</a>
+            <a href="statistics/category_places.html" style="padding: 5px 10px; background-color: #ecf0f1; border-radius: 3px; color: #3498db; text-decoration: none;">Places</a>
+            <a href="statistics/category_peoples.html" style="padding: 5px 10px; background-color: #ecf0f1; border-radius: 3px; color: #3498db; text-decoration: none;">Ethnic Groups</a>
+            <a href="statistics/category_deities.html" style="padding: 5px 10px; background-color: #ecf0f1; border-radius: 3px; color: #3498db; text-decoration: none;">Deities</a>
+        </div>
+    </div>
+
+    <div class="section-card">
+        <h3><a href="statistics/pausanias_analysis.html">6. Pausanias Citations</a></h3>
+        <p>Analysis of Stephanos's citations of Pausanias the Periegete. Did Stephanos have access to the
+        complete text of Pausanias, or only certain portions? Statistical analysis of citation distribution
+        with links to the cited passages.</p>
     </div>
 """
 
@@ -1181,9 +1458,11 @@ def generate_regression_page(
 """
 
     if global_ridge:
+        # Handle both Ridge (fixed alpha) and RidgeCV (selected alpha_)
+        global_alpha = getattr(global_ridge, 'alpha_', None) or getattr(global_ridge, 'alpha', 1.0)
         html += f"""        <div class="metric">
             <span class="metric-label">Alpha (Regularization):</span>
-            <span class="metric-value">{global_ridge.alpha_:.4f}</span>
+            <span class="metric-value">{global_alpha:.4f}</span>
         </div>
         <div class="metric">
             <span class="metric-label">CV R² Mean:</span>
@@ -1202,7 +1481,7 @@ def generate_regression_page(
     html += "    </div>\n"
 
     if global_regression_img:
-        html += f'    <img src="../{global_regression_img}" alt="Global Regression Coefficients">\n'
+        html += generate_chart_embed(global_regression_img, "Global Regression Coefficients")
         html += generate_coefficient_table(global_top20, global_bottom20, noun_details, "Global Model: ")
 
     html += """
@@ -1211,11 +1490,26 @@ def generate_regression_page(
 """
 
     if parisinus_ridge:
+        # Handle both Ridge (fixed alpha) and RidgeCV (selected alpha_)
+        parisinus_alpha = getattr(parisinus_ridge, 'alpha_', None) or getattr(parisinus_ridge, 'alpha', 1.0)
         html += f"""        <div class="metric">
             <span class="metric-label">Alpha (Regularization):</span>
-            <span class="metric-value">{parisinus_ridge.alpha_:.4f}</span>
+            <span class="metric-value">{parisinus_alpha:.4f}</span>
+        </div>
+"""
+        # For LOOCV (single R² value), show differently than k-fold (multiple values)
+        if len(parisinus_cv) == 1:
+            html += f"""        <div class="metric">
+            <span class="metric-label">LOOCV R²:</span>
+            <span class="metric-value">{parisinus_cv[0]:.4f}</span>
         </div>
         <div class="metric">
+            <span class="metric-label">CV Method:</span>
+            <span class="metric-value">Leave-One-Out</span>
+        </div>
+"""
+        else:
+            html += f"""        <div class="metric">
             <span class="metric-label">CV R² Mean:</span>
             <span class="metric-value">{parisinus_cv.mean():.4f}</span>
         </div>
@@ -1232,7 +1526,7 @@ def generate_regression_page(
     html += "    </div>\n"
 
     if parisinus_regression_img:
-        html += f'    <img src="../{parisinus_regression_img}" alt="Parisinus Regression Coefficients">\n'
+        html += generate_chart_embed(parisinus_regression_img, "Parisinus Regression Coefficients")
         html += generate_coefficient_table(parisinus_top20, parisinus_bottom20, noun_details, "Parisinus Model: ")
 
     html += """
@@ -1241,9 +1535,11 @@ def generate_regression_page(
 """
 
     if epitomised_ridge:
+        # Handle both Ridge (fixed alpha) and RidgeCV (selected alpha_)
+        epitomised_alpha = getattr(epitomised_ridge, 'alpha_', None) or getattr(epitomised_ridge, 'alpha', 1.0)
         html += f"""        <div class="metric">
             <span class="metric-label">Alpha (Regularization):</span>
-            <span class="metric-value">{epitomised_ridge.alpha_:.4f}</span>
+            <span class="metric-value">{epitomised_alpha:.4f}</span>
         </div>
         <div class="metric">
             <span class="metric-label">CV R² Mean:</span>
@@ -1262,7 +1558,7 @@ def generate_regression_page(
     html += "    </div>\n"
 
     if epitomised_regression_img:
-        html += f'    <img src="../{epitomised_regression_img}" alt="Non-Parisinus Regression Coefficients">\n'
+        html += generate_chart_embed(epitomised_regression_img, "Non-Parisinus Regression Coefficients")
         html += generate_coefficient_table(epitomised_top20, epitomised_bottom20, noun_details, "Non-Parisinus Model: ")
 
     html += generate_page_footer()
@@ -1395,6 +1691,307 @@ def generate_parisinus_comparison_page(parisinus_stats, epitomised_stats, t_stat
     return html
 
 
+def generate_category_comparison_chart(category_data, page_key, label, noun_details=None):
+    """Generate an interactive Plotly comparison chart showing Parisinus vs Epitome coefficients."""
+    from plotly.subplots import make_subplots
+
+    epitome_coefs = category_data['epitome']['coefficients']
+    parisinus_coefs = category_data['parisinus']['coefficients']
+    nouns = category_data['nouns']
+
+    # Create comparison dataframe with translations
+    comparison_data = []
+    for noun in nouns:
+        epi_coef = epitome_coefs.get(noun, 0)
+        par_coef = parisinus_coefs.get(noun, 0)
+        diff = par_coef - epi_coef
+        english = noun_details.get(noun, {}).get('english', '') if noun_details else ''
+        comparison_data.append({
+            'noun': noun,
+            'english': english,
+            'epitome': epi_coef,
+            'parisinus': par_coef,
+            'difference': diff,
+            'abs_diff': abs(diff),
+        })
+
+    df = pd.DataFrame(comparison_data)
+    df = df.sort_values('abs_diff', ascending=False)
+
+    # Create Plotly figure with subplots
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=(f'{label}: Epitome vs Parisinus Emphasis', f'Top 20 {label} with Largest Difference'),
+        horizontal_spacing=0.12
+    )
+
+    # Build hover text with translations
+    hover_texts = []
+    for _, row in df.iterrows():
+        if row['english']:
+            hover_texts.append(f"<b>{row['noun']}</b><br>{row['english']}<br><br>Epitome: {row['epitome']:.1f} words<br>Parisinus: {row['parisinus']:.1f} words")
+        else:
+            hover_texts.append(f"<b>{row['noun']}</b><br><br>Epitome: {row['epitome']:.1f} words<br>Parisinus: {row['parisinus']:.1f} words")
+
+    # Left plot: Scatter of Epitome vs Parisinus coefficients
+    fig.add_trace(
+        go.Scatter(
+            x=df['epitome'],
+            y=df['parisinus'],
+            mode='markers',
+            marker=dict(
+                size=10,
+                color=df['difference'],
+                colorscale='RdBu_r',
+                showscale=True,
+                colorbar=dict(title='Difference', x=0.45)
+            ),
+            text=hover_texts,
+            hovertemplate='%{text}<extra></extra>',
+            showlegend=False
+        ),
+        row=1, col=1
+    )
+
+    # Add diagonal line (equal coefficients)
+    min_val = min(df['epitome'].min(), df['parisinus'].min())
+    max_val = max(df['epitome'].max(), df['parisinus'].max())
+    fig.add_trace(
+        go.Scatter(
+            x=[min_val, max_val],
+            y=[min_val, max_val],
+            mode='lines',
+            line=dict(color='red', dash='dash', width=2),
+            name='Equal emphasis',
+            hoverinfo='skip'
+        ),
+        row=1, col=1
+    )
+
+    # Right plot: Top differences as horizontal bar chart
+    top_diff = df.head(20).iloc[::-1]  # Reverse for proper display order
+    colors = ['#c0392b' if d > 0 else '#2980b9' for d in top_diff['difference']]
+
+    # Build hover text for bar chart with translations
+    bar_hover_texts = []
+    for _, row in top_diff.iterrows():
+        if row['english']:
+            bar_hover_texts.append(f"<b>{row['noun']}</b><br>{row['english']}<br><br>Difference: {row['difference']:+.1f} words")
+        else:
+            bar_hover_texts.append(f"<b>{row['noun']}</b><br><br>Difference: {row['difference']:+.1f} words")
+
+    fig.add_trace(
+        go.Bar(
+            y=top_diff['noun'],
+            x=top_diff['difference'],
+            orientation='h',
+            marker_color=colors,
+            text=[f'{d:+.1f}' for d in top_diff['difference']],
+            textposition='outside',
+            hovertext=bar_hover_texts,
+            hovertemplate='%{hovertext}<extra></extra>',
+            showlegend=False
+        ),
+        row=1, col=2
+    )
+
+    # Update layout with annotations for emphasis labels
+    fig.update_layout(
+        height=600,
+        width=1200,
+        showlegend=True,
+        legend=dict(x=0.02, y=0.98),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        annotations=[
+            # Northwest corner: Stephanos emphasis (high Parisinus, low Epitome)
+            dict(
+                x=0.05, y=0.95, xref='x domain', yref='y domain',
+                text='<b>Stephanos<br>emphasis</b>',
+                showarrow=False, font=dict(size=11, color='#c0392b'),
+                xanchor='left', yanchor='top',
+                bgcolor='rgba(255,255,255,0.8)'
+            ),
+            # Southeast corner: Epitome emphasis (high Epitome, low Parisinus)
+            dict(
+                x=0.95, y=0.05, xref='x domain', yref='y domain',
+                text='<b>Epitome<br>emphasis</b>',
+                showarrow=False, font=dict(size=11, color='#2980b9'),
+                xanchor='right', yanchor='bottom',
+                bgcolor='rgba(255,255,255,0.8)'
+            ),
+        ]
+    )
+
+    # Update axes with better labels
+    fig.update_xaxes(
+        title_text='Extra words in the epitome when mentioned',
+        gridcolor='lightgray', zeroline=True, zerolinecolor='gray',
+        row=1, col=1
+    )
+    fig.update_yaxes(
+        title_text='Extra words in the Parisinus when mentioned',
+        gridcolor='lightgray', zeroline=True, zerolinecolor='gray',
+        row=1, col=1
+    )
+    fig.update_xaxes(
+        title_text='Difference (Parisinus - Epitome) in words',
+        gridcolor='lightgray', zeroline=True, zerolinecolor='black',
+        row=1, col=2
+    )
+    fig.update_yaxes(tickfont=dict(size=10), row=1, col=2)
+
+    # Save as HTML
+    output_dir = Path("reference_site/statistics_images")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    html_path = output_dir / f"comparison_{page_key}.html"
+    fig.write_html(str(html_path), include_plotlyjs='cdn')
+
+    return f"statistics_images/comparison_{page_key}.html"
+
+
+def generate_category_page(category_data, noun_details):
+    """Generate a dedicated page for a single category."""
+    label = category_data['label']
+    page_key = category_data['page_key']
+
+    html = generate_page_header(f'{label} Analysis', f'category_{page_key}', in_subdirectory=True)
+
+    html += f"""
+    <h2>{label} Analysis</h2>
+    <p>This page analyzes how individual {label.lower()} correlate with entry length in the Ethnika.
+    Positive coefficients indicate that entries mentioning this {label.lower()[:-1] if label.endswith('s') else label.lower()}
+    tend to be longer; negative coefficients indicate shorter entries.</p>
+
+    <div class="stats-box">
+        <div class="metric">
+            <span class="metric-label">Total {label.lower()} analyzed:</span>
+            <span class="metric-value">{category_data['n_features']}</span>
+        </div>
+    </div>
+"""
+
+    # Comparison chart (if available)
+    if 'comparison_img' in category_data:
+        chart_path = category_data['comparison_img']
+        # Check if it's an HTML file (interactive) or PNG (static)
+        if chart_path.endswith('.html'):
+            html += f"""
+    <h3>Parisinus vs Epitome Comparison</h3>
+    <p>This chart shows which {label.lower()} Stephanos emphasized more in the original Parisinus text
+    compared to the epitomized version. <em>Hover over points and bars for details.</em></p>
+    <iframe src="../{chart_path}" width="100%" height="650" style="border: 1px solid #ddd; margin: 20px 0;"></iframe>
+"""
+        else:
+            html += f"""
+    <h3>Parisinus vs Epitome Comparison</h3>
+    <p>This chart shows which {label.lower()} Stephanos emphasized more in the original Parisinus text
+    compared to the epitomized version.</p>
+    <img src="../{chart_path}" alt="{label} Comparison Chart">
+"""
+
+    # Individual model sections
+    for subset_key, subset_label in [('all', 'All Entries'), ('epitome', 'Epitome Only'), ('parisinus', 'Parisinus Only')]:
+        if subset_key not in category_data:
+            continue
+
+        subset = category_data[subset_key]
+        model = subset['model']
+        cv_scores = subset['cv_scores']
+        alpha = getattr(model, 'alpha_', None) or getattr(model, 'alpha', 1.0)
+
+        html += f"""
+    <h3>{subset_label}</h3>
+    <div class="stats-box">
+        <div class="metric">
+            <span class="metric-label">Entries analyzed:</span>
+            <span class="metric-value">{subset['n_samples']}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">Alpha (Regularization):</span>
+            <span class="metric-value">{alpha:.4f}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">CV R²:</span>
+            <span class="metric-value">{cv_scores.mean():.4f}</span>
+        </div>
+    </div>
+"""
+        if subset['img_path']:
+            html += generate_chart_embed(subset['img_path'], f"{subset_label} Coefficients")
+
+        html += generate_coefficient_table(subset['top20'], subset['bottom20'], noun_details, f"{subset_label}: ")
+
+    html += generate_page_footer()
+    return html
+
+
+def generate_categories_page(category_models, noun_details):
+    """Generate per-category regression overview page with links to individual pages."""
+    html = generate_page_header('Regression by Category', 'categories', in_subdirectory=True)
+
+    html += """
+    <h2>Per-Category Regression Analysis</h2>
+    <p>These models analyze which specific proper nouns within each category are associated with longer
+    or shorter entries. Each category has its own dedicated page with detailed analysis comparing
+    the original Parisinus text to the epitomized version.</p>
+
+    <div class="stats-box">
+        <p><strong>Methodology:</strong> For each category, we build separate ridge regression models
+        for all entries, Epitome-only entries, and Parisinus-only entries. This reveals which
+        proper nouns Stephanos emphasized more in the original versus what the epitomizer preserved.</p>
+    </div>
+
+    <h3>Category Summary</h3>
+    <table>
+        <tr>
+            <th>Category</th>
+            <th>Features</th>
+            <th>All Entries R²</th>
+            <th>Epitome R²</th>
+            <th>Parisinus R²</th>
+            <th>Details</th>
+        </tr>
+"""
+
+    for label, data in category_models.items():
+        page_key = data.get('page_key', label.lower().replace(' ', '_'))
+        n_features = data.get('n_features', 0)
+
+        all_r2 = data.get('all', {}).get('cv_scores', np.array([np.nan])).mean()
+        epi_r2 = data.get('epitome', {}).get('cv_scores', np.array([np.nan])).mean()
+        par_r2 = data.get('parisinus', {}).get('cv_scores', np.array([np.nan])).mean()
+
+        all_r2_str = f"{all_r2:.4f}" if not np.isnan(all_r2) else 'N/A'
+        epi_r2_str = f"{epi_r2:.4f}" if not np.isnan(epi_r2) else 'N/A'
+        par_r2_str = f"{par_r2:.4f}" if not np.isnan(par_r2) else 'N/A'
+
+        html += f"""        <tr>
+            <td><strong>{label}</strong></td>
+            <td>{n_features}</td>
+            <td>{all_r2_str}</td>
+            <td>{epi_r2_str}</td>
+            <td>{par_r2_str}</td>
+            <td><a href="category_{page_key}.html">View Details →</a></td>
+        </tr>
+"""
+
+    html += """    </table>
+
+    <h3>Quick Links</h3>
+    <ul>
+"""
+    for label, data in category_models.items():
+        page_key = data.get('page_key', label.lower().replace(' ', '_'))
+        html += f'        <li><a href="category_{page_key}.html">{label}</a></li>\n'
+
+    html += """    </ul>
+"""
+
+    html += generate_page_footer()
+    return html
+
+
 def main():
     print("Generating statistics website...")
 
@@ -1422,28 +2019,36 @@ def main():
     print("  Building feature matrix for ridge regression...")
     X, y, noun_lemmas, lemma_names, is_parisinus = get_proper_noun_features(cur)
 
+    # Get proper noun details for tables and hover tooltips (fetch early for use in visualizations)
+    print("  Fetching proper noun details...")
+    noun_details = get_proper_noun_details(cur, noun_lemmas)
+
     print("  Performing global ridge regression...")
     global_ridge, global_cv, global_top20, global_bottom20 = perform_ridge_regression(X, y, noun_lemmas, is_parisinus)
 
     if global_ridge:
-        global_regression_img = generate_regression_visualization(global_top20, global_bottom20, "regression_global.png")
+        global_regression_img = generate_regression_visualization(global_top20, global_bottom20, "regression_global.png", noun_details=noun_details)
     else:
         global_regression_img = None
 
-    # Parisinus-only regression
-    print("  Performing Parisinus-only ridge regression...")
-    parisinus_mask = is_parisinus
-    if parisinus_mask.sum() > 10:  # Need at least 10 samples
+    # Parisinus-only regression - use noun_type features (5 features) instead of individual nouns
+    print("  Performing Parisinus-only ridge regression (using noun_type features)...")
+    X_types, y_types, noun_types, lemma_names_types, is_parisinus_types = get_proper_noun_type_features(cur)
+    parisinus_mask_types = is_parisinus_types
+    if parisinus_mask_types.sum() > 5:  # Need at least 5 samples for 5 features
         parisinus_ridge, parisinus_cv, parisinus_top20, parisinus_bottom20 = perform_ridge_regression(
-            X[parisinus_mask], y[parisinus_mask], noun_lemmas, is_parisinus[parisinus_mask]
+            X_types[parisinus_mask_types], y_types[parisinus_mask_types], noun_types, is_parisinus_types[parisinus_mask_types]
         )
         if parisinus_ridge:
+            # Note: noun_types are category labels, not proper nouns, so no noun_details here
             parisinus_regression_img = generate_regression_visualization(parisinus_top20, parisinus_bottom20, "regression_delta.png")
         else:
             parisinus_regression_img = None
     else:
         parisinus_ridge, parisinus_cv, parisinus_top20, parisinus_bottom20 = None, None, None, None
         parisinus_regression_img = None
+    # Store noun_types for display
+    parisinus_noun_labels = noun_types
 
     # Epitomised regression
     print("  Performing Epitomised ridge regression...")
@@ -1453,16 +2058,12 @@ def main():
             X[epitomised_mask], y[epitomised_mask], noun_lemmas, is_parisinus[epitomised_mask]
         )
         if epitomised_ridge:
-            epitomised_regression_img = generate_regression_visualization(epitomised_top20, epitomised_bottom20, "regression_non_delta.png")
+            epitomised_regression_img = generate_regression_visualization(epitomised_top20, epitomised_bottom20, "regression_non_delta.png", noun_details=noun_details)
         else:
             epitomised_regression_img = None
     else:
         epitomised_ridge, epitomised_cv, epitomised_top20, epitomised_bottom20 = None, None, None, None
         epitomised_regression_img = None
-
-    # Get proper noun details for tables
-    print("  Fetching proper noun details...")
-    noun_details = get_proper_noun_details(cur, noun_lemmas)
 
     # 4.5. Parisinus Coislinianus 228 vs Epitomised version coefficient comparison
     print("  Comparing Parisinus Coislinianus 228 vs Epitomised version coefficients...")
@@ -1472,29 +2073,32 @@ def main():
     comparison_density_img = None
     comparison_interactive_path = None
 
-    if parisinus_ridge and epitomised_ridge:
+    # Only compare coefficients if both models use the same features
+    # (Parisinus now uses noun_type features, so comparison is not meaningful)
+    if parisinus_ridge and epitomised_ridge and len(parisinus_ridge.coef_) == len(epitomised_ridge.coef_):
         parisinus_coefs = parisinus_top20['coefficient'].tolist() if parisinus_top20 is not None else None
         epitomised_coefs = epitomised_top20['coefficient'].tolist() if epitomised_top20 is not None else None
 
         # Get coefficients for all nouns
-        if parisinus_ridge and epitomised_ridge:
-            parisinus_coef_df = pd.DataFrame({
-                'noun': noun_lemmas,
-                'coefficient': parisinus_ridge.coef_
-            })
-            epitomised_coef_df = pd.DataFrame({
-                'noun': noun_lemmas,
-                'coefficient': epitomised_ridge.coef_
-            })
+        parisinus_coef_df = pd.DataFrame({
+            'noun': noun_lemmas,
+            'coefficient': parisinus_ridge.coef_
+        })
+        epitomised_coef_df = pd.DataFrame({
+            'noun': noun_lemmas,
+            'coefficient': epitomised_ridge.coef_
+        })
 
-            comparison_df, top_parisinus_emphasis, top_epitomised_emphasis = compare_parisinus_epitomised_coefficients(
-                parisinus_ridge.coef_, epitomised_ridge.coef_, noun_lemmas, noun_details
+        comparison_df, top_parisinus_emphasis, top_epitomised_emphasis = compare_parisinus_epitomised_coefficients(
+            parisinus_ridge.coef_, epitomised_ridge.coef_, noun_lemmas, noun_details
+        )
+
+        if comparison_df is not None:
+            comparison_density_img, comparison_interactive_path = generate_coefficient_comparison_plots(
+                comparison_df, noun_details
             )
-
-            if comparison_df is not None:
-                comparison_density_img, comparison_interactive_path = generate_coefficient_comparison_plots(
-                    comparison_df, noun_details
-                )
+    else:
+        print("    (Skipping coefficient comparison - models use different features)")
 
     # 5. Etymology analysis
     print("  Analyzing etymologies...")
@@ -1515,6 +2119,86 @@ def main():
                 ha='center', va='center', fontsize=16)
         ax2.axis('off')
         etym_comparison_img = save_plot_to_file(fig2, "etymology_parisinus_comparison.png")
+
+    # 5.5. Per-category regression models (All, Parisinus, Epitome)
+    print("  Building per-category regression models...")
+    category_models = {}
+
+    categories = [
+        ('source', 'person', 'Authors', 'authors'),
+        ('entity', 'person', 'Historical Figures', 'persons'),
+        ('entity', 'place', 'Places', 'places'),
+        ('entity', 'people', 'Ethnic Groups', 'peoples'),
+        ('entity', 'deity', 'Deities', 'deities'),
+    ]
+
+    for role, noun_type, label, page_key in categories:
+        print(f"    - {label}...")
+        # For places, exclude self-references (e.g., don't count "Δωδώνη" in the Δωδώνη entry)
+        exclude_self = (noun_type == 'place')
+        X_cat, y_cat, nouns_cat, lemmas_cat, is_par_cat = get_category_specific_features(
+            cur, role=role, noun_type=noun_type, min_occurrences=2, exclude_self_reference=exclude_self
+        )
+
+        if X_cat is None or len(nouns_cat) < 3:
+            print(f"      (insufficient data)")
+            continue
+
+        # Fetch noun details for this category (for translations in charts)
+        category_noun_details = get_proper_noun_details(cur, nouns_cat)
+
+        category_data = {
+            'label': label,
+            'page_key': page_key,
+            'role': role,
+            'noun_type': noun_type,
+            'nouns': nouns_cat,
+            'n_features': len(nouns_cat),
+            'noun_details': category_noun_details,
+        }
+
+        # Run models on: All entries, Epitome only, Parisinus only
+        subsets = [
+            ('all', np.ones(len(y_cat), dtype=bool), 'All Entries'),
+            ('epitome', ~is_par_cat, 'Epitome Only'),
+            ('parisinus', is_par_cat, 'Parisinus Only'),
+        ]
+
+        for subset_key, mask, subset_label in subsets:
+            X_sub = X_cat[mask]
+            y_sub = y_cat[mask]
+
+            if len(y_sub) < 5:
+                print(f"      {subset_label}: (insufficient data, {len(y_sub)} samples)")
+                continue
+
+            model, cv_scores, top20, bottom20 = perform_ridge_regression(
+                X_sub, y_sub, nouns_cat, is_par_cat[mask]
+            )
+
+            if model is not None:
+                img_name = f"regression_{page_key}_{subset_key}.png"
+                img_path = generate_regression_visualization(top20, bottom20, img_name, noun_details=category_noun_details)
+
+                category_data[subset_key] = {
+                    'model': model,
+                    'cv_scores': cv_scores,
+                    'top20': top20,
+                    'bottom20': bottom20,
+                    'img_path': img_path,
+                    'n_samples': len(y_sub),
+                    'coefficients': dict(zip(nouns_cat, model.coef_)),
+                }
+                print(f"      {subset_label}: {len(y_sub)} samples, R² = {cv_scores.mean():.4f}")
+
+        # Generate comparison chart if we have both epitome and parisinus
+        if 'epitome' in category_data and 'parisinus' in category_data:
+            comparison_img = generate_category_comparison_chart(
+                category_data, page_key, label, noun_details=category_noun_details
+            )
+            category_data['comparison_img'] = comparison_img
+
+        category_models[label] = category_data
 
     # 6. Parisinus Coislinianus 228 vs Epitomised version comparison
     print("  Comparing Parisinus Coislinianus 228 vs Epitomised version entries...")
@@ -1555,6 +2239,21 @@ def main():
     )
     (stats_dir / "regression.html").write_text(regression_html, encoding='utf-8')
 
+    # Generate categories overview page
+    print("    - Generating categories page...")
+    if category_models:
+        categories_html = generate_categories_page(category_models, noun_details)
+        (stats_dir / "categories.html").write_text(categories_html, encoding='utf-8')
+
+        # Generate individual category pages
+        for label, data in category_models.items():
+            page_key = data.get('page_key', label.lower().replace(' ', '_'))
+            print(f"    - Generating {label} page...")
+            category_html = generate_category_page(data, noun_details)
+            (stats_dir / f"category_{page_key}.html").write_text(category_html, encoding='utf-8')
+    else:
+        print("      (No category models available)")
+
     # Generate etymology page
     print("    - Generating etymology page...")
     etymology_html = generate_etymology_page(
@@ -1575,6 +2274,7 @@ def main():
     print(f"  - Main page: {(ref_site_dir / 'statistics.html').absolute()}")
     print(f"  - Word count: {(stats_dir / 'word_count.html').absolute()}")
     print(f"  - Regression: {(stats_dir / 'regression.html').absolute()}")
+    print(f"  - Categories: {(stats_dir / 'categories.html').absolute()}")
     print(f"  - Etymology: {(stats_dir / 'etymology.html').absolute()}")
     print(f"  - Delta comparison: {(stats_dir / 'parisinus_comparison.html').absolute()}")
     print("\nOpen reference_site/statistics.html in browser to view comprehensive analysis.")
