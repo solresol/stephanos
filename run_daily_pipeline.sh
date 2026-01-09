@@ -62,6 +62,10 @@ uv run extract_proper_nouns.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 5c: Extracting etymologies..." | tee -a "$LOGFILE"
 uv run extract_etymologies.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 5d: Link proper nouns to Wikidata (limit to 20 per day to control costs)
+echo "Step 5d: Linking to Wikidata..." | tee -a "$LOGFILE"
+uv run link_wikidata.py --limit 20 2>&1 | tee -a "$LOGFILE"
+
 # Step 6: Generate progress website
 echo "Step 6: Generating progress website..." | tee -a "$LOGFILE"
 uv run generate_progress_site.py 2>&1 | tee -a "$LOGFILE"
@@ -74,9 +78,17 @@ uv run generate_reference_site.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 7a: Generating statistics website..." | tee -a "$LOGFILE"
 uv run generate_statistics_site.py 2>&1 | tee -a "$LOGFILE"
 
-# Step 7b: Generate people page
-echo "Step 7b: Generating people page..." | tee -a "$LOGFILE"
-uv run generate_people_page.py 2>&1 | tee -a "$LOGFILE"
+# Step 7a2: Analyze Pausanias citations
+echo "Step 7a2: Analyzing Pausanias citations..." | tee -a "$LOGFILE"
+uv run analyze_pausanias_citations.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 7b: Generate entity pages (sources, works, entities, peoples, fgrhist)
+echo "Step 7b: Generating entity pages..." | tee -a "$LOGFILE"
+uv run generate_sources_page.py 2>&1 | tee -a "$LOGFILE"
+uv run generate_works_page.py 2>&1 | tee -a "$LOGFILE"
+uv run generate_entities_page.py 2>&1 | tee -a "$LOGFILE"
+uv run generate_peoples_page.py 2>&1 | tee -a "$LOGFILE"
+uv run generate_fgrhist_page.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 7c: Generate protected pages
 echo "Step 7c: Generating protected pages..." | tee -a "$LOGFILE"
@@ -89,6 +101,10 @@ uv run generate_csv_export.py --output exports/lemmas.csv 2>&1 | tee -a "$LOGFIL
 # Step 8a: Export proper nouns CSV
 echo "Step 8a: Exporting proper nouns CSV..." | tee -a "$LOGFILE"
 uv run export_proper_nouns_csv.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 8a2: Export etymologies CSV
+echo "Step 8a2: Exporting etymologies CSV..." | tee -a "$LOGFILE"
+uv run export_etymologies_csv.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 8b: Export lemma data for review interface
 echo "Step 8b: Exporting lemma data for review interface..." | tee -a "$LOGFILE"
@@ -111,6 +127,7 @@ rsync -avz progress.html stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/ste
 # Deploy CSV exports
 rsync -avz exports/lemmas.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 rsync -avz exports/proper_nouns.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+rsync -avz exports/etymologies.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 # Deploy review data JSON
 rsync -avz review_data.json stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ 2>&1 | tee -a "$LOGFILE"
 
