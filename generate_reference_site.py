@@ -3,6 +3,8 @@
 Generate a reference website showing all lemmas and their translations, grouped by Greek letter.
 """
 import json
+import re
+import html as html_module
 import unicodedata
 from pathlib import Path
 from datetime import datetime, timezone
@@ -120,6 +122,17 @@ def get_all_lemmas(cur):
     """)
     etymologies_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
 
+    # Fetch aliases for proper nouns (grouped by proper noun english name)
+    cur.execute("""
+        SELECT pn.english_translation,
+               json_agg(DISTINCT pna.alias ORDER BY pna.alias) as aliases
+        FROM proper_nouns pn
+        JOIN proper_noun_aliases pna ON pna.proper_noun_id = pn.id
+        WHERE pn.english_translation IS NOT NULL
+        GROUP BY pn.english_translation
+    """)
+    aliases_by_name = {row[0]: row[1] for row in cur.fetchall()}
+
     all_lemmas = []
     for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at in rows:
         # Prefer corrected versions, fallback to human_greek_text, then OCR
@@ -172,6 +185,7 @@ def get_all_lemmas(cur):
             "word_count": word_count,
             "proper_nouns": proper_nouns_by_lemma.get(lemma_id, []),
             "etymologies": etymologies_by_lemma.get(lemma_id, []),
+            "aliases_by_name": aliases_by_name,
             "version": version or "epitome",
             "review_status": review_status or "not_reviewed",
             "reviewed_by": reviewed_by,
@@ -182,6 +196,52 @@ def get_all_lemmas(cur):
         all_lemmas.append(lemma_data)
 
     return all_lemmas
+
+
+def highlight_proper_nouns_in_translation(translation, proper_nouns, aliases_by_name):
+    """
+    Wrap proper noun names in the translation with spans that show aliases on hover.
+
+    Args:
+        translation: The English translation text
+        proper_nouns: List of proper noun dicts with 'english' key
+        aliases_by_name: Dict mapping english names to list of aliases
+
+    Returns:
+        HTML string with proper nouns wrapped in tooltip spans
+    """
+    if not translation or not proper_nouns:
+        return translation
+
+    # Build a list of (name, aliases) to find in the text
+    names_to_find = []
+    for noun in proper_nouns:
+        english = noun.get('english', '')
+        if english and english in aliases_by_name:
+            aliases = aliases_by_name[english]
+            if aliases:
+                names_to_find.append((english, aliases))
+
+    if not names_to_find:
+        return translation
+
+    # Sort by length (longest first) to avoid partial matches
+    names_to_find.sort(key=lambda x: len(x[0]), reverse=True)
+
+    # Track which positions have been replaced to avoid overlaps
+    result = translation
+    for name, aliases in names_to_find:
+        # Escape for regex
+        pattern = r'\b' + re.escape(name) + r'\b'
+        # Limit aliases shown to first 5
+        alias_list = aliases[:5]
+        if len(aliases) > 5:
+            alias_list.append(f"...+{len(aliases)-5} more")
+        aliases_str = html_module.escape(', '.join(alias_list))
+        replacement = f'<span class="proper-noun-highlight" data-aliases="{aliases_str}">{name}</span>'
+        result = re.sub(pattern, replacement, result, count=1)
+
+    return result
 
 
 def render_lemma_cards(lemmas):
@@ -206,6 +266,13 @@ def render_lemma_cards(lemmas):
         translation = lemma.get('translation') or lemma.get('english_translation') or ""
         if not is_translated or not translation:
             translation = '<span class="pending-translation">Translation pending</span>'
+        else:
+            # Highlight proper nouns with alias tooltips
+            translation = highlight_proper_nouns_in_translation(
+                translation,
+                lemma.get("proper_nouns", []),
+                lemma.get("aliases_by_name", {})
+            )
         meta_lines = []
         if lemma.get("entry_number"):
             meta_lines.append(f"Entry #{lemma['entry_number']}")
@@ -489,6 +556,30 @@ def common_styles():
             line-height: 1.6;
             margin: 10px 0;
         }
+        .proper-noun-highlight {
+            border-bottom: 1px dotted #3f51b5;
+            cursor: help;
+            position: relative;
+        }
+        .proper-noun-highlight:hover {
+            background: #e8eaf6;
+        }
+        .proper-noun-highlight:hover::after {
+            content: "Also: " attr(data-aliases);
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            background: #333;
+            color: white;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            white-space: nowrap;
+            z-index: 100;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
         .footer {
             text-align: center;
             padding: 30px 20px;
@@ -557,6 +648,7 @@ def generate_index_html(letter_counts, stats):
             <a href="fgrhist.html">FGrHist Index</a>
             <a href="entities.html">People &amp; Deities</a>
             <a href="peoples.html">Ethnic Groups</a>
+            <a href="aliases.html">Aliases</a>
             <a href="statistics.html">Statistics</a>
             <a href="progress.html">Processing Progress</a>
             <a href="protected/">Page Scans</a>
@@ -631,6 +723,7 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
             <a href="fgrhist.html">FGrHist Index</a>
             <a href="entities.html">People &amp; Deities</a>
             <a href="peoples.html">Ethnic Groups</a>
+            <a href="aliases.html">Aliases</a>
             <a href="statistics.html">Statistics</a>
             <a href="cgi-bin/review.cgi">Human Review</a>
         </div>

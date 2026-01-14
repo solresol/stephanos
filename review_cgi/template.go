@@ -244,6 +244,19 @@ const reviewTemplate = `<!DOCTYPE html>
         .btn-save:hover {
             background: #229954;
         }
+        .btn-save-stay {
+            padding: 12px 32px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 1.1em;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .btn-save-stay:hover {
+            background: #2980b9;
+        }
         .btn-skip {
             padding: 12px 32px;
             background: #95a5a6;
@@ -334,10 +347,10 @@ const reviewTemplate = `<!DOCTYPE html>
                 </div>
             </div>
 
-            <div class="section-title">Original Greek Text</div>
+            <div class="section-title">Raw OCR of Greek</div>
             <div class="original-text">{{.Lemma.GreekText}}</div>
 
-            <div class="section-title">Original English Translation</div>
+            <div class="section-title">AI-generated English Translation</div>
             <div class="original-text">{{.Lemma.EnglishTranslation}}</div>
 
             {{if .Lemma.ImageFilenames}}
@@ -398,7 +411,8 @@ const reviewTemplate = `<!DOCTYPE html>
                 </div>
 
                 <div class="button-group">
-                    <button type="submit" class="btn-save">Save & Continue →</button>
+                    <button type="submit" name="action" value="continue" class="btn-save">Save & Continue →</button>
+                    <button type="submit" name="action" value="stay" class="btn-save-stay">Save</button>
                     <button type="button" class="btn-skip" onclick="window.location.href='?id={{.NextID}}'">
                         Skip to Next
                     </button>

@@ -164,7 +164,7 @@ EXTRACT_LEMMAS_TOOL = {
                             },
                             "greek_text": {
                                 "type": "string",
-                                "description": "The full Greek text of the lemma entry"
+                                "description": "The full Greek text of the lemma entry, starting with the headword (do NOT include the entry number)"
                             },
                             "confidence": {
                                 "type": "string",
@@ -562,7 +562,7 @@ def process_image_with_gemini(model_name, image_path=None, volume_meta=None, all
                         },
                         "greek_text": {
                             "type": "string",
-                            "description": "The full Greek text of the lemma entry"
+                            "description": "The full Greek text of the lemma entry, starting with the headword (do NOT include the entry number)"
                         },
                         "confidence": {
                             "type": "string",

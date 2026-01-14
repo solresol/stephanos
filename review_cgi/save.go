@@ -45,6 +45,7 @@ func main() {
 	correctedGreek := strings.TrimSpace(formData.Get("corrected_greek"))
 	correctedEnglish := strings.TrimSpace(formData.Get("corrected_english"))
 	notes := strings.TrimSpace(formData.Get("notes"))
+	action := formData.Get("action") // "stay" or "continue" (default)
 	remoteUser := os.Getenv("REMOTE_USER")
 
 	// Validate required fields
@@ -105,25 +106,31 @@ func main() {
 		return
 	}
 
-	// Find current lemma and get next
-	currentLemma := FindLemmaByID(data, lemmaID)
-	var nextID int
+	// Determine redirect target based on action
+	var redirectID int
 
-	if currentLemma != nil {
-		nextLemma := GetNextLemma(data, currentLemma)
-		if nextLemma != nil {
-			nextID = nextLemma.ID
-		} else {
-			// Reached end, stay on current
-			nextID = lemmaID
-		}
+	if action == "stay" {
+		// Stay on current lemma
+		redirectID = lemmaID
 	} else {
-		nextID = lemmaID
+		// Default: continue to next lemma
+		currentLemma := FindLemmaByID(data, lemmaID)
+		if currentLemma != nil {
+			nextLemma := GetNextLemma(data, currentLemma)
+			if nextLemma != nil {
+				redirectID = nextLemma.ID
+			} else {
+				// Reached end, stay on current
+				redirectID = lemmaID
+			}
+		} else {
+			redirectID = lemmaID
+		}
 	}
 
-	// Redirect to next entry
+	// Redirect to target entry
 	fmt.Println("Status: 303 See Other")
-	fmt.Printf("Location: /cgi-bin/review.cgi?id=%d\n", nextID)
+	fmt.Printf("Location: /cgi-bin/review.cgi?id=%d\n", redirectID)
 	fmt.Println("Content-Type: text/html; charset=utf-8")
 	fmt.Println()
 	fmt.Printf(`<!DOCTYPE html>
@@ -136,7 +143,7 @@ func main() {
     <p>Review saved. Redirecting...</p>
     <p><a href="/cgi-bin/review.cgi?id=%d">Click here if not redirected</a></p>
 </body>
-</html>`, nextID, nextID)
+</html>`, redirectID, redirectID)
 
 	// Log successful save
 	log.Printf("Review saved: lemma_id=%d, status=%s, user=%s", lemmaID, reviewStatus, remoteUser)
