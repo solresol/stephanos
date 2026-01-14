@@ -66,6 +66,14 @@ uv run extract_etymologies.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 5d: Linking to Wikidata..." | tee -a "$LOGFILE"
 uv run link_wikidata.py --limit 20 2>&1 | tee -a "$LOGFILE"
 
+# Step 5e: Extract aliases from Greek text (limit to 20 per day to control costs)
+echo "Step 5e: Extracting aliases from Greek text..." | tee -a "$LOGFILE"
+uv run extract_aliases.py --limit 20 2>&1 | tee -a "$LOGFILE"
+
+# Step 5f: Generate spelling variants
+echo "Step 5f: Generating spelling variants..." | tee -a "$LOGFILE"
+uv run generate_spelling_variants.py 2>&1 | tee -a "$LOGFILE"
+
 # Step 6: Generate progress website
 echo "Step 6: Generating progress website..." | tee -a "$LOGFILE"
 uv run generate_progress_site.py 2>&1 | tee -a "$LOGFILE"
@@ -82,13 +90,14 @@ uv run generate_statistics_site.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 7a2: Analyzing Pausanias citations..." | tee -a "$LOGFILE"
 uv run analyze_pausanias_citations.py 2>&1 | tee -a "$LOGFILE"
 
-# Step 7b: Generate entity pages (sources, works, entities, peoples, fgrhist)
+# Step 7b: Generate entity pages (sources, works, entities, peoples, fgrhist, aliases)
 echo "Step 7b: Generating entity pages..." | tee -a "$LOGFILE"
 uv run generate_sources_page.py 2>&1 | tee -a "$LOGFILE"
 uv run generate_works_page.py 2>&1 | tee -a "$LOGFILE"
 uv run generate_entities_page.py 2>&1 | tee -a "$LOGFILE"
 uv run generate_peoples_page.py 2>&1 | tee -a "$LOGFILE"
 uv run generate_fgrhist_page.py 2>&1 | tee -a "$LOGFILE"
+uv run generate_aliases_page.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 7c: Generate protected pages
 echo "Step 7c: Generating protected pages..." | tee -a "$LOGFILE"
