@@ -43,10 +43,17 @@ type Review struct {
 	LemmaID                       int
 	ReviewStatus                  string
 	CorrectedGreekText            string
-	CorrectedEnglishTranslation   string
+	CorrectedEnglishTranslation   string  // Initial human translation
+	ReviewedEnglishTranslation    string  // Reviewed/approved translation
+	// OBSOLETE: ReviewerUsername is deprecated. Use the per-field tracking columns below instead.
+	// Kept for backward compatibility with legacy reviews that don't have per-field tracking.
 	ReviewerUsername              string
 	ReviewedAt                    *time.Time
 	Notes                         string
+	// Track who last modified each field (preferred over ReviewerUsername)
+	GreekCorrectedBy              string
+	InitialTranslationBy          string
+	ReviewedTranslationBy         string
 }
 
 // Config holds application configuration
@@ -99,6 +106,17 @@ func OpenDatabase(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
+	// Ensure new columns exist (migrations)
+	migrations := []string{
+		"ALTER TABLE reviews ADD COLUMN reviewed_english_translation TEXT",
+		"ALTER TABLE reviews ADD COLUMN greek_corrected_by TEXT",
+		"ALTER TABLE reviews ADD COLUMN initial_translation_by TEXT",
+		"ALTER TABLE reviews ADD COLUMN reviewed_translation_by TEXT",
+	}
+	for _, migration := range migrations {
+		db.Exec(migration) // Ignore errors (column may already exist)
+	}
+
 	return db, nil
 }
 
@@ -108,9 +126,13 @@ func GetReview(db *sql.DB, lemmaID int) (*Review, error) {
 		SELECT lemma_id, review_status,
 		       COALESCE(corrected_greek_text, ''),
 		       COALESCE(corrected_english_translation, ''),
+		       COALESCE(reviewed_english_translation, ''),
 		       COALESCE(reviewer_username, ''),
 		       reviewed_at,
-		       COALESCE(notes, '')
+		       COALESCE(notes, ''),
+		       COALESCE(greek_corrected_by, ''),
+		       COALESCE(initial_translation_by, ''),
+		       COALESCE(reviewed_translation_by, '')
 		FROM reviews
 		WHERE lemma_id = ?
 	`
@@ -121,9 +143,13 @@ func GetReview(db *sql.DB, lemmaID int) (*Review, error) {
 		&review.ReviewStatus,
 		&review.CorrectedGreekText,
 		&review.CorrectedEnglishTranslation,
+		&review.ReviewedEnglishTranslation,
 		&review.ReviewerUsername,
 		&review.ReviewedAt,
 		&review.Notes,
+		&review.GreekCorrectedBy,
+		&review.InitialTranslationBy,
+		&review.ReviewedTranslationBy,
 	)
 
 	if err == sql.ErrNoRows {
@@ -141,21 +167,52 @@ func GetReview(db *sql.DB, lemmaID int) (*Review, error) {
 	return review, nil
 }
 
-// SaveReview saves or updates review data
-func SaveReview(db *sql.DB, review *Review) error {
+// SaveReview saves or updates review data, tracking who modified each field
+func SaveReview(db *sql.DB, review *Review, oldReview *Review, username string) error {
+	// Determine which "by" fields to update based on what changed
+	greekBy := review.GreekCorrectedBy
+	initialBy := review.InitialTranslationBy
+	reviewedBy := review.ReviewedTranslationBy
+
+	if oldReview == nil || review.CorrectedGreekText != oldReview.CorrectedGreekText {
+		if review.CorrectedGreekText != "" {
+			greekBy = username
+		}
+	}
+	if oldReview == nil || review.CorrectedEnglishTranslation != oldReview.CorrectedEnglishTranslation {
+		if review.CorrectedEnglishTranslation != "" {
+			initialBy = username
+		}
+	}
+	if oldReview == nil || review.ReviewedEnglishTranslation != oldReview.ReviewedEnglishTranslation {
+		if review.ReviewedEnglishTranslation != "" {
+			reviewedBy = username
+		}
+	}
+
+	// Preserve existing reviewer_username on update (it's obsolete, only used for legacy fallback)
+	reviewerUsername := username
+	if oldReview != nil && oldReview.ReviewerUsername != "" {
+		reviewerUsername = oldReview.ReviewerUsername
+	}
+
 	query := `
 		INSERT INTO reviews (
 			lemma_id, review_status, corrected_greek_text,
-			corrected_english_translation, reviewer_username,
-			reviewed_at, notes
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+			corrected_english_translation, reviewed_english_translation,
+			reviewer_username, reviewed_at, notes,
+			greek_corrected_by, initial_translation_by, reviewed_translation_by
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(lemma_id) DO UPDATE SET
 			review_status = excluded.review_status,
 			corrected_greek_text = excluded.corrected_greek_text,
 			corrected_english_translation = excluded.corrected_english_translation,
-			reviewer_username = excluded.reviewer_username,
+			reviewed_english_translation = excluded.reviewed_english_translation,
 			reviewed_at = excluded.reviewed_at,
-			notes = excluded.notes
+			notes = excluded.notes,
+			greek_corrected_by = excluded.greek_corrected_by,
+			initial_translation_by = excluded.initial_translation_by,
+			reviewed_translation_by = excluded.reviewed_translation_by
 	`
 
 	_, err := db.Exec(query,
@@ -163,9 +220,13 @@ func SaveReview(db *sql.DB, review *Review) error {
 		review.ReviewStatus,
 		review.CorrectedGreekText,
 		review.CorrectedEnglishTranslation,
-		review.ReviewerUsername,
+		review.ReviewedEnglishTranslation,
+		reviewerUsername,
 		time.Now(),
 		review.Notes,
+		greekBy,
+		initialBy,
+		reviewedBy,
 	)
 
 	if err != nil {

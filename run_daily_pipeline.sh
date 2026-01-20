@@ -115,6 +115,18 @@ uv run export_proper_nouns_csv.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 8a2: Exporting etymologies CSV..." | tee -a "$LOGFILE"
 uv run export_etymologies_csv.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 8a3: Export for nodegoat
+echo "Step 8a3: Exporting for nodegoat..." | tee -a "$LOGFILE"
+uv run export_for_nodegoat.py --output exports/nodegoat 2>&1 | tee -a "$LOGFILE"
+
+# Step 8a4: Generate PDF book
+echo "Step 8a4: Generating PDF book..." | tee -a "$LOGFILE"
+uv run generate_pdf_book.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 8a5: Generate downloads page
+echo "Step 8a5: Generating downloads page..." | tee -a "$LOGFILE"
+uv run generate_downloads_page.py 2>&1 | tee -a "$LOGFILE"
+
 # Step 8b: Export lemma data for review interface
 echo "Step 8b: Exporting lemma data for review interface..." | tee -a "$LOGFILE"
 uv run export_for_review.py 2>&1 | tee -a "$LOGFILE"
@@ -137,6 +149,8 @@ rsync -avz progress.html stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/ste
 rsync -avz exports/lemmas.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 rsync -avz exports/proper_nouns.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 rsync -avz exports/etymologies.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+# Deploy nodegoat exports
+rsync -avz exports/nodegoat/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/nodegoat/ 2>&1 | tee -a "$LOGFILE"
 # Deploy review data JSON
 rsync -avz review_data.json stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ 2>&1 | tee -a "$LOGFILE"
 

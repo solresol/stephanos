@@ -111,7 +111,7 @@ func main() {
 				LemmaID:      lemma.ID,
 				ReviewStatus: "not_reviewed",
 			}
-			SaveReview(db, defaultReview)
+			SaveReview(db, defaultReview, nil, "system")
 		}
 		total = len(data.Lemmas)
 		reviewed = 0

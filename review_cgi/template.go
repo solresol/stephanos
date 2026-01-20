@@ -343,7 +343,8 @@ const reviewTemplate = `<!DOCTYPE html>
                     {{.Lemma.VolumeLabel}}<br>
                     {{if .Lemma.MeinekeID}}Meineke: {{.Lemma.MeinekeID}}<br>{{end}}
                     {{if .Lemma.BillerbeckID}}Billerbeck: {{.Lemma.BillerbeckID}}<br>{{end}}
-                    {{.Lemma.WordCount}} words
+                    {{.Lemma.WordCount}} words<br>
+                    <a href="/letter_{{.Lemma.Letter}}.html#lemma-{{.Lemma.ID}}" target="_blank" style="color: #3498db;">View on public site →</a>
                 </div>
             </div>
 
@@ -373,19 +374,20 @@ const reviewTemplate = `<!DOCTYPE html>
             <form method="POST" action="/cgi-bin/save.cgi" class="review-form">
                 <input type="hidden" name="lemma_id" value="{{.Lemma.ID}}">
                 <input type="hidden" name="current_position" value="{{.Lemma.SortOrder}}">
+                <input type="hidden" id="ai_translation" value="{{.Lemma.EnglishTranslation}}">
 
                 <div class="form-group">
-                    <label>Review Status:</label>
+                    <label>OCR Status:</label>
                     <div class="radio-group">
                         <label>
                             <input type="radio" name="review_status" value="reviewed_ok"
                                    {{if eq .Review.ReviewStatus "reviewed_ok"}}checked{{end}}>
-                            Reviewed - OK (no corrections needed)
+                            OCR OK (no corrections needed)
                         </label>
                         <label>
                             <input type="radio" name="review_status" value="reviewed_corrections"
                                    {{if eq .Review.ReviewStatus "reviewed_corrections"}}checked{{end}}>
-                            Reviewed - Corrections Made
+                            OCR Corrections Made
                         </label>
                         <label>
                             <input type="radio" name="review_status" value="not_reviewed"
@@ -396,13 +398,37 @@ const reviewTemplate = `<!DOCTYPE html>
                 </div>
 
                 <div class="form-group">
-                    <label for="corrected_greek">Corrected Greek Text (leave empty if OK):</label>
+                    <label for="corrected_greek">
+                        Corrected Greek Text (leave empty if OK)
+                        {{if .Review.CorrectedGreekText}}<span style="font-weight: normal; color: #7f8c8d; font-size: 0.9em;"> — last edited by {{if .Review.GreekCorrectedBy}}{{.Review.GreekCorrectedBy}}{{else}}{{.Review.ReviewerUsername}}{{end}}</span>{{end}}
+                    </label>
                     <textarea name="corrected_greek" id="corrected_greek">{{.Review.CorrectedGreekText}}</textarea>
                 </div>
 
                 <div class="form-group">
-                    <label for="corrected_english">Corrected English Translation (leave empty if OK):</label>
+                    <label for="corrected_english">
+                        Initial Human Translation
+                        {{if .Review.CorrectedEnglishTranslation}}<span style="font-weight: normal; color: #7f8c8d; font-size: 0.9em;"> — last edited by {{if .Review.InitialTranslationBy}}{{.Review.InitialTranslationBy}}{{else}}{{.Review.ReviewerUsername}}{{end}}</span>{{end}}
+                    </label>
+                    <div style="margin-bottom: 8px;">
+                        <button type="button" onclick="copyAIToInitial()" style="padding: 6px 12px; background: #95a5a6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em;">
+                            Copy the AI translation here
+                        </button>
+                    </div>
                     <textarea name="corrected_english" id="corrected_english">{{.Review.CorrectedEnglishTranslation}}</textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="reviewed_english">
+                        Reviewed English Translation
+                        {{if .Review.ReviewedEnglishTranslation}}<span style="font-weight: normal; color: #7f8c8d; font-size: 0.9em;"> — last edited by {{if .Review.ReviewedTranslationBy}}{{.Review.ReviewedTranslationBy}}{{else}}{{.Review.ReviewerUsername}}{{end}}</span>{{end}}
+                    </label>
+                    <div style="margin-bottom: 8px;">
+                        <button type="button" onclick="copyInitialToReviewed()" style="padding: 6px 12px; background: #95a5a6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em;">
+                            Human translation looks OK to me
+                        </button>
+                    </div>
+                    <textarea name="reviewed_english" id="reviewed_english">{{.Review.ReviewedEnglishTranslation}}</textarea>
                 </div>
 
                 <div class="form-group">
@@ -420,6 +446,16 @@ const reviewTemplate = `<!DOCTYPE html>
             </form>
         </div>
     </div>
+    <script>
+        function copyInitialToReviewed() {
+            var initial = document.getElementById('corrected_english').value;
+            document.getElementById('reviewed_english').value = initial;
+        }
+        function copyAIToInitial() {
+            var ai = document.getElementById('ai_translation').value;
+            document.getElementById('corrected_english').value = ai;
+        }
+    </script>
 </body>
 </html>
 `
