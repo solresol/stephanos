@@ -349,6 +349,8 @@ def render_lemma_cards(lemmas):
                 html_page = img.replace('.jpg', '.html').replace('.png', '.html')
                 image_links.append(f'<a href="protected/{html_page}" target="_blank">{img}</a>')
             meta_lines.append(f"Source: {', '.join(image_links)}")
+        # Add edit link to review system
+        meta_lines.append(f'<a href="/cgi-bin/review.cgi?id={lemma["lemma_id"]}">Edit</a>')
         meta_html = "<br>".join(meta_lines)
         cards_html.append(
             f"""
@@ -653,6 +655,7 @@ def generate_index_html(letter_counts, stats):
             <a href="progress.html">Processing Progress</a>
             <a href="protected/">Page Scans</a>
             <a href="cgi-bin/review.cgi">Human Review</a>
+            <a href="downloads.html">Downloads</a>
         </div>
         <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
             <div class="stat-card">
@@ -726,6 +729,7 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
             <a href="aliases.html">Aliases</a>
             <a href="statistics.html">Statistics</a>
             <a href="cgi-bin/review.cgi">Human Review</a>
+            <a href="downloads.html">Downloads</a>
         </div>
         {body}
         <div class="footer">

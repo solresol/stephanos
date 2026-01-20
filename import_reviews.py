@@ -51,6 +51,7 @@ def import_reviews():
     sqlite_cur.execute("""
         SELECT lemma_id, review_status,
                corrected_greek_text, corrected_english_translation,
+               reviewed_english_translation,
                reviewer_username, reviewed_at, notes
         FROM reviews
         WHERE review_status != 'not_reviewed'
@@ -77,6 +78,7 @@ def import_reviews():
         review_status = review['review_status']
         corrected_greek = review['corrected_greek_text'] or None
         corrected_english = review['corrected_english_translation'] or None
+        reviewed_english = review['reviewed_english_translation'] or None
         reviewer = review['reviewer_username']
         reviewed_at = review['reviewed_at']
         notes = review['notes'] or None
@@ -99,6 +101,7 @@ def import_reviews():
                 SET review_status = %s,
                     corrected_greek_scan = %s,
                     corrected_english_translation = %s,
+                    reviewed_english_translation = %s,
                     reviewed_by = %s,
                     reviewed_at = %s,
                     human_notes = %s
@@ -109,6 +112,7 @@ def import_reviews():
                 review_status,
                 corrected_greek,
                 corrected_english,
+                reviewed_english,
                 reviewer,
                 reviewed_at,
                 notes,

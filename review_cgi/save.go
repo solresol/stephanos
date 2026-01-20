@@ -44,6 +44,7 @@ func main() {
 	reviewStatus := formData.Get("review_status")
 	correctedGreek := strings.TrimSpace(formData.Get("corrected_greek"))
 	correctedEnglish := strings.TrimSpace(formData.Get("corrected_english"))
+	reviewedEnglish := strings.TrimSpace(formData.Get("reviewed_english"))
 	notes := strings.TrimSpace(formData.Get("notes"))
 	action := formData.Get("action") // "stay" or "continue" (default)
 	remoteUser := os.Getenv("REMOTE_USER")
@@ -89,18 +90,29 @@ func main() {
 	}
 	defer db.Close()
 
-	// Create review record
+	// Get old review to track changes
+	oldReview, err := GetReview(db, lemmaID)
+	if err != nil {
+		showErrorAndExit(fmt.Sprintf("Failed to get existing review: %v", err))
+		return
+	}
+
+	// Create review record with new values, preserving "by" fields from old review
 	review := &Review{
-		LemmaID:                     lemmaID,
-		ReviewStatus:                reviewStatus,
-		CorrectedGreekText:          correctedGreek,
-		CorrectedEnglishTranslation: correctedEnglish,
-		ReviewerUsername:            remoteUser,
-		Notes:                       notes,
+		LemmaID:                      lemmaID,
+		ReviewStatus:                 reviewStatus,
+		CorrectedGreekText:           correctedGreek,
+		CorrectedEnglishTranslation:  correctedEnglish,
+		ReviewedEnglishTranslation:   reviewedEnglish,
+		ReviewerUsername:             remoteUser,
+		Notes:                        notes,
+		GreekCorrectedBy:             oldReview.GreekCorrectedBy,
+		InitialTranslationBy:         oldReview.InitialTranslationBy,
+		ReviewedTranslationBy:        oldReview.ReviewedTranslationBy,
 	}
 
 	// Save to database
-	err = SaveReview(db, review)
+	err = SaveReview(db, review, oldReview, remoteUser)
 	if err != nil {
 		showErrorAndExit(fmt.Sprintf("Failed to save review: %v", err))
 		return
