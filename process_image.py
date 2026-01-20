@@ -86,9 +86,10 @@ def load_gemini_api_key():
         raise FileNotFoundError(f"Gemini API key file not found: {key_path}")
     return key_path.read_text().strip()
 
-SYSTEM_PROMPT = """You are a classical philologist specializing in Byzantine Greek geographical texts.
-You are extracting lemma entries from scanned pages of Stephanos of Byzantium's Ethnika (Billerbeck edition).
-Extract polytonic Greek accurately. Do NOT invent text."""
+SYSTEM_PROMPT = """You are a classical philologist interested in ancient place names from around the ancient world, as rendered in ancient Greek .                                     
+  You are extracting lemma entries from scanned pages of Stephanos of           
+  Byzantium's Ethnika (Billerbeck edition).                                     
+  Extract the polytonic ancient Greek text accurately, retaining unusual spellings and diacritical marks from non-Attic dialects where they are present. Do NOT invent text."""
 
 USER_PROMPT = """Classify this page and extract numbered lemma entries.
 
