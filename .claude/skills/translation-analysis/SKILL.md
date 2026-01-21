@@ -138,6 +138,63 @@ Kaleros: Alopekonesos (α 242) used to be called this, after King Kaleros...
 
 ## Integration
 
-After analysis, the generated guidance can be added to:
-- `translate_lemmas.py` TRANSLATION_SYSTEM_PROMPT constant
-- A separate `TRANSLATION_GUIDE.md` file referenced by the prompt
+Translation prompts are versioned in the database. After analysis:
+
+### Step 6: View Current Prompt
+```bash
+psql -U stephanos stephanos -c "SELECT version, created_at, notes, prompt_text FROM translation_prompts ORDER BY version DESC LIMIT 1"
+```
+
+### Step 7: Ask User About New Prompt Version
+
+After generating guidance, ask the user:
+
+**"Would you like to create a new translation prompt version with this guidance?"**
+
+Options:
+1. Yes - insert new prompt version
+2. No - just save the analysis for later
+3. Let me review and edit first
+
+If yes, combine the current prompt with the new guidance and insert:
+
+```bash
+psql -U stephanos stephanos << 'EOF'
+INSERT INTO translation_prompts (prompt_text, notes)
+VALUES (
+'You are an expert classical philologist and translator specializing in Byzantine Greek geographical texts.
+You will receive Greek text from a lemma entry in Stephanos of Byzantium''s Ethnika.
+Translate the Greek text into clear, scholarly English.
+Preserve technical terminology and place names appropriately.
+
+TRANSLATION STYLE GUIDE:
+[Insert generated guidance here]
+',
+'Added guidance based on Gabriel''s corrections: [brief summary of changes]'
+);
+EOF
+```
+
+### Step 8: Verify and Report
+
+After inserting, verify and show the user:
+```bash
+psql -U stephanos stephanos -c "SELECT version, created_at, notes FROM translation_prompts ORDER BY version DESC LIMIT 1"
+```
+
+Report:
+- New prompt version number
+- Number of entries that will be retranslated (those with older prompt versions and no human translation)
+
+```bash
+psql -U stephanos stephanos -c "
+SELECT COUNT(*) as entries_to_retranslate
+FROM assembled_lemmas
+WHERE translated = 1
+  AND (corrected_english_translation IS NULL OR corrected_english_translation = '')
+  AND (reviewed_english_translation IS NULL OR reviewed_english_translation = '')
+  AND translation_prompt_version < (SELECT MAX(version) FROM translation_prompts)
+"
+```
+
+The next run of `translate_lemmas.py` will automatically prioritize these entries.

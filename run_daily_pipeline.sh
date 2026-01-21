@@ -44,8 +44,8 @@ uv run batch_process.py \
 echo "Step 4: Assembling lemmas..." | tee -a "$LOGFILE"
 uv run assemble_lemmas.py 2>&1 | tee -a "$LOGFILE"
 
-# Step 5: Translate lemmas with gpt-5.1
-echo "Step 5: Translating lemmas with gpt-5.1..." | tee -a "$LOGFILE"
+# Step 5: Translate lemmas with gpt-5.2
+echo "Step 5: Translating lemmas with gpt-5.2..." | tee -a "$LOGFILE"
 uv run translate_lemmas.py \
     --delay 1 \
     2>&1 | tee -a "$LOGFILE"
@@ -63,8 +63,12 @@ echo "Step 5c: Extracting etymologies..." | tee -a "$LOGFILE"
 uv run extract_etymologies.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 5d: Link proper nouns to Wikidata (limit to 20 per day to control costs)
-echo "Step 5d: Linking to Wikidata..." | tee -a "$LOGFILE"
+echo "Step 5d: Linking sources to Wikidata..." | tee -a "$LOGFILE"
 uv run link_wikidata.py --limit 20 2>&1 | tee -a "$LOGFILE"
+
+# Step 5d2: Link place headwords to Wikidata (limit to 10 per day to control costs)
+echo "Step 5d2: Linking places to Wikidata..." | tee -a "$LOGFILE"
+uv run link_wikidata_places.py --limit 10 2>&1 | tee -a "$LOGFILE"
 
 # Step 5e: Extract aliases from Greek text (limit to 20 per day to control costs)
 echo "Step 5e: Extracting aliases from Greek text..." | tee -a "$LOGFILE"
@@ -89,6 +93,10 @@ uv run generate_statistics_site.py 2>&1 | tee -a "$LOGFILE"
 # Step 7a2: Analyze Pausanias citations
 echo "Step 7a2: Analyzing Pausanias citations..." | tee -a "$LOGFILE"
 uv run analyze_pausanias_citations.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 7a3: Generate places map
+echo "Step 7a3: Generating places map..." | tee -a "$LOGFILE"
+uv run generate_places_map.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 7b: Generate entity pages (sources, works, entities, peoples, fgrhist, aliases)
 echo "Step 7b: Generating entity pages..." | tee -a "$LOGFILE"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Translate Greek lemmas to English using gpt-5.1.
+Translate Greek lemmas to English using gpt-5.2.
 Processes assembled lemmas that have been extracted but not yet translated.
 Enforces a daily token limit of 100,000 tokens.
 
@@ -17,12 +17,7 @@ from openai import OpenAI
 from db import get_connection
 
 DEFAULT_TRANSLATION_DAILY_TOKEN_LIMIT = 100_000
-DEFAULT_MODEL = "gpt-5.1"
-
-TRANSLATION_SYSTEM_PROMPT = """You are an expert classical philologist and translator specializing in Byzantine Greek geographical texts.
-You will receive Greek text from a lemma entry in Stephanos of Byzantium's Ethnika.
-Translate the Greek text into clear, scholarly English.
-Preserve technical terminology and place names appropriately."""
+DEFAULT_MODEL = "gpt-5.2"
 
 # Tool definition for structured translation output
 TRANSLATE_TOOL = {
@@ -64,24 +59,65 @@ def get_translation_tokens_today(cur):
     row = cur.fetchone()
     return row[0] if row else 0
 
-def fetch_lemmas_needing_translation(cur):
+
+def get_current_translation_prompt(cur):
     """
-    Fetch assembled lemmas that need translation:
-    1. Never translated (translated = 0)
-    2. Updated after last translation (updated_at > translated_at)
+    Get the current (latest) translation prompt from the database.
+
+    Returns (version, prompt_text) tuple.
+    """
+    cur.execute(
+        """
+        SELECT version, prompt_text
+        FROM translation_prompts
+        ORDER BY version DESC
+        LIMIT 1
+        """
+    )
+    row = cur.fetchone()
+    if not row:
+        raise RuntimeError("No translation prompts found in database. Run database setup first.")
+    return row[0], row[1]
+
+def fetch_lemmas_needing_translation(cur, current_prompt_version: int):
+    """
+    Fetch assembled lemmas that need (re)translation.
+
+    Priority order:
+    1. Entries with outdated prompt versions (older AI translations needing update)
+    2. Never translated entries (translated = 0)
+
+    Excludes entries with human translations (corrected or reviewed) since
+    those don't need AI retranslation.
     """
     cur.execute(
         """
         SELECT id, lemma, entry_number, type, greek_text, human_greek_text, human_notes, confidence, assembled_json
         FROM assembled_lemmas
-        WHERE translated = 0
-           OR (translated_at IS NOT NULL AND updated_at > translated_at)
-        ORDER BY CASE WHEN volume_number = 3 THEN 0 ELSE 1 END, id
-        """
+        WHERE
+            -- Exclude entries that have human translations
+            (corrected_english_translation IS NULL OR corrected_english_translation = '')
+            AND (reviewed_english_translation IS NULL OR reviewed_english_translation = '')
+            AND (
+                -- Outdated prompt version (prioritized)
+                (translated = 1 AND (translation_prompt_version IS NULL OR translation_prompt_version < %s))
+                OR
+                -- Never translated
+                translated = 0
+            )
+        ORDER BY
+            -- Priority 1: Outdated translations first
+            CASE WHEN translated = 1 AND (translation_prompt_version IS NULL OR translation_prompt_version < %s)
+                 THEN 0 ELSE 1 END,
+            -- Priority 2: Volume 3 (kappa) first within each group
+            CASE WHEN volume_number = 3 THEN 0 ELSE 1 END,
+            id
+        """,
+        (current_prompt_version, current_prompt_version)
     )
     return cur.fetchall()
 
-def mark_translated(conn, cur, lemma_id, translation: str, tokens_used: int, lemma_data: dict = None):
+def mark_translated(conn, cur, lemma_id, translation: str, tokens_used: int, prompt_version: int, lemma_data: dict = None):
     """
     Mark a lemma as translated, storing the translation in the normalized column.
 
@@ -106,14 +142,15 @@ def mark_translated(conn, cur, lemma_id, translation: str, tokens_used: int, lem
             translation = %s,
             translation_json = %s,
             translated_at = %s,
-            translation_tokens = %s
+            translation_tokens = %s,
+            translation_prompt_version = %s
         WHERE id = %s
         """,
-        (translation, translation_json, datetime.now(timezone.utc).isoformat(), tokens_used, lemma_id)
+        (translation, translation_json, datetime.now(timezone.utc).isoformat(), tokens_used, prompt_version, lemma_id)
     )
     conn.commit()
 
-def translate_lemma(client, lemma_text: str, greek_text: str, entry_number: int, model: str = DEFAULT_MODEL):
+def translate_lemma(client, lemma_text: str, greek_text: str, entry_number: int, system_prompt: str, model: str = DEFAULT_MODEL):
     """
     Translate Greek text using tool calling for structured output.
 
@@ -122,6 +159,7 @@ def translate_lemma(client, lemma_text: str, greek_text: str, entry_number: int,
         lemma_text: The headword/lemma
         greek_text: The Greek text to translate
         entry_number: Entry number for context
+        system_prompt: The translation system prompt from the database
         model: OpenAI model to use
 
     Returns:
@@ -140,7 +178,7 @@ Provide a scholarly English translation. Preserve place names and technical term
     response = client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": TRANSLATION_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
         ],
         tools=[TRANSLATE_TOOL],
@@ -180,6 +218,10 @@ def main():
     conn = get_connection()
     cur = conn.cursor()
 
+    # Get current translation prompt from database
+    prompt_version, system_prompt = get_current_translation_prompt(cur)
+    print(f"Using translation prompt version {prompt_version}")
+
     # Check translation tokens used today
     tokens_today = get_translation_tokens_today(cur)
     print(f"Translation tokens used today: {tokens_today:,} / {args.translation_daily_token_limit:,}")
@@ -189,8 +231,9 @@ def main():
         conn.close()
         return
 
-    # Get lemmas needing translation (untranslated or stale)
-    needs_translation = fetch_lemmas_needing_translation(cur)
+    # Get lemmas needing translation (untranslated or outdated prompt version)
+    # Excludes entries with human translations
+    needs_translation = fetch_lemmas_needing_translation(cur, prompt_version)
 
     print(f"Lemmas needing translation: {len(needs_translation)}")
 
@@ -225,7 +268,7 @@ def main():
 
         if skip:
             # Record as translated without spending tokens
-            mark_translated(conn, cur, lemma_id, "", 0)
+            mark_translated(conn, cur, lemma_id, "", 0, prompt_version)
             translated_count += 1
             print(f"SKIPPED {display_name} (reason: {reason})")
             continue
@@ -248,6 +291,7 @@ def main():
                 lemma_text=lemma_text or "",
                 greek_text=source_greek,
                 entry_number=entry_number or 0,
+                system_prompt=system_prompt,
                 model=args.model
             )
 
@@ -256,7 +300,7 @@ def main():
                 continue
 
             # Save to database (both new column and legacy JSON for compatibility)
-            mark_translated(conn, cur, lemma_id, translation, tokens_used, lemma_data)
+            mark_translated(conn, cur, lemma_id, translation, tokens_used, prompt_version, lemma_data)
 
             translated_count += 1
             total_tokens_this_run += tokens_used
