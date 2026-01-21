@@ -46,12 +46,42 @@ To add dependencies: `uv add <package>`
      - `--no-headword-constraint`: Disables headword validation against the Meineke list. Useful for processing pages outside the expected headword range.
 
 4. **Translation** (`translate_lemmas.py`)
-   - Processes extracted Greek text through gpt-5.1 for translation using tool calling
-   - Stores translations in `translation` column (normalized)
-   - Also updates `translation_json` for backward compatibility during migration
+   - Processes extracted Greek text through gpt-5.2 for translation using tool calling
+   - Reads system prompt from `translation_prompts` table (versioned)
+   - Stores translations in `translation` column with `translation_prompt_version`
+   - Priority order: (1) outdated prompt versions, (2) untranslated entries
+   - Skips entries with human translations (they don't need AI retranslation)
 
 5. **Website Generation** (`generate_progress_site.py`, `generate_reference_site.py`)
    - Generates static HTML showing processing progress and translated lemmas
+
+### Translation Prompt Versioning
+
+Translation prompts are stored in the database with version numbers, allowing systematic improvement of AI translations.
+
+**Table: `translation_prompts`**
+- `version` (SERIAL PRIMARY KEY) - Auto-incrementing version number
+- `prompt_text` (TEXT) - The full system prompt
+- `notes` (TEXT) - Description of changes from previous version
+- `created_at` (TIMESTAMP)
+
+**Workflow:**
+1. Run `/translation-analysis` skill to analyze Gabriel's corrections
+2. Generate improved prompt guidance based on patterns found
+3. Insert new prompt version:
+   ```sql
+   INSERT INTO translation_prompts (prompt_text, notes)
+   VALUES ('Your improved prompt...', 'Added guidance for X, Y, Z');
+   ```
+4. Run `translate_lemmas.py` - it will automatically:
+   - Use the latest prompt version
+   - Prioritize retranslating entries with older prompt versions
+   - Skip entries that have human translations
+
+**Tracking:**
+- Each AI translation stores its `translation_prompt_version`
+- Reference site displays "AI prompt: vN" in metadata
+- Entries with human translations don't need retranslation regardless of prompt version
 
 ### Database Schema
 
@@ -66,6 +96,7 @@ Tables:
 - `lemma_images`: Junction table linking lemmas to their source images (normalized from `source_image_ids` JSON)
 - `proper_nouns`: Extracted proper nouns from lemmas
 - `etymologies`: Extracted etymologies from lemmas
+- `translation_prompts`: Versioned system prompts for AI translation
 
 Key columns in `images`:
 - `id` (primary key)
@@ -82,10 +113,12 @@ Key columns in `assembled_lemmas`:
 - `greek_text` (full Greek text from OCR)
 - `translation` (TEXT, English translation - normalized)
 - `translated` (0/1 flag), `translated_at`, `translation_tokens` (translation tracking)
+- `translation_prompt_version` (INTEGER, foreign key to translation_prompts.version)
 - `version` (TEXT, 'epitome' or 'parisinus' - distinguishes between Byzantine epitome and unabridged Parisinus text)
 - `volume_number`, `volume_label`, `letter_range` (source volume metadata)
 - `word_count` (for statistical analysis)
 - `human_greek_text`, `human_notes` (for curator corrections)
+- `corrected_english_translation`, `reviewed_english_translation` (human translations from review interface)
 - Other metadata and nodegoat integration fields
 
 **Deprecated columns** (kept for backward compatibility, will be removed):
@@ -187,7 +220,7 @@ When writing new processing code:
 - Database: PostgreSQL on localhost (see `db.py` and `config.py`)
 
 ### Model Behavior
-- Gemini 3.0 Flash is used for image processing (OCR); gpt-5.1 handles translation
+- Gemini 3.0 Flash is used for image processing (OCR); gpt-5.2 handles translation
 - Output is "best effort" - expect occasional errors or low-confidence readings
 - Polytonic Greek should be preserved exactly as rendered in images
 

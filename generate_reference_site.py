@@ -84,7 +84,9 @@ def get_all_lemmas(cur):
                ) as image_filenames,
                a.word_count, a.version,
                a.corrected_greek_scan, a.corrected_english_translation,
-               a.review_status, a.reviewed_by, a.reviewed_at
+               a.review_status, a.reviewed_by, a.reviewed_at,
+               a.wikidata_place_qid, a.wikidata_place_label, a.latitude, a.longitude, a.pleiades_id,
+               a.translation_prompt_version
         FROM assembled_lemmas a
         LEFT JOIN ocr_generations g ON a.ocr_generation_id = g.id
         ORDER BY a.id
@@ -134,7 +136,7 @@ def get_all_lemmas(cur):
     aliases_by_name = {row[0]: row[1] for row in cur.fetchall()}
 
     all_lemmas = []
-    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at in rows:
+    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at, wikidata_place_qid, wikidata_place_label, latitude, longitude, pleiades_id, translation_prompt_version in rows:
         # Prefer corrected versions, fallback to human_greek_text, then OCR
         greek = (corrected_greek_scan or human_greek_text or greek_text or "").strip()
 
@@ -191,6 +193,12 @@ def get_all_lemmas(cur):
             "reviewed_by": reviewed_by,
             "reviewed_at": reviewed_at,
             "has_corrections": bool(corrected_greek_scan or corrected_english_translation),
+            "wikidata_place_qid": wikidata_place_qid,
+            "wikidata_place_label": wikidata_place_label,
+            "latitude": latitude,
+            "longitude": longitude,
+            "pleiades_id": pleiades_id,
+            "translation_prompt_version": translation_prompt_version,
         }
         lemma_data["letter_slug"] = get_initial_slug(lemma_data["lemma"])
         all_lemmas.append(lemma_data)
@@ -254,14 +262,6 @@ def render_lemma_cards(lemmas):
         parisinus_class = "parisinus-version" if is_parisinus else ""
         version_badge = '<span class="version-badge">Parisinus</span>' if is_parisinus else ""
 
-        # Review status badges
-        review_status = lemma.get('review_status', 'not_reviewed')
-        reviewed_class = "reviewed" if review_status != 'not_reviewed' else ""
-        review_badge = ""
-        if review_status == 'reviewed_ok':
-            review_badge = '<span class="review-badge review-ok">Reviewed ✓</span>'
-        elif review_status == 'reviewed_corrections':
-            review_badge = '<span class="review-badge review-corrected">Corrected ✓</span>'
         is_translated = lemma.get("translated")
         translation = lemma.get('translation') or lemma.get('english_translation') or ""
         if not is_translated or not translation:
@@ -297,6 +297,10 @@ def render_lemma_cards(lemmas):
         # Add word count
         if lemma.get("word_count") is not None:
             meta_lines.append(f"Word count: {lemma['word_count']}")
+
+        # Add translation prompt version (only for AI translations, not human)
+        if lemma.get("translation_prompt_version") and lemma.get("translated"):
+            meta_lines.append(f"AI prompt: v{lemma['translation_prompt_version']}")
 
         # Add proper nouns (separated by role)
         if lemma.get("proper_nouns"):
@@ -341,6 +345,19 @@ def render_lemma_cards(lemmas):
             if etym_list:
                 meta_lines.append(f"Etymologies: {'; '.join(etym_list)}")
 
+        # Add Wikidata place link and coordinates
+        if lemma.get("wikidata_place_qid"):
+            place_parts = []
+            qid = lemma["wikidata_place_qid"]
+            label = lemma.get("wikidata_place_label", "")
+            place_parts.append(f'<a href="https://www.wikidata.org/wiki/{qid}" target="_blank">{label or qid}</a>')
+            if lemma.get("latitude") and lemma.get("longitude"):
+                lat, lon = lemma["latitude"], lemma["longitude"]
+                place_parts.append(f'📍 <a href="map.html" title="{lat:.4f}, {lon:.4f}">Map</a>')
+            if lemma.get("pleiades_id"):
+                place_parts.append(f'<a href="https://pleiades.stoa.org/places/{lemma["pleiades_id"]}" target="_blank">Pleiades</a>')
+            meta_lines.append(f"Place: {' | '.join(place_parts)}")
+
         # Add page image links (to HTML wrappers)
         if lemma.get("image_filenames"):
             image_links = []
@@ -352,12 +369,19 @@ def render_lemma_cards(lemmas):
         # Add edit link to review system
         meta_lines.append(f'<a href="/cgi-bin/review.cgi?id={lemma["lemma_id"]}">Edit</a>')
         meta_html = "<br>".join(meta_lines)
+        # Status badges (populated by JavaScript)
+        status_badges = f'''<span class="status-badges" data-lemma-id="{lemma['lemma_id']}">
+            <span class="status-badge status-ocr" title="OCR Checked">OCR ✓</span>
+            <span class="status-badge status-initial" title="Initial Translation">Trans ✓</span>
+            <span class="status-badge status-confirmed" title="Translation Confirmed">Confirmed ✓</span>
+        </span>'''
+
         cards_html.append(
             f"""
-            <div class="lemma-card {parisinus_class} {reviewed_class}" id="lemma-{lemma['lemma_id']}">
+            <div class="lemma-card {parisinus_class}" id="lemma-{lemma['lemma_id']}" data-lemma-id="{lemma['lemma_id']}">
                 <div class="lemma-header">
                     <div>
-                        <div class="lemma-title">{lemma['lemma']}{confidence_badge}{version_badge}{review_badge}</div>
+                        <div class="lemma-title">{lemma['lemma']}{confidence_badge}{version_badge}{status_badges}</div>
                         {f'<span class="lemma-type">{lemma["type"]}</span>' if lemma['type'] else ''}
                     </div>
                     <div class="lemma-meta">
@@ -535,22 +559,36 @@ def common_styles():
         .parisinus-version:hover {
             box-shadow: 0 4px 16px rgba(156, 39, 176, 0.2);
         }
-        .review-badge {
-            display: inline-block;
+        /* Live status badges (updated via JavaScript) */
+        .status-badges {
+            display: inline-flex;
+            gap: 6px;
+            margin-left: 10px;
+        }
+        .status-badge {
+            display: none;  /* Hidden by default, shown when status is true */
             padding: 3px 8px;
             color: white;
             border-radius: 3px;
-            font-size: 0.75em;
-            margin-left: 10px;
+            font-size: 0.7em;
+            font-weight: 600;
         }
-        .review-ok {
+        .status-badge.visible {
+            display: inline-block;
+        }
+        .status-ocr {
+            background: #8e44ad;
+        }
+        .status-initial {
+            background: #e67e22;
+        }
+        .status-confirmed {
             background: #27ae60;
         }
-        .review-corrected {
-            background: #2980b9;
-        }
-        .reviewed {
-            border: 2px solid #27ae60;
+        .status-loading {
+            color: #999;
+            font-size: 0.75em;
+            margin-left: 10px;
         }
         .translation {
             font-size: 1em;
@@ -651,11 +689,13 @@ def generate_index_html(letter_counts, stats):
             <a href="entities.html">People &amp; Deities</a>
             <a href="peoples.html">Ethnic Groups</a>
             <a href="aliases.html">Aliases</a>
+            <a href="map.html">Places Map</a>
             <a href="statistics.html">Statistics</a>
             <a href="progress.html">Processing Progress</a>
             <a href="protected/">Page Scans</a>
             <a href="cgi-bin/review.cgi">Human Review</a>
             <a href="downloads.html">Downloads</a>
+            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
         </div>
         <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
             <div class="stat-card">
@@ -689,6 +729,65 @@ def generate_index_html(letter_counts, stats):
 </html>
 """
     return html
+
+
+def generate_status_script(slug):
+    """Generate JavaScript for fetching and displaying live review status."""
+    return f"""
+<script>
+(function() {{
+    const letter = '{slug}';
+    const statusUrl = '/public-cgi/status.cgi?letter=' + letter;
+
+    // Fetch status on page load
+    fetch(statusUrl)
+        .then(response => response.json())
+        .then(data => {{
+            if (data.error) {{
+                console.warn('Status API error:', data.error);
+                return;
+            }}
+
+            // Update badges for each lemma
+            const statuses = data.statuses || {{}};
+            for (const [lemmaId, status] of Object.entries(statuses)) {{
+                const badgeContainer = document.querySelector(`.status-badges[data-lemma-id="${{lemmaId}}"]`);
+                if (!badgeContainer) continue;
+
+                // Show/hide badges based on status
+                const ocrBadge = badgeContainer.querySelector('.status-ocr');
+                const initialBadge = badgeContainer.querySelector('.status-initial');
+                const confirmedBadge = badgeContainer.querySelector('.status-confirmed');
+
+                if (status.ocr_checked && ocrBadge) {{
+                    ocrBadge.classList.add('visible');
+                    if (status.ocr_checked_by) {{
+                        ocrBadge.title = 'OCR Checked by ' + status.ocr_checked_by;
+                    }}
+                }}
+                if (status.initial_translation && initialBadge) {{
+                    initialBadge.classList.add('visible');
+                    if (status.initial_translation_by) {{
+                        initialBadge.title = 'Initial translation by ' + status.initial_translation_by;
+                    }}
+                }}
+                if (status.translation_confirmed && confirmedBadge) {{
+                    confirmedBadge.classList.add('visible');
+                    if (status.translation_confirmed_by) {{
+                        confirmedBadge.title = 'Translation confirmed by ' + status.translation_confirmed_by;
+                    }}
+                }}
+            }}
+
+            // Log timing for debugging
+            console.log(`Status loaded for ${{letter}}: ${{data.review_count}}/${{data.lemma_count}} reviewed in ${{data.timing_ms.toFixed(1)}}ms`);
+        }})
+        .catch(err => {{
+            console.warn('Failed to fetch status:', err);
+        }});
+}})();
+</script>
+"""
 
 
 def generate_letter_page(letter_char, letter_name, slug, lemmas):
@@ -727,15 +826,18 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
             <a href="entities.html">People &amp; Deities</a>
             <a href="peoples.html">Ethnic Groups</a>
             <a href="aliases.html">Aliases</a>
+            <a href="map.html">Places Map</a>
             <a href="statistics.html">Statistics</a>
             <a href="cgi-bin/review.cgi">Human Review</a>
             <a href="downloads.html">Downloads</a>
+            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
         </div>
         {body}
         <div class="footer">
             <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
         </div>
     </div>
+    {generate_status_script(slug)}
 </body>
 </html>
 """

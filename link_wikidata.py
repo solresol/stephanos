@@ -53,60 +53,112 @@ def load_api_key():
     return key_path.read_text().strip()
 
 
+def normalize_name(name: str) -> list:
+    """
+    Generate search variants for a name.
+    Handles Greek/Latin ending variations (-os/-us, -on/-um, etc.)
+    """
+    variants = [name]
+
+    # Greek to Latin ending conversions
+    if name.endswith('os'):
+        variants.append(name[:-2] + 'us')  # Iolaos -> Iolaus
+    elif name.endswith('us'):
+        variants.append(name[:-2] + 'os')  # Iolaus -> Iolaos
+
+    if name.endswith('on'):
+        variants.append(name[:-2] + 'um')  # Strabon -> Strabum
+    elif name.endswith('um'):
+        variants.append(name[:-2] + 'on')
+
+    # Also try without diacritics for Greek names
+    # (handled by Wikidata search)
+
+    return variants
+
+
 def query_wikidata(name_english: str, name_greek: str = None) -> list:
     """
     Query Wikidata for entities matching the name.
 
     Returns list of candidates with their QID, labels, descriptions, and occupations.
+    Uses Wikidata search API for fuzzy matching, then SPARQL for details.
     """
-    # Build search terms
-    search_terms = [name_english]
+    # Build search terms with variants
+    search_terms = []
+    if name_english:
+        search_terms.extend(normalize_name(name_english))
     if name_greek:
         search_terms.append(name_greek)
+
+    # Remove duplicates while preserving order
+    search_terms = list(dict.fromkeys(search_terms))
 
     candidates = []
 
     for term in search_terms:
-        # SPARQL query to find ancient writers/historians with matching name
-        query = f"""
-        SELECT DISTINCT ?item ?itemLabel ?itemDescription ?birthYear ?deathYear
-               (GROUP_CONCAT(DISTINCT ?occupationLabel; separator=", ") AS ?occupations)
-        WHERE {{
-            # Search by label
-            ?item rdfs:label "{term}"@en .
-
-            # Must be a human
-            ?item wdt:P31 wd:Q5 .
-
-            # Get birth year (approximate)
-            OPTIONAL {{
-                ?item wdt:P569 ?birth .
-                BIND(YEAR(?birth) AS ?birthYear)
-            }}
-
-            # Get death year (approximate)
-            OPTIONAL {{
-                ?item wdt:P570 ?death .
-                BIND(YEAR(?death) AS ?deathYear)
-            }}
-
-            # Get occupations
-            OPTIONAL {{
-                ?item wdt:P106 ?occupation .
-                ?occupation rdfs:label ?occupationLabel .
-                FILTER(LANG(?occupationLabel) = "en")
-            }}
-
-            # Filter for ancient period (before 600 CE)
-            FILTER(!BOUND(?deathYear) || ?deathYear < 600)
-
-            SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en,grc,la". }}
-        }}
-        GROUP BY ?item ?itemLabel ?itemDescription ?birthYear ?deathYear
-        LIMIT 20
-        """
-
+        # First, use Wikidata search API for fuzzy matching
         try:
+            search_response = requests.get(
+                "https://www.wikidata.org/w/api.php",
+                params={
+                    "action": "wbsearchentities",
+                    "search": term,
+                    "language": "en",
+                    "limit": 10,
+                    "format": "json"
+                },
+                headers={"User-Agent": "StephanosProject/1.0 (ancient geography research)"},
+                timeout=30
+            )
+            search_response.raise_for_status()
+            search_data = search_response.json()
+
+            # Get QIDs from search results
+            qids = [r["id"] for r in search_data.get("search", [])]
+
+            if not qids:
+                continue
+
+            # Now query SPARQL for details on these specific entities
+            qid_values = " ".join(f"wd:{qid}" for qid in qids)
+            query = f"""
+            SELECT DISTINCT ?item ?itemLabel ?itemDescription ?birthYear ?deathYear
+                   (GROUP_CONCAT(DISTINCT ?occupationLabel; separator=", ") AS ?occupations)
+            WHERE {{
+                VALUES ?item {{ {qid_values} }}
+
+                # Must be a human
+                ?item wdt:P31 wd:Q5 .
+
+                # Get birth year (approximate)
+                OPTIONAL {{
+                    ?item wdt:P569 ?birth .
+                    BIND(YEAR(?birth) AS ?birthYear)
+                }}
+
+                # Get death year (approximate)
+                OPTIONAL {{
+                    ?item wdt:P570 ?death .
+                    BIND(YEAR(?death) AS ?deathYear)
+                }}
+
+                # Get occupations
+                OPTIONAL {{
+                    ?item wdt:P106 ?occupation .
+                    ?occupation rdfs:label ?occupationLabel .
+                    FILTER(LANG(?occupationLabel) = "en")
+                }}
+
+                # Filter for ancient period (before 600 CE)
+                FILTER(!BOUND(?deathYear) || ?deathYear < 600)
+
+                SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en,grc,la". }}
+            }}
+            GROUP BY ?item ?itemLabel ?itemDescription ?birthYear ?deathYear
+            LIMIT 20
+            """
+
             response = requests.get(
                 WIKIDATA_ENDPOINT,
                 params={"query": query, "format": "json"},

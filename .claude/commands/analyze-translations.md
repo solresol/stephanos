@@ -33,7 +33,13 @@ Analyze the differences between Gabriel's human-corrected translations and the A
    - Stylistic preferences (telegraphic formulas)
    - Modern vs ancient names
 
-5. **Generate a translation style guide** that could be added to the system prompt in `translate_lemmas.py`
+5. **Generate a translation style guide** that could be added to the system prompt
+
+6. **Ask about inserting a new prompt version**:
+   - Show the current prompt version from `translation_prompts` table
+   - Ask: "Would you like to create a new translation prompt version with this guidance?"
+   - If yes, insert the new prompt combining existing text with new guidance
+   - Report how many entries will be retranslated
 
 ## Output Format
 
@@ -43,5 +49,11 @@ Produce a comprehensive report with:
 - Detailed side-by-side comparisons for each correction
 - Gabriel's notes verbatim
 - Ready-to-use prompt guidance
+
+## Prompt Versioning
+
+Translation prompts are stored in the `translation_prompts` table with version numbers.
+When a new version is inserted, `translate_lemmas.py` will automatically prioritize
+retranslating entries that used older prompt versions (skipping those with human translations).
 
 $ARGUMENTS
