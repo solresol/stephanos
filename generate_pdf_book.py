@@ -270,9 +270,13 @@ def escape_index_term(text):
 def generate_overview_map(lemmas, output_path):
     """Generate a static overview map of geocoded places.
 
-    Creates a simple map focused on the Mediterranean region showing
-    all geocoded places from the Ethnika.
+    Creates a map focused on the Mediterranean region showing
+    all geocoded places from the Ethnika, using cartopy for
+    proper coastlines and geographic features.
     """
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+
     # Filter to only geocoded lemmas
     geocoded = [(l['lemma'], l['latitude'], l['longitude'])
                 for l in lemmas
@@ -288,36 +292,31 @@ def generate_overview_map(lemmas, output_path):
     lats = [g[1] for g in geocoded]
     lons = [g[2] for g in geocoded]
 
-    # Create figure with Mediterranean-focused extent
-    fig, ax = plt.subplots(figsize=(10, 7), dpi=150)
+    # Create figure with cartopy projection
+    fig = plt.figure(figsize=(10, 7), dpi=150)
+    ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
 
     # Set extent to cover ancient Mediterranean world
     # (Western Mediterranean to Persia, North Africa to Black Sea)
-    ax.set_xlim(-10, 60)
-    ax.set_ylim(20, 50)
+    ax.set_extent([-10, 60, 20, 50], crs=ccrs.PlateCarree())
 
-    # Add a simple land/sea background
-    # Light blue for sea
-    ax.set_facecolor('#e6f3ff')
-
-    # Draw simplified coastlines as background reference
-    # Mediterranean basin approximation
-    coast_x = [-5, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
-    coast_y_south = [35, 33, 32, 31, 32, 31, 32, 31, 32, 34, 36, 38, 40]
-    coast_y_north = [43, 44, 44, 45, 45, 42, 41, 42, 41, 42, 43, 44, 45]
-
-    # Fill land areas (simplified)
-    ax.fill_between(coast_x, 20, coast_y_south, color='#f5f5dc', alpha=0.7)  # Africa
-    ax.fill_between(coast_x, coast_y_north, 50, color='#f5f5dc', alpha=0.7)  # Europe
+    # Add geographic features
+    ax.add_feature(cfeature.OCEAN, facecolor='#e6f3ff')
+    ax.add_feature(cfeature.LAND, facecolor='#f5f5dc')
+    ax.add_feature(cfeature.COASTLINE, linewidth=0.5, edgecolor='#666666')
+    ax.add_feature(cfeature.BORDERS, linewidth=0.3, linestyle=':', edgecolor='#999999')
+    ax.add_feature(cfeature.LAKES, facecolor='#e6f3ff', alpha=0.5)
+    ax.add_feature(cfeature.RIVERS, linewidth=0.3, edgecolor='#99ccff')
 
     # Plot places
     ax.scatter(lons, lats, c='#8b0000', s=30, alpha=0.7, edgecolors='white',
-               linewidths=0.5, zorder=5)
+               linewidths=0.5, zorder=5, transform=ccrs.PlateCarree())
 
-    # Add grid
-    ax.grid(True, linestyle='--', alpha=0.3, color='gray')
-    ax.set_xlabel('Longitude', fontsize=10)
-    ax.set_ylabel('Latitude', fontsize=10)
+    # Add gridlines
+    gl = ax.gridlines(draw_labels=True, linewidth=0.5, color='gray',
+                      alpha=0.3, linestyle='--')
+    gl.top_labels = False
+    gl.right_labels = False
 
     # Title
     ax.set_title(f'Geocoded Places in the Ethnika ({len(geocoded)} locations)',
@@ -468,11 +467,12 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
 \makeindex[name=deities,title=Index of Deities,intoc]
 \makeindex[name=sources,title=Index of Ancient Sources,intoc]
 
-% Dictionary-style headers using memoir's marks
-% \memmark sets both first and last marks correctly
+% Dictionary-style headers showing first-last range
+% Uses extramarks for proper first/last entry tracking
+\usepackage{extramarks}
 \makepagestyle{dictionary}
-\makeevenhead{dictionary}{\thepage}{}{\itshape\leftmark}
-\makeoddhead{dictionary}{\itshape\rightmark}{}{\thepage}
+\makeevenhead{dictionary}{\thepage}{}{\itshape\firstxmark}
+\makeoddhead{dictionary}{\itshape\lastxmark}{}{\thepage}
 \makeheadrule{dictionary}{\textwidth}{\normalrulethickness}
 
 % Colors
@@ -490,13 +490,12 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
 % Graphics for maps
 \usepackage{graphicx}
 
-% Entry formatting with dictionary marks using memoir's \memmark
+% Entry formatting with dictionary marks
 % Args: headword, annotations, translation
 \newcommand{\entry}[3]{%
-    \memmark{#1}%
-    \paragraph{\textcolor{headwordcolor}{\textbf{#1}}#2}%
-    #3%
-    \bigskip
+    \extramarks{#1}{#1}%
+    \noindent\textcolor{headwordcolor}{\textbf{#1}}#2\enspace #3%
+    \par\bigskip
 }
 
 % Chapter formatting for memoir
