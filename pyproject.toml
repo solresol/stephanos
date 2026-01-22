@@ -19,4 +19,5 @@ dependencies = [
     "plotly>=6.5.0",
     "kaleido>=1.2.0",
     "weasyprint>=68.0",
+    "cartopy>=0.25.0",
 ]
