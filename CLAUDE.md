@@ -17,6 +17,9 @@ All Python programs should be run with `uv run`:
 - `uv run generate_progress_site.py` - Generate progress tracking website
 - `uv run generate_reference_site.py` - Generate reference website with lemmas
 - `uv run generate_csv_export.py --output exports/lemmas.csv` - Export lemmas to CSV
+- `uv run generate_pdf_book.py` - Generate PDF book with translations and indices
+- `uv run generate_places_map.py` - Generate interactive map of geocoded places
+- `uv run link_wikidata_places.py` - Link place lemmas to Wikidata entities
 
 To add dependencies: `uv add <package>`
 
@@ -54,6 +57,17 @@ To add dependencies: `uv add <package>`
 
 5. **Website Generation** (`generate_progress_site.py`, `generate_reference_site.py`)
    - Generates static HTML showing processing progress and translated lemmas
+
+6. **PDF Book Generation** (`generate_pdf_book.py`)
+   - Generates a LaTeX/XeLaTeX PDF with all translations
+   - Includes overview map using cartopy for proper coastlines
+   - Dictionary-style page headers showing first-last entry range
+   - Multiple indices: persons, places, peoples, deities, ancient sources
+
+7. **Wikidata/Pleiades Linking** (`link_wikidata_places.py`)
+   - Links place lemmas to Wikidata entities using SPARQL queries
+   - Fetches coordinates, Pleiades IDs, and labels
+   - Includes ancient world bounding box validation (-15° to 80° lon, 10° to 55° lat)
 
 ### Translation Prompt Versioning
 
@@ -119,6 +133,7 @@ Key columns in `assembled_lemmas`:
 - `word_count` (for statistical analysis)
 - `human_greek_text`, `human_notes` (for curator corrections)
 - `corrected_english_translation`, `reviewed_english_translation` (human translations from review interface)
+- `latitude`, `longitude`, `pleiades_id`, `wikidata_place_qid`, `wikidata_place_label` (geocoding)
 - Other metadata and nodegoat integration fields
 
 **Deprecated columns** (kept for backward compatibility, will be removed):
@@ -232,6 +247,12 @@ When writing new processing code:
 ### Deployment
 - Deploy by running rsync to stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
 - Database backups go to stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/datadumps.ifost.org.au/htdocs/stephanos/
+
+### Review Interface
+- SQLite review database on merah: `/var/www/vhosts/stephanos.symmachus.org/db/reviews.db`
+- Sync locally with: `scp stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/reviews.db /tmp/reviews.db`
+- Contains human corrections: `corrected_english_translation`, `corrected_greek_text`, `notes`, `review_status`
+- Use `/analyze-translations` or `/translation-analysis` skill to analyze corrections and improve prompts
 
 ## nodegoat Integration (In Progress)
 
