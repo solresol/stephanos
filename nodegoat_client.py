@@ -7,7 +7,7 @@ Based on nodegoat REST API documentation.
 import json
 import requests
 from typing import Optional, Dict, List, Any
-from config import NODEGOAT_URL, NODEGOAT_TOKEN, NODEGOAT_PROJECT_ID
+from config import NODEGOAT_API_URL, NODEGOAT_TOKEN, NODEGOAT_PROJECT_ID
 
 
 class NodegoatClient:
@@ -27,7 +27,7 @@ class NodegoatClient:
             token: Bearer token for authentication (default: from config)
             project_id: Default project ID (default: from config)
         """
-        self.base_url = (base_url or NODEGOAT_URL).rstrip("/")
+        self.base_url = (base_url or NODEGOAT_API_URL).rstrip("/")
         self.token = token or NODEGOAT_TOKEN
         self.project_id = project_id or NODEGOAT_PROJECT_ID
 
