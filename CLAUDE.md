@@ -146,17 +146,26 @@ Key columns in `lemma_images` (junction table):
 - `image_id` (foreign key to images)
 - `position` (order of images within a multi-page lemma)
 
-### Parisinus Coislinianus 228 vs Epitomised Version
+### Text Versions
 
-The Stephanos text exists in two forms:
-- **Parisinus Coislinianus 228**: The unabridged, original text found in Billerbeck volume 2 for delta and epsilon entries
-- **Epitomised version**: The Byzantine epitome - shortened/summarized version that covers most entries
+The Stephanos text exists in three forms:
+- **Epitome** (`version='epitome'`): The Byzantine epitome - shortened/summarized version that covers most entries
+- **Parisinus Coislinianus 228** (`version='parisinus'`): The unabridged, original text found in Billerbeck volume 2 for delta and epsilon entries
+- **Synthetic** (`version='synthetic'`): Reconstructed entries based on quotes from other ancient authors (e.g., fragments preserved in later sources)
 
 **Database representation:**
-- The `version` column distinguishes entries: 'parisinus' for unabridged text, 'epitome' for Byzantine summary
-- Some lemmas exist in both versions (stored as separate rows with same entry_number but different version values)
+- The `version` column (TEXT) distinguishes entries: 'epitome', 'parisinus', or 'synthetic'
+- Some lemmas exist in multiple versions (stored as separate rows with same entry_number but different version values)
 - The `is_parisinus_228` column provides backward compatibility for statistical analysis
 - Currently 13 Parisinus entries have been imported from Billerbeck volume 2, with the longest (Δωδώνη) spanning 6 pages
+
+**Display:**
+- Epitome entries: default styling (no badge)
+- Parisinus entries: purple border with "Parisinus" badge
+- Synthetic entries: amber/orange border with "Synthetic" badge
+
+**Statistical analysis:**
+- The logistic regression (epitome vs parisinus) excludes synthetic entries since they are reconstructions, not original data points
 
 **Dual-column pages:**
 Billerbeck volume 2 presented Parisinus and epitome text side-by-side on many pages. These have all been processed using `process_image.py --dual-column` and are now in the database. Examples include entries 140-151 (Δύμη through Δώτιον).
@@ -254,45 +263,105 @@ When writing new processing code:
 - Contains human corrections: `corrected_english_translation`, `corrected_greek_text`, `notes`, `review_status`
 - Use `/analyze-translations` or `/translation-analysis` skill to analyze corrections and improve prompts
 
-## nodegoat Integration (In Progress)
+## nodegoat Integration
 
-**Status:** Phase 1 complete, awaiting API credentials for Phase 2
-**Documentation:** See `NODEGOAT_STATUS.md` for detailed status and `NODEGOAT_SETUP.md` for setup instructions
+**Status:** Active - bidirectional sync operational
+**Instance:** Uppsala University (nodegoat.abm.uu.se), API at api.nodegoat.abm.uu.se
+**Project ID:** 4309 | **Type ID:** 15752 (Steph Paragraph)
 
 ### Overview
 
-The project uses nodegoat (Uppsala University instance at nodegoat.abm.uu.se) for collaborative curation. Data flows bidirectionally:
-- **Export:** Push new lemmas from database to nodegoat (replaces manual CSV import)
-- **Import:** Pull human corrections from nodegoat back to database
+The project uses nodegoat for collaborative curation. Data flows bidirectionally:
+- **Push (Local → nodegoat):** Our OCR text, AI translations, human corrections
+- **Pull (nodegoat → Local):** Human corrections made in nodegoat
+
+### Field Mappings
+
+**nodegoat "Steph Paragraph" Field IDs:**
+| Field ID | Field Name | Description |
+|----------|------------|-------------|
+| 48236 | Greek Headword | The lemma headword |
+| 48240 | Billerbeck ID | Primary key for matching (e.g., "Α1", "Δ10") |
+| 48241 | Meineke ID | Secondary reference |
+| 48237 | **Meineke Greek** | *DO NOT WRITE - not our data* |
+| 48310 | Billerbeck Greek | Our OCR `greek_text` |
+| 48238 | English AI | AI translation (`translation` column) |
+| 48239 | English edited | Initial human translation (`corrected_english_translation`) |
+| 48354 | Approved EN | Reviewed translation (`reviewed_english_translation`) |
+| 48353 | Epitome/Parisinus/Other | Version field (`version` column) |
+| 48242 | Comments | Human notes |
+| 48325 | OCR Process | Model used (e.g., "gemini-2.0-flash") |
+| 48328 | Confidence | OCR confidence level |
+| 48329 | DTG | Date/time of processing |
+
+**Push Mapping (Local → nodegoat):**
+| Local Column | → | nodegoat Field | Notes |
+|--------------|---|----------------|-------|
+| `greek_text` | → | Billerbeck Greek (48310) | Only if nodegoat is empty |
+| `translation` | → | English AI (48238) | AI translation |
+| `corrected_english_translation` | → | English edited (48239) | Initial human translation |
+| `reviewed_english_translation` | → | Approved EN (48354) | Reviewed/final translation |
+| `version` | → | Epitome/Parisinus (48353) | epitome/parisinus/synthetic |
+| `confidence` | → | Confidence (48328) | OCR confidence |
+
+**Pull Mapping (nodegoat → Local):**
+| nodegoat Field | → | Local Column | Notes |
+|----------------|---|--------------|-------|
+| English edited (48239) | → | `reviewed_english_translation` | Human corrections |
+| Comments (48242) | → | `human_notes` | Curator annotations |
 
 ### Files
 
-- `stephanos.ini` - Configuration with API token (gitignored, see `stephanos.ini.example`)
-- `nodegoat_client.py` - REST API client library (OAuth 2.0)
-- `nodegoat_cli.py` - CLI tool for exploring nodegoat structure
-- `sync_to_nodegoat.py` - Export script (not yet built, awaiting field mappings)
-- `sync_from_nodegoat.py` - Import script (not yet built, awaiting field mappings)
+- `stephanos.ini` - Configuration with API token (gitignored)
+- `nodegoat_client.py` - REST API client library (Bearer token auth)
+- `nodegoat_cli.py` - CLI for exploring nodegoat structure
+- `sync_nodegoat.py` - **Primary sync script** (bidirectional, uses PATCH)
+- `sync_from_nodegoat.py` - Import-only script (legacy)
+- `sync_to_nodegoat.py` - Export-only script (legacy, has warnings)
+- `preview_nodegoat_sync.py` - Preview differences without making changes
 
-### Database Schema
+### API Notes
 
-The `assembled_lemmas` table has columns for nodegoat integration:
-- `nodegoat_id` - Links to nodegoat Object ID (NULL until synced)
-- `human_greek_text` - Corrected Greek from curators (overrides OCR `greek_text`)
-- `human_notes` - Curator annotations
-- `last_synced_to_nodegoat_at` - Export timestamp (to be added)
-- `last_synced_from_nodegoat_at` - Import timestamp (to be added)
+The nodegoat API uses **PATCH for partial updates**:
+- PATCH only affects fields included in the request
+- Fields not specified in the request remain unchanged
+- Always include `object.object_id` to target specific object
+- API documentation: https://nodegoat.net/documentation.p/450.m/103/store
+
+### Database Columns for Sync
+
+```sql
+-- Sync tracking columns in assembled_lemmas:
+nodegoat_id                      -- Links to nodegoat Object ID
+last_synced_to_nodegoat_at       -- Last successful push timestamp
+last_synced_from_nodegoat_at     -- Last successful pull timestamp
+translation_modified_at          -- When AI translation changed
+reviewed_translation_modified_at -- When human translation changed
+```
+
+### Usage
+
+```bash
+# Preview what would sync (no changes)
+uv run sync_nodegoat.py --push --dry-run
+
+# Push changed entries to nodegoat (safe, incremental)
+uv run sync_nodegoat.py --push --limit 20
+
+# Catch up entries never synced before
+uv run sync_nodegoat.py --push --catch-up --limit 50
+
+# Pull human corrections from nodegoat
+uv run sync_nodegoat.py --pull --limit 50
+
+# Preview differences
+uv run preview_nodegoat_sync.py --limit 100
+```
 
 ### Design Principles
 
-1. **OCR Never Overwritten:** `greek_text` column preserves original OCR output, corrections go to `human_greek_text`
+1. **OCR Never Overwritten:** `greek_text` preserves original OCR; corrections go to `human_greek_text`
 2. **Curator Authority:** When conflicts occur, nodegoat version wins (human corrections are authoritative)
-3. **Graceful Degradation:** Website uses `COALESCE(human_greek_text, greek_text)` - shows best available version
-4. **Idempotent Sync:** Export only sends records where `nodegoat_id IS NULL`, import uses timestamps to avoid re-processing
-
-### Next Steps (Blocked on API Token)
-
-1. Get API token from Uppsala nodegoat administrator
-2. Run `uv run nodegoat_cli.py list-types` to discover Type IDs
-3. Document field mappings between database and nodegoat
-4. Build `sync_to_nodegoat.py` and `sync_from_nodegoat.py`
-5. Integrate into `run_daily_pipeline.sh`
+3. **Safe by Default:** Use `--limit` and `--dry-run` to control sync scope
+4. **Idempotent Sync:** Timestamps track what's been synced to avoid re-processing
+5. **Billerbeck Greek Protection:** We only write to this field if nodegoat's value is empty
