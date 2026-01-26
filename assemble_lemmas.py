@@ -74,6 +74,14 @@ def ensure_table(cur):
         ON assembled_lemmas (source_image_ids, entry_number, version)
         """
     )
+    # Create unique index on (billerbeck_id, version) to prevent duplicate Billerbeck IDs
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS assembled_lemmas_billerbeck_version_idx
+        ON assembled_lemmas (billerbeck_id, version)
+        WHERE billerbeck_id IS NOT NULL
+        """
+    )
 
 
 def load_headword_lookup(cur):
