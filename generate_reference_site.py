@@ -258,9 +258,16 @@ def render_lemma_cards(lemmas):
     for lemma in lemmas:
         confidence_class = "low-confidence" if lemma.get('confidence') == 'low' else ""
         confidence_badge = '<span class="confidence-badge">Low Confidence</span>' if lemma.get('confidence') == 'low' else ""
-        is_parisinus = lemma.get('version') == 'parisinus'
-        parisinus_class = "parisinus-version" if is_parisinus else ""
-        version_badge = '<span class="version-badge">Parisinus</span>' if is_parisinus else ""
+        version = lemma.get('version', 'epitome')
+        if version == 'parisinus':
+            version_class = "parisinus-version"
+            version_badge = '<span class="version-badge">Parisinus</span>'
+        elif version == 'synthetic':
+            version_class = "synthetic-version"
+            version_badge = '<span class="version-badge synthetic-badge">Synthetic</span>'
+        else:
+            version_class = ""
+            version_badge = ""
 
         is_translated = lemma.get("translated")
         translation = lemma.get('translation') or lemma.get('english_translation') or ""
@@ -378,7 +385,7 @@ def render_lemma_cards(lemmas):
 
         cards_html.append(
             f"""
-            <div class="lemma-card {parisinus_class}" id="lemma-{lemma['lemma_id']}" data-lemma-id="{lemma['lemma_id']}">
+            <div class="lemma-card {version_class}" id="lemma-{lemma['lemma_id']}" data-lemma-id="{lemma['lemma_id']}">
                 <div class="lemma-header">
                     <div>
                         <div class="lemma-title">{lemma['lemma']}{confidence_badge}{version_badge}{status_badges}</div>
@@ -559,6 +566,16 @@ def common_styles():
         .parisinus-version:hover {
             box-shadow: 0 4px 16px rgba(156, 39, 176, 0.2);
         }
+        .synthetic-version {
+            background: #fff8e1;
+            border: 2px solid #ff8f00;
+        }
+        .synthetic-version:hover {
+            box-shadow: 0 4px 16px rgba(255, 143, 0, 0.2);
+        }
+        .synthetic-badge {
+            background: #ff8f00 !important;
+        }
         /* Live status badges (updated via JavaScript) */
         .status-badges {
             display: inline-flex;
@@ -692,6 +709,7 @@ def generate_index_html(letter_counts, stats):
             <a href="map.html">Places Map</a>
             <a href="statistics.html">Statistics</a>
             <a href="progress.html">Processing Progress</a>
+            <a href="pipeline.html">Pipeline Status</a>
             <a href="protected/">Page Scans</a>
             <a href="cgi-bin/review.cgi">Human Review</a>
             <a href="downloads.html">Downloads</a>

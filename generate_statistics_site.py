@@ -48,7 +48,7 @@ def get_word_count_data(cur):
             CASE WHEN a.version = 'parisinus' THEN TRUE ELSE FALSE END as is_parisinus
         FROM assembled_lemmas a
         LEFT JOIN proper_nouns p ON p.lemma_id = a.id
-        WHERE a.word_count IS NOT NULL
+        WHERE a.word_count IS NOT NULL AND a.version IN ('epitome', 'parisinus')
         GROUP BY a.id, a.lemma, a.word_count, a.type, a.version
     """)
 
@@ -84,7 +84,7 @@ def get_proper_noun_features(cur):
             COALESCE(json_agg(p.lemma_form) FILTER (WHERE p.lemma_form IS NOT NULL), '[]') as nouns
         FROM assembled_lemmas a
         LEFT JOIN proper_nouns p ON p.lemma_id = a.id
-        WHERE a.word_count IS NOT NULL
+        WHERE a.word_count IS NOT NULL AND a.version IN ('epitome', 'parisinus')
         GROUP BY a.id, a.lemma, a.word_count, a.version
     """)
 
@@ -135,7 +135,7 @@ def get_proper_noun_type_features(cur):
             COALESCE(SUM(CASE WHEN p.noun_type = 'other' THEN 1 ELSE 0 END), 0) as other_count
         FROM assembled_lemmas a
         LEFT JOIN proper_nouns p ON p.lemma_id = a.id
-        WHERE a.word_count IS NOT NULL
+        WHERE a.word_count IS NOT NULL AND a.version IN ('epitome', 'parisinus')
         GROUP BY a.id, a.lemma, a.word_count, a.version
     """)
 
@@ -214,7 +214,7 @@ def get_category_specific_features(cur, role=None, noun_type=None, min_occurrenc
             COALESCE(json_agg(p.lemma_form) FILTER (WHERE p.lemma_form IS NOT NULL AND {where_clause}), '[]') as nouns
         FROM assembled_lemmas a
         LEFT JOIN proper_nouns p ON p.lemma_id = a.id
-        WHERE a.word_count IS NOT NULL
+        WHERE a.word_count IS NOT NULL AND a.version IN ('epitome', 'parisinus')
         GROUP BY a.id, a.lemma, a.word_count, a.version
     """)
 
