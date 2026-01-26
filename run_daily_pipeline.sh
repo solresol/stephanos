@@ -90,6 +90,10 @@ uv run generate_reference_site.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 7a: Generating statistics website..." | tee -a "$LOGFILE"
 uv run generate_statistics_site.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 7a1: Generate pipeline progress page
+echo "Step 7a1: Generating pipeline progress page..." | tee -a "$LOGFILE"
+uv run generate_pipeline_progress.py 2>&1 | tee -a "$LOGFILE"
+
 # Step 7a2: Analyze Pausanias citations
 echo "Step 7a2: Analyzing Pausanias citations..." | tee -a "$LOGFILE"
 uv run analyze_pausanias_citations.py 2>&1 | tee -a "$LOGFILE"
@@ -146,6 +150,10 @@ echo "Step 8c: Syncing review database from merah..." | tee -a "$LOGFILE"
 # Step 8d: Import reviews into PostgreSQL
 echo "Step 8d: Importing reviews into PostgreSQL..." | tee -a "$LOGFILE"
 uv run import_reviews.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 8e: Sync with nodegoat (push changes, limit to 20 per day for safety)
+echo "Step 8e: Syncing with nodegoat..." | tee -a "$LOGFILE"
+uv run sync_nodegoat.py --push --catch-up --limit 20 2>&1 | tee -a "$LOGFILE" || echo "  Warning: nodegoat sync failed" | tee -a "$LOGFILE"
 
 # Step 9: Deploy to merah
 echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
