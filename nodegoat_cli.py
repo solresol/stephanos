@@ -38,14 +38,13 @@ def cmd_list_types(client, args):
     print("Fetching Object Types...")
     result = client.query_model(project_id=args.project)
 
-    if "data" in result:
-        types = result["data"]
+    if "data" in result and "types" in result["data"]:
+        types = result["data"]["types"]
         print(f"\nFound {len(types)} Object Type(s):\n")
         for type_id, type_data in types.items():
-            name = type_data.get("name", "Unknown")
+            type_info = type_data.get("type", {})
+            name = type_info.get("name", "Unknown")
             print(f"  ID {type_id}: {name}")
-            if "object_name_options" in type_data:
-                print(f"    Object name: {type_data['object_name_options']}")
     else:
         print("\nRaw response:")
         print_json(result)
@@ -56,31 +55,38 @@ def cmd_show_type(client, args):
     print(f"Fetching Type {args.type_id} structure...")
     result = client.query_model(type_id=args.type_id, project_id=args.project)
 
-    if "data" in result:
-        type_data = result["data"]
-        print(f"\nType: {type_data.get('name', 'Unknown')}\n")
+    if "data" in result and "types" in result["data"]:
+        types = result["data"]["types"]
+        type_id_str = str(args.type_id)
+        if type_id_str not in types:
+            print(f"Type {args.type_id} not found")
+            return
 
-        # Show object name configuration
-        if "object_name_options" in type_data:
-            print("Object Name Configuration:")
-            print_json(type_data["object_name_options"])
-            print()
+        type_data = types[type_id_str]
+        type_info = type_data.get("type", {})
+        print(f"\nType: {type_info.get('name', 'Unknown')}\n")
 
         # Show object descriptions (fields)
         if "object_descriptions" in type_data:
             print("Object Descriptions (Fields):")
             for desc_id, desc_data in type_data["object_descriptions"].items():
-                print(f"  ID {desc_id}: {desc_data.get('name', 'Unknown')}")
-                print(f"    Type: {desc_data.get('value_type_base', 'unknown')}")
-                if desc_data.get("is_required"):
+                name = desc_data.get("object_description_name", "Unknown")
+                value_type = desc_data.get("object_description_value_type_base", "text")
+                ref_type = desc_data.get("object_description_ref_type_id")
+                print(f"  ID {desc_id}: {name}")
+                print(f"    Type: {value_type or 'text'}")
+                if ref_type:
+                    print(f"    References Type: {ref_type}")
+                if desc_data.get("object_description_is_required"):
                     print("    Required: Yes")
             print()
 
         # Show sub-objects
-        if "object_sub_details" in type_data:
+        if "object_sub_details" in type_data and type_data["object_sub_details"]:
             print("Sub-Objects:")
             for sub_id, sub_data in type_data["object_sub_details"].items():
-                print(f"  ID {sub_id}: {sub_data.get('name', 'Unknown')}")
+                sub_details = sub_data.get("object_sub_details", {})
+                print(f"  ID {sub_id}: {sub_details.get('object_sub_details_name', 'Unknown')}")
             print()
     else:
         print("\nRaw response:")
@@ -102,23 +108,23 @@ def cmd_query_objects(client, args):
         limit=args.limit,
     )
 
-    if "data" in result:
-        objects = result["data"]
+    if "data" in result and "objects" in result["data"]:
+        objects = result["data"]["objects"]
         print(f"\nFound {len(objects)} object(s):\n")
 
         for obj_id, obj_data in list(objects.items())[:args.limit or 999]:
             # Show object name
             if "object" in obj_data:
-                name = obj_data["object"].get("object_name_plain", "Unnamed")
+                name = obj_data["object"].get("object_name", obj_data["object"].get("object_name_plain", "Unnamed"))
                 print(f"ID {obj_id}: {name}")
 
             # Show first few fields
             if "object_definitions" in obj_data:
                 for desc_id, desc_value in list(obj_data["object_definitions"].items())[:3]:
                     if desc_value:
-                        # Handle both simple values and complex objects
+                        # Handle the nodegoat field structure
                         if isinstance(desc_value, dict):
-                            val = desc_value.get("value", str(desc_value))
+                            val = desc_value.get("object_definition_value", str(desc_value))
                         else:
                             val = desc_value
                         # Truncate long values
