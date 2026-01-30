@@ -7,6 +7,7 @@ and records per-lemma rows in assembled_lemmas. Can optionally rebuild the table
 """
 import argparse
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -94,12 +95,30 @@ def load_headword_lookup(cur):
     )
     lookup = {}
     for greek_headword, nodegoat_id, meineke_id, billerbeck_id in cur.fetchall():
-        lookup[greek_headword.strip()] = {
-            "nodegoat_id": nodegoat_id,
-            "meineke_id": meineke_id,
-            "billerbeck_id": billerbeck_id,
-        }
+        key = greek_headword.strip()
+        lookup.setdefault(key, []).append(
+            {
+                "nodegoat_id": nodegoat_id,
+                "meineke_id": meineke_id,
+                "billerbeck_id": billerbeck_id,
+            }
+        )
     return lookup
+
+
+def select_headword_meta(meta_list, entry_number):
+    if not meta_list:
+        return None
+    if len(meta_list) == 1:
+        return meta_list[0]
+    if entry_number is not None:
+        entry_str = str(entry_number)
+        for meta in meta_list:
+            billerbeck_id = meta.get("billerbeck_id") or ""
+            match = re.search(r"(\d+)", billerbeck_id)
+            if match and match.group(1) == entry_str:
+                return meta
+    return meta_list[0]
 
 
 def load_processed_images(cur):
@@ -117,7 +136,7 @@ def load_processed_images(cur):
 
 def build_assembled_entries(rows, headword_lookup):
     entries = []
-    last_entry = None
+    last_entry_by_version = {}
 
     for image_id, filename, lemma_json, volume_number, volume_label, letter_range, ocr_generation_id, processed_at in rows:
         if not lemma_json:
@@ -142,25 +161,26 @@ def build_assembled_entries(rows, headword_lookup):
 
         if status == "non_greek_error":
             print(f"Skipping {filename}: non-Greek page detected")
-            last_entry = None
+            last_entry_by_version = {}
             continue
         if status == "apparatus_only":
             print(f"Skipping {filename}: apparatus only")
-            last_entry = None
+            last_entry_by_version = {}
             continue
         if status == "continuation_only":
-            if last_entry:
-                last_entry["source_image_ids"].append(image_id)
-                if notes:
-                    last_entry["greek_text"] = (last_entry["greek_text"] + " " + notes).strip()
-                if volume_number and not last_entry.get("volume_number"):
-                    last_entry["volume_number"] = volume_number
-                    last_entry["volume_label"] = volume_label
-                    last_entry["letter_range"] = letter_range
-                if ocr_generation_id and not last_entry.get("ocr_generation_id"):
-                    last_entry["ocr_generation_id"] = ocr_generation_id
-                if processed_at and (not last_entry.get("ocr_processed_at") or processed_at > last_entry["ocr_processed_at"]):
-                    last_entry["ocr_processed_at"] = processed_at
+            if last_entry_by_version:
+                for last_entry in last_entry_by_version.values():
+                    last_entry["source_image_ids"].append(image_id)
+                    if notes:
+                        last_entry["greek_text"] = (last_entry["greek_text"] + " " + notes).strip()
+                    if volume_number and not last_entry.get("volume_number"):
+                        last_entry["volume_number"] = volume_number
+                        last_entry["volume_label"] = volume_label
+                        last_entry["letter_range"] = letter_range
+                    if ocr_generation_id and not last_entry.get("ocr_generation_id"):
+                        last_entry["ocr_generation_id"] = ocr_generation_id
+                    if processed_at and (not last_entry.get("ocr_processed_at") or processed_at > last_entry["ocr_processed_at"]):
+                        last_entry["ocr_processed_at"] = processed_at
             else:
                 print(f"Continuation with no prior lemma on {filename}, ignoring")
             continue
@@ -183,13 +203,14 @@ def build_assembled_entries(rows, headword_lookup):
                 "ocr_generation_id": ocr_generation_id,
                 "ocr_processed_at": processed_at,
             }
-            meta = headword_lookup.get(assembled["lemma"])
+            meta_list = headword_lookup.get(assembled["lemma"])
+            meta = select_headword_meta(meta_list, assembled["entry_number"])
             if meta:
                 assembled["nodegoat_id"] = meta["nodegoat_id"]
                 assembled["meineke_id"] = meta["meineke_id"]
                 assembled["billerbeck_id"] = meta["billerbeck_id"]
             entries.append(assembled)
-            last_entry = assembled
+            last_entry_by_version[assembled["version"]] = assembled
 
     return entries
 
