@@ -5,6 +5,7 @@ Provides methods for querying and updating data in nodegoat using OAuth 2.0.
 Based on nodegoat REST API documentation.
 """
 import json
+import time
 import requests
 from typing import Optional, Dict, List, Any
 from config import NODEGOAT_API_URL, NODEGOAT_TOKEN, NODEGOAT_PROJECT_ID
@@ -43,6 +44,10 @@ class NodegoatClient:
         path: str,
         data: Optional[Dict] = None,
         params: Optional[Dict] = None,
+        max_retries: int = 10,
+        backoff_seconds: int = 5,
+        max_backoff_seconds: int = 1800,
+        max_total_wait_seconds: int = 1800,
     ) -> Dict[str, Any]:
         """
         Make authenticated request to nodegoat API.
@@ -65,26 +70,65 @@ class NodegoatClient:
             "Content-Type": "application/json",
         }
 
-        response = requests.request(
-            method=method,
-            url=url,
-            headers=headers,
-            json=data,
-            params=params,
-        )
+        total_wait = 0
+        for attempt in range(max_retries + 1):
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=data,
+                params=params,
+            )
 
-        try:
-            response.raise_for_status()
-        except requests.HTTPError as e:
-            # Try to include response body in error message
+            # Handle HTTP-level rate limiting
+            if response.status_code == 429:
+                if attempt < max_retries:
+                    sleep_for = min(max_backoff_seconds, backoff_seconds * (2 ** attempt))
+                    remaining = max_total_wait_seconds - total_wait
+                    if remaining <= 0:
+                        break
+                    if sleep_for > remaining:
+                        sleep_for = remaining
+                    print(f"Rate limit hit (HTTP 429). Retrying in {sleep_for}s...")
+                    time.sleep(sleep_for)
+                    total_wait += sleep_for
+                    continue
+
+            # Handle nodegoat JSON-level rate limiting (HTTP 200 with error)
+            response_json = None
             try:
-                error_detail = response.json()
-                print(f"Error response: {json.dumps(error_detail, indent=2)}")
-            except:
-                print(f"Error response: {response.text}")
-            raise e
+                response_json = response.json()
+            except Exception:
+                response_json = None
 
-        return response.json()
+            if isinstance(response_json, dict) and response_json.get("error") == "request_limit":
+                if attempt < max_retries:
+                    sleep_for = min(max_backoff_seconds, backoff_seconds * (2 ** attempt))
+                    remaining = max_total_wait_seconds - total_wait
+                    if remaining <= 0:
+                        break
+                    if sleep_for > remaining:
+                        sleep_for = remaining
+                    print(f"Rate limit hit (request_limit). Retrying in {sleep_for}s...")
+                    time.sleep(sleep_for)
+                    total_wait += sleep_for
+                    continue
+
+            try:
+                response.raise_for_status()
+            except requests.HTTPError as e:
+                # Try to include response body in error message
+                try:
+                    error_detail = response_json if response_json is not None else response.json()
+                    print(f"Error response: {json.dumps(error_detail, indent=2)}")
+                except Exception:
+                    print(f"Error response: {response.text}")
+                raise e
+
+            if response_json is not None:
+                return response_json
+
+            return response.json()
 
     def get_openapi_spec(self, project_id: Optional[str] = None) -> Dict:
         """

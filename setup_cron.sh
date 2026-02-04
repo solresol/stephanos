@@ -32,6 +32,9 @@ cat > "$CRON_FILE" <<'EOF'
 
 # 8. Upload PostgreSQL backup to merah (3:10 AM)
 10 3 * * * rsync ~/stephanos/backups/stephanos_$(date +\%Y\%m\%d).sql.gz stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/datadumps.ifost.org.au/htdocs/stephanos/ >> logs/backup_upload.log 2>&1
+
+# 9. Hourly nodegoat sync (small batch to avoid rate limits)
+0 * * * * ~/stephanos/nodegoat_hourly_sync.sh >> logs/nodegoat_sync.log 2>&1
 EOF
 
 echo "=== Stephanos Cron Job Setup ==="
@@ -91,6 +94,7 @@ echo "  2:30 AM - Deploy to merah"
 echo "  2:45 AM - Backup review database on merah (7-day retention)"
 echo "  3:00 AM - Backup PostgreSQL database (7-day retention)"
 echo "  3:10 AM - Upload PostgreSQL backup to merah"
+echo "  Hourly - nodegoat sync (small batch)"
 echo
 
 # Cleanup

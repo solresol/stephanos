@@ -156,7 +156,7 @@ def get_local_entries_to_push(conn, limit: int = None, catch_up: bool = False) -
 
 
 def build_push_payload(local_entry: dict, ng_entry: dict | None) -> dict | None:
-    """Build nodegoat PATCH payload with only changed fields.
+    """Build nodegoat update payload with only changed fields.
 
     Returns None if no changes needed.
     """
@@ -193,12 +193,34 @@ def build_push_payload(local_entry: dict, ng_entry: dict | None) -> dict | None:
     return {"object_definitions": object_definitions}
 
 
+def build_full_update_payload(ng_entry: dict, changes: dict) -> dict:
+    """Merge existing nodegoat fields with changes for safe PUT update."""
+    merged_definitions = {}
+
+    # Preserve existing nodegoat fields to avoid wiping data
+    for field_name, field_id in NG_FIELDS.items():
+        existing_value = ng_entry["fields"].get(field_name)
+        if existing_value is None or existing_value == "":
+            continue
+        merged_definitions[str(field_id)] = {
+            "object_description_id": field_id,
+            "object_definition_value": existing_value,
+        }
+
+    # Overlay changes
+    for field_id, payload in changes["object_definitions"].items():
+        merged_definitions[field_id] = payload
+
+    return {"object_definitions": merged_definitions}
+
+
 def push_to_nodegoat(
     client: NodegoatClient,
     conn,
     local_entries: list,
     ng_entries: dict,
-    dry_run: bool = False
+    dry_run: bool = False,
+    verbose: bool = False,
 ) -> tuple[int, int, int]:
     """Push local entries to nodegoat.
 
@@ -232,15 +254,17 @@ def push_to_nodegoat(
             pushed_count += 1
             continue
 
-        # Add object_id for PATCH
-        payload["object"] = {"object_id": int(ng_entry["object_id"])}
+        # Build full update payload (PUT) to avoid PATCH side effects
+        full_payload = build_full_update_payload(ng_entry, payload)
 
         try:
-            result = client.patch_object(
+            result = client.update_objects(
                 type_id=int(NODEGOAT_LEMMA_TYPE_ID),
-                object_data=payload,
+                updates={int(ng_entry["object_id"]): full_payload},
                 project_id=NODEGOAT_PROJECT_ID,
             )
+            if verbose:
+                print(f"  [{i+1}/{len(local_entries)}] {local_entry['lemma']} ({billerbeck_id}): PUT response {result}")
 
             # Update sync timestamp and nodegoat_id
             cur.execute("""
@@ -267,7 +291,8 @@ def pull_from_nodegoat(
     conn,
     ng_entries: dict,
     limit: int = None,
-    dry_run: bool = False
+    dry_run: bool = False,
+    verbose: bool = False,
 ) -> tuple[int, int]:
     """Pull human corrections from nodegoat to local database.
 
@@ -339,6 +364,8 @@ def pull_from_nodegoat(
 
         sql = f"UPDATE assembled_lemmas SET {', '.join(updates)} WHERE id = %s"
         cur.execute(sql, params)
+        if verbose:
+            print(f"  [{i+1}/{len(entries_to_check)}] {ng_entry['object_name']} ({billerbeck_id}): Applied updates {updates}")
 
         pulled_count += 1
         print(f"  [{i+1}/{len(entries_to_check)}] {ng_entry['object_name']} ({billerbeck_id}): Pulled updates")
@@ -356,6 +383,7 @@ def main():
     parser.add_argument("--catch-up", action="store_true", help="Sync entries never synced before")
     parser.add_argument("--limit", type=int, help="Limit number of entries to process")
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without making them")
+    parser.add_argument("--verbose", action="store_true", help="Print raw nodegoat responses")
     args = parser.parse_args()
 
     if not args.push and not args.pull:
@@ -387,7 +415,7 @@ def main():
 
         if local_entries:
             pushed, skipped, not_found = push_to_nodegoat(
-                client, conn, local_entries, ng_entries, args.dry_run
+                client, conn, local_entries, ng_entries, args.dry_run, args.verbose
             )
             print()
             print(f"Pushed: {pushed}")
@@ -401,7 +429,7 @@ def main():
         print("=" * 70)
 
         pulled, skipped = pull_from_nodegoat(
-            client, conn, ng_entries, args.limit, args.dry_run
+            client, conn, ng_entries, args.limit, args.dry_run, args.verbose
         )
         print()
         print(f"Pulled: {pulled}")
