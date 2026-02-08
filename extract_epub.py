@@ -3,7 +3,12 @@
 Extract EPUB files and register HTML files that need image extraction.
 
 EPUBs are extracted to ~/epubs/<epub_basename>/
-HTML files containing 'illustype_image_text' are registered in the database.
+HTML files containing page images are registered in the database.
+
+Historically this pipeline targeted EPUBs where page images live in
+`div.illustype_image_text img` (De Gruyter "image+text" HTML). Some EPUBs
+(e.g. Billerbeck vol. 5) instead reference page images via
+`div.Image_Center img` under an `OPS/graphic/` directory.
 """
 import sys
 import zipfile
@@ -31,7 +36,7 @@ def extract_epub(epub_path: Path, extract_dir: Path) -> bool:
 
 def find_content_html_files(extract_dir: Path) -> list[tuple[Path, Path, int]]:
     """
-    Find HTML files containing illustype_image_text divs.
+    Find HTML files containing page-image references.
     Returns list of (html_path, image_dir, image_count) tuples.
     """
     results = []
@@ -42,12 +47,22 @@ def find_content_html_files(extract_dir: Path) -> list[tuple[Path, Path, int]]:
     for html_path in html_files:
         try:
             soup = BeautifulSoup(html_path.read_text(encoding="utf-8"), "html.parser")
-            image_divs = soup.select("div.illustype_image_text img")
+            # Primary selector (most volumes): one page image per div.illustype_image_text
+            page_imgs = soup.select("div.illustype_image_text img")
 
-            if image_divs:
-                # Image directory is typically same as HTML directory
+            # Fallback selector (e.g. Billerbeck vol. 5): a sequence of centered page images
+            if not page_imgs:
+                page_imgs = []
+                for img in soup.select("div.Image_Center img"):
+                    src = img.get("src") or ""
+                    # Avoid registering cover/other figures: keep obvious page_* images.
+                    if "page_" in Path(src).name:
+                        page_imgs.append(img)
+
+            if page_imgs:
+                # Image directory is typically same as HTML directory; src may contain ../
                 image_dir = html_path.parent
-                results.append((html_path, image_dir, len(image_divs)))
+                results.append((html_path, image_dir, len(page_imgs)))
         except Exception as e:
             print(f"Error parsing {html_path}: {e}")
 
@@ -160,7 +175,7 @@ def process_epub(epub_path: Path):
     html_files = find_content_html_files(extract_dir)
 
     if not html_files:
-        print("Warning: No HTML files with illustype_image_text found")
+        print("Warning: No HTML files with page images found (illustype_image_text/Image_Center)")
 
     # Register HTML files
     registered = 0

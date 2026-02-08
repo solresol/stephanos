@@ -18,14 +18,32 @@ from volume_metadata import ensure_volume_columns, infer_volume_metadata
 
 
 def extract_images(html_path: Path) -> list[str]:
-    """Extract image filenames from HTML file"""
+    """Extract image src paths from an HTML/XHTML file.
+
+    Supports:
+    - De Gruyter "image+text" pages: `div.illustype_image_text img`
+    - Billerbeck vol. 5-style pages: `div.Image_Center img` (filters to `page_*.png`)
+    """
     soup = BeautifulSoup(html_path.read_text(encoding="utf-8"), "html.parser")
     images = []
 
-    for img in soup.select("div.illustype_image_text img"):
+    # Prefer the primary selector when present (it avoids inline glyph images, notes, etc.)
+    img_tags = soup.select("div.illustype_image_text img")
+    if not img_tags:
+        # Fallback: centered page images (common in vol. 5). Avoid the many tiny inline glyph images.
+        img_tags = []
+        for img in soup.select("div.Image_Center img"):
+            src = img.get("src") or ""
+            if "page_" in Path(src).name:
+                img_tags.append(img)
+
+    for img in img_tags:
         src = img.get("src")
-        if src:
-            images.append(src)
+        if not src:
+            continue
+        # Strip fragments/query params just in case
+        src = src.split("#", 1)[0].split("?", 1)[0]
+        images.append(src)
 
     return images
 

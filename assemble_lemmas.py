@@ -49,6 +49,8 @@ def ensure_table(cur):
         """
     )
     # Backfill columns if table already existed
+    # NOTE: We intentionally keep translation-related columns stable across re-assembly runs.
+    # `assemble_lemmas.py` should not wipe translations unless the underlying Greek text changed.
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS volume_number INTEGER")
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS volume_label TEXT")
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS letter_range TEXT")
@@ -58,6 +60,10 @@ def ensure_table(cur):
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS meineke_id TEXT")
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS billerbeck_id TEXT")
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS version TEXT")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS translation TEXT")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS translation_prompt_version INTEGER")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS corrected_english_translation TEXT")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS reviewed_english_translation TEXT")
     # Ensure version column has default and NOT NULL constraint
     cur.execute("ALTER TABLE assembled_lemmas ALTER COLUMN version SET DEFAULT 'epitome'")
     try:
@@ -276,11 +282,44 @@ def upsert_assembled(cur, assembled_entries):
                 version = EXCLUDED.version,
                 assembled_json = EXCLUDED.assembled_json,
                 updated_at = CURRENT_TIMESTAMP,
-                translated = 0,
-                translation = NULL,
-                translation_json = NULL,
-                translation_tokens = 0,
-                translated_at = NULL,
+                -- Preserve existing translations unless the underlying Greek text changed.
+                -- This prevents daily `assemble_lemmas.py` runs from forcing retranslation.
+                translated = CASE
+                    WHEN assembled_lemmas.greek_text IS DISTINCT FROM EXCLUDED.greek_text
+                         AND (assembled_lemmas.human_greek_text IS NULL OR assembled_lemmas.human_greek_text = '')
+                    THEN 0
+                    ELSE assembled_lemmas.translated
+                END,
+                translation = CASE
+                    WHEN assembled_lemmas.greek_text IS DISTINCT FROM EXCLUDED.greek_text
+                         AND (assembled_lemmas.human_greek_text IS NULL OR assembled_lemmas.human_greek_text = '')
+                    THEN NULL
+                    ELSE assembled_lemmas.translation
+                END,
+                translation_json = CASE
+                    WHEN assembled_lemmas.greek_text IS DISTINCT FROM EXCLUDED.greek_text
+                         AND (assembled_lemmas.human_greek_text IS NULL OR assembled_lemmas.human_greek_text = '')
+                    THEN NULL
+                    ELSE assembled_lemmas.translation_json
+                END,
+                translation_tokens = CASE
+                    WHEN assembled_lemmas.greek_text IS DISTINCT FROM EXCLUDED.greek_text
+                         AND (assembled_lemmas.human_greek_text IS NULL OR assembled_lemmas.human_greek_text = '')
+                    THEN 0
+                    ELSE assembled_lemmas.translation_tokens
+                END,
+                translated_at = CASE
+                    WHEN assembled_lemmas.greek_text IS DISTINCT FROM EXCLUDED.greek_text
+                         AND (assembled_lemmas.human_greek_text IS NULL OR assembled_lemmas.human_greek_text = '')
+                    THEN NULL
+                    ELSE assembled_lemmas.translated_at
+                END,
+                translation_prompt_version = CASE
+                    WHEN assembled_lemmas.greek_text IS DISTINCT FROM EXCLUDED.greek_text
+                         AND (assembled_lemmas.human_greek_text IS NULL OR assembled_lemmas.human_greek_text = '')
+                    THEN NULL
+                    ELSE assembled_lemmas.translation_prompt_version
+                END,
                 volume_number = COALESCE(EXCLUDED.volume_number, assembled_lemmas.volume_number),
                 volume_label = COALESCE(EXCLUDED.volume_label, assembled_lemmas.volume_label),
                 letter_range = COALESCE(EXCLUDED.letter_range, assembled_lemmas.letter_range),
