@@ -48,6 +48,16 @@ def extract_images(html_path: Path) -> list[str]:
     return images
 
 
+def ensure_html_files_columns(cur):
+    """Ensure expected columns exist on html_files.
+
+    Some older DBs only had a `processed` flag; newer code tracks `processed_at`
+    and `image_count` for observability.
+    """
+    cur.execute("ALTER TABLE html_files ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE html_files ADD COLUMN IF NOT EXISTS image_count INTEGER")
+
+
 def process_html_file(conn, cur, html_path: Path, html_file_id: int = None, volume_meta: dict | None = None, image_dir: Path = None) -> int:
     """
     Process a single HTML file and insert images with BLOB data.
@@ -130,13 +140,15 @@ def get_unprocessed_html_files(cur, limit: int = None) -> list[tuple]:
 
 def mark_html_processed(conn, cur, html_file_id: int, image_count: int):
     """Mark HTML file as processed"""
+    # Use ISO string so this works whether processed_at is TIMESTAMPTZ or TEXT on older DBs.
+    processed_at = datetime.now(timezone.utc).isoformat()
     cur.execute(
         """
         UPDATE html_files
         SET processed = 1, processed_at = %s, image_count = %s
         WHERE id = %s
         """,
-        (datetime.now(timezone.utc).isoformat(), image_count, html_file_id)
+        (processed_at, image_count, html_file_id)
     )
 
 
@@ -197,6 +209,8 @@ def main():
     conn = get_connection()
     cur = conn.cursor()
     ensure_volume_columns(cur)
+    ensure_html_files_columns(cur)
+    conn.commit()
 
     if args.from_db:
         process_from_database(conn, cur, args.limit)

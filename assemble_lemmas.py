@@ -11,8 +11,9 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+import psycopg2
+
 from db import get_connection
-from volume_metadata import ensure_volume_columns
 from volume_metadata import ensure_volume_columns
 
 
@@ -116,15 +117,40 @@ def select_headword_meta(meta_list, entry_number):
     if not meta_list:
         return None
     if len(meta_list) == 1:
-        return meta_list[0]
-    if entry_number is not None:
-        entry_str = str(entry_number)
-        for meta in meta_list:
-            billerbeck_id = meta.get("billerbeck_id") or ""
-            match = re.search(r"(\d+)", billerbeck_id)
-            if match and match.group(1) == entry_str:
-                return meta
-    return meta_list[0]
+        meta = meta_list[0]
+        if entry_number is None:
+            return meta
+        billerbeck_id = meta.get("billerbeck_id") or ""
+        match = re.search(r"(\d+)", billerbeck_id)
+        if match and match.group(1) != str(entry_number):
+            # Entry number doesn't match the canonical ID for this headword; treat as OCR mismatch.
+            return None
+        return meta
+    # Ambiguous headword: only select a meta row when we can disambiguate by entry number.
+    if entry_number is None:
+        return None
+    entry_str = str(entry_number)
+    for meta in meta_list:
+        billerbeck_id = meta.get("billerbeck_id") or ""
+        match = re.search(r"(\d+)", billerbeck_id)
+        if match and match.group(1) == entry_str:
+            return meta
+    return None
+
+
+def extract_headword_from_greek_text(greek_text: str) -> str | None:
+    """Extract headword from OCR greek_text (typically before the middle dot)."""
+    if not greek_text:
+        return None
+
+    # Some OCR runs accidentally include the entry number at the start.
+    cleaned = re.sub(r"^\d+\s+", "", greek_text.strip())
+    dot = cleaned.find("·")
+    if dot <= 0:
+        return None
+
+    headword = cleaned[:dot].strip()
+    return headword or None
 
 
 def load_processed_images(cur):
@@ -177,6 +203,7 @@ def build_assembled_entries(rows, headword_lookup):
             if last_entry_by_version:
                 for last_entry in last_entry_by_version.values():
                     last_entry["source_image_ids"].append(image_id)
+                    last_entry.setdefault("source_image_filenames", []).append(filename)
                     if notes:
                         last_entry["greek_text"] = (last_entry["greek_text"] + " " + notes).strip()
                     if volume_number and not last_entry.get("volume_number"):
@@ -195,14 +222,24 @@ def build_assembled_entries(rows, headword_lookup):
             continue
 
         for entry in page_entries:
+            greek_text = (entry.get("greek_text", "") or "").strip()
+            greek_text = re.sub(r"^\d+\s+", "", greek_text)
+
+            lemma = (entry.get("lemma", "") or "").strip()
+            # OCR sometimes returns an incorrect headword field while the greek_text starts correctly.
+            lemma_from_text = extract_headword_from_greek_text(greek_text)
+            if lemma_from_text:
+                lemma = lemma_from_text
+
             assembled = {
-                "lemma": entry.get("lemma", "").strip(),
+                "lemma": lemma,
                 "entry_number": entry.get("entry_number"),
                 "type": entry.get("type", ""),
-                "greek_text": entry.get("greek_text", "").strip(),
+                "greek_text": greek_text,
                 "confidence": entry.get("confidence", "normal"),
                 "version": entry.get("version") or "epitome",  # default to epitome if not specified
                 "source_image_ids": [image_id],
+                "source_image_filenames": [filename],
                 "volume_number": volume_number,
                 "volume_label": volume_label,
                 "letter_range": letter_range,
@@ -229,6 +266,7 @@ def upsert_assembled(cur, assembled_entries):
     Keeps source_image_ids JSON for backward compatibility during migration.
     """
     upserts = 0
+    skipped_duplicates = 0
     for entry in assembled_entries:
         source_ids_json = json.dumps(entry["source_image_ids"])
         # assembled_json is deprecated but kept for backward compatibility
@@ -337,8 +375,57 @@ def upsert_assembled(cur, assembled_entries):
             print("Params content:", params)
             print("Entry:", entry)
             raise
-        cur.execute(sql)
-        result = cur.fetchone()
+        cur.execute("SAVEPOINT assembled_upsert")
+        try:
+            cur.execute(sql)
+            result = cur.fetchone()
+            cur.execute("RELEASE SAVEPOINT assembled_upsert")
+        except psycopg2.Error as e:
+            cur.execute("ROLLBACK TO SAVEPOINT assembled_upsert")
+            cur.execute("RELEASE SAVEPOINT assembled_upsert")
+
+            constraint = getattr(getattr(e, "diag", None), "constraint_name", None)
+            if isinstance(e, psycopg2.errors.UniqueViolation) and constraint == "assembled_lemmas_billerbeck_version_idx":
+                skipped_duplicates += 1
+                billerbeck_id = entry.get("billerbeck_id")
+                version = entry.get("version") or "epitome"
+
+                existing = None
+                try:
+                    cur.execute(
+                        """
+                        SELECT id, lemma, entry_number, source_image_ids
+                        FROM assembled_lemmas
+                        WHERE billerbeck_id = %s AND version = %s
+                        LIMIT 1
+                        """,
+                        (billerbeck_id, version),
+                    )
+                    existing = cur.fetchone()
+                except Exception:
+                    # Best-effort only; keep assembling even if this lookup fails.
+                    existing = None
+
+                src_ids = entry.get("source_image_ids") or []
+                src_files = entry.get("source_image_filenames") or []
+                if existing:
+                    existing_id, existing_lemma, existing_entry_number, existing_source_image_ids = existing
+                    print(
+                        f"Warning: duplicate billerbeck_id {billerbeck_id} (version={version}). "
+                        f"Existing lemma id={existing_id} lemma='{existing_lemma}' entry_number={existing_entry_number} "
+                        f"source_image_ids={existing_source_image_ids}; "
+                        f"skipping new lemma='{entry.get('lemma')}' entry_number={entry.get('entry_number')} "
+                        f"images={src_ids} files={src_files}"
+                    )
+                else:
+                    print(
+                        f"Warning: duplicate billerbeck_id {billerbeck_id} (version={version}); "
+                        f"skipping lemma='{entry.get('lemma')}' entry_number={entry.get('entry_number')} "
+                        f"images={src_ids} files={src_files}"
+                    )
+                continue
+
+            raise
         lemma_id = result[0] if result else None
 
         # Update junction table for normalized image tracking
@@ -357,6 +444,8 @@ def upsert_assembled(cur, assembled_entries):
                 )
 
         upserts += 1
+    if skipped_duplicates:
+        print(f"Skipped {skipped_duplicates} entries due to duplicate (billerbeck_id, version).")
     return upserts
 
 
