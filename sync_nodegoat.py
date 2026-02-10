@@ -221,6 +221,7 @@ def push_to_nodegoat(
     ng_entries: dict,
     dry_run: bool = False,
     verbose: bool = False,
+    batch_size: int = 25,
 ) -> tuple[int, int, int]:
     """Push local entries to nodegoat.
 
@@ -230,6 +231,11 @@ def push_to_nodegoat(
     skipped_count = 0
     not_found_count = 0
     cur = conn.cursor()
+
+    batch_size = max(1, int(batch_size or 1))
+
+    # Collect updates first so we can send fewer API calls (nodegoat supports bulk PUT updates).
+    pending_updates: list[dict] = []
 
     for i, local_entry in enumerate(local_entries):
         billerbeck_id = local_entry["billerbeck_id"]
@@ -257,28 +263,106 @@ def push_to_nodegoat(
         # Build full update payload (PUT) to avoid PATCH side effects
         full_payload = build_full_update_payload(ng_entry, payload)
 
+        pending_updates.append(
+            {
+                "i": i,
+                "local_entry": local_entry,
+                "ng_entry": ng_entry,
+                "full_payload": full_payload,
+                "field_names": field_names,
+            }
+        )
+
+    # Execute in batches to reduce HTTP overhead.
+    for batch_start in range(0, len(pending_updates), batch_size):
+        batch = pending_updates[batch_start:batch_start + batch_size]
+        updates = {int(item["ng_entry"]["object_id"]): item["full_payload"] for item in batch}
+
         try:
             result = client.update_objects(
                 type_id=int(NODEGOAT_LEMMA_TYPE_ID),
-                updates={int(ng_entry["object_id"]): full_payload},
+                updates=updates,
                 project_id=NODEGOAT_PROJECT_ID,
             )
             if verbose:
-                print(f"  [{i+1}/{len(local_entries)}] {local_entry['lemma']} ({billerbeck_id}): PUT response {result}")
+                ids = [int(item["ng_entry"]["object_id"]) for item in batch]
+                print(f"  Batch PUT ({len(batch)} objects): {ids} response {result}")
 
-            # Update sync timestamp and nodegoat_id
-            cur.execute("""
-                UPDATE assembled_lemmas
-                SET last_synced_to_nodegoat_at = NOW(),
-                    nodegoat_id = %s
-                WHERE id = %s
-            """, (ng_entry["nodegoat_id"], local_entry["id"]))
+            for item in batch:
+                i = item["i"]
+                local_entry = item["local_entry"]
+                ng_entry = item["ng_entry"]
+                field_names = item["field_names"]
+                billerbeck_id = local_entry["billerbeck_id"]
 
-            pushed_count += 1
-            print(f"  [{i+1}/{len(local_entries)}] {local_entry['lemma']} ({billerbeck_id}): Updated {field_names}")
+                # Update sync timestamp and nodegoat_id
+                cur.execute(
+                    """
+                    UPDATE assembled_lemmas
+                    SET last_synced_to_nodegoat_at = NOW(),
+                        nodegoat_id = %s
+                    WHERE id = %s
+                    """,
+                    (ng_entry["nodegoat_id"], local_entry["id"]),
+                )
+
+                pushed_count += 1
+                print(
+                    f"  [{i+1}/{len(local_entries)}] {local_entry['lemma']} ({billerbeck_id}): Updated {field_names}"
+                )
 
         except Exception as e:
-            print(f"  [{i+1}/{len(local_entries)}] {local_entry['lemma']} ({billerbeck_id}): ERROR - {e}")
+            print(f"  Batch PUT ERROR ({len(batch)} objects): {e}")
+
+            # Fallback: try single-object updates so one bad payload doesn't block the rest.
+            if len(batch) == 1:
+                item = batch[0]
+                i = item["i"]
+                local_entry = item["local_entry"]
+                ng_entry = item["ng_entry"]
+                field_names = item["field_names"]
+                billerbeck_id = local_entry["billerbeck_id"]
+                print(f"  [{i+1}/{len(local_entries)}] {local_entry['lemma']} ({billerbeck_id}): ERROR - {e}")
+                continue
+
+            for item in batch:
+                i = item["i"]
+                local_entry = item["local_entry"]
+                ng_entry = item["ng_entry"]
+                full_payload = item["full_payload"]
+                field_names = item["field_names"]
+                billerbeck_id = local_entry["billerbeck_id"]
+
+                try:
+                    result = client.update_objects(
+                        type_id=int(NODEGOAT_LEMMA_TYPE_ID),
+                        updates={int(ng_entry["object_id"]): full_payload},
+                        project_id=NODEGOAT_PROJECT_ID,
+                    )
+                    if verbose:
+                        print(
+                            f"  [{i+1}/{len(local_entries)}] {local_entry['lemma']} ({billerbeck_id}): PUT response {result}"
+                        )
+
+                    cur.execute(
+                        """
+                        UPDATE assembled_lemmas
+                        SET last_synced_to_nodegoat_at = NOW(),
+                            nodegoat_id = %s
+                        WHERE id = %s
+                        """,
+                        (ng_entry["nodegoat_id"], local_entry["id"]),
+                    )
+
+                    pushed_count += 1
+                    print(
+                        f"  [{i+1}/{len(local_entries)}] {local_entry['lemma']} ({billerbeck_id}): Updated {field_names}"
+                    )
+
+                except Exception as e2:
+                    print(
+                        f"  [{i+1}/{len(local_entries)}] {local_entry['lemma']} ({billerbeck_id}): ERROR - {e2}"
+                    )
 
     if not dry_run:
         conn.commit()
@@ -382,6 +466,12 @@ def main():
     parser.add_argument("--pull", action="store_true", help="Pull changes from nodegoat")
     parser.add_argument("--catch-up", action="store_true", help="Sync entries never synced before")
     parser.add_argument("--limit", type=int, help="Limit number of entries to process")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=25,
+        help="Push only: number of objects per bulk PUT update (default: 25)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without making them")
     parser.add_argument("--verbose", action="store_true", help="Print raw nodegoat responses")
     args = parser.parse_args()
@@ -415,7 +505,13 @@ def main():
 
         if local_entries:
             pushed, skipped, not_found = push_to_nodegoat(
-                client, conn, local_entries, ng_entries, args.dry_run, args.verbose
+                client,
+                conn,
+                local_entries,
+                ng_entries,
+                args.dry_run,
+                args.verbose,
+                batch_size=args.batch_size,
             )
             print()
             print(f"Pushed: {pushed}")

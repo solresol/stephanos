@@ -10,6 +10,7 @@ from db import get_connection
 
 
 OUTPUT_DIR = "reference_site/protected"
+IMAGES_SUBDIR = "images"
 
 # Greek letter mapping for generating reference links
 GREEK_LETTERS = {
@@ -32,6 +33,39 @@ def get_letter_slug(text):
             base = c.upper()
             return GREEK_LETTERS.get(base, "index")
     return "index"
+
+def _guess_ext_from_mime(mime_type: str | None) -> str:
+    """Best-effort file extension for extracted images."""
+    if not mime_type:
+        return ".jpg"
+    mt = mime_type.lower().strip()
+    if mt in ("image/jpeg", "image/jpg"):
+        return ".jpg"
+    if mt == "image/png":
+        return ".png"
+    if mt == "image/gif":
+        return ".gif"
+    if mt == "image/webp":
+        return ".webp"
+    if mt in ("image/tiff", "image/tif"):
+        return ".tif"
+    if mt == "image/bmp":
+        return ".bmp"
+    return ".jpg"
+
+
+def protected_page_name(image_id: int) -> str:
+    return f"image_{image_id}.html"
+
+
+def protected_image_name(image_id: int, original_filename: str, mime_type: str | None) -> str:
+    # Prefer the original extension when it looks sane; fall back to mime-type.
+    ext = Path(original_filename).suffix.lower()
+    if ext == ".jpeg":
+        ext = ".jpg"
+    if ext not in {".jpg", ".png", ".gif", ".webp", ".tif", ".tiff", ".bmp"}:
+        ext = _guess_ext_from_mime(mime_type)
+    return f"image_{image_id}{ext}"
 
 
 def get_all_images_with_lemmas(cur):
@@ -92,11 +126,13 @@ def get_lemmas_for_image(cur, image_id):
     return cur.fetchall()
 
 
-def generate_image_page(image_data, lemmas, prev_filename=None, next_filename=None):
+def generate_image_page(image_data, lemmas, image_src: str, prev_page: str | None = None, next_page: str | None = None):
     """Generate HTML page for a single image"""
     (image_id, filename, processed, processed_at, lemma_json, tokens_used,
      ocr_model, ocr_gen_id, ocr_gen_name, ocr_gen_desc, vol_num, vol_label,
      letter_range, image_blob, mime_type, first_headword, last_headword) = image_data
+
+    has_image = bool(image_blob)
 
     # Parse lemma_json if available
     raw_entries = []
@@ -257,6 +293,14 @@ def generate_image_page(image_data, lemmas, prev_filename=None, next_filename=No
             border: 1px solid #ddd;
             border-radius: 4px;
         }}
+        .missing-image {{
+            padding: 30px 20px;
+            border: 1px dashed #bbb;
+            border-radius: 4px;
+            color: #666;
+            background: #fff;
+            text-align: center;
+        }}
         .section {{
             margin: 30px 0;
         }}
@@ -412,10 +456,10 @@ def generate_image_page(image_data, lemmas, prev_filename=None, next_filename=No
             <a href="../index.html">Reference Site</a>
         </div>
 
-        <div class="page-nav">
-            {'<a href="' + prev_filename.replace('.jpg', '.html').replace('.png', '.html') + '">← Previous Page</a>' if prev_filename else '<span class="disabled">← Previous Page</span>'}
-            {'<a href="' + next_filename.replace('.jpg', '.html').replace('.png', '.html') + '">Next Page →</a>' if next_filename else '<span class="disabled">Next Page →</span>'}
-        </div>
+	        <div class="page-nav">
+	            {f'<a href=\"{prev_page}\">← Previous Page</a>' if prev_page else '<span class="disabled">← Previous Page</span>'}
+	            {f'<a href=\"{next_page}\">Next Page →</a>' if next_page else '<span class="disabled">Next Page →</span>'}
+	        </div>
 
         <h1>{filename}</h1>
         <div class="status {proc_class}">{proc_status}</div>
@@ -430,12 +474,12 @@ def generate_image_page(image_data, lemmas, prev_filename=None, next_filename=No
             <div class="metadata-row"><span class="metadata-label">Status:</span>{status}</div>
         </div>
 
-        <div class="content-wrapper">
-            <div class="image-column">
-                <div class="image-display">
-                    <img src="{filename}" alt="{filename}">
-                </div>
-            </div>
+	        <div class="content-wrapper">
+	            <div class="image-column">
+	                <div class="image-display">
+	                    {f'<img src=\"{image_src}\" alt=\"{filename}\">' if has_image else '<div class=\"missing-image\">Image data not available in database</div>'}
+	                </div>
+	            </div>
 
             <div class="lemmas-column">
                 {raw_entries_html}
@@ -468,8 +512,9 @@ def generate_protected_index(images_by_volume):
 
         image_links = []
         for img in images:
+            image_id = img[0]
             filename = img[1]
-            page_name = filename.replace('.jpg', '.html').replace('.png', '.html')
+            page_name = protected_page_name(image_id)
             proc_icon = "✓" if img[2] else "⧖"
             image_links.append(f'<li><a href="{page_name}">{proc_icon} {filename}</a></li>')
 
@@ -594,6 +639,8 @@ def main():
     # Create output directory
     output_dir = Path(OUTPUT_DIR)
     output_dir.mkdir(exist_ok=True, parents=True)
+    images_dir = output_dir / IMAGES_SUBDIR
+    images_dir.mkdir(exist_ok=True, parents=True)
 
     # Group images by volume
     images_by_volume = {}
@@ -604,22 +651,25 @@ def main():
         image_id = image_data[0]
         filename = image_data[1]
         image_blob = image_data[13]
+        mime_type = image_data[14]
 
         # Get lemmas for this image
         lemmas = get_lemmas_for_image(cur, image_id)
 
         # Determine prev/next filenames
-        prev_filename = images[idx - 1][1] if idx > 0 else None
-        next_filename = images[idx + 1][1] if idx < len(images) - 1 else None
+        prev_page = protected_page_name(images[idx - 1][0]) if idx > 0 else None
+        next_page = protected_page_name(images[idx + 1][0]) if idx < len(images) - 1 else None
 
         # Generate HTML page with navigation
-        page_name = filename.replace('.jpg', '.html').replace('.png', '.html')
-        html = generate_image_page(image_data, lemmas, prev_filename, next_filename)
+        page_name = protected_page_name(image_id)
+        extracted_image_name = protected_image_name(image_id, filename, mime_type)
+        image_src = f"{IMAGES_SUBDIR}/{extracted_image_name}"
+        html = generate_image_page(image_data, lemmas, image_src=image_src, prev_page=prev_page, next_page=next_page)
         (output_dir / page_name).write_text(html, encoding='utf-8')
 
         # Extract image from database if we have it
         if image_blob:
-            (output_dir / filename).write_bytes(image_blob)
+            (images_dir / extracted_image_name).write_bytes(image_blob)
 
         # Group by volume for index
         vol_key = (image_data[10], image_data[11])  # (volume_number, volume_label)

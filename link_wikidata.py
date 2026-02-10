@@ -12,6 +12,7 @@ Usage:
     uv run link_wikidata.py                    # Link unlinked sources
     uv run link_wikidata.py --limit 10         # Process only 10 entries
     uv run link_wikidata.py --relink           # Re-process already linked entries
+    uv run link_wikidata.py --retry-not-found-days 180  # Periodically recheck old 'not_found' entries
     uv run link_wikidata.py --dry-run          # Show what would be done
 """
 import argparse
@@ -281,25 +282,86 @@ If multiple candidates are equally plausible, respond:
 
 
 def get_unlinked_sources(cur, limit: int = None, relink: bool = False):
-    """Get sources that need Wikidata linking."""
-    where_clause = "WHERE p.role = 'source'"
-    if not relink:
-        where_clause += " AND p.wikidata_qid IS NULL"
+    # Backwards-compatible wrapper (historical name used by older docs/scripts).
+    return get_sources_to_process(cur, limit=limit, relink=relink)
+
+
+def get_sources_to_process(
+    cur,
+    limit: int | None = None,
+    relink: bool = False,
+    retry_not_found_days: int | None = None,
+    retry_ambiguous_days: int | None = None,
+):
+    """Get source names that need Wikidata linking.
+
+    Default behavior is to process each source once by selecting only rows where
+    wikidata_confidence IS NULL (never attempted).
+
+    Optionally, you can retry old failures after a cooldown (Wikidata evolves).
+    """
+    if relink:
+        where_sql = "TRUE"
+        params: list[object] = []
+    else:
+        clauses = [
+            # Never attempted
+            "(wikidata_qid IS NULL AND wikidata_confidence IS NULL)",
+        ]
+        params = []
+
+        if retry_not_found_days is not None:
+            clauses.append(
+                "(wikidata_qid IS NULL AND wikidata_confidence = 'not_found' AND "
+                "COALESCE(wikidata_linked_at, TIMESTAMPTZ 'epoch') < NOW() - (%s * INTERVAL '1 day'))"
+            )
+            params.append(retry_not_found_days)
+
+        if retry_ambiguous_days is not None:
+            clauses.append(
+                "(wikidata_qid IS NULL AND wikidata_confidence = 'ambiguous' AND "
+                "COALESCE(wikidata_linked_at, TIMESTAMPTZ 'epoch') < NOW() - (%s * INTERVAL '1 day'))"
+            )
+            params.append(retry_ambiguous_days)
+
+        where_sql = "(" + " OR ".join(clauses) + ")"
+
+    limit_sql = f"LIMIT {int(limit)}" if limit else ""
 
     query = f"""
+        WITH grouped AS (
+            SELECT
+                p.lemma_form,
+                p.english_translation,
+                json_agg(DISTINCT p.citation) FILTER (
+                    WHERE p.citation IS NOT NULL AND p.citation != ''
+                ) as citations,
+                json_agg(DISTINCT p.work_title) FILTER (
+                    WHERE p.work_title IS NOT NULL AND p.work_title != ''
+                ) as work_titles,
+                COUNT(DISTINCT p.lemma_id) as mention_count,
+                MAX(p.wikidata_qid) as wikidata_qid,
+                MAX(p.wikidata_confidence) as wikidata_confidence,
+                MAX(p.wikidata_linked_at) as wikidata_linked_at
+            FROM proper_nouns p
+            WHERE p.role = 'source'
+            GROUP BY p.lemma_form, p.english_translation
+        )
         SELECT
-            p.lemma_form,
-            p.english_translation,
-            json_agg(DISTINCT p.citation) FILTER (WHERE p.citation IS NOT NULL AND p.citation != '') as citations,
-            json_agg(DISTINCT p.work_title) FILTER (WHERE p.work_title IS NOT NULL AND p.work_title != '') as work_titles,
-            COUNT(DISTINCT p.lemma_id) as mention_count
-        FROM proper_nouns p
-        {where_clause}
-        GROUP BY p.lemma_form, p.english_translation
-        ORDER BY mention_count DESC
-        {"LIMIT " + str(limit) if limit else ""}
+            lemma_form,
+            english_translation,
+            citations,
+            work_titles,
+            mention_count
+        FROM grouped
+        WHERE {where_sql}
+        ORDER BY
+            (wikidata_confidence IS NULL) DESC,
+            mention_count DESC,
+            wikidata_linked_at ASC NULLS FIRST
+        {limit_sql}
     """
-    cur.execute(query)
+    cur.execute(query, params)
     return cur.fetchall()
 
 
@@ -324,6 +386,18 @@ def main():
     parser = argparse.ArgumentParser(description="Link proper nouns to Wikidata entities")
     parser.add_argument("--limit", type=int, help="Maximum number of entries to process")
     parser.add_argument("--relink", action="store_true", help="Re-process already linked entries")
+    parser.add_argument(
+        "--retry-not-found-days",
+        type=int,
+        default=None,
+        help="Retry sources previously marked not_found after N days (default: disabled)",
+    )
+    parser.add_argument(
+        "--retry-ambiguous-days",
+        type=int,
+        default=None,
+        help="Retry sources previously marked ambiguous after N days (default: disabled)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
     parser.add_argument("--delay", type=float, default=1.0, help="Delay between API calls (default: 1.0)")
     args = parser.parse_args()
@@ -342,7 +416,13 @@ def main():
         return
 
     # Get sources to process
-    sources = get_unlinked_sources(cur, args.limit, args.relink)
+    sources = get_sources_to_process(
+        cur,
+        limit=args.limit,
+        relink=args.relink,
+        retry_not_found_days=args.retry_not_found_days,
+        retry_ambiguous_days=args.retry_ambiguous_days,
+    )
     print(f"Found {len(sources)} sources to process")
 
     if not sources:
