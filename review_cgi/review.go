@@ -31,6 +31,10 @@ type PageData struct {
 }
 
 var meinekeObjectTagRe = regexp.MustCompile(`\[/?object[^\]]*\]`)
+var parenSpanRe = regexp.MustCompile(`\(([^()]*)\)`)
+var bracketSpanRe = regexp.MustCompile(`\[([^\[\]]*)\]`)
+var citationKeywordRe = regexp.MustCompile(`(?i)\b(?:FGrHist|fr\.?|fragment(?:um)?|frag\.?)\b`)
+var citationCRefRe = regexp.MustCompile(`\bC\s*\d`)
 
 func stripGreekDiacritics(r rune) rune {
 	// Strip the common "tonos vs oxia" and polytonic precomposed vowels to their base letters.
@@ -161,11 +165,112 @@ func stripGreekDiacritics(r rune) rune {
 	}
 }
 
+func isGreekRune(r rune) bool {
+	if r >= 0x0370 && r <= 0x03FF {
+		return true
+	}
+	if r >= 0x1F00 && r <= 0x1FFF {
+		return true
+	}
+	return false
+}
+
+func isCitationSpan(span string) bool {
+	t := strings.TrimSpace(span)
+	if t == "" {
+		return false
+	}
+
+	if citationKeywordRe.MatchString(t) || citationCRefRe.MatchString(t) {
+		return true
+	}
+
+	hasGreek := false
+	hasLatin := false
+	hasDigit := false
+	greekWordCount := 0
+	currentGreekRun := 0
+
+	for _, r := range t {
+		if isGreekRune(r) {
+			hasGreek = true
+			currentGreekRun++
+			continue
+		}
+
+		if currentGreekRun >= 2 {
+			greekWordCount++
+		}
+		currentGreekRun = 0
+
+		if unicode.IsLetter(r) && unicode.In(r, unicode.Latin) {
+			hasLatin = true
+		}
+		if unicode.IsDigit(r) {
+			hasDigit = true
+		}
+	}
+	if currentGreekRun >= 2 {
+		greekWordCount++
+	}
+
+	if !hasGreek && (hasLatin || hasDigit) {
+		return true
+	}
+
+	// Treat short digit-bearing Greek spans like "(Ν 363)" as citation metadata.
+	if hasDigit && greekWordCount <= 1 {
+		return true
+	}
+
+	return false
+}
+
+func stripCitationMarkers(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+
+	current := text
+	for i := 0; i < 4; i++ {
+		previous := current
+
+		current = parenSpanRe.ReplaceAllStringFunc(current, func(match string) string {
+			if len(match) < 2 {
+				return match
+			}
+			inner := strings.TrimSpace(match[1 : len(match)-1])
+			if isCitationSpan(inner) {
+				return ""
+			}
+			return match
+		})
+
+		current = bracketSpanRe.ReplaceAllStringFunc(current, func(match string) string {
+			if len(match) < 2 {
+				return match
+			}
+			inner := strings.TrimSpace(match[1 : len(match)-1])
+			if isCitationSpan(inner) {
+				return ""
+			}
+			return match
+		})
+
+		if current == previous {
+			break
+		}
+	}
+
+	return current
+}
+
 func normalizeForMeinekeCompare(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return ""
 	}
 	s = meinekeObjectTagRe.ReplaceAllString(s, "")
+	s = stripCitationMarkers(s)
 	s = strings.ReplaceAll(s, "\u00a0", " ")
 
 	var b strings.Builder

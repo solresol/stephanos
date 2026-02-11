@@ -45,6 +45,13 @@ LETTER_BY_CHAR = {char: slug for char, _, slug in GREEK_LETTERS}
 
 _WS_RE = re.compile(r"\s+")
 _MEINEKE_OBJECT_TAG_RE = re.compile(r"\[/?object[^\]]*\]")
+_PAREN_SPAN_RE = re.compile(r"\(([^()]*)\)")
+_BRACKET_SPAN_RE = re.compile(r"\[([^\[\]]*)\]")
+_CITE_KEYWORD_RE = re.compile(r"(?i)\b(?:FGrHist|fr\.?|fragment(?:um)?|frag\.?)\b")
+_CITE_CREF_RE = re.compile(r"\bC\s*\d")
+_GREEK_CHAR_RE = re.compile(r"[\u0370-\u03FF\u1F00-\u1FFF]")
+_LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
+_DIGIT_RE = re.compile(r"\d")
 
 
 def normalize_whitespace(text: str) -> str:
@@ -67,19 +74,73 @@ def strip_diacritics(text: str) -> str:
     return unicodedata.normalize("NFC", without_marks)
 
 
+def is_citation_span(span_text: str) -> bool:
+    """Heuristic for parenthetical/bracket content that's citation metadata, not lemma text."""
+    text = normalize_whitespace(span_text or "")
+    if not text:
+        return False
+
+    if _CITE_KEYWORD_RE.search(text) or _CITE_CREF_RE.search(text):
+        return True
+
+    has_greek = bool(_GREEK_CHAR_RE.search(text))
+    has_latin = bool(_LATIN_CHAR_RE.search(text))
+    has_digit = bool(_DIGIT_RE.search(text))
+
+    # Purely Latin/digit spans are citation-like in this corpus.
+    if not has_greek and (has_latin or has_digit):
+        return True
+
+    # Also treat short digit-bearing Greek spans like "(Ν 363)" as references.
+    if has_digit:
+        greek_words = re.findall(r"[\u0370-\u03FF\u1F00-\u1FFF]{2,}", text)
+        if len(greek_words) <= 1:
+            return True
+
+    return False
+
+
+def strip_citation_markers(text: str) -> str:
+    """Remove citation-only parenthetical/bracket spans for fair text comparison."""
+    if not text:
+        return ""
+
+    current = text
+    # Re-run a few times in case removal exposes another non-nested span.
+    for _ in range(4):
+        previous = current
+
+        def paren_repl(match: re.Match) -> str:
+            inner = match.group(1)
+            return "" if is_citation_span(inner) else match.group(0)
+
+        def bracket_repl(match: re.Match) -> str:
+            inner = match.group(1)
+            return "" if is_citation_span(inner) else match.group(0)
+
+        current = _PAREN_SPAN_RE.sub(paren_repl, current)
+        current = _BRACKET_SPAN_RE.sub(bracket_repl, current)
+        if current == previous:
+            break
+
+    return current
+
+
 def classify_text_difference(a: str, b: str) -> str:
     """
     Classify differences between two Greek strings.
 
     Returns:
-        - "same": equal after normalization (strip Meineke [object] tags, NFC, collapse whitespace,
-          ignore punctuation/symbols)
+        - "same": equal after normalization (strip Meineke [object] tags, strip citation-only markers,
+          NFC, collapse whitespace, ignore punctuation/symbols)
         - "tone_marks_only": not equal under that normalization, but equal after removing combining marks
         - "different": base letters differ (or other non-diacritic differences)
     """
     # Strip nodegoat markup present in some Meineke paragraphs.
     a = _MEINEKE_OBJECT_TAG_RE.sub("", a or "")
     b = _MEINEKE_OBJECT_TAG_RE.sub("", b or "")
+    a = strip_citation_markers(a)
+    b = strip_citation_markers(b)
 
     def normalize_for_compare(text: str, remove_diacritics: bool) -> str:
         if not text:
@@ -1231,9 +1292,11 @@ def generate_meineke_comparison_page(stats: dict) -> str:
         <h2>Differences vs Meineke</h2>
         <p class="note">
             For comparison, we normalize text by: stripping any Meineke nodegoat <code>[object=...]</code> tags,
-            NFC-normalizing Unicode (so tonos/oxia compare consistently), collapsing whitespace, and ignoring
-            punctuation/symbol characters. “Tone-marks only” means the strings become equal after removing
-            combining diacritics (accents/breathings) but are not equal under the above normalization.
+            stripping citation-only parenthetical/bracketed markers (e.g. <code>(FGrHist ...)</code>,
+            <code>(fr. ...)</code>), NFC-normalizing Unicode (so tonos/oxia compare consistently), collapsing
+            whitespace, and ignoring punctuation/symbol characters. “Tone-marks only” means the strings become
+            equal after removing combining diacritics (accents/breathings) but are not equal under the above
+            normalization.
         </p>
 
         <table>
