@@ -78,6 +78,10 @@ uv run extract_aliases.py --limit 20 2>&1 | tee -a "$LOGFILE"
 echo "Step 5f: Generating spelling variants..." | tee -a "$LOGFILE"
 uv run generate_spelling_variants.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 5g: Analyze Meineke/Billerbeck differences with gpt-5-mini (small daily batch)
+echo "Step 5g: Analyzing Meineke/Billerbeck differences..." | tee -a "$LOGFILE"
+uv run analyze_meineke_differences.py --limit 20 --daily-token-limit 100000 --delay 1 2>&1 | tee -a "$LOGFILE"
+
 # Step 6: Generate progress website
 echo "Step 6: Generating progress website..." | tee -a "$LOGFILE"
 uv run generate_progress_site.py 2>&1 | tee -a "$LOGFILE"
@@ -110,6 +114,7 @@ uv run generate_entities_page.py 2>&1 | tee -a "$LOGFILE"
 uv run generate_peoples_page.py 2>&1 | tee -a "$LOGFILE"
 uv run generate_fgrhist_page.py 2>&1 | tee -a "$LOGFILE"
 uv run generate_aliases_page.py 2>&1 | tee -a "$LOGFILE"
+uv run generate_meineke_difference_analysis_page.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 7c: Generate protected pages
 echo "Step 7c: Generating protected pages..." | tee -a "$LOGFILE"

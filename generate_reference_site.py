@@ -834,6 +834,7 @@ def generate_index_html(letter_counts, stats):
 	            <a href="map.html">Places Map</a>
 	            <a href="statistics.html">Statistics</a>
 	            <a href="meineke_comparison.html">Meineke vs Billerbeck</a>
+	            <a href="meineke_difference_analysis.html">Difference Analysis</a>
 	            <a href="progress.html">Processing Progress</a>
 	            <a href="pipeline.html">Pipeline Status</a>
 	            <a href="protected/">Page Scans</a>
@@ -973,6 +974,7 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
 	            <a href="map.html">Places Map</a>
 	            <a href="statistics.html">Statistics</a>
 	            <a href="meineke_comparison.html">Meineke vs Billerbeck</a>
+	            <a href="meineke_difference_analysis.html">Difference Analysis</a>
 	            <a href="cgi-bin/review.cgi">Human Review</a>
 	            <a href="downloads.html">Downloads</a>
 	            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
@@ -1228,6 +1230,7 @@ def generate_meineke_comparison_page(stats: dict) -> str:
             <a href="aliases.html">Aliases</a>
             <a href="map.html">Places Map</a>
             <a href="statistics.html">Statistics</a>
+            <a href="meineke_difference_analysis.html">Difference Analysis</a>
             <a href="progress.html">Processing Progress</a>
             <a href="pipeline.html">Pipeline Status</a>
             <a href="protected/">Page Scans</a>
@@ -1435,6 +1438,7 @@ def main():
         <div class="nav-links">
             <a href="index.html">All Letters</a>
             <a href="statistics.html">Statistics</a>
+            <a href="meineke_difference_analysis.html">Difference Analysis</a>
             <a href="pipeline.html">Pipeline Status</a>
             <a href="cgi-bin/review.cgi">Human Review</a>
         </div>
