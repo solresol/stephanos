@@ -44,6 +44,7 @@ GREEK_LETTERS = [
 LETTER_BY_CHAR = {char: slug for char, _, slug in GREEK_LETTERS}
 
 _WS_RE = re.compile(r"\s+")
+_MEINEKE_OBJECT_TAG_RE = re.compile(r"\[/?object[^\]]*\]")
 
 
 def normalize_whitespace(text: str) -> str:
@@ -59,6 +60,8 @@ def strip_diacritics(text: str) -> str:
     """Remove Greek tone-marks/diacritics (combining marks) for comparison."""
     if not text:
         return ""
+    # Normalize first so tonos/oxia etc compare consistently.
+    text = unicodedata.normalize("NFC", text)
     decomposed = unicodedata.normalize("NFD", text)
     without_marks = "".join(c for c in decomposed if not unicodedata.combining(c))
     return unicodedata.normalize("NFC", without_marks)
@@ -69,15 +72,38 @@ def classify_text_difference(a: str, b: str) -> str:
     Classify differences between two Greek strings.
 
     Returns:
-        - "same": equal after whitespace normalization
-        - "tone_marks_only": not equal exactly, but equal after removing combining marks
+        - "same": equal after normalization (strip Meineke [object] tags, NFC, collapse whitespace,
+          ignore punctuation/symbols)
+        - "tone_marks_only": not equal under that normalization, but equal after removing combining marks
         - "different": base letters differ (or other non-diacritic differences)
     """
-    a_norm = normalize_whitespace(a)
-    b_norm = normalize_whitespace(b)
-    if a_norm == b_norm:
+    # Strip nodegoat markup present in some Meineke paragraphs.
+    a = _MEINEKE_OBJECT_TAG_RE.sub("", a or "")
+    b = _MEINEKE_OBJECT_TAG_RE.sub("", b or "")
+
+    def normalize_for_compare(text: str, remove_diacritics: bool) -> str:
+        if not text:
+            return ""
+        text = unicodedata.normalize("NFC", text)
+        text = text.replace("\u00a0", " ")
+
+        if remove_diacritics:
+            text = strip_diacritics(text)
+
+        # Ignore punctuation/symbols for comparison.
+        chars = []
+        for ch in text:
+            cat = unicodedata.category(ch)
+            if cat.startswith("P") or cat.startswith("S"):
+                continue
+            chars.append(ch if not ch.isspace() else " ")
+        return normalize_whitespace("".join(chars))
+
+    a_exact = normalize_for_compare(a, remove_diacritics=False)
+    b_exact = normalize_for_compare(b, remove_diacritics=False)
+    if a_exact == b_exact:
         return "same"
-    if strip_diacritics(a_norm) == strip_diacritics(b_norm):
+    if normalize_for_compare(a, remove_diacritics=True) == normalize_for_compare(b, remove_diacritics=True):
         return "tone_marks_only"
     return "different"
 
@@ -908,7 +934,7 @@ def compute_meineke_comparison_stats(cur) -> dict:
 
     Note: This page is intended as a high-level QA/progress view, not a philological judgment
     about editorial differences. "Same/different" is defined by string comparison after
-    whitespace normalization (see classify_text_difference()).
+    normalization (see classify_text_difference()).
     """
     cur.execute(
         """
@@ -921,9 +947,26 @@ def compute_meineke_comparison_stats(cur) -> dict:
             COALESCE(a.review_status, 'not_reviewed') as review_status,
             COALESCE(a.corrected_english_translation, '') as corrected_english_translation,
             COALESCE(a.reviewed_english_translation, '') as reviewed_english_translation,
-            COALESCE(mh.greek_paragraph, '') as meineke_greek_paragraph
+            COALESCE(mh_match.greek_paragraph, '') as meineke_greek_paragraph
         FROM assembled_lemmas a
-        LEFT JOIN meineke_headwords mh ON mh.nodegoat_id = a.nodegoat_id
+        LEFT JOIN LATERAL (
+            SELECT mh.greek_paragraph
+            FROM meineke_headwords mh
+            WHERE (
+                (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
+                OR (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
+                OR (a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id)
+            )
+            ORDER BY
+                CASE
+                    WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 0
+                    WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 1
+                    WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 2
+                    ELSE 3
+                END,
+                mh.id
+            LIMIT 1
+        ) mh_match ON TRUE
         WHERE a.version = 'epitome'
           AND a.greek_text IS NOT NULL
           AND a.greek_text != ''
@@ -1182,8 +1225,10 @@ def generate_meineke_comparison_page(stats: dict) -> str:
 
         <h2>Differences vs Meineke</h2>
         <p class="note">
-            “Same” is equality after whitespace normalization. “Tone-marks only” means the strings become equal
-            after removing combining diacritics (accents/breathings) but are not exactly equal.
+            For comparison, we normalize text by: stripping any Meineke nodegoat <code>[object=...]</code> tags,
+            NFC-normalizing Unicode (so tonos/oxia compare consistently), collapsing whitespace, and ignoring
+            punctuation/symbol characters. “Tone-marks only” means the strings become equal after removing
+            combining diacritics (accents/breathings) but are not equal under the above normalization.
         </p>
 
         <table>
@@ -1329,7 +1374,7 @@ def main():
         <p>This page could not be generated.</p>
         <p class="note">
             Common causes:
-            <code>meineke_headwords</code> table missing, <code>nodegoat_id</code> not populated, or database schema mismatch.
+            <code>meineke_headwords</code> table missing, <code>billerbeck_id</code>/<code>meineke_id</code> not populated, or database schema mismatch.
         </p>
         <h3>Error</h3>
         <pre>{html_module.escape(str(e))}</pre>

@@ -6,8 +6,10 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // PageData holds data for template rendering
@@ -28,9 +30,166 @@ type PageData struct {
 	ShowMeineke       bool
 }
 
-func normalizeWhitespace(s string) string {
-	// Collapses whitespace differences so "same text, different line breaks" doesn't count as different.
-	return strings.Join(strings.Fields(s), " ")
+var meinekeObjectTagRe = regexp.MustCompile(`\[/?object[^\]]*\]`)
+
+func stripGreekDiacritics(r rune) rune {
+	// Strip the common "tonos vs oxia" and polytonic precomposed vowels to their base letters.
+	// This is intentionally Greek-focused and avoids pulling in golang.org/x/text dependencies.
+	switch r {
+	case '\u0386':
+		return 'Α' // Ά
+	case '\u0388':
+		return 'Ε' // Έ
+	case '\u0389':
+		return 'Η' // Ή
+	case '\u038A':
+		return 'Ι' // Ί
+	case '\u038C':
+		return 'Ο' // Ό
+	case '\u038E':
+		return 'Υ' // Ύ
+	case '\u038F':
+		return 'Ω' // Ώ
+	case '\u03AA':
+		return 'Ι' // Ϊ
+	case '\u03AB':
+		return 'Υ' // Ϋ
+	case '\u03AC':
+		return 'α' // ά
+	case '\u03AD':
+		return 'ε' // έ
+	case '\u03AE':
+		return 'η' // ή
+	case '\u03AF':
+		return 'ι' // ί
+	case '\u03CA', '\u0390':
+		return 'ι' // ϊ, ΐ
+	case '\u03CC':
+		return 'ο' // ό
+	case '\u03CD':
+		return 'υ' // ύ
+	case '\u03CB', '\u03B0':
+		return 'υ' // ϋ, ΰ
+	case '\u03CE':
+		return 'ω' // ώ
+	}
+
+	switch {
+	case r >= 0x1F00 && r <= 0x1F07:
+		return 'α'
+	case r >= 0x1F08 && r <= 0x1F0F:
+		return 'Α'
+	case r >= 0x1F10 && r <= 0x1F15:
+		return 'ε'
+	case r >= 0x1F18 && r <= 0x1F1D:
+		return 'Ε'
+	case r >= 0x1F20 && r <= 0x1F27:
+		return 'η'
+	case r >= 0x1F28 && r <= 0x1F2F:
+		return 'Η'
+	case r >= 0x1F30 && r <= 0x1F37:
+		return 'ι'
+	case r >= 0x1F38 && r <= 0x1F3F:
+		return 'Ι'
+	case r >= 0x1F40 && r <= 0x1F45:
+		return 'ο'
+	case r >= 0x1F48 && r <= 0x1F4D:
+		return 'Ο'
+	case r >= 0x1F50 && r <= 0x1F57:
+		return 'υ'
+	case r == 0x1F59 || r == 0x1F5B || r == 0x1F5D || r == 0x1F5F:
+		return 'Υ'
+	case r >= 0x1F60 && r <= 0x1F67:
+		return 'ω'
+	case r >= 0x1F68 && r <= 0x1F6F:
+		return 'Ω'
+
+	case r >= 0x1F70 && r <= 0x1F71:
+		return 'α'
+	case r >= 0x1F72 && r <= 0x1F73:
+		return 'ε'
+	case r >= 0x1F74 && r <= 0x1F75:
+		return 'η'
+	case r >= 0x1F76 && r <= 0x1F77:
+		return 'ι'
+	case r >= 0x1F78 && r <= 0x1F79:
+		return 'ο'
+	case r >= 0x1F7A && r <= 0x1F7B:
+		return 'υ'
+	case r >= 0x1F7C && r <= 0x1F7D:
+		return 'ω'
+
+	case r >= 0x1F80 && r <= 0x1F87:
+		return 'α'
+	case r >= 0x1F88 && r <= 0x1F8F:
+		return 'Α'
+	case r >= 0x1F90 && r <= 0x1F97:
+		return 'η'
+	case r >= 0x1F98 && r <= 0x1F9F:
+		return 'Η'
+	case r >= 0x1FA0 && r <= 0x1FA7:
+		return 'ω'
+	case r >= 0x1FA8 && r <= 0x1FAF:
+		return 'Ω'
+
+	case r >= 0x1FB0 && r <= 0x1FB7:
+		return 'α'
+	case r >= 0x1FB8 && r <= 0x1FBC:
+		return 'Α'
+	case r >= 0x1FC2 && r <= 0x1FC7:
+		return 'η'
+	case r >= 0x1FC8 && r <= 0x1FCC:
+		return 'Η'
+	case r >= 0x1FD0 && r <= 0x1FD7:
+		return 'ι'
+	case r >= 0x1FD8 && r <= 0x1FDB:
+		return 'Ι'
+	case r >= 0x1FE0 && r <= 0x1FE7:
+		return 'υ'
+	case r >= 0x1FE8 && r <= 0x1FEB:
+		return 'Υ'
+	case r == 0x1FE5:
+		return 'ρ'
+	case r == 0x1FEC:
+		return 'Ρ'
+	case r >= 0x1FF2 && r <= 0x1FF7:
+		return 'ω'
+	case r >= 0x1FF8 && r <= 0x1FFC:
+		return 'Ω'
+	default:
+		return r
+	}
+}
+
+func normalizeForMeinekeCompare(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return ""
+	}
+	s = meinekeObjectTagRe.ReplaceAllString(s, "")
+	s = strings.ReplaceAll(s, "\u00a0", " ")
+
+	var b strings.Builder
+	b.Grow(len(s))
+
+	lastWasSpace := false
+	for _, r := range s {
+		r = stripGreekDiacritics(r)
+
+		if unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			continue
+		}
+		if unicode.IsSpace(r) {
+			if !lastWasSpace {
+				b.WriteByte(' ')
+				lastWasSpace = true
+			}
+			continue
+		}
+
+		b.WriteRune(r)
+		lastWasSpace = false
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func main() {
@@ -131,33 +290,33 @@ func main() {
 
 	// Navigation
 	prevLemma := GetPreviousLemma(data, currentLemma)
-		nextLemma := GetNextLemma(data, currentLemma)
-		nextUnreviewed := GetNextUnreviewedInLetter(db, data, currentLemma)
+	nextLemma := GetNextLemma(data, currentLemma)
+	nextUnreviewed := GetNextUnreviewedInLetter(db, data, currentLemma)
 
-		showMeineke := false
-		if strings.TrimSpace(currentLemma.MeinekeGreekParagraph) != "" {
-			billerbeckText := currentLemma.GreekText
-			if review != nil && strings.TrimSpace(review.CorrectedGreekText) != "" {
-				billerbeckText = review.CorrectedGreekText
-			}
-			// If the two are effectively identical, don't show both.
-			showMeineke = normalizeWhitespace(billerbeckText) != normalizeWhitespace(currentLemma.MeinekeGreekParagraph)
+	showMeineke := false
+	if strings.TrimSpace(currentLemma.MeinekeGreekParagraph) != "" {
+		billerbeckText := currentLemma.GreekText
+		if review != nil && strings.TrimSpace(review.CorrectedGreekText) != "" {
+			billerbeckText = review.CorrectedGreekText
 		}
+		// If the two are effectively identical, don't show both.
+		showMeineke = normalizeForMeinekeCompare(billerbeckText) != normalizeForMeinekeCompare(currentLemma.MeinekeGreekParagraph)
+	}
 
-		pageData := PageData{
-			Lemma:             currentLemma,
-			Review:            review,
-			TotalCount:        len(data.Lemmas),
+	pageData := PageData{
+		Lemma:             currentLemma,
+		Review:            review,
+		TotalCount:        len(data.Lemmas),
 		ReviewedCount:     reviewed,
 		PercentComplete:   percentComplete,
 		CurrentPosition:   currentLemma.SortOrder + 1,
 		HasPrevious:       prevLemma != nil,
 		HasNext:           nextLemma != nil,
-			HasNextUnreviewed: nextUnreviewed != nil,
-			LetterName:        GetGreekLetterName(currentLemma.Letter),
-			LetterNav:         GetLetterNavigation(data),
-			ShowMeineke:       showMeineke,
-		}
+		HasNextUnreviewed: nextUnreviewed != nil,
+		LetterName:        GetGreekLetterName(currentLemma.Letter),
+		LetterNav:         GetLetterNavigation(data),
+		ShowMeineke:       showMeineke,
+	}
 
 	if prevLemma != nil {
 		pageData.PreviousID = prevLemma.ID

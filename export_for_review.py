@@ -10,6 +10,7 @@ Output: review_data.json
 """
 
 import json
+import re
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,7 @@ from pathlib import Path
 from db import get_connection
 
 OUTPUT_FILE = "review_data.json"
+_MEINEKE_OBJECT_TAG_RE = re.compile(r"\[/?object[^\]]*\]")
 
 # Greek letter ordering for sort
 GREEK_LETTERS = [
@@ -105,13 +107,30 @@ def export_lemmas():
             a.billerbeck_id,
             a.word_count,
             a.confidence,
-            COALESCE(mh.greek_paragraph, '') as meineke_greek_paragraph,
+            COALESCE(mh_match.greek_paragraph, '') as meineke_greek_paragraph,
             (SELECT json_agg(i.image_filename ORDER BY li.position)
              FROM images i
              JOIN lemma_images li ON li.image_id = i.id
              WHERE li.lemma_id = a.id) as image_filenames
         FROM assembled_lemmas a
-        LEFT JOIN meineke_headwords mh ON mh.nodegoat_id = a.nodegoat_id
+        LEFT JOIN LATERAL (
+            SELECT mh.greek_paragraph
+            FROM meineke_headwords mh
+            WHERE (
+                (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
+                OR (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
+                OR (a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id)
+            )
+            ORDER BY
+                CASE
+                    WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 0
+                    WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 1
+                    WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 2
+                    ELSE 3
+                END,
+                mh.id
+            LIMIT 1
+        ) mh_match ON TRUE
         ORDER BY a.lemma, a.version
     """
 
@@ -139,7 +158,7 @@ def export_lemmas():
             "entry_number": entry_number or 0,
             "version": version or "epitome",
             "greek_text": greek_text or "",
-            "meineke_greek_paragraph": meineke_greek_paragraph or "",
+            "meineke_greek_paragraph": _MEINEKE_OBJECT_TAG_RE.sub("", meineke_greek_paragraph or ""),
             "english_translation": english_translation,
             "type": lemma_type or "",
             "volume_label": volume_label or "",
