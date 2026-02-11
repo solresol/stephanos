@@ -997,6 +997,7 @@ def compute_meineke_comparison_stats(cur) -> dict:
     diff_corrected_vs_meineke = init_diff()
     diff_uncorrected_vs_meineke = init_diff()
     diff_best_vs_meineke = init_diff()
+    diff_reviewed_best_vs_meineke = init_diff()
 
     for (
         lemma_id,
@@ -1042,6 +1043,9 @@ def compute_meineke_comparison_stats(cur) -> dict:
 
         update_diff(diff_best_vs_meineke, classify_text_difference(best_greek, meineke_greek_paragraph))
 
+        if is_reviewed:
+            update_diff(diff_reviewed_best_vs_meineke, classify_text_difference(best_greek, meineke_greek_paragraph))
+
         if has_human_correction:
             corrected_greek = corrected_greek_scan.strip() or human_greek_text.strip()
             update_diff(diff_corrected_vs_meineke, classify_text_difference(corrected_greek, meineke_greek_paragraph))
@@ -1062,6 +1066,7 @@ def compute_meineke_comparison_stats(cur) -> dict:
             "human_corrected_vs_meineke": diff_corrected_vs_meineke,
             "uncorrected_ocr_vs_meineke": diff_uncorrected_vs_meineke,
             "best_available_vs_meineke": diff_best_vs_meineke,
+            "human_reviewed_best_vs_meineke": diff_reviewed_best_vs_meineke,
         },
     }
 
@@ -1243,6 +1248,7 @@ def generate_meineke_comparison_page(stats: dict) -> str:
             {row("Human-corrected Greek vs Meineke", comparisons.get("human_corrected_vs_meineke", {}))}
             {row("Uncorrected OCR vs Meineke", comparisons.get("uncorrected_ocr_vs_meineke", {}))}
             {row("Best available (corrected else OCR) vs Meineke", comparisons.get("best_available_vs_meineke", {}))}
+            {row("Human-reviewed (best available) vs Meineke", comparisons.get("human_reviewed_best_vs_meineke", {}))}
         </table>
 
         <div class="footer">
