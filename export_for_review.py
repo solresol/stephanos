@@ -105,11 +105,13 @@ def export_lemmas():
             a.billerbeck_id,
             a.word_count,
             a.confidence,
+            COALESCE(mh.greek_paragraph, '') as meineke_greek_paragraph,
             (SELECT json_agg(i.image_filename ORDER BY li.position)
              FROM images i
              JOIN lemma_images li ON li.image_id = i.id
              WHERE li.lemma_id = a.id) as image_filenames
         FROM assembled_lemmas a
+        LEFT JOIN meineke_headwords mh ON mh.nodegoat_id = a.nodegoat_id
         ORDER BY a.lemma, a.version
     """
 
@@ -120,7 +122,7 @@ def export_lemmas():
     for row in rows:
         (lemma_id, lemma, entry_number, version, greek_text, english_translation,
          lemma_type, volume_label, meineke_id, billerbeck_id, word_count,
-         confidence, image_filenames) = row
+         confidence, meineke_greek_paragraph, image_filenames) = row
 
         # Parse image filenames (psycopg2 auto-deserializes JSON in some cases)
         if isinstance(image_filenames, str):
@@ -137,6 +139,7 @@ def export_lemmas():
             "entry_number": entry_number or 0,
             "version": version or "epitome",
             "greek_text": greek_text or "",
+            "meineke_greek_paragraph": meineke_greek_paragraph or "",
             "english_translation": english_translation,
             "type": lemma_type or "",
             "volume_label": volume_label or "",

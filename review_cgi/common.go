@@ -19,6 +19,7 @@ type Lemma struct {
 	EntryNumber           int      `json:"entry_number"`
 	Version               string   `json:"version"`
 	GreekText             string   `json:"greek_text"`
+	MeinekeGreekParagraph string   `json:"meineke_greek_paragraph"`
 	EnglishTranslation    string   `json:"english_translation"`
 	Type                  string   `json:"type"`
 	VolumeLabel           string   `json:"volume_label"`

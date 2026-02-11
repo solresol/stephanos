@@ -351,6 +351,11 @@ const reviewTemplate = `<!DOCTYPE html>
             <div class="section-title">Raw OCR of Greek</div>
             <div class="original-text">{{.Lemma.GreekText}}</div>
 
+            {{if .Lemma.MeinekeGreekParagraph}}
+            <div class="section-title">Meineke Greek (reference)</div>
+            <div class="original-text">{{.Lemma.MeinekeGreekParagraph}}</div>
+            {{end}}
+
             <div class="section-title">AI-generated English Translation</div>
             <div class="original-text">{{.Lemma.EnglishTranslation}}</div>
 
