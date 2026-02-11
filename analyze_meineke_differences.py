@@ -37,6 +37,7 @@ DIFF_CONTEXT_TOKENS = 3
 MEINEKE_OBJECT_TAG_RE = re.compile(r"\[/?object[^\]]*\]")
 WS_RE = re.compile(r"\s+")
 TOKEN_RE = re.compile(r"[\u0370-\u03FF\u1F00-\u1FFF]+|[A-Za-z]+|\d+")
+PARENTHETICAL_RE = re.compile(r"\([^()]*\)")
 
 MECHANICAL_PATTERNS = [
     "numeral_word_equivalent",
@@ -102,6 +103,15 @@ DIFF_TOOL = {
                     "type": "string",
                     "description": "Short summary of what differs most in this pair",
                 },
+                "translation_impact": {
+                    "type": "string",
+                    "enum": ["likely_different_translation", "probably_same_translation", "uncertain"],
+                    "description": "Whether an English translation would likely change if Meineke were used instead of Billerbeck",
+                },
+                "translation_impact_note": {
+                    "type": "string",
+                    "description": "Very short reason for the translation-impact classification",
+                },
             },
             "required": [
                 "difference_level",
@@ -109,6 +119,8 @@ DIFF_TOOL = {
                 "mechanical_patterns",
                 "word_pairs",
                 "summary",
+                "translation_impact",
+                "translation_impact_note",
             ],
         },
     },
@@ -126,7 +138,11 @@ Rules:
    - e.g., Str. vs Στράβων; fr. vs fragment wording.
 4. Ignore bare editorial wrappers when possible (<...>, [...], quotes), unless content differs substantively.
 5. Mark "substantive" when lexical content, names, morphology that changes reference, or semantic scope differs.
-6. Return only strict function-call JSON."""
+6. Set translation_impact to:
+   - likely_different_translation: if English meaning/reference would likely change.
+   - probably_same_translation: if differences are notation/mechanical or unlikely to change translation.
+   - uncertain: if insufficient context.
+7. Return only strict function-call JSON."""
 
 USER_PROMPT = """Compare these two Greek texts.
 
@@ -179,6 +195,9 @@ def ensure_table(cur) -> None:
             mechanical_patterns JSONB,
             word_pairs JSONB,
             summary TEXT,
+            translation_impact TEXT,
+            translation_impact_note TEXT,
+            likely_translation_change BOOLEAN NOT NULL DEFAULT FALSE,
             has_numeral_word_pattern BOOLEAN NOT NULL DEFAULT FALSE,
             has_citation_abbreviation_pattern BOOLEAN NOT NULL DEFAULT FALSE,
             has_editorial_marker_pattern BOOLEAN NOT NULL DEFAULT FALSE,
@@ -187,6 +206,24 @@ def ensure_table(cur) -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE meineke_text_differences
+        ADD COLUMN IF NOT EXISTS translation_impact TEXT
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE meineke_text_differences
+        ADD COLUMN IF NOT EXISTS translation_impact_note TEXT
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE meineke_text_differences
+        ADD COLUMN IF NOT EXISTS likely_translation_change BOOLEAN NOT NULL DEFAULT FALSE
         """
     )
     cur.execute(
@@ -209,6 +246,48 @@ def clean_prompt_text(text: str) -> str:
     if len(text) > MAX_TEXT_CHARS:
         return text[: MAX_TEXT_CHARS - 1] + "…"
     return text
+
+
+def strip_leading_entry_number(text: str, entry_number: int | None) -> str:
+    """
+    Remove a leading Billerbeck entry number marker like:
+      "30 Καλλατις..." or "30. Καλλατις..." or "30) Καλλατις..."
+    when it matches the known entry_number for that lemma.
+    """
+    if not text:
+        return ""
+    if entry_number is None:
+        return text
+
+    try:
+        n = int(entry_number)
+    except (TypeError, ValueError):
+        return text
+
+    # Require an exact leading numeric marker matching this lemma's entry number.
+    pattern = re.compile(rf"^\s*{n}(?:[.)])?\s+")
+    return pattern.sub("", text, count=1)
+
+
+def strip_parenthetical_content(text: str) -> str:
+    """
+    Remove parenthetical spans like:
+      (FGrHist 4 F 57 = fr. 57 Fowler)
+    before LLM comparison so citation wrappers do not count as differences.
+    """
+    if not text:
+        return ""
+
+    cleaned = text
+    while True:
+        updated = PARENTHETICAL_RE.sub(" ", cleaned)
+        if updated == cleaned:
+            break
+        cleaned = updated
+
+    # If unmatched parens remain, drop them as punctuation noise.
+    cleaned = cleaned.replace("(", " ").replace(")", " ")
+    return WS_RE.sub(" ", cleaned.replace("\u00a0", " ")).strip()
 
 
 def build_difference_windows(billerbeck_text: str, meineke_text: str) -> str:
@@ -386,6 +465,24 @@ def upsert_pair_row(cur, row) -> None:
                 THEN NULL
                 ELSE meineke_text_differences.summary
             END,
+            translation_impact = CASE
+                WHEN meineke_text_differences.pair_hash IS DISTINCT FROM EXCLUDED.pair_hash
+                  OR meineke_text_differences.normalized_class IS DISTINCT FROM EXCLUDED.normalized_class
+                THEN NULL
+                ELSE meineke_text_differences.translation_impact
+            END,
+            translation_impact_note = CASE
+                WHEN meineke_text_differences.pair_hash IS DISTINCT FROM EXCLUDED.pair_hash
+                  OR meineke_text_differences.normalized_class IS DISTINCT FROM EXCLUDED.normalized_class
+                THEN NULL
+                ELSE meineke_text_differences.translation_impact_note
+            END,
+            likely_translation_change = CASE
+                WHEN meineke_text_differences.pair_hash IS DISTINCT FROM EXCLUDED.pair_hash
+                  OR meineke_text_differences.normalized_class IS DISTINCT FROM EXCLUDED.normalized_class
+                THEN FALSE
+                ELSE meineke_text_differences.likely_translation_change
+            END,
             has_numeral_word_pattern = CASE
                 WHEN meineke_text_differences.pair_hash IS DISTINCT FROM EXCLUDED.pair_hash
                   OR meineke_text_differences.normalized_class IS DISTINCT FROM EXCLUDED.normalized_class
@@ -517,9 +614,12 @@ def get_tokens_used_today(cur) -> int:
 
 
 def analyze_pair(client: OpenAI, *, model: str, lemma: str, entry_number: int | None, billerbeck_id: str, meineke_id: str, source_kind: str, billerbeck_text: str, meineke_text: str):
-    billerbeck_excerpt = clean_prompt_text(billerbeck_text)
-    meineke_excerpt = clean_prompt_text(meineke_text)
-    difference_windows = build_difference_windows(billerbeck_text, meineke_text)
+    billerbeck_for_llm = strip_leading_entry_number(billerbeck_text, entry_number)
+    billerbeck_for_llm = strip_parenthetical_content(billerbeck_for_llm)
+    meineke_for_llm = strip_parenthetical_content(meineke_text)
+    billerbeck_excerpt = clean_prompt_text(billerbeck_for_llm)
+    meineke_excerpt = clean_prompt_text(meineke_for_llm)
+    difference_windows = build_difference_windows(billerbeck_for_llm, meineke_for_llm)
 
     response = client.chat.completions.create(
         model=model,
@@ -560,6 +660,10 @@ def normalize_llm_result(result: dict) -> dict:
 
     minor_equivalent_to_tone = bool(result.get("minor_equivalent_to_tone", False))
     summary = str(result.get("summary", "")).strip()
+    translation_impact = str(result.get("translation_impact", "uncertain")).strip().lower()
+    if translation_impact not in {"likely_different_translation", "probably_same_translation", "uncertain"}:
+        translation_impact = "uncertain"
+    translation_impact_note = str(result.get("translation_impact_note", "")).strip()
 
     patterns = []
     for item in result.get("mechanical_patterns", []):
@@ -594,6 +698,8 @@ def normalize_llm_result(result: dict) -> dict:
         "mechanical_patterns": patterns,
         "word_pairs": word_pairs,
         "summary": summary,
+        "translation_impact": translation_impact,
+        "translation_impact_note": translation_impact_note,
     }
 
 
@@ -608,6 +714,7 @@ def update_analysis_success(conn, cur, lemma_id: int, model: str, tokens_used: i
         or "author_work_notation_variant" in normalized["mechanical_patterns"]
     )
     has_editorial = "editorial_bracketing_or_quotes" in normalized["mechanical_patterns"]
+    likely_translation_change = normalized["translation_impact"] == "likely_different_translation"
 
     cur.execute(
         """
@@ -621,6 +728,9 @@ def update_analysis_success(conn, cur, lemma_id: int, model: str, tokens_used: i
             mechanical_patterns = %s::jsonb,
             word_pairs = %s::jsonb,
             summary = %s,
+            translation_impact = %s,
+            translation_impact_note = %s,
+            likely_translation_change = %s,
             has_numeral_word_pattern = %s,
             has_citation_abbreviation_pattern = %s,
             has_editorial_marker_pattern = %s,
@@ -638,6 +748,9 @@ def update_analysis_success(conn, cur, lemma_id: int, model: str, tokens_used: i
             mechanical_patterns_json,
             word_pairs_json,
             normalized["summary"],
+            normalized["translation_impact"],
+            normalized["translation_impact_note"],
+            likely_translation_change,
             has_numeral,
             has_citation_abbrev,
             has_editorial,
@@ -738,6 +851,7 @@ def main() -> None:
             tokens_total += tokens_used
             print(
                 f"OK ({normalized['difference_level']}, "
+                f"impact={normalized['translation_impact']}, "
                 f"minor={normalized['minor_equivalent_to_tone']}, "
                 f"tokens={tokens_used}, total_today={tokens_today + tokens_total:,})"
             )

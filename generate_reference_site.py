@@ -5,6 +5,7 @@ Generate a reference website showing all lemmas and their translations, grouped 
 import json
 import re
 import html as html_module
+import hashlib
 import unicodedata
 from pathlib import Path
 from datetime import datetime, timezone
@@ -833,8 +834,8 @@ def generate_index_html(letter_counts, stats):
 	            <a href="aliases.html">Aliases</a>
 	            <a href="map.html">Places Map</a>
 	            <a href="statistics.html">Statistics</a>
-	            <a href="meineke_comparison.html">Meineke vs Billerbeck</a>
-	            <a href="meineke_difference_analysis.html">Difference Analysis</a>
+	            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
+	            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
 	            <a href="progress.html">Processing Progress</a>
 	            <a href="pipeline.html">Pipeline Status</a>
 	            <a href="protected/">Page Scans</a>
@@ -973,8 +974,8 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
 	            <a href="aliases.html">Aliases</a>
 	            <a href="map.html">Places Map</a>
 	            <a href="statistics.html">Statistics</a>
-	            <a href="meineke_comparison.html">Meineke vs Billerbeck</a>
-	            <a href="meineke_difference_analysis.html">Difference Analysis</a>
+	            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
+	            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
 	            <a href="cgi-bin/review.cgi">Human Review</a>
 	            <a href="downloads.html">Downloads</a>
 	            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
@@ -1221,24 +1222,24 @@ def generate_meineke_comparison_page(stats: dict) -> str:
     </div>
     <div class="container">
         <div class="nav-links">
-            <a href="index.html">All Letters</a>
-            <a href="sources.html">Ancient Sources</a>
-            <a href="works.html">Works Cited</a>
-            <a href="fgrhist.html">FGrHist Index</a>
-            <a href="entities.html">People &amp; Deities</a>
-            <a href="peoples.html">Ethnic Groups</a>
-            <a href="aliases.html">Aliases</a>
-            <a href="map.html">Places Map</a>
-            <a href="statistics.html">Statistics</a>
+            <a href="../index.html">All Letters</a>
+            <a href="../sources.html">Ancient Sources</a>
+            <a href="../works.html">Works Cited</a>
+            <a href="../fgrhist.html">FGrHist Index</a>
+            <a href="../entities.html">People &amp; Deities</a>
+            <a href="../peoples.html">Ethnic Groups</a>
+            <a href="../aliases.html">Aliases</a>
+            <a href="../map.html">Places Map</a>
+            <a href="../statistics.html">Statistics</a>
             <a href="meineke_difference_analysis.html">Difference Analysis</a>
-            <a href="progress.html">Processing Progress</a>
-            <a href="pipeline.html">Pipeline Status</a>
-            <a href="protected/">Page Scans</a>
-            <a href="cgi-bin/review.cgi">Human Review</a>
-            <a href="downloads.html">Downloads</a>
+            <a href="../progress.html">Processing Progress</a>
+            <a href="../pipeline.html">Pipeline Status</a>
+            <a href="../protected/">Page Scans</a>
+            <a href="../cgi-bin/review.cgi">Human Review</a>
+            <a href="../downloads.html">Downloads</a>
         </div>
 
-        <div class="breadcrumb"><a href="index.html">All Letters</a> / Meineke vs Billerbeck</div>
+        <div class="breadcrumb"><a href="../index.html">All Letters</a> / Meineke vs Billerbeck</div>
 
         <h2>Coverage</h2>
         <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
@@ -1331,6 +1332,7 @@ def extract_images_from_database(cur, output_dir: Path):
     """Extract image BLOBs from database to protected directory"""
     protected_dir = output_dir / "protected"
     protected_dir.mkdir(exist_ok=True)
+    used_names = set()
 
     # Get all unique image filenames used in assembled lemmas
     cur.execute(
@@ -1356,7 +1358,18 @@ def extract_images_from_database(cur, output_dir: Path):
         if not image_data:
             continue
 
-        image_path = protected_dir / filename
+        # Keep extracted files inside protected/ even if DB filename contains paths like ../graphic/...
+        safe_name = Path(filename or "").name
+        if not safe_name:
+            safe_name = f"image_{extracted + 1:06d}.bin"
+        if safe_name in used_names:
+            stem = Path(safe_name).stem
+            suffix = Path(safe_name).suffix
+            digest = hashlib.sha1((filename or safe_name).encode("utf-8")).hexdigest()[:8]
+            safe_name = f"{stem}_{digest}{suffix}"
+        used_names.add(safe_name)
+
+        image_path = protected_dir / safe_name
         image_path.write_bytes(image_data)
         extracted += 1
 
@@ -1405,9 +1418,11 @@ def main():
 
     # Generate Meineke comparison page (best-effort; don't fail the whole site on stats issues)
     try:
+        protected_dir = output_dir / "protected"
+        protected_dir.mkdir(exist_ok=True)
         meineke_stats = compute_meineke_comparison_stats(cur)
         meineke_html = generate_meineke_comparison_page(meineke_stats)
-        (output_dir / "meineke_comparison.html").write_text(meineke_html, encoding='utf-8')
+        (protected_dir / "meineke_comparison.html").write_text(meineke_html, encoding='utf-8')
     except Exception as e:
         print(f"Warning: failed to generate Meineke comparison page: {e}")
         fallback_html = f"""<!DOCTYPE html>
@@ -1436,13 +1451,13 @@ def main():
     </div>
     <div class="container">
         <div class="nav-links">
-            <a href="index.html">All Letters</a>
-            <a href="statistics.html">Statistics</a>
+            <a href="../index.html">All Letters</a>
+            <a href="../statistics.html">Statistics</a>
             <a href="meineke_difference_analysis.html">Difference Analysis</a>
-            <a href="pipeline.html">Pipeline Status</a>
-            <a href="cgi-bin/review.cgi">Human Review</a>
+            <a href="../pipeline.html">Pipeline Status</a>
+            <a href="../cgi-bin/review.cgi">Human Review</a>
         </div>
-        <div class="breadcrumb"><a href="index.html">All Letters</a> / Meineke vs Billerbeck</div>
+        <div class="breadcrumb"><a href="../index.html">All Letters</a> / Meineke vs Billerbeck</div>
         <h2>Page Unavailable</h2>
         <p>This page could not be generated.</p>
         <p class="note">
@@ -1458,7 +1473,7 @@ def main():
 </body>
 </html>
 """
-        (output_dir / "meineke_comparison.html").write_text(fallback_html, encoding='utf-8')
+        (protected_dir / "meineke_comparison.html").write_text(fallback_html, encoding='utf-8')
 
     conn.close()
 

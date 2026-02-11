@@ -3,7 +3,7 @@
 Generate a reporting page for GPT-analyzed Meineke/Billerbeck differences.
 
 Output:
-  reference_site/meineke_difference_analysis.html
+  reference_site/protected/meineke_difference_analysis.html
 """
 import html as html_module
 import json
@@ -12,7 +12,7 @@ from pathlib import Path
 
 from db import get_connection
 
-OUTPUT_PATH = Path("reference_site/meineke_difference_analysis.html")
+OUTPUT_PATH = Path("reference_site/protected/meineke_difference_analysis.html")
 
 PATTERN_LABELS = {
     "numeral_word_equivalent": "Numeral vs word equivalent",
@@ -43,13 +43,13 @@ def shorten(text: str, limit: int = 260) -> str:
 def nav_links() -> str:
     return """
         <div class="nav-links">
-            <a href="index.html">All Letters</a>
+            <a href="../index.html">All Letters</a>
             <a href="meineke_comparison.html">Meineke vs Billerbeck</a>
-            <a href="sources.html">Ancient Sources</a>
-            <a href="entities.html">People &amp; Deities</a>
-            <a href="statistics.html">Statistics</a>
-            <a href="pipeline.html">Pipeline Status</a>
-            <a href="cgi-bin/review.cgi">Human Review</a>
+            <a href="../sources.html">Ancient Sources</a>
+            <a href="../entities.html">People &amp; Deities</a>
+            <a href="../statistics.html">Statistics</a>
+            <a href="../pipeline.html">Pipeline Status</a>
+            <a href="../cgi-bin/review.cgi">Human Review</a>
         </div>
     """
 
@@ -76,7 +76,36 @@ def fetch_stats(cur):
                              AND difference_level = 'substantive') AS substantive_count,
             COUNT(*) FILTER (WHERE llm_status = 'analyzed' AND has_numeral_word_pattern) AS numeral_word_count,
             COUNT(*) FILTER (WHERE llm_status = 'analyzed' AND has_citation_abbreviation_pattern) AS citation_abbrev_count,
-            COUNT(*) FILTER (WHERE llm_status = 'analyzed' AND has_editorial_marker_pattern) AS editorial_marker_count
+            COUNT(*) FILTER (WHERE llm_status = 'analyzed' AND has_editorial_marker_pattern) AS editorial_marker_count,
+            COUNT(*) FILTER (
+                WHERE normalized_class = 'different'
+                  AND llm_status = 'analyzed'
+                  AND translation_impact = 'likely_different_translation'
+            ) AS likely_different_translation_count,
+            COUNT(*) FILTER (
+                WHERE normalized_class = 'different'
+                  AND llm_status = 'analyzed'
+                  AND translation_impact = 'probably_same_translation'
+            ) AS probably_same_translation_count,
+            COUNT(*) FILTER (
+                WHERE normalized_class = 'different'
+                  AND llm_status = 'analyzed'
+                  AND COALESCE(translation_impact, 'uncertain') = 'uncertain'
+            ) AS uncertain_translation_count,
+            COUNT(*) FILTER (WHERE normalized_class = 'different' AND source_kind = 'corrected') AS different_corrected_count,
+            COUNT(*) FILTER (
+                WHERE normalized_class = 'different'
+                  AND source_kind = 'corrected'
+                  AND llm_status = 'analyzed'
+                  AND translation_impact = 'likely_different_translation'
+            ) AS likely_different_corrected_count,
+            COUNT(*) FILTER (WHERE normalized_class = 'different' AND source_kind = 'ocr') AS different_ocr_count,
+            COUNT(*) FILTER (
+                WHERE normalized_class = 'different'
+                  AND source_kind = 'ocr'
+                  AND llm_status = 'analyzed'
+                  AND translation_impact = 'likely_different_translation'
+            ) AS likely_different_ocr_count
         FROM meineke_text_differences
         """
     )
@@ -228,6 +257,13 @@ def main():
         numeral_word_count,
         citation_abbrev_count,
         editorial_marker_count,
+        likely_different_translation_count,
+        probably_same_translation_count,
+        uncertain_translation_count,
+        different_corrected_count,
+        likely_different_corrected_count,
+        different_ocr_count,
+        likely_different_ocr_count,
     ) = stats
 
     level_rows = []
@@ -390,7 +426,7 @@ def main():
 <body>
   <div class="header">
     <h1>Meineke Difference Analysis</h1>
-    <p>GPT-5-mini structured reports for Billerbeck vs Meineke text differences</p>
+    <p>Estimated translation impact if the project switched from Billerbeck to Meineke</p>
   </div>
   <div class="container">
     {nav_links()}
@@ -402,8 +438,31 @@ def main():
       <div class="stat-card"><div class="stat-value">{tone_count:,}</div><div class="stat-label">Tone-marks only</div></div>
       <div class="stat-card"><div class="stat-value">{different_count:,}</div><div class="stat-label">Different (needs review)</div></div>
       <div class="stat-card"><div class="stat-value">{analyzed_count:,}</div><div class="stat-label">Different rows analyzed by LLM</div></div>
+      <div class="stat-card"><div class="stat-value">{likely_different_translation_count:,}</div><div class="stat-label">Likely different translation</div></div>
       <div class="stat-card"><div class="stat-value">{pending_count:,}</div><div class="stat-label">Pending LLM analysis</div></div>
       <div class="stat-card"><div class="stat-value">{error_count:,}</div><div class="stat-label">LLM analysis errors</div></div>
+    </div>
+
+    <div class="section">
+      <h2>Switching to Meineke: Translation Impact</h2>
+      <p class="note">
+        Primary metric: rows where the LLM judges the English translation would likely change if we switched base text.
+      </p>
+      <table>
+        <tr><th>Impact class</th><th>Count</th><th>Share of analyzed different rows</th></tr>
+        <tr><td>Likely different translation</td><td>{likely_different_translation_count:,}</td><td>{fmt_pct(likely_different_translation_count, analyzed_count)}</td></tr>
+        <tr><td>Probably same translation</td><td>{probably_same_translation_count:,}</td><td>{fmt_pct(probably_same_translation_count, analyzed_count)}</td></tr>
+        <tr><td>Uncertain</td><td>{uncertain_translation_count:,}</td><td>{fmt_pct(uncertain_translation_count, analyzed_count)}</td></tr>
+      </table>
+      <table>
+        <tr><th>Subset</th><th>Total different rows</th><th>Likely different translation</th><th>Share within subset</th></tr>
+        <tr><td>Human-corrected Billerbeck rows</td><td>{different_corrected_count:,}</td><td>{likely_different_corrected_count:,}</td><td>{fmt_pct(likely_different_corrected_count, different_corrected_count)}</td></tr>
+        <tr><td>Uncorrected OCR rows</td><td>{different_ocr_count:,}</td><td>{likely_different_ocr_count:,}</td><td>{fmt_pct(likely_different_ocr_count, different_ocr_count)}</td></tr>
+        <tr><td>All different rows</td><td>{different_count:,}</td><td>{likely_different_translation_count:,}</td><td>{fmt_pct(likely_different_translation_count, different_count)}</td></tr>
+      </table>
+      <p class="note">
+        Remaining uncertainty is mainly from pending rows: {pending_count:,} of {different_count:,} different rows are not yet analyzed.
+      </p>
     </div>
 
     <div class="section">
