@@ -80,7 +80,8 @@ uv run generate_spelling_variants.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 5g: Analyze Meineke/Billerbeck differences with gpt-5-mini (small daily batch)
 echo "Step 5g: Analyzing Meineke/Billerbeck differences..." | tee -a "$LOGFILE"
-uv run analyze_meineke_differences.py --limit 20 --daily-token-limit 100000 --delay 1 2>&1 | tee -a "$LOGFILE"
+MEINEKE_DIFF_DAILY_TOKEN_LIMIT="${MEINEKE_DIFF_DAILY_TOKEN_LIMIT:-1000000}"
+uv run analyze_meineke_differences.py --limit 20 --daily-token-limit "$MEINEKE_DIFF_DAILY_TOKEN_LIMIT" --delay 1 2>&1 | tee -a "$LOGFILE"
 
 # Step 6: Generate progress website
 echo "Step 6: Generating progress website..." | tee -a "$LOGFILE"
