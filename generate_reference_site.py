@@ -43,6 +43,44 @@ GREEK_LETTERS = [
 
 LETTER_BY_CHAR = {char: slug for char, _, slug in GREEK_LETTERS}
 
+_WS_RE = re.compile(r"\s+")
+
+
+def normalize_whitespace(text: str) -> str:
+    """Normalize whitespace for robust string comparison (collapse runs, trim)."""
+    if not text:
+        return ""
+    # Also normalize non-breaking spaces to regular spaces.
+    text = text.replace("\u00a0", " ")
+    return _WS_RE.sub(" ", text).strip()
+
+
+def strip_diacritics(text: str) -> str:
+    """Remove Greek tone-marks/diacritics (combining marks) for comparison."""
+    if not text:
+        return ""
+    decomposed = unicodedata.normalize("NFD", text)
+    without_marks = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return unicodedata.normalize("NFC", without_marks)
+
+
+def classify_text_difference(a: str, b: str) -> str:
+    """
+    Classify differences between two Greek strings.
+
+    Returns:
+        - "same": equal after whitespace normalization
+        - "tone_marks_only": not equal exactly, but equal after removing combining marks
+        - "different": base letters differ (or other non-diacritic differences)
+    """
+    a_norm = normalize_whitespace(a)
+    b_norm = normalize_whitespace(b)
+    if a_norm == b_norm:
+        return "same"
+    if strip_diacritics(a_norm) == strip_diacritics(b_norm):
+        return "tone_marks_only"
+    return "different"
+
 
 def strip_combining(char: str) -> str:
     """Return base character without combining marks."""
@@ -699,19 +737,20 @@ def generate_index_html(letter_counts, stats):
     </div>
 
     <div class="container">
-        <div class="nav-links">
-            <a href="sources.html">Ancient Sources</a>
-            <a href="works.html">Works Cited</a>
-            <a href="fgrhist.html">FGrHist Index</a>
-            <a href="entities.html">People &amp; Deities</a>
-            <a href="peoples.html">Ethnic Groups</a>
-            <a href="aliases.html">Aliases</a>
-            <a href="map.html">Places Map</a>
-            <a href="statistics.html">Statistics</a>
-            <a href="progress.html">Processing Progress</a>
-            <a href="pipeline.html">Pipeline Status</a>
-            <a href="protected/">Page Scans</a>
-            <a href="cgi-bin/review.cgi">Human Review</a>
+	        <div class="nav-links">
+	            <a href="sources.html">Ancient Sources</a>
+	            <a href="works.html">Works Cited</a>
+	            <a href="fgrhist.html">FGrHist Index</a>
+	            <a href="entities.html">People &amp; Deities</a>
+	            <a href="peoples.html">Ethnic Groups</a>
+	            <a href="aliases.html">Aliases</a>
+	            <a href="map.html">Places Map</a>
+	            <a href="statistics.html">Statistics</a>
+	            <a href="meineke_comparison.html">Meineke vs Billerbeck</a>
+	            <a href="progress.html">Processing Progress</a>
+	            <a href="pipeline.html">Pipeline Status</a>
+	            <a href="protected/">Page Scans</a>
+	            <a href="cgi-bin/review.cgi">Human Review</a>
             <a href="downloads.html">Downloads</a>
             <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
         </div>
@@ -836,6 +875,240 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
         <p>Stephanos of Byzantium - Ethnika</p>
     </div>
     <div class="container">
+	        <div class="nav-links">
+	            <a href="index.html">All Letters</a>
+	            <a href="sources.html">Ancient Sources</a>
+	            <a href="works.html">Works Cited</a>
+	            <a href="fgrhist.html">FGrHist Index</a>
+	            <a href="entities.html">People &amp; Deities</a>
+	            <a href="peoples.html">Ethnic Groups</a>
+	            <a href="aliases.html">Aliases</a>
+	            <a href="map.html">Places Map</a>
+	            <a href="statistics.html">Statistics</a>
+	            <a href="meineke_comparison.html">Meineke vs Billerbeck</a>
+	            <a href="cgi-bin/review.cgi">Human Review</a>
+	            <a href="downloads.html">Downloads</a>
+	            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
+	        </div>
+        {body}
+        <div class="footer">
+            <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+        </div>
+    </div>
+    {generate_status_script(slug)}
+</body>
+    </html>
+    """
+    return html
+
+
+def compute_meineke_comparison_stats(cur) -> dict:
+    """
+    Compare our Greek (Billerbeck OCR and human corrections) to Meineke paragraphs.
+
+    Note: This page is intended as a high-level QA/progress view, not a philological judgment
+    about editorial differences. "Same/different" is defined by string comparison after
+    whitespace normalization (see classify_text_difference()).
+    """
+    cur.execute(
+        """
+        SELECT
+            a.id,
+            a.lemma,
+            COALESCE(a.greek_text, '') as ocr_greek_text,
+            COALESCE(a.corrected_greek_scan, '') as corrected_greek_scan,
+            COALESCE(a.human_greek_text, '') as human_greek_text,
+            COALESCE(a.review_status, 'not_reviewed') as review_status,
+            COALESCE(a.corrected_english_translation, '') as corrected_english_translation,
+            COALESCE(a.reviewed_english_translation, '') as reviewed_english_translation,
+            COALESCE(mh.greek_paragraph, '') as meineke_greek_paragraph
+        FROM assembled_lemmas a
+        LEFT JOIN meineke_headwords mh ON mh.nodegoat_id = a.nodegoat_id
+        WHERE a.version = 'epitome'
+          AND a.greek_text IS NOT NULL
+          AND a.greek_text != ''
+        ORDER BY a.id
+        """
+    )
+    rows = cur.fetchall()
+
+    def init_diff():
+        return {"total": 0, "same": 0, "different": 0, "tone_marks_only": 0}
+
+    def update_diff(bucket: dict, diff_class: str):
+        bucket["total"] += 1
+        if diff_class == "same":
+            bucket["same"] += 1
+            return
+        bucket["different"] += 1
+        if diff_class == "tone_marks_only":
+            bucket["tone_marks_only"] += 1
+
+    total = len(rows)
+    with_meineke = 0
+    human_corrected = 0
+    human_reviewed = 0
+
+    review_status_counts = {"not_reviewed": 0, "reviewed_ok": 0, "reviewed_corrections": 0, "other": 0}
+
+    diff_corrected_vs_meineke = init_diff()
+    diff_uncorrected_vs_meineke = init_diff()
+    diff_best_vs_meineke = init_diff()
+
+    for (
+        lemma_id,
+        lemma,
+        ocr_greek_text,
+        corrected_greek_scan,
+        human_greek_text,
+        review_status,
+        corrected_english_translation,
+        reviewed_english_translation,
+        meineke_greek_paragraph,
+    ) in rows:
+        ocr_greek_text = ocr_greek_text or ""
+        corrected_greek_scan = corrected_greek_scan or ""
+        human_greek_text = human_greek_text or ""
+        meineke_greek_paragraph = meineke_greek_paragraph or ""
+
+        status = (review_status or "").strip() or "not_reviewed"
+        if status in review_status_counts:
+            review_status_counts[status] += 1
+        else:
+            review_status_counts["other"] += 1
+
+        has_human_correction = bool(corrected_greek_scan.strip() or human_greek_text.strip())
+        if has_human_correction:
+            human_corrected += 1
+
+        is_reviewed = (
+            status in ("reviewed_ok", "reviewed_corrections")
+            or bool((corrected_english_translation or "").strip())
+            or bool((reviewed_english_translation or "").strip())
+        )
+        if is_reviewed:
+            human_reviewed += 1
+
+        has_meineke = bool(meineke_greek_paragraph.strip())
+        if not has_meineke:
+            continue
+        with_meineke += 1
+
+        # Choose "best available" Billerbeck: corrected Greek first, else OCR.
+        best_greek = (corrected_greek_scan.strip() or human_greek_text.strip() or ocr_greek_text.strip())
+
+        update_diff(diff_best_vs_meineke, classify_text_difference(best_greek, meineke_greek_paragraph))
+
+        if has_human_correction:
+            corrected_greek = corrected_greek_scan.strip() or human_greek_text.strip()
+            update_diff(diff_corrected_vs_meineke, classify_text_difference(corrected_greek, meineke_greek_paragraph))
+        else:
+            update_diff(diff_uncorrected_vs_meineke, classify_text_difference(ocr_greek_text, meineke_greek_paragraph))
+
+    return {
+        "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "scope": "assembled_lemmas.version = 'epitome' with non-empty greek_text",
+        "totals": {
+            "total_entries": total,
+            "entries_with_meineke": with_meineke,
+            "entries_human_corrected": human_corrected,
+            "entries_human_reviewed": human_reviewed,
+        },
+        "review_status_counts": review_status_counts,
+        "comparisons": {
+            "human_corrected_vs_meineke": diff_corrected_vs_meineke,
+            "uncorrected_ocr_vs_meineke": diff_uncorrected_vs_meineke,
+            "best_available_vs_meineke": diff_best_vs_meineke,
+        },
+    }
+
+
+def generate_meineke_comparison_page(stats: dict) -> str:
+    def fmt_pct(n: int, d: int) -> str:
+        if not d:
+            return "N/A"
+        return f"{(100.0 * n / d):.1f}%"
+
+    totals = stats.get("totals", {})
+    comparisons = stats.get("comparisons", {})
+
+    total_entries = int(totals.get("total_entries", 0) or 0)
+    entries_with_meineke = int(totals.get("entries_with_meineke", 0) or 0)
+    entries_human_corrected = int(totals.get("entries_human_corrected", 0) or 0)
+    entries_human_reviewed = int(totals.get("entries_human_reviewed", 0) or 0)
+
+    review_counts = stats.get("review_status_counts", {}) or {}
+    reviewed_ok = int(review_counts.get("reviewed_ok", 0) or 0)
+    reviewed_corr = int(review_counts.get("reviewed_corrections", 0) or 0)
+    not_reviewed = int(review_counts.get("not_reviewed", 0) or 0)
+
+    def row(name: str, bucket: dict) -> str:
+        total = int(bucket.get("total", 0) or 0)
+        same = int(bucket.get("same", 0) or 0)
+        different = int(bucket.get("different", 0) or 0)
+        tone_only = int(bucket.get("tone_marks_only", 0) or 0)
+        substantive = max(0, different - tone_only)
+        return f"""
+            <tr>
+                <td>{html_module.escape(name)}</td>
+                <td>{total:,}</td>
+                <td>{same:,} ({fmt_pct(same, total)})</td>
+                <td>{different:,} ({fmt_pct(different, total)})</td>
+                <td>{tone_only:,} ({fmt_pct(tone_only, different)})</td>
+                <td>{substantive:,} ({fmt_pct(substantive, different)})</td>
+            </tr>
+        """
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meineke vs Billerbeck - Stephanos Ethnika</title>
+    <style>
+    {common_styles()}
+    table {{
+        width: 100%;
+        border-collapse: collapse;
+        margin: 18px 0;
+        background: #fff;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        border-radius: 8px;
+        overflow: hidden;
+    }}
+    th, td {{
+        padding: 12px 14px;
+        border-bottom: 1px solid #eee;
+        vertical-align: top;
+    }}
+    th {{
+        background: #0d47a1;
+        color: #fff;
+        font-weight: 700;
+        text-align: left;
+    }}
+    tr:hover td {{
+        background: #fafafa;
+    }}
+    .note {{
+        color: #555;
+        font-size: 0.95em;
+        line-height: 1.6;
+        margin: 10px 0 0;
+    }}
+    code {{
+        background: #f2f4f8;
+        padding: 2px 6px;
+        border-radius: 4px;
+    }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Meineke vs Billerbeck</h1>
+        <p>Greek text comparison and human review coverage</p>
+    </div>
+    <div class="container">
         <div class="nav-links">
             <a href="index.html">All Letters</a>
             <a href="sources.html">Ancient Sources</a>
@@ -846,20 +1119,96 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
             <a href="aliases.html">Aliases</a>
             <a href="map.html">Places Map</a>
             <a href="statistics.html">Statistics</a>
+            <a href="progress.html">Processing Progress</a>
+            <a href="pipeline.html">Pipeline Status</a>
+            <a href="protected/">Page Scans</a>
             <a href="cgi-bin/review.cgi">Human Review</a>
             <a href="downloads.html">Downloads</a>
-            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
         </div>
-        {body}
+
+        <div class="breadcrumb"><a href="index.html">All Letters</a> / Meineke vs Billerbeck</div>
+
+        <h2>Coverage</h2>
+        <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
+            <div class="stat-card">
+                <div class="stat-value">{total_entries:,}</div>
+                <div class="stat-label">Billerbeck OCR entries</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{entries_with_meineke:,}</div>
+                <div class="stat-label">With Meineke paragraph</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{entries_human_corrected:,}</div>
+                <div class="stat-label">Human-corrected Greek</div>
+                <div class="stat-meta">{fmt_pct(entries_human_corrected, total_entries)} of OCR entries</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{entries_human_reviewed:,}</div>
+                <div class="stat-label">Human-reviewed (any)</div>
+                <div class="stat-meta">{fmt_pct(entries_human_reviewed, total_entries)} of OCR entries</div>
+            </div>
+        </div>
+
+        <p class="note">
+            Scope: <code>{html_module.escape(stats.get('scope', ''))}</code><br>
+            Generated: {html_module.escape(stats.get('generated_at_utc', ''))}<br>
+            Human-reviewed (any): <code>review_status</code> is <code>reviewed_ok</code>/<code>reviewed_corrections</code>, or a human translation field is present
+        </p>
+
+        <h2>Human Review Status</h2>
+        <table>
+            <tr>
+                <th>Status</th>
+                <th>Count</th>
+                <th>Share of OCR entries</th>
+            </tr>
+            <tr>
+                <td>not_reviewed</td>
+                <td>{not_reviewed:,}</td>
+                <td>{fmt_pct(not_reviewed, total_entries)}</td>
+            </tr>
+            <tr>
+                <td>reviewed_ok</td>
+                <td>{reviewed_ok:,}</td>
+                <td>{fmt_pct(reviewed_ok, total_entries)}</td>
+            </tr>
+            <tr>
+                <td>reviewed_corrections</td>
+                <td>{reviewed_corr:,}</td>
+                <td>{fmt_pct(reviewed_corr, total_entries)}</td>
+            </tr>
+        </table>
+
+        <h2>Differences vs Meineke</h2>
+        <p class="note">
+            “Same” is equality after whitespace normalization. “Tone-marks only” means the strings become equal
+            after removing combining diacritics (accents/breathings) but are not exactly equal.
+        </p>
+
+        <table>
+            <tr>
+                <th>Comparison</th>
+                <th>Compared</th>
+                <th>Same</th>
+                <th>Different</th>
+                <th>Tone-marks only</th>
+                <th>Substantive</th>
+            </tr>
+            {row("Human-corrected Greek vs Meineke", comparisons.get("human_corrected_vs_meineke", {}))}
+            {row("Uncorrected OCR vs Meineke", comparisons.get("uncorrected_ocr_vs_meineke", {}))}
+            {row("Best available (corrected else OCR) vs Meineke", comparisons.get("best_available_vs_meineke", {}))}
+        </table>
+
         <div class="footer">
             <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
         </div>
     </div>
-    {generate_status_script(slug)}
 </body>
 </html>
 """
     return html
+
 
 def extract_images_from_database(cur, output_dir: Path):
     """Extract image BLOBs from database to protected directory"""
@@ -936,6 +1285,62 @@ def main():
 
     # Extract images from database to protected directory
     images_extracted = extract_images_from_database(cur, output_dir)
+
+    # Generate Meineke comparison page (best-effort; don't fail the whole site on stats issues)
+    try:
+        meineke_stats = compute_meineke_comparison_stats(cur)
+        meineke_html = generate_meineke_comparison_page(meineke_stats)
+        (output_dir / "meineke_comparison.html").write_text(meineke_html, encoding='utf-8')
+    except Exception as e:
+        print(f"Warning: failed to generate Meineke comparison page: {e}")
+        fallback_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meineke vs Billerbeck - Stephanos Ethnika</title>
+    <style>
+    {common_styles()}
+    code, pre {{
+        background: #f2f4f8;
+        padding: 2px 6px;
+        border-radius: 4px;
+    }}
+    pre {{
+        padding: 12px;
+        overflow-x: auto;
+    }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Meineke vs Billerbeck</h1>
+        <p>Greek text comparison and human review coverage</p>
+    </div>
+    <div class="container">
+        <div class="nav-links">
+            <a href="index.html">All Letters</a>
+            <a href="statistics.html">Statistics</a>
+            <a href="pipeline.html">Pipeline Status</a>
+            <a href="cgi-bin/review.cgi">Human Review</a>
+        </div>
+        <div class="breadcrumb"><a href="index.html">All Letters</a> / Meineke vs Billerbeck</div>
+        <h2>Page Unavailable</h2>
+        <p>This page could not be generated.</p>
+        <p class="note">
+            Common causes:
+            <code>meineke_headwords</code> table missing, <code>nodegoat_id</code> not populated, or database schema mismatch.
+        </p>
+        <h3>Error</h3>
+        <pre>{html_module.escape(str(e))}</pre>
+        <div class="footer">
+            <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+        (output_dir / "meineke_comparison.html").write_text(fallback_html, encoding='utf-8')
 
     conn.close()
 

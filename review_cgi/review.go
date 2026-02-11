@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // PageData holds data for template rendering
@@ -24,6 +25,12 @@ type PageData struct {
 	HasNextUnreviewed bool
 	LetterName        string
 	LetterNav         []LetterNav
+	ShowMeineke       bool
+}
+
+func normalizeWhitespace(s string) string {
+	// Collapses whitespace differences so "same text, different line breaks" doesn't count as different.
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func main() {
@@ -124,22 +131,33 @@ func main() {
 
 	// Navigation
 	prevLemma := GetPreviousLemma(data, currentLemma)
-	nextLemma := GetNextLemma(data, currentLemma)
-	nextUnreviewed := GetNextUnreviewedInLetter(db, data, currentLemma)
+		nextLemma := GetNextLemma(data, currentLemma)
+		nextUnreviewed := GetNextUnreviewedInLetter(db, data, currentLemma)
 
-	pageData := PageData{
-		Lemma:             currentLemma,
-		Review:            review,
-		TotalCount:        len(data.Lemmas),
+		showMeineke := false
+		if strings.TrimSpace(currentLemma.MeinekeGreekParagraph) != "" {
+			billerbeckText := currentLemma.GreekText
+			if review != nil && strings.TrimSpace(review.CorrectedGreekText) != "" {
+				billerbeckText = review.CorrectedGreekText
+			}
+			// If the two are effectively identical, don't show both.
+			showMeineke = normalizeWhitespace(billerbeckText) != normalizeWhitespace(currentLemma.MeinekeGreekParagraph)
+		}
+
+		pageData := PageData{
+			Lemma:             currentLemma,
+			Review:            review,
+			TotalCount:        len(data.Lemmas),
 		ReviewedCount:     reviewed,
 		PercentComplete:   percentComplete,
 		CurrentPosition:   currentLemma.SortOrder + 1,
 		HasPrevious:       prevLemma != nil,
 		HasNext:           nextLemma != nil,
-		HasNextUnreviewed: nextUnreviewed != nil,
-		LetterName:        GetGreekLetterName(currentLemma.Letter),
-		LetterNav:         GetLetterNavigation(data),
-	}
+			HasNextUnreviewed: nextUnreviewed != nil,
+			LetterName:        GetGreekLetterName(currentLemma.Letter),
+			LetterNav:         GetLetterNavigation(data),
+			ShowMeineke:       showMeineke,
+		}
 
 	if prevLemma != nil {
 		pageData.PreviousID = prevLemma.ID

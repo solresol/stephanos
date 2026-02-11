@@ -351,7 +351,7 @@ const reviewTemplate = `<!DOCTYPE html>
             <div class="section-title">Raw OCR of Greek</div>
             <div class="original-text">{{.Lemma.GreekText}}</div>
 
-            {{if .Lemma.MeinekeGreekParagraph}}
+            {{if .ShowMeineke}}
             <div class="section-title">Meineke Greek (reference)</div>
             <div class="original-text">{{.Lemma.MeinekeGreekParagraph}}</div>
             {{end}}
