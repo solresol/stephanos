@@ -1,0 +1,622 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+%
+\documentclass[
+]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{xcolor}
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\ifLuaTeX
+  \usepackage{selnolig}  % disable illegal ligatures
+\fi
+\IfFileExists{bookmark.sty}{\usepackage{bookmark}}{\usepackage{hyperref}}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  hidelinks,
+  pdfcreator={LaTeX via pandoc}}
+
+\author{}
+\date{}
+
+\begin{document}
+
+\hypertarget{zero-shot-llm-translation-for-ancient-greek-lexicography-a-production-grade-human-in-the-loop-pipeline}{%
+\section{Zero-Shot LLM Translation for Ancient Greek Lexicography: A
+Production-Grade Human-in-the-Loop
+Pipeline}\label{zero-shot-llm-translation-for-ancient-greek-lexicography-a-production-grade-human-in-the-loop-pipeline}}
+
+\hypertarget{abstract}{%
+\subsection{Abstract}\label{abstract}}
+
+We present a production-oriented pipeline for generating and reviewing
+English translations of ancient Greek lexicographic entries from
+\emph{Stephanos of Byzantium}. The system uses off-the-shelf LLMs in
+zero-shot mode (no fine-tuning) and couples them with strict OCR JSON
+validation, database-backed provenance, prompt versioning, and human
+review tooling. Beyond translation, the same architecture extracts cited
+authors/works/fragments, people/deities/ethnic groups, aliases,
+etymologies, and geospatial place links; it also generates
+research-facing web pages and a PDF book. We focus on methodology rather
+than model novelty: how to make LLM translation dependable enough for
+large-scale scholarly workflows. We also introduce a structured
+comparison layer between Billerbeck-based Greek and Meineke-linked
+Greek, including translation-impact classification
+(\texttt{likely\_different\_translation},
+\texttt{probably\_same\_translation}, \texttt{uncertain}). Results from
+operational use show that many observed textual differences are
+mechanical and non-translation-changing, while a smaller subset likely
+affects translation decisions. Finally, we outline a "Narrative
+Learning" loop in which recurrent human-AI correction deltas are
+distilled into explicit prompt updates. We release a reproducible
+architecture pattern for digital humanities tasks where correctness is
+cumulative and expert correction is mandatory.
+
+\hypertarget{1-introduction}{%
+\subsection{1. Introduction}\label{1-introduction}}
+
+Large language models can generate fluent translations for historical
+languages, but production use in scholarship fails when systems optimize
+for output volume rather than correctness control. In ancient text
+workflows, three constraints dominate:
+
+\begin{itemize}
+\tightlist
+\item
+  OCR noise propagates quickly.
+\item
+  Editorial traditions differ.
+\item
+  Human correction remains essential.
+\end{itemize}
+
+Our goal is to design a system that takes these constraints as
+first-class requirements.
+
+We report a deployed pipeline for the \emph{Ethnika} corpus that:
+
+\begin{itemize}
+\tightlist
+\item
+  ingests page-linked image data,
+\item
+  runs OCR with strict JSON output requirements,
+\item
+  assembles lemma-level records,
+\item
+  translates using zero-shot prompts,
+\item
+  supports human correction and review in a dedicated interface,
+\item
+  analyzes cross-edition textual differences for likely translation
+  impact,
+\item
+  derives structured scholarly metadata (sources, works, fragments,
+  entities, aliases, etymologies, places).
+\end{itemize}
+
+The key contribution is an end-to-end operational method that makes
+zero-shot translation usable under expert supervision.
+
+\hypertarget{2-task-and-data-model}{%
+\subsection{2. Task and Data Model}\label{2-task-and-data-model}}
+
+\hypertarget{21-unit-of-work}{%
+\subsubsection{2.1 Unit of Work}\label{21-unit-of-work}}
+
+The primary unit is a lemma record linked to one or more source page
+images. Each lemma contains:
+
+\begin{itemize}
+\tightlist
+\item
+  machine OCR Greek text,
+\item
+  optional human-corrected Greek text,
+\item
+  machine translation outputs (versioned),
+\item
+  optional human translations,
+\item
+  review metadata.
+\end{itemize}
+
+\hypertarget{22-provenance-requirements}{%
+\subsubsection{2.2 Provenance
+Requirements}\label{22-provenance-requirements}}
+
+Each stage writes explicit status flags and timestamps. Processing is
+idempotent by default: only records with \texttt{processed=0} are acted
+on. This minimizes accidental reprocessing and supports crash-safe
+reruns.
+
+\hypertarget{23-editorial-alignment}{%
+\subsubsection{2.3 Editorial Alignment}\label{23-editorial-alignment}}
+
+The system links assembled lemmas to Meineke headword paragraphs using
+prioritized identifiers (\texttt{nodegoat\_id}, \texttt{billerbeck\_id},
+\texttt{meineke\_id}). This enables downstream comparison even when base
+working text comes from Billerbeck OCR. Each lemma also carries version
+metadata (e.g., \texttt{epitome}, \texttt{parisinus},
+\texttt{synthetic}), which is preserved through analysis and publication
+layers.
+
+\hypertarget{3-system-architecture}{%
+\subsection{3. System Architecture}\label{3-system-architecture}}
+
+\hypertarget{31-stage-a-ingestion}{%
+\subsubsection{3.1 Stage A: Ingestion}\label{31-stage-a-ingestion}}
+
+HTML/image registration and extraction populate image rows in
+PostgreSQL. Inputs remain immutable; metadata and processing fields are
+appended.
+
+\hypertarget{32-stage-b-ocr}{%
+\subsubsection{3.2 Stage B: OCR}\label{32-stage-b-ocr}}
+
+OCR writes strict JSON to \texttt{images.lemma\_json}. Failures are
+non-destructive:
+
+\begin{itemize}
+\tightlist
+\item
+  malformed JSON =\textgreater{} no \texttt{processed=1} update,
+\item
+  missing image =\textgreater{} hard error,
+\item
+  API failure =\textgreater{} bubble to batch runner.
+\end{itemize}
+
+\hypertarget{33-stage-c-assembly}{%
+\subsubsection{3.3 Stage C: Assembly}\label{33-stage-c-assembly}}
+
+OCR JSON is normalized into lemma-level structures. Human correction
+fields are separate from machine fields.
+
+\hypertarget{34-stage-d-translation}{%
+\subsubsection{3.4 Stage D: Translation}\label{34-stage-d-translation}}
+
+Translation uses zero-shot prompt templates with version tracking
+(\texttt{translation\_prompt\_version}). New prompt versions trigger
+targeted retranslation priority while preserving human edits.
+
+\hypertarget{35-stage-e-review-and-publication}{%
+\subsubsection{3.5 Stage E: Review and
+Publication}\label{35-stage-e-review-and-publication}}
+
+A CGI review interface displays source images, Billerbeck Greek views,
+and cross-edition comparison status. Public/protected web pages are
+generated from DB snapshots for transparency and operations monitoring.
+
+\hypertarget{36-stage-f-structured-enrichment-modules}{%
+\subsubsection{3.6 Stage F: Structured Enrichment
+Modules}\label{36-stage-f-structured-enrichment-modules}}
+
+After translation, additional forced-schema extraction jobs populate
+reusable research tables:
+
+\begin{itemize}
+\tightlist
+\item
+  proper noun extraction with explicit \texttt{role} (\texttt{source} vs
+  \texttt{entity}) and \texttt{noun\_type} (\texttt{person},
+  \texttt{place}, \texttt{people}, \texttt{deity}, \texttt{other}),
+\item
+  source citation metadata (\texttt{citation}, \texttt{work\_title})
+  enabling author/work/fragment indexing,
+\item
+  alias extraction (Stephanos-stated aliases plus rule-based spelling
+  variants),
+\item
+  etymology extraction with controlled categories.
+\end{itemize}
+
+This design keeps all enrichment layers keyed to lemma IDs, so every
+derived claim remains auditable against source Greek and OCR provenance.
+
+\hypertarget{37-stage-g-geospatial-and-book-outputs}{%
+\subsubsection{3.7 Stage G: Geospatial and Book
+Outputs}\label{37-stage-g-geospatial-and-book-outputs}}
+
+Place rows linked to coordinates and identifiers (Wikidata/Pleiades) are
+rendered into an interactive Leaflet map. A separate publishing step
+compiles a PDF book from database records, including indices for
+sources, persons, places, peoples, and deities, plus map integration.
+
+\hypertarget{4-llm-methodology}{%
+\subsection{4. LLM Methodology}\label{4-llm-methodology}}
+
+\hypertarget{41-zero-shot-constraint}{%
+\subsubsection{4.1 Zero-Shot Constraint}\label{41-zero-shot-constraint}}
+
+No model fine-tuning is used. We intentionally test a low-assumption
+setup that many DH teams can replicate.
+
+\hypertarget{42-prompt-governance}{%
+\subsubsection{4.2 Prompt Governance}\label{42-prompt-governance}}
+
+Prompts are stored as versioned rows. This creates:
+
+\begin{itemize}
+\tightlist
+\item
+  reproducibility across runs,
+\item
+  auditable changes in translation style/coverage,
+\item
+  controlled reprocessing policy.
+\end{itemize}
+
+\hypertarget{43-structured-difference-analysis}{%
+\subsubsection{4.3 Structured Difference
+Analysis}\label{43-structured-difference-analysis}}
+
+For lemmas where normalized Billerbeck-vs-Meineke class is
+\texttt{different}, we run forced-structure LLM analysis. Inputs are
+pre-cleaned to remove non-semantic artifacts:
+
+\begin{itemize}
+\tightlist
+\item
+  Billerbeck leading entry numbers,
+\item
+  citation-heavy parenthetical wrappers.
+\end{itemize}
+
+Outputs include:
+
+\begin{itemize}
+\tightlist
+\item
+  difference level,
+\item
+  mechanical pattern tags,
+\item
+  word-pair substitutions,
+\item
+  translation-impact class.
+\end{itemize}
+
+\hypertarget{5-evaluation-strategy}{%
+\subsection{5. Evaluation Strategy}\label{5-evaluation-strategy}}
+
+Our evaluation is workflow-centric rather than benchmark-centric.
+
+\hypertarget{51-what-we-measure}{%
+\subsubsection{5.1 What We Measure}\label{51-what-we-measure}}
+
+\begin{itemize}
+\tightlist
+\item
+  processing success/failure rates,
+\item
+  number and category of Billerbeck-vs-Meineke differences,
+\item
+  translation-impact distribution,
+\item
+  human correction/review coverage,
+\item
+  extraction coverage for sources/entities/aliases/etymologies,
+\item
+  category-level and version-aware statistical signals.
+\end{itemize}
+
+\hypertarget{52-category-and-version-analytics}{%
+\subsubsection{5.2 Category and Version
+Analytics}\label{52-category-and-version-analytics}}
+
+The statistics layer computes both descriptive and model-based analyses:
+
+\begin{itemize}
+\tightlist
+\item
+  word-count distributions by lemma type and initial letter,
+\item
+  ridge-regression models using proper noun features,
+\item
+  per-category models (authors, historical figures, places, ethnic
+  groups, deities),
+\item
+  split analyses for Parisinus versus epitomised entries,
+\item
+  etymology category distributions by version.
+\end{itemize}
+
+This framework allows us to ask not only "what was translated?" but also
+"what kinds of material were emphasized or compressed across textual
+traditions?"
+
+\hypertarget{53-why-this-matters}{%
+\subsubsection{5.3 Why This Matters}\label{53-why-this-matters}}
+
+For this task, an aggregate BLEU-style metric would obscure the real
+risk profile. The key risk is not average lexical mismatch; it is the
+subset of entries where model output and textual base choices can
+mislead downstream scholarship.
+
+\hypertarget{6-observed-outcomes-operational}{%
+\subsection{6. Observed Outcomes
+(Operational)}\label{6-observed-outcomes-operational}}
+
+From current operational runs:
+
+\begin{itemize}
+\tightlist
+\item
+  the majority of detected cross-edition differences are mechanical,
+\item
+  a smaller subset is classified as likely translation-changing,
+\item
+  uncertainty remains concentrated in not-yet-analyzed rows.
+\end{itemize}
+
+This validates a triage model:
+
+\begin{itemize}
+\tightlist
+\item
+  analyze all "different" rows over time,
+\item
+  prioritize rows likely to change translation,
+\item
+  route flagged rows to human review first.
+\end{itemize}
+
+\hypertarget{7-error-analysis}{%
+\subsection{7. Error Analysis}\label{7-error-analysis}}
+
+Common error classes include:
+
+\begin{itemize}
+\tightlist
+\item
+  OCR artifacts that survive token-level cleaning,
+\item
+  citation-marker confusion,
+\item
+  morphological drift in dense lexicographic formulae,
+\item
+  over-smoothing in English rendering.
+\end{itemize}
+
+Mitigations that worked in practice:
+
+\begin{itemize}
+\tightlist
+\item
+  strict JSON validation gates,
+\item
+  non-destructive failure handling,
+\item
+  explicit comparison pre-cleaning,
+\item
+  forced-schema LLM outputs,
+\item
+  prompt version audits.
+\end{itemize}
+
+\hypertarget{8-human-in-the-loop-design}{%
+\subsection{8. Human-in-the-Loop
+Design}\label{8-human-in-the-loop-design}}
+
+The review interface is not an afterthought; it is the core quality
+mechanism. Effective elements include:
+
+\begin{itemize}
+\tightlist
+\item
+  immediate access to source images,
+\item
+  side-by-side Billerbeck text states (raw OCR and comparison text),
+\item
+  explicit Meineke-vs-Billerbeck status labels,
+\item
+  direct edit links from analysis pages.
+\end{itemize}
+
+This reduces context-switching and speeds expert correction.
+
+\hypertarget{9-narrative-learning-loop}{%
+\subsection{9. Narrative Learning
+Loop}\label{9-narrative-learning-loop}}
+
+We formalize prompt improvement as a data-driven narrative loop rather
+than parameter fine-tuning.
+
+\hypertarget{91-input-signal}{%
+\subsubsection{9.1 Input Signal}\label{91-input-signal}}
+
+Primary signal is structured disagreement between:
+
+\begin{itemize}
+\tightlist
+\item
+  AI translation output,
+\item
+  human-corrected or human-reviewed translation fields.
+\end{itemize}
+
+Each disagreement is linked to lemma metadata, source Greek, and review
+provenance.
+
+\hypertarget{92-pattern-mining}{%
+\subsubsection{9.2 Pattern Mining}\label{92-pattern-mining}}
+
+At scheduled intervals, we sample reviewed deltas and ask an LLM to:
+
+\begin{itemize}
+\tightlist
+\item
+  identify recurrent error motifs,
+\item
+  separate lexical/semantic issues from stylistic preference,
+\item
+  propose concise correction heuristics with examples.
+\end{itemize}
+
+\hypertarget{93-prompt-update-protocol}{%
+\subsubsection{9.3 Prompt Update
+Protocol}\label{93-prompt-update-protocol}}
+
+Heuristics are converted into a new prompt version only after human
+approval. We then:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  run targeted retranslation on a validation subset,
+\item
+  compare correction rates and reviewer effort against the prior
+  version,
+\item
+  promote or rollback based on observed impact.
+\end{enumerate}
+
+This produces a text-level learning trajectory that is interpretable and
+auditable. It aligns with your "Narrative Learning" framing (arXiv
+preprint citation to be inserted), where system improvement is encoded
+as explicit narrative constraints.
+
+\hypertarget{10-operational-lessons}{%
+\subsection{10. Operational Lessons}\label{10-operational-lessons}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Idempotency is non-negotiable for long-running pipelines.
+\item
+  "Parse first, mark processed later" prevents silent queue loss.
+\item
+  Prompt versioning is as important as model versioning.
+\item
+  Editorial comparison should be modeled as data, not narrative notes.
+\item
+  Small UI changes in review tools can have large impact on annotation
+  throughput.
+\end{enumerate}
+
+\hypertarget{11-limitations-and-threats-to-validity}{%
+\subsection{11. Limitations and Threats to
+Validity}\label{11-limitations-and-threats-to-validity}}
+
+\begin{itemize}
+\tightlist
+\item
+  No gold-standard aligned translation benchmark is yet complete.
+\item
+  Human review depth may vary by entry.
+\item
+  Translation-impact labels are model-assisted and still need expert
+  confirmation.
+\item
+  Results are reported from one corpus/domain and may not transfer
+  unchanged.
+\end{itemize}
+
+\hypertarget{12-ethics-and-scholarly-safety}{%
+\subsection{12. Ethics and Scholarly
+Safety}\label{12-ethics-and-scholarly-safety}}
+
+We treat model output as provisional. The system is designed to prevent
+hidden automation authority:
+
+\begin{itemize}
+\tightlist
+\item
+  explicit review states,
+\item
+  tracked human edits,
+\item
+  no automatic overwrite of curated fields,
+\item
+  public distinction between machine and human outputs.
+\end{itemize}
+
+For classical scholarship, this separation is critical.
+
+\hypertarget{13-conclusion}{%
+\subsection{13. Conclusion}\label{13-conclusion}}
+
+A zero-shot LLM setup can support ancient Greek translation workflows at
+scale if embedded in a strict, provenance-rich, human-supervised
+architecture. Our contribution is a deployable pattern for digital
+humanities teams: combine conservative data engineering with targeted
+model usage, and treat review as a first-class system component.
+
+\hypertarget{reproducibility-notes}{%
+\subsection{Reproducibility Notes}\label{reproducibility-notes}}
+
+To replicate the method:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Use idempotent stage flags for each processing phase.
+\item
+  Require strict machine-readable OCR payloads.
+\item
+  Separate machine and human correction columns.
+\item
+  Version translation prompts and retranslation policy.
+\item
+  Add structured cross-edition comparison with pre-cleaning.
+\item
+  Expose review-centric pages with direct record-level edit links.
+\end{enumerate}
+
+\hypertarget{placeholder-references}{%
+\subsection{Placeholder References}\label{placeholder-references}}
+
+\begin{itemize}
+\tightlist
+\item
+  Prior work on machine translation for historical languages.
+\item
+  LLM reliability and structured output control.
+\item
+  Human-in-the-loop annotation systems.
+\item
+  Digital philology workflows for classical corpora.
+\item
+  {[}Your Name{]}, "Narrative Learning" (arXiv preprint; add full
+  citation details).
+\end{itemize}
+
+\end{document}

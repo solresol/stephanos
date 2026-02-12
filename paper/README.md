@@ -3,7 +3,7 @@
 This directory contains manuscript drafts based on the current Stephanos pipeline work.
 
 - `classical_review_draft.md`: Draft in a Classical Review style (philological audience).
-- `computing_venue_draft.md`: Draft in a computing-journal/conference style (NLP/HCI/DH audience).
+- `computing_venue_draft.tex`: Draft in a computing-journal/conference style (NLP/HCI/DH audience), in LaTeX format.
 
 Both drafts are intentionally practical and methodology-focused:
 
