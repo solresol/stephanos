@@ -167,10 +167,73 @@ const reviewTemplate = `<!DOCTYPE html>
             font-size: 1.1em;
             line-height: 1.8;
             padding: 15px;
-            background: #faf afa;
+            background: #fafafa;
             border-left: 4px solid #3498db;
             border-radius: 4px;
             margin: 10px 0;
+        }
+        .comparison-status {
+            margin: 10px 0;
+            padding: 10px 12px;
+            border-radius: 6px;
+            font-weight: 600;
+        }
+        .status-same {
+            background: #eef7ee;
+            color: #1f7a36;
+            border: 1px solid #cfe9d3;
+        }
+        .status-tone {
+            background: #eef3fb;
+            color: #245f9d;
+            border: 1px solid #d1deef;
+        }
+        .status-different {
+            background: #fdf1e8;
+            color: #985313;
+            border: 1px solid #f1d7be;
+        }
+        .status-missing {
+            background: #f4f4f4;
+            color: #666;
+            border: 1px solid #ddd;
+        }
+        .comparison-note {
+            color: #555;
+            font-size: 0.95em;
+            margin: 8px 0 4px;
+        }
+        .comparison-box {
+            margin: 10px 0;
+            padding: 12px;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            background: #fcfdff;
+        }
+        .comparison-box code {
+            background: #f2f4f8;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-size: 0.92em;
+        }
+        .word-pairs {
+            margin: 8px 0 0 18px;
+            padding: 0;
+        }
+        .word-pairs li {
+            margin: 4px 0;
+        }
+        .pair-type {
+            color: #666;
+            font-size: 0.9em;
+        }
+        details.meineke-details {
+            margin-top: 10px;
+        }
+        details.meineke-details summary {
+            cursor: pointer;
+            color: #2c3e50;
+            font-weight: 600;
         }
         .images {
             display: flex;
@@ -183,6 +246,40 @@ const reviewTemplate = `<!DOCTYPE html>
             border: 2px solid #ecf0f1;
             border-radius: 4px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .ocr-meineke-wrap {
+            margin-top: 10px;
+        }
+        .ocr-panel,
+        .text-panel {
+            min-width: 0;
+        }
+        .ocr-panel .images {
+            display: block;
+            margin-top: 10px;
+        }
+        .ocr-panel .images > div {
+            margin-bottom: 12px;
+        }
+        .ocr-panel .images img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        @media (min-width: 1100px) {
+            .ocr-meineke-wrap {
+                display: grid;
+                grid-template-columns: 1.9fr 1fr;
+                gap: 24px;
+                align-items: start;
+            }
+            .ocr-panel .section-title,
+            .text-panel .section-title {
+                margin-top: 0;
+            }
+            .text-panel .original-text {
+                margin-top: 0;
+            }
         }
         .review-form {
             margin-top: 20px;
@@ -348,30 +445,78 @@ const reviewTemplate = `<!DOCTYPE html>
                 </div>
             </div>
 
-            <div class="section-title">Raw OCR of Greek</div>
-            <div class="original-text">{{.Lemma.GreekText}}</div>
+            <div class="ocr-meineke-wrap">
+                {{if .Lemma.ImageFilenames}}
+                <div class="ocr-panel">
+                    <div class="section-title">Source Page Images</div>
+                    <div class="images">
+                        {{range $filename := .Lemma.ImageFilenames}}
+                        <div>
+                            <img src="/protected/{{$filename}}" alt="{{$filename}}">
+                            <div style="text-align: center; font-size: 0.85em; color: #7f8c8d; margin-top: 5px;">
+                                {{$filename}}
+                            </div>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+                {{end}}
+
+                <div class="text-panel">
+                    <div class="section-title">Raw OCR of Billerbeck</div>
+                    <div class="original-text">{{.Lemma.GreekText}}</div>
+
+                    {{if ne .BillerbeckCompareText .Lemma.GreekText}}
+                    <div class="section-title">Billerbeck Greek Used For Comparison</div>
+                    <div class="original-text">{{.BillerbeckCompareText}}</div>
+                    {{end}}
+                </div>
+            </div>
+
+            <div class="section-title">Meineke vs Billerbeck</div>
+            <div class="comparison-status {{if eq .MeinekeStatus "different"}}status-different{{else if eq .MeinekeStatus "tone_marks_only"}}status-tone{{else if eq .MeinekeStatus "same"}}status-same{{else}}status-missing{{end}}">
+                {{.MeinekeStatusLabel}}
+            </div>
+            <div class="comparison-note">
+                Comparison uses the current Billerbeck text for this review (corrected Greek if present, otherwise raw OCR),
+                and ignores citation wrappers and punctuation.
+            </div>
 
             {{if .ShowMeineke}}
-            <div class="section-title">Meineke Greek (reference)</div>
-            <div class="original-text">{{.Lemma.MeinekeGreekParagraph}}</div>
+            <details class="meineke-details" {{if eq .MeinekeStatus "different"}}open{{end}}>
+                <summary>Show Meineke Greek paragraph</summary>
+                <div class="original-text">{{.Lemma.MeinekeGreekParagraph}}</div>
+            </details>
+            {{end}}
+
+            {{if or .Lemma.MeinekeDifferenceSummary .Lemma.MeinekeTranslationImpact .Lemma.MeinekeWordPairs}}
+            <div class="comparison-box">
+                {{if .Lemma.MeinekeDifferenceSummary}}
+                <div><strong>LLM summary:</strong> {{.Lemma.MeinekeDifferenceSummary}}</div>
+                {{end}}
+
+                {{if .Lemma.MeinekeTranslationImpact}}
+                <div style="margin-top: 6px;">
+                    <strong>Translation impact:</strong>
+                    {{if eq .Lemma.MeinekeTranslationImpact "likely_different_translation"}}Likely different translation{{else if eq .Lemma.MeinekeTranslationImpact "probably_same_translation"}}Probably same translation{{else}}Uncertain{{end}}
+                    {{if .Lemma.MeinekeTranslationImpactNote}} — {{.Lemma.MeinekeTranslationImpactNote}}{{end}}
+                </div>
+                {{end}}
+
+                {{if .Lemma.MeinekeWordPairs}}
+                <div style="margin-top: 6px;"><strong>Word-pair differences:</strong></div>
+                <ul class="word-pairs">
+                    {{range .Lemma.MeinekeWordPairs}}
+                    <li><code>{{.Billerbeck}}</code> → <code>{{.Meineke}}</code> {{if .PatternType}}<span class="pair-type">({{.PatternType}})</span>{{end}}</li>
+                    {{end}}
+                </ul>
+                {{end}}
+            </div>
             {{end}}
 
             <div class="section-title">AI-generated English Translation</div>
             <div class="original-text">{{.Lemma.EnglishTranslation}}</div>
 
-            {{if .Lemma.ImageFilenames}}
-            <div class="section-title">Source Page Images</div>
-            <div class="images">
-                {{range $filename := .Lemma.ImageFilenames}}
-                <div>
-                    <img src="/protected/{{$filename}}" alt="{{$filename}}">
-                    <div style="text-align: center; font-size: 0.85em; color: #7f8c8d; margin-top: 5px;">
-                        {{$filename}}
-                    </div>
-                </div>
-                {{end}}
-            </div>
-            {{end}}
         </div>
 
         <div class="card">

@@ -87,52 +87,118 @@ def export_lemmas():
     conn = get_connection()
     cur = conn.cursor()
 
-    # Query all lemmas with their data using normalized schema
-    query = """
-        SELECT
-            a.id,
-            a.lemma,
-            a.entry_number,
-            a.version,
-            COALESCE(a.greek_text, '') as greek_text,
-            COALESCE(a.translation, (
-                SELECT COALESCE(
-                    (a.translation_json::json)->>'translation',
-                    (a.translation_json::json)->>'english_translation'
-                ) WHERE a.translation_json IS NOT NULL
-            )) as english_translation,
-            a.type,
-            a.volume_label,
-            a.meineke_id,
-            a.billerbeck_id,
-            a.word_count,
-            a.confidence,
-            COALESCE(mh_match.greek_paragraph, '') as meineke_greek_paragraph,
-            (SELECT json_agg(i.image_filename ORDER BY li.position)
-             FROM images i
-             JOIN lemma_images li ON li.image_id = i.id
-             WHERE li.lemma_id = a.id) as image_filenames
-        FROM assembled_lemmas a
-        LEFT JOIN LATERAL (
-            SELECT mh.greek_paragraph
-            FROM meineke_headwords mh
-            WHERE (
-                (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
-                OR (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
-                OR (a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id)
-            )
-            ORDER BY
-                CASE
-                    WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 0
-                    WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 1
-                    WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 2
-                    ELSE 3
-                END,
-                mh.id
-            LIMIT 1
-        ) mh_match ON TRUE
-        ORDER BY a.lemma, a.version
-    """
+    cur.execute("SELECT to_regclass('public.meineke_text_differences') IS NOT NULL")
+    has_diff_table = bool(cur.fetchone()[0])
+
+    # Query all lemmas with their data using normalized schema.
+    # Include Meineke/Billerbeck comparison metadata when available.
+    if has_diff_table:
+        query = """
+            SELECT
+                a.id,
+                a.lemma,
+                a.entry_number,
+                a.version,
+                COALESCE(a.greek_text, '') as greek_text,
+                COALESCE(a.translation, (
+                    SELECT COALESCE(
+                        (a.translation_json::json)->>'translation',
+                        (a.translation_json::json)->>'english_translation'
+                    ) WHERE a.translation_json IS NOT NULL
+                )) as english_translation,
+                a.type,
+                a.volume_label,
+                a.meineke_id,
+                a.billerbeck_id,
+                a.word_count,
+                a.confidence,
+                COALESCE(mh_match.greek_paragraph, '') as meineke_greek_paragraph,
+                (SELECT json_agg(i.image_filename ORDER BY li.position)
+                 FROM images i
+                 JOIN lemma_images li ON li.image_id = i.id
+                 WHERE li.lemma_id = a.id) as image_filenames,
+                COALESCE(md.normalized_class, '') as meineke_normalized_class,
+                COALESCE(md.llm_status, '') as meineke_llm_status,
+                COALESCE(md.difference_level, '') as meineke_difference_level,
+                COALESCE(md.translation_impact, '') as meineke_translation_impact,
+                COALESCE(md.translation_impact_note, '') as meineke_translation_impact_note,
+                COALESCE(md.summary, '') as meineke_difference_summary,
+                COALESCE(md.word_pairs, '[]'::jsonb) as meineke_word_pairs
+            FROM assembled_lemmas a
+            LEFT JOIN LATERAL (
+                SELECT mh.greek_paragraph
+                FROM meineke_headwords mh
+                WHERE (
+                    (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
+                    OR (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
+                    OR (a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id)
+                )
+                ORDER BY
+                    CASE
+                        WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 0
+                        WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 1
+                        WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 2
+                        ELSE 3
+                    END,
+                    mh.id
+                LIMIT 1
+            ) mh_match ON TRUE
+            LEFT JOIN meineke_text_differences md ON md.lemma_id = a.id
+            ORDER BY a.lemma, a.version
+        """
+    else:
+        query = """
+            SELECT
+                a.id,
+                a.lemma,
+                a.entry_number,
+                a.version,
+                COALESCE(a.greek_text, '') as greek_text,
+                COALESCE(a.translation, (
+                    SELECT COALESCE(
+                        (a.translation_json::json)->>'translation',
+                        (a.translation_json::json)->>'english_translation'
+                    ) WHERE a.translation_json IS NOT NULL
+                )) as english_translation,
+                a.type,
+                a.volume_label,
+                a.meineke_id,
+                a.billerbeck_id,
+                a.word_count,
+                a.confidence,
+                COALESCE(mh_match.greek_paragraph, '') as meineke_greek_paragraph,
+                (SELECT json_agg(i.image_filename ORDER BY li.position)
+                 FROM images i
+                 JOIN lemma_images li ON li.image_id = i.id
+                 WHERE li.lemma_id = a.id) as image_filenames,
+                '' as meineke_normalized_class,
+                '' as meineke_llm_status,
+                '' as meineke_difference_level,
+                '' as meineke_translation_impact,
+                '' as meineke_translation_impact_note,
+                '' as meineke_difference_summary,
+                '[]'::jsonb as meineke_word_pairs
+            FROM assembled_lemmas a
+            LEFT JOIN LATERAL (
+                SELECT mh.greek_paragraph
+                FROM meineke_headwords mh
+                WHERE (
+                    (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
+                    OR (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
+                    OR (a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id)
+                )
+                ORDER BY
+                    CASE
+                        WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 0
+                        WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 1
+                        WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 2
+                        ELSE 3
+                    END,
+                    mh.id
+                LIMIT 1
+            ) mh_match ON TRUE
+            ORDER BY a.lemma, a.version
+        """
 
     cur.execute(query)
     rows = cur.fetchall()
@@ -141,7 +207,10 @@ def export_lemmas():
     for row in rows:
         (lemma_id, lemma, entry_number, version, greek_text, english_translation,
          lemma_type, volume_label, meineke_id, billerbeck_id, word_count,
-         confidence, meineke_greek_paragraph, image_filenames) = row
+         confidence, meineke_greek_paragraph, image_filenames,
+         meineke_normalized_class, meineke_llm_status, meineke_difference_level,
+         meineke_translation_impact, meineke_translation_impact_note,
+         meineke_difference_summary, meineke_word_pairs) = row
 
         # Parse image filenames (psycopg2 auto-deserializes JSON in some cases)
         if isinstance(image_filenames, str):
@@ -151,6 +220,14 @@ def export_lemmas():
                 image_filenames = []
         elif image_filenames is None:
             image_filenames = []
+
+        if isinstance(meineke_word_pairs, str):
+            try:
+                meineke_word_pairs = json.loads(meineke_word_pairs)
+            except json.JSONDecodeError:
+                meineke_word_pairs = []
+        elif meineke_word_pairs is None:
+            meineke_word_pairs = []
 
         lemma_data = {
             "id": lemma_id,
@@ -167,6 +244,13 @@ def export_lemmas():
             "word_count": word_count or 0,
             "image_filenames": image_filenames,
             "confidence": confidence or "normal",
+            "meineke_normalized_class": meineke_normalized_class or "",
+            "meineke_llm_status": meineke_llm_status or "",
+            "meineke_difference_level": meineke_difference_level or "",
+            "meineke_translation_impact": meineke_translation_impact or "",
+            "meineke_translation_impact_note": meineke_translation_impact_note or "",
+            "meineke_difference_summary": meineke_difference_summary or "",
+            "meineke_word_pairs": meineke_word_pairs if isinstance(meineke_word_pairs, list) else [],
             "letter": get_letter_slug(lemma or ""),
             "sort_order": 0  # Will be set after sorting
         }

@@ -14,20 +14,23 @@ import (
 
 // PageData holds data for template rendering
 type PageData struct {
-	Lemma             *Lemma
-	Review            *Review
-	TotalCount        int
-	ReviewedCount     int
-	PercentComplete   int
-	CurrentPosition   int
-	HasPrevious       bool
-	HasNext           bool
-	PreviousID        int
-	NextID            int
-	HasNextUnreviewed bool
-	LetterName        string
-	LetterNav         []LetterNav
-	ShowMeineke       bool
+	Lemma                 *Lemma
+	Review                *Review
+	TotalCount            int
+	ReviewedCount         int
+	PercentComplete       int
+	CurrentPosition       int
+	HasPrevious           bool
+	HasNext               bool
+	PreviousID            int
+	NextID                int
+	HasNextUnreviewed     bool
+	LetterName            string
+	LetterNav             []LetterNav
+	ShowMeineke           bool
+	BillerbeckCompareText string
+	MeinekeStatus         string
+	MeinekeStatusLabel    string
 }
 
 var meinekeObjectTagRe = regexp.MustCompile(`\[/?object[^\]]*\]`)
@@ -265,7 +268,7 @@ func stripCitationMarkers(text string) string {
 	return current
 }
 
-func normalizeForMeinekeCompare(s string) string {
+func normalizeForMeinekeCompare(s string, removeDiacritics bool) string {
 	if strings.TrimSpace(s) == "" {
 		return ""
 	}
@@ -278,7 +281,9 @@ func normalizeForMeinekeCompare(s string) string {
 
 	lastWasSpace := false
 	for _, r := range s {
-		r = stripGreekDiacritics(r)
+		if removeDiacritics {
+			r = stripGreekDiacritics(r)
+		}
 
 		if unicode.IsPunct(r) || unicode.IsSymbol(r) {
 			continue
@@ -295,6 +300,37 @@ func normalizeForMeinekeCompare(s string) string {
 		lastWasSpace = false
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func classifyMeinekeDifference(billerbeckText string, meinekeText string) string {
+	if strings.TrimSpace(meinekeText) == "" {
+		return "missing_meineke"
+	}
+
+	if normalizeForMeinekeCompare(billerbeckText, false) == normalizeForMeinekeCompare(meinekeText, false) {
+		return "same"
+	}
+
+	if normalizeForMeinekeCompare(billerbeckText, true) == normalizeForMeinekeCompare(meinekeText, true) {
+		return "tone_marks_only"
+	}
+
+	return "different"
+}
+
+func meinekeStatusLabel(status string) string {
+	switch status {
+	case "same":
+		return "Same as Billerbeck (normalized)"
+	case "tone_marks_only":
+		return "Tone/accent differences only"
+	case "different":
+		return "Different from Billerbeck"
+	case "missing_meineke":
+		return "No Meineke paragraph available"
+	default:
+		return "Comparison unavailable"
+	}
 }
 
 func main() {
@@ -398,29 +434,29 @@ func main() {
 	nextLemma := GetNextLemma(data, currentLemma)
 	nextUnreviewed := GetNextUnreviewedInLetter(db, data, currentLemma)
 
-	showMeineke := false
-	if strings.TrimSpace(currentLemma.MeinekeGreekParagraph) != "" {
-		billerbeckText := currentLemma.GreekText
-		if review != nil && strings.TrimSpace(review.CorrectedGreekText) != "" {
-			billerbeckText = review.CorrectedGreekText
-		}
-		// If the two are effectively identical, don't show both.
-		showMeineke = normalizeForMeinekeCompare(billerbeckText) != normalizeForMeinekeCompare(currentLemma.MeinekeGreekParagraph)
+	billerbeckText := currentLemma.GreekText
+	if review != nil && strings.TrimSpace(review.CorrectedGreekText) != "" {
+		billerbeckText = review.CorrectedGreekText
 	}
+	meinekeStatus := classifyMeinekeDifference(billerbeckText, currentLemma.MeinekeGreekParagraph)
+	showMeineke := strings.TrimSpace(currentLemma.MeinekeGreekParagraph) != ""
 
 	pageData := PageData{
-		Lemma:             currentLemma,
-		Review:            review,
-		TotalCount:        len(data.Lemmas),
-		ReviewedCount:     reviewed,
-		PercentComplete:   percentComplete,
-		CurrentPosition:   currentLemma.SortOrder + 1,
-		HasPrevious:       prevLemma != nil,
-		HasNext:           nextLemma != nil,
-		HasNextUnreviewed: nextUnreviewed != nil,
-		LetterName:        GetGreekLetterName(currentLemma.Letter),
-		LetterNav:         GetLetterNavigation(data),
-		ShowMeineke:       showMeineke,
+		Lemma:                 currentLemma,
+		Review:                review,
+		TotalCount:            len(data.Lemmas),
+		ReviewedCount:         reviewed,
+		PercentComplete:       percentComplete,
+		CurrentPosition:       currentLemma.SortOrder + 1,
+		HasPrevious:           prevLemma != nil,
+		HasNext:               nextLemma != nil,
+		HasNextUnreviewed:     nextUnreviewed != nil,
+		LetterName:            GetGreekLetterName(currentLemma.Letter),
+		LetterNav:             GetLetterNavigation(data),
+		ShowMeineke:           showMeineke,
+		BillerbeckCompareText: billerbeckText,
+		MeinekeStatus:         meinekeStatus,
+		MeinekeStatusLabel:    meinekeStatusLabel(meinekeStatus),
 	}
 
 	if prevLemma != nil {

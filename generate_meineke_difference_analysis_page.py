@@ -26,6 +26,29 @@ PATTERN_LABELS = {
     "other_mechanical": "Other mechanical",
 }
 
+IMPACT_PAGE_DEFS = [
+    {
+        "key": "likely_different_translation",
+        "label": "Likely different translation",
+        "filename": "meineke_impact_likely_different_translation.html",
+        "description": "Entries where the LLM judges that switching base text to Meineke would likely change translation.",
+    },
+    {
+        "key": "probably_same_translation",
+        "label": "Probably same translation",
+        "filename": "meineke_impact_probably_same_translation.html",
+        "description": "Entries where differences are likely not translation-changing.",
+    },
+    {
+        "key": "uncertain",
+        "label": "Uncertain",
+        "filename": "meineke_impact_uncertain.html",
+        "description": "Entries where the model could not confidently determine translation impact.",
+    },
+]
+
+IMPACT_PAGE_BY_KEY = {row["key"]: row for row in IMPACT_PAGE_DEFS}
+
 
 def fmt_pct(n: int, d: int) -> str:
     if not d:
@@ -168,6 +191,7 @@ def fetch_examples(cur, level: str, limit: int = 12):
     cur.execute(
         """
         SELECT
+            lemma_id,
             lemma,
             billerbeck_id,
             source_kind,
@@ -185,6 +209,97 @@ def fetch_examples(cur, level: str, limit: int = 12):
         (level, limit),
     )
     return cur.fetchall()
+
+
+def fetch_impact_headwords(cur, impact_key: str):
+    where_clause = "COALESCE(translation_impact, 'uncertain') = 'uncertain'" if impact_key == "uncertain" else "translation_impact = %s"
+    params = () if impact_key == "uncertain" else (impact_key,)
+    cur.execute(
+        f"""
+        SELECT
+            lemma_id,
+            lemma,
+            billerbeck_id
+        FROM meineke_text_differences
+        WHERE normalized_class = 'different'
+          AND llm_status = 'analyzed'
+          AND {where_clause}
+        ORDER BY lemma, entry_number NULLS LAST, lemma_id
+        """,
+        params,
+    )
+    return cur.fetchall()
+
+
+def render_impact_page(*, title: str, description: str, rows: list[tuple], generated_at: str) -> str:
+    if rows:
+        items = []
+        for lemma_id, lemma, billerbeck_id in rows:
+            meta = f" <span class='meta'>({html_module.escape(billerbeck_id or '')})</span>" if billerbeck_id else ""
+            items.append(
+                f"<li><a href='../cgi-bin/review.cgi?id={int(lemma_id)}' target='_blank'>{html_module.escape(lemma or '')}</a>{meta}</li>"
+            )
+        headwords_html = "\n".join(items)
+    else:
+        headwords_html = "<li>No entries currently in this class.</li>"
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{html_module.escape(title)} - Stephanos Ethnika</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; margin: 0; background: #f5f5f5; color: #222; }}
+    .header {{ background: linear-gradient(135deg, #0d47a1 0%, #1e88e5 100%); color: #fff; padding: 28px 20px; text-align: center; }}
+    .container {{ max-width: 1100px; margin: 0 auto; padding: 20px; }}
+    .nav-links {{ margin: 12px 0 18px; text-align: right; }}
+    .nav-links a {{ color: #0d47a1; text-decoration: none; font-weight: 600; margin-left: 10px; }}
+    .nav-links a:hover {{ text-decoration: underline; }}
+    .card {{ background: #fff; border-radius: 8px; padding: 18px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }}
+    ul {{ margin: 12px 0 0 18px; }}
+    li {{ margin: 4px 0; }}
+    .meta {{ color: #666; font-size: 0.9em; }}
+    .note {{ color: #555; font-size: 0.95em; }}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>{html_module.escape(title)}</h1>
+    <p>{html_module.escape(description)}</p>
+  </div>
+  <div class="container">
+    <div class="nav-links">
+      <a href="meineke_difference_analysis.html">Back to Difference Analysis</a>
+      <a href="meineke_comparison.html">Meineke vs Billerbeck</a>
+      <a href="../index.html">All Letters</a>
+      <a href="../cgi-bin/review.cgi">Human Review</a>
+    </div>
+    <div class="card">
+      <p><strong>Headwords:</strong> {len(rows):,}</p>
+      <ul>
+        {headwords_html}
+      </ul>
+    </div>
+    <p class="note">Generated at: {html_module.escape(generated_at)}</p>
+  </div>
+</body>
+</html>
+"""
+
+
+def write_impact_pages(impact_rows_by_key: dict[str, list[tuple]]) -> None:
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    for key, cfg in IMPACT_PAGE_BY_KEY.items():
+        html = render_impact_page(
+            title=f"Translation Impact: {cfg['label']}",
+            description=cfg["description"],
+            rows=impact_rows_by_key.get(key, []),
+            generated_at=generated_at,
+        )
+        page_path = OUTPUT_PATH.parent / cfg["filename"]
+        page_path.write_text(html, encoding="utf-8")
+        print(f"Wrote {page_path}")
 
 
 def render_table_rows(rows: list[str]) -> str:
@@ -205,6 +320,10 @@ def main():
         top_pairs = fetch_top_pairs(cur)
         substantive_examples = fetch_examples(cur, "substantive")
         mechanical_examples = fetch_examples(cur, "mechanical")
+        impact_rows_by_key = {
+            key: fetch_impact_headwords(cur, key)
+            for key in IMPACT_PAGE_BY_KEY
+        }
     except Exception as exc:
         conn.close()
         fallback_html = f"""<!DOCTYPE html>
@@ -242,6 +361,8 @@ def main():
         return
 
     conn.close()
+
+    write_impact_pages(impact_rows_by_key)
 
     (
         total_rows,
@@ -292,11 +413,12 @@ def main():
 
     def render_examples(rows):
         rendered = []
-        for lemma, billerbeck_id, source_kind, summary, patterns_json, billerbeck_text, meineke_text in rows:
+        for lemma_id, lemma, billerbeck_id, source_kind, summary, patterns_json, billerbeck_text, meineke_text in rows:
             patterns = patterns_json if isinstance(patterns_json, list) else (json.loads(patterns_json) if patterns_json else [])
+            edit_link = f"../cgi-bin/review.cgi?id={int(lemma_id)}" if lemma_id is not None else "../cgi-bin/review.cgi"
             rendered.append(
                 "<div class='example-card'>"
-                f"<div class='example-head'><strong>{html_module.escape(lemma or '')}</strong> "
+                f"<div class='example-head'><strong><a href='{html_module.escape(edit_link)}' target='_blank'>{html_module.escape(lemma or '')}</a></strong> "
                 f"<span class='id'>({html_module.escape(billerbeck_id or '')}, {html_module.escape(source_kind or '')})</span></div>"
                 f"<div class='summary'>{html_module.escape(summary or '')}</div>"
                 f"<div class='patterns'>Patterns: {html_module.escape(', '.join(patterns) if patterns else 'none')}</div>"
@@ -450,9 +572,9 @@ def main():
       </p>
       <table>
         <tr><th>Impact class</th><th>Count</th><th>Share of analyzed different rows</th></tr>
-        <tr><td>Likely different translation</td><td>{likely_different_translation_count:,}</td><td>{fmt_pct(likely_different_translation_count, analyzed_count)}</td></tr>
-        <tr><td>Probably same translation</td><td>{probably_same_translation_count:,}</td><td>{fmt_pct(probably_same_translation_count, analyzed_count)}</td></tr>
-        <tr><td>Uncertain</td><td>{uncertain_translation_count:,}</td><td>{fmt_pct(uncertain_translation_count, analyzed_count)}</td></tr>
+        <tr><td><a href="{IMPACT_PAGE_BY_KEY["likely_different_translation"]["filename"]}">Likely different translation</a></td><td>{likely_different_translation_count:,}</td><td>{fmt_pct(likely_different_translation_count, analyzed_count)}</td></tr>
+        <tr><td><a href="{IMPACT_PAGE_BY_KEY["probably_same_translation"]["filename"]}">Probably same translation</a></td><td>{probably_same_translation_count:,}</td><td>{fmt_pct(probably_same_translation_count, analyzed_count)}</td></tr>
+        <tr><td><a href="{IMPACT_PAGE_BY_KEY["uncertain"]["filename"]}">Uncertain</a></td><td>{uncertain_translation_count:,}</td><td>{fmt_pct(uncertain_translation_count, analyzed_count)}</td></tr>
       </table>
       <table>
         <tr><th>Subset</th><th>Total different rows</th><th>Likely different translation</th><th>Share within subset</th></tr>

@@ -12,55 +12,69 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+type DifferenceWordPair struct {
+	Billerbeck  string `json:"billerbeck"`
+	Meineke     string `json:"meineke"`
+	PatternType string `json:"pattern_type"`
+	Note        string `json:"note"`
+}
+
 // Lemma represents a single lemma entry from the JSON export
 type Lemma struct {
-	ID                    int      `json:"id"`
-	Lemma                 string   `json:"lemma"`
-	EntryNumber           int      `json:"entry_number"`
-	Version               string   `json:"version"`
-	GreekText             string   `json:"greek_text"`
-	MeinekeGreekParagraph string   `json:"meineke_greek_paragraph"`
-	EnglishTranslation    string   `json:"english_translation"`
-	Type                  string   `json:"type"`
-	VolumeLabel           string   `json:"volume_label"`
-	MeinekeID             string   `json:"meineke_id"`
-	BillerbeckID          string   `json:"billerbeck_id"`
-	WordCount             int      `json:"word_count"`
-	ImageFilenames        []string `json:"image_filenames"`
-	Confidence            string   `json:"confidence"`
-	Letter                string   `json:"letter"`
-	SortOrder             int      `json:"sort_order"`
+	ID                           int                  `json:"id"`
+	Lemma                        string               `json:"lemma"`
+	EntryNumber                  int                  `json:"entry_number"`
+	Version                      string               `json:"version"`
+	GreekText                    string               `json:"greek_text"`
+	MeinekeGreekParagraph        string               `json:"meineke_greek_paragraph"`
+	EnglishTranslation           string               `json:"english_translation"`
+	Type                         string               `json:"type"`
+	VolumeLabel                  string               `json:"volume_label"`
+	MeinekeID                    string               `json:"meineke_id"`
+	BillerbeckID                 string               `json:"billerbeck_id"`
+	WordCount                    int                  `json:"word_count"`
+	ImageFilenames               []string             `json:"image_filenames"`
+	Confidence                   string               `json:"confidence"`
+	MeinekeNormalizedClass       string               `json:"meineke_normalized_class"`
+	MeinekeLLMStatus             string               `json:"meineke_llm_status"`
+	MeinekeDifferenceLevel       string               `json:"meineke_difference_level"`
+	MeinekeTranslationImpact     string               `json:"meineke_translation_impact"`
+	MeinekeTranslationImpactNote string               `json:"meineke_translation_impact_note"`
+	MeinekeDifferenceSummary     string               `json:"meineke_difference_summary"`
+	MeinekeWordPairs             []DifferenceWordPair `json:"meineke_word_pairs"`
+	Letter                       string               `json:"letter"`
+	SortOrder                    int                  `json:"sort_order"`
 }
 
 // LemmaData contains all lemmas from JSON export
 type LemmaData struct {
-	Lemmas      []Lemma   `json:"lemmas"`
-	TotalCount  int       `json:"total_count"`
-	ExportedAt  time.Time `json:"exported_at"`
+	Lemmas     []Lemma   `json:"lemmas"`
+	TotalCount int       `json:"total_count"`
+	ExportedAt time.Time `json:"exported_at"`
 }
 
 // Review represents review data from SQLite
 type Review struct {
-	LemmaID                       int
-	ReviewStatus                  string
-	CorrectedGreekText            string
-	CorrectedEnglishTranslation   string  // Initial human translation
-	ReviewedEnglishTranslation    string  // Reviewed/approved translation
+	LemmaID                     int
+	ReviewStatus                string
+	CorrectedGreekText          string
+	CorrectedEnglishTranslation string // Initial human translation
+	ReviewedEnglishTranslation  string // Reviewed/approved translation
 	// OBSOLETE: ReviewerUsername is deprecated. Use the per-field tracking columns below instead.
 	// Kept for backward compatibility with legacy reviews that don't have per-field tracking.
-	ReviewerUsername              string
-	ReviewedAt                    *time.Time
-	Notes                         string
+	ReviewerUsername string
+	ReviewedAt       *time.Time
+	Notes            string
 	// Track who last modified each field (preferred over ReviewerUsername)
-	GreekCorrectedBy              string
-	InitialTranslationBy          string
-	ReviewedTranslationBy         string
+	GreekCorrectedBy      string
+	InitialTranslationBy  string
+	ReviewedTranslationBy string
 }
 
 // Config holds application configuration
 type Config struct {
-	DataFile    string
-	DBPath      string
+	DataFile     string
+	DBPath       string
 	ProtectedURL string
 }
 
