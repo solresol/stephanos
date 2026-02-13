@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""
+OCR Meineke pages from images.source_document='meineke' into strict JSON.
+
+Output schema:
+{
+  "status": "entries_present|continuation_only|apparatus_only|non_greek_error",
+  "entries": [
+    {
+      "lemma": "...",
+      "entry_number": 123,
+      "billerbeck_id": "...",
+      "meineke_id": "...",
+      "main_text_lines": [
+        {"line_seq": 1, "printed_line_label": "10", "line_text": "..."}
+      ],
+      "apparatus_entries": [
+        {"line_seq": 1, "printed_line_label": "10", "apparatus_text": "...", "anchor_token": "...", "note_kind": "variant"}
+      ]
+    }
+  ]
+}
+"""
+import argparse
+import base64
+import json
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+from openai import OpenAI
+
+from db import get_connection
+
+DEFAULT_MODEL = "gpt-5.1"
+
+SYSTEM_PROMPT = """You are a philological OCR assistant for the Meineke text of Stephanos of Byzantium.
+Extract both:
+1) Main text lines with line numbers
+2) Apparatus entries linked to those lines.
+
+Return strict JSON only via the provided function tool."""
+
+USER_PROMPT = """Extract lemma entries from this Meineke page.
+
+Rules:
+- Preserve printed line labels when present.
+- Also provide normalized sequential line_seq per entry.
+- Capture apparatus entries and link them to line_seq/printed_line_label where possible.
+- Do not collapse line boundaries.
+- If this page has no new entries, choose continuation_only/apparatus_only/non_greek_error as appropriate.
+"""
+
+EXTRACT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "submit_meineke_page",
+        "description": "Submit extracted Meineke page data with line-linked apparatus",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["entries_present", "continuation_only", "apparatus_only", "non_greek_error"]
+                },
+                "entries": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "lemma": {"type": "string"},
+                            "entry_number": {"type": "integer"},
+                            "billerbeck_id": {"type": "string"},
+                            "meineke_id": {"type": "string"},
+                            "main_text_lines": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "line_seq": {"type": "integer"},
+                                        "printed_line_label": {"type": "string"},
+                                        "line_text": {"type": "string"},
+                                    },
+                                    "required": ["line_seq", "line_text"],
+                                },
+                            },
+                            "apparatus_entries": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "line_seq": {"type": "integer"},
+                                        "printed_line_label": {"type": "string"},
+                                        "apparatus_text": {"type": "string"},
+                                        "anchor_token": {"type": "string"},
+                                        "note_kind": {"type": "string"},
+                                    },
+                                    "required": ["apparatus_text"],
+                                },
+                            },
+                        },
+                        "required": ["lemma", "main_text_lines", "apparatus_entries"],
+                    },
+                },
+            },
+            "required": ["status", "entries"],
+        },
+    },
+}
+
+
+def load_api_key():
+    key_path = Path.home() / ".openai.key"
+    if not key_path.exists():
+        raise FileNotFoundError(f"API key file not found: {key_path}")
+    return key_path.read_text().strip()
+
+
+def fetch_unprocessed_images(cur, limit: int | None):
+    query = """
+        SELECT id, image_filename, image_data
+        FROM images
+        WHERE processed = 0
+          AND COALESCE(source_document, 'billerbeck') = 'meineke'
+        ORDER BY id
+    """
+    if limit is not None:
+        query += f" LIMIT {int(limit)}"
+    cur.execute(query)
+    return cur.fetchall()
+
+
+def ensure_columns(cur):
+    cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS source_document TEXT DEFAULT 'billerbeck'")
+
+
+def process_image(client, model, image_data):
+    if isinstance(image_data, memoryview):
+        image_data = bytes(image_data)
+    b64 = base64.b64encode(image_data).decode("utf-8")
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": USER_PROMPT},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                ],
+            },
+        ],
+        tools=[EXTRACT_TOOL],
+        tool_choice={"type": "function", "function": {"name": "submit_meineke_page"}},
+    )
+    tokens = response.usage.total_tokens if response.usage else 0
+    tool_call = response.choices[0].message.tool_calls[0]
+    payload = json.loads(tool_call.function.arguments)
+    return payload, tokens
+
+
+def mark_processed(conn, cur, image_id, payload, tokens_used, model):
+    cur.execute(
+        """
+        UPDATE images
+        SET processed = 1,
+            lemma_json = %s,
+            processed_at = %s,
+            tokens_used = %s,
+            ocr_model = %s
+        WHERE id = %s
+        """,
+        (
+            json.dumps(payload, ensure_ascii=False),
+            datetime.now(timezone.utc).isoformat(),
+            tokens_used,
+            model,
+            image_id,
+        ),
+    )
+    conn.commit()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="OCR Meineke pages with line/apparatus extraction.")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--delay", type=float, default=1.0)
+    args = parser.parse_args()
+
+    conn = get_connection()
+    cur = conn.cursor()
+    ensure_columns(cur)
+    rows = fetch_unprocessed_images(cur, args.limit)
+    if not rows:
+        print("No unprocessed Meineke images found.")
+        conn.close()
+        return
+
+    client = OpenAI(api_key=load_api_key())
+    done = 0
+    for image_id, filename, image_data in rows:
+        if not image_data:
+            print(f"Skipping {filename}: no image_data BLOB")
+            continue
+        try:
+            payload, tokens = process_image(client, args.model, image_data)
+            mark_processed(conn, cur, image_id, payload, tokens, args.model)
+            done += 1
+            print(f"Processed {filename} (tokens={tokens})")
+            if args.delay > 0:
+                time.sleep(args.delay)
+        except Exception as exc:
+            print(f"Failed {filename}: {type(exc).__name__}: {exc}")
+
+    conn.close()
+    print(f"Meineke OCR complete: {done} images.")
+
+
+if __name__ == "__main__":
+    main()

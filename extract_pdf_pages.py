@@ -50,6 +50,7 @@ def ensure_pdf_support(cur):
     cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS volume_number INTEGER")
     cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS volume_label TEXT")
     cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS letter_range TEXT")
+    cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS source_document TEXT DEFAULT 'billerbeck'")
 
 
 def get_or_create_pdf(cur, pdf_path: Path, volume_meta: Optional[dict]) -> int:
@@ -76,22 +77,23 @@ def get_or_create_pdf(cur, pdf_path: Path, volume_meta: Optional[dict]) -> int:
 
 
 def register_image(cur, image_filename: str, pdf_file_id: Optional[int], page_number: int,
-                   image_dir: Path, volume_meta: Optional[dict]) -> bool:
+                   image_dir: Path, volume_meta: Optional[dict], source_document: str) -> bool:
     """Insert/refresh image into DB queue."""
     volume_number = volume_meta["volume_number"] if volume_meta else None
     volume_label = volume_meta["volume_label"] if volume_meta else None
     letter_range = volume_meta["letter_range"] if volume_meta else None
     cur.execute(
         """
-        INSERT INTO images (image_filename, pdf_file_id, page_number, image_dir, volume_number, volume_label, letter_range)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO images (image_filename, pdf_file_id, page_number, image_dir, volume_number, volume_label, letter_range, source_document)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (image_filename) DO UPDATE
             SET pdf_file_id = EXCLUDED.pdf_file_id,
                 page_number = EXCLUDED.page_number,
                 image_dir = EXCLUDED.image_dir,
                 volume_number = COALESCE(EXCLUDED.volume_number, images.volume_number),
                 volume_label = COALESCE(EXCLUDED.volume_label, images.volume_label),
-                letter_range = COALESCE(EXCLUDED.letter_range, images.letter_range)
+                letter_range = COALESCE(EXCLUDED.letter_range, images.letter_range),
+                source_document = EXCLUDED.source_document
         """,
         (
             image_filename,
@@ -101,6 +103,7 @@ def register_image(cur, image_filename: str, pdf_file_id: Optional[int], page_nu
             volume_number,
             volume_label,
             letter_range,
+            source_document,
         ),
     )
     return cur.rowcount > 0
@@ -108,7 +111,7 @@ def register_image(cur, image_filename: str, pdf_file_id: Optional[int], page_nu
 
 def render_pages(pdf_path: Path, output_dir: Path, pages: list[int], dpi: int, prefix: str,
                  db_conn=None, db_cur=None, pdf_file_id: Optional[int] = None,
-                 volume_meta: Optional[dict] = None) -> tuple[int, int]:
+                 volume_meta: Optional[dict] = None, source_document: str = "billerbeck") -> tuple[int, int]:
     scale = dpi / 72.0  # PDF points are 72 DPI
     digits = len(str(max(pages))) if pages else 1
 
@@ -133,7 +136,7 @@ def render_pages(pdf_path: Path, output_dir: Path, pages: list[int], dpi: int, p
 
             if db_cur:
                 registered += int(
-                    register_image(db_cur, filename, pdf_file_id, page_number, output_dir, volume_meta)
+                    register_image(db_cur, filename, pdf_file_id, page_number, output_dir, volume_meta, source_document)
                 )
             print(f"Saved page {page_number} -> {output_dir / filename}")
 
@@ -177,6 +180,12 @@ def main():
                         help="Directory to write images (default: ./pdf_pages)")
     parser.add_argument("--dpi", type=int, default=DEFAULT_DPI, help=f"Render DPI (default: {DEFAULT_DPI})")
     parser.add_argument("--prefix", default="page", help="Filename prefix for images (default: page)")
+    parser.add_argument(
+        "--source-document",
+        default="billerbeck",
+        choices=["billerbeck", "meineke"],
+        help="Source document label to store on queued images (default: billerbeck)",
+    )
     parser.add_argument("--skip-db", action="store_true",
                         help="Skip registering extracted images in the database")
     args = parser.parse_args()
@@ -184,6 +193,10 @@ def main():
     pdf_path = Path(args.pdf).expanduser().resolve()
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
+
+    prefix = args.prefix
+    if args.source_document == "meineke" and prefix == "page":
+        prefix = "meineke_page"
 
     if args.start_page:
         start_page = args.start_page
@@ -212,11 +225,12 @@ def main():
         Path(args.output_dir),
         pages,
         args.dpi,
-        args.prefix,
+        prefix,
         db_conn=db_conn,
         db_cur=db_cur,
         pdf_file_id=pdf_file_id,
         volume_meta=volume_meta,
+        source_document=args.source_document,
     )
 
     if db_conn:

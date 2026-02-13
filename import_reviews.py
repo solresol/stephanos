@@ -27,6 +27,100 @@ def log(message):
         f.write(log_message + '\n')
 
 
+def sqlite_table_exists(cur, table_name: str) -> bool:
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    )
+    return cur.fetchone() is not None
+
+
+def import_variant_reviews(sqlite_cur, pg_cur):
+    """
+    Import optional variant-level review rows from SQLite bridge table.
+    Returns (updated_count, skipped_count, error_count).
+    """
+    if not sqlite_table_exists(sqlite_cur, "translation_variant_reviews"):
+        return 0, 0, 0
+
+    sqlite_cur.execute(
+        """
+        SELECT lemma_id, variant_kind, variant_id, variant_status,
+               source_text_version_id, notes, reviewer_username, reviewed_at
+        FROM translation_variant_reviews
+        ORDER BY reviewed_at
+        """
+    )
+    rows = sqlite_cur.fetchall()
+    if not rows:
+        return 0, 0, 0
+
+    updated_count = 0
+    skipped_count = 0
+    error_count = 0
+
+    for row in rows:
+        lemma_id = row["lemma_id"]
+        variant_kind = (row["variant_kind"] or "").strip()
+        variant_id = (row["variant_id"] or "").strip()
+        variant_status = (row["variant_status"] or "draft").strip()
+        notes = row["notes"] or None
+        reviewer = row["reviewer_username"] or None
+        reviewed_at = row["reviewed_at"] or None
+
+        if not variant_kind or not variant_id:
+            skipped_count += 1
+            continue
+
+        try:
+            if variant_kind == "translation_run":
+                pg_cur.execute(
+                    """
+                    UPDATE translation_runs
+                    SET status = %s,
+                        reviewed_by = %s,
+                        reviewed_at = %s,
+                        review_notes = %s
+                    WHERE id = %s
+                      AND lemma_id = %s
+                    """,
+                    (variant_status, reviewer, reviewed_at, notes, variant_id, lemma_id),
+                )
+                if pg_cur.rowcount > 0:
+                    updated_count += 1
+                else:
+                    skipped_count += 1
+                continue
+
+            if variant_kind == "human_translation":
+                pg_cur.execute(
+                    """
+                    UPDATE human_translations
+                    SET status = %s,
+                        reviewed_by = %s,
+                        reviewed_at = %s,
+                        notes = COALESCE(%s, notes),
+                        updated_at = NOW()
+                    WHERE id = %s
+                      AND lemma_id = %s
+                    """,
+                    (variant_status, reviewer, reviewed_at, notes, variant_id, lemma_id),
+                )
+                if pg_cur.rowcount > 0:
+                    updated_count += 1
+                else:
+                    skipped_count += 1
+                continue
+
+            # Legacy variant lane: no additional import action needed beyond existing fields.
+            skipped_count += 1
+        except Exception as e:
+            log(f"  ERROR importing variant review lemma={lemma_id} kind={variant_kind} id={variant_id}: {e}")
+            error_count += 1
+
+    return updated_count, skipped_count, error_count
+
+
 def import_reviews():
     """Import reviews from SQLite to PostgreSQL."""
     log("=== Starting review import ===")
@@ -139,6 +233,17 @@ def import_reviews():
             continue
 
     # Commit changes
+    variant_updated = variant_skipped = variant_errors = 0
+    try:
+        variant_updated, variant_skipped, variant_errors = import_variant_reviews(sqlite_cur, pg_cur)
+        if variant_updated or variant_skipped or variant_errors:
+            log(
+                "Variant review import: "
+                f"updated={variant_updated}, skipped={variant_skipped}, errors={variant_errors}"
+            )
+    except Exception as e:
+        log(f"WARNING: Variant review import skipped due to error: {e}")
+
     pg_conn.commit()
 
     # Close connections
@@ -150,8 +255,12 @@ def import_reviews():
     log(f"  Updated: {updated_count}")
     log(f"  Skipped: {skipped_count}")
     log(f"  Errors: {error_count}")
+    if variant_updated or variant_skipped or variant_errors:
+        log(f"  Variant Updated: {variant_updated}")
+        log(f"  Variant Skipped: {variant_skipped}")
+        log(f"  Variant Errors: {variant_errors}")
 
-    if error_count > 0:
+    if error_count > 0 or variant_errors > 0:
         return 1
 
     return 0

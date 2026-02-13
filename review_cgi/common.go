@@ -42,6 +42,14 @@ type Lemma struct {
 	MeinekeTranslationImpactNote string               `json:"meineke_translation_impact_note"`
 	MeinekeDifferenceSummary     string               `json:"meineke_difference_summary"`
 	MeinekeWordPairs             []DifferenceWordPair `json:"meineke_word_pairs"`
+	TranslationBlocked           bool                 `json:"translation_blocked"`
+	TranslationBlockReason       string               `json:"translation_block_reason"`
+	TranslationDifferenceEvidence string              `json:"translation_difference_evidence"`
+	TranslationVariants          []map[string]interface{} `json:"translation_variants"`
+	SourceTextVersions           []map[string]interface{} `json:"source_text_versions"`
+	CanonicalVariantRef          map[string]interface{}   `json:"canonical_variant_ref"`
+	BlockedReasons               []string                 `json:"blocked_reasons"`
+	Apparatus                    []map[string]interface{} `json:"apparatus"`
 	Letter                       string               `json:"letter"`
 	SortOrder                    int                  `json:"sort_order"`
 }
@@ -127,6 +135,17 @@ func OpenDatabase(dbPath string) (*sql.DB, error) {
 		"ALTER TABLE reviews ADD COLUMN greek_corrected_by TEXT",
 		"ALTER TABLE reviews ADD COLUMN initial_translation_by TEXT",
 		"ALTER TABLE reviews ADD COLUMN reviewed_translation_by TEXT",
+		`CREATE TABLE IF NOT EXISTS translation_variant_reviews (
+			lemma_id INTEGER NOT NULL,
+			variant_kind TEXT NOT NULL,
+			variant_id TEXT NOT NULL,
+			variant_status TEXT NOT NULL DEFAULT 'draft',
+			source_text_version_id TEXT,
+			notes TEXT,
+			reviewer_username TEXT,
+			reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (lemma_id, variant_kind, variant_id)
+		)`,
 	}
 	for _, migration := range migrations {
 		db.Exec(migration) // Ignore errors (column may already exist)
@@ -248,6 +267,54 @@ func SaveReview(db *sql.DB, review *Review, oldReview *Review, username string) 
 		return fmt.Errorf("failed to save review: %w", err)
 	}
 
+	return nil
+}
+
+// SaveTranslationVariantReview stores variant-level review metadata.
+func SaveTranslationVariantReview(
+	db *sql.DB,
+	lemmaID int,
+	variantKind string,
+	variantID string,
+	variantStatus string,
+	sourceTextVersionID string,
+	notes string,
+	username string,
+) error {
+	if strings.TrimSpace(variantKind) == "" || strings.TrimSpace(variantID) == "" {
+		return nil
+	}
+	if strings.TrimSpace(variantStatus) == "" {
+		variantStatus = "draft"
+	}
+
+	query := `
+		INSERT INTO translation_variant_reviews (
+			lemma_id, variant_kind, variant_id, variant_status,
+			source_text_version_id, notes, reviewer_username, reviewed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(lemma_id, variant_kind, variant_id) DO UPDATE SET
+			variant_status = excluded.variant_status,
+			source_text_version_id = excluded.source_text_version_id,
+			notes = excluded.notes,
+			reviewer_username = excluded.reviewer_username,
+			reviewed_at = excluded.reviewed_at
+	`
+
+	_, err := db.Exec(
+		query,
+		lemmaID,
+		variantKind,
+		variantID,
+		variantStatus,
+		sourceTextVersionID,
+		notes,
+		username,
+		time.Now(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save translation variant review: %w", err)
+	}
 	return nil
 }
 

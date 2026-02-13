@@ -1,324 +1,382 @@
 #!/usr/bin/env python3
 """
-Translate Greek lemmas to English using gpt-5.2.
-Processes assembled lemmas that have been extracted but not yet translated.
-Enforces a daily token limit of 100,000 tokens.
+Queue-driven translation worker for parallel translation runs.
 
-Uses OpenAI tool calling for structured output.
+Consumes translation_run_requests and writes one row per generated run to
+translation_runs.
 """
 import argparse
 import json
 import time
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 
 from openai import OpenAI
 
 from db import get_connection
 
-DEFAULT_TRANSLATION_DAILY_TOKEN_LIMIT = 100_000
+DEFAULT_DAILY_TOKEN_LIMIT = 100_000
 DEFAULT_MODEL = "gpt-5.2"
 
-# Tool definition for structured translation output
 TRANSLATE_TOOL = {
     "type": "function",
     "function": {
         "name": "submit_translation",
-        "description": "Submit the English translation of a Greek lemma entry",
+        "description": "Submit a translation variant",
         "parameters": {
             "type": "object",
             "properties": {
                 "translation": {
                     "type": "string",
-                    "description": "The scholarly English translation of the Greek text"
+                    "description": "English translation output",
                 }
             },
-            "required": ["translation"]
-        }
-    }
+            "required": ["translation"],
+        },
+    },
 }
 
+
 def load_api_key():
-    """Load OpenAI API key from ~/.openai.key"""
     key_path = Path.home() / ".openai.key"
     if not key_path.exists():
         raise FileNotFoundError(f"API key file not found: {key_path}")
     return key_path.read_text().strip()
 
-def get_translation_tokens_today(cur):
-    """Get total translation tokens used today"""
+
+def get_tokens_today(cur):
     today = datetime.now(timezone.utc).date().isoformat()
     cur.execute(
         """
-        SELECT COALESCE(SUM(translation_tokens), 0)
-        FROM assembled_lemmas
-        WHERE DATE(translated_at) = %s
+        SELECT COALESCE(SUM(tokens_used), 0)
+        FROM translation_runs
+        WHERE DATE(completed_at) = %s
         """,
-        (today,)
+        (today,),
     )
     row = cur.fetchone()
     return row[0] if row else 0
 
 
-def get_current_translation_prompt(cur):
+def fetch_requests(cur, request_limit: int | None):
+    query = """
+        SELECT
+            r.id AS request_id,
+            r.lemma_id,
+            r.requested_runs,
+            COALESCE(r.model, %s) AS model_name,
+            COALESCE(r.temperature, 1.0) AS temperature,
+            COALESCE(r.top_p, 1.0) AS top_p,
+            p.id AS profile_id,
+            p.name AS profile_name,
+            pv.id AS profile_version_id,
+            pv.version AS profile_version_number,
+            pv.prompt_text,
+            stv.id AS source_text_version_id,
+            stv.text_body AS source_text,
+            a.lemma,
+            a.entry_number
+        FROM translation_run_requests r
+        JOIN translation_prompt_profiles p ON p.id = r.profile_id
+        JOIN translation_prompt_profile_versions pv ON pv.id = r.profile_version_id
+        JOIN lemma_source_text_versions stv ON stv.id = r.source_text_version_id
+        JOIN assembled_lemmas a ON a.id = r.lemma_id
+        WHERE r.status IN ('pending', 'running')
+        ORDER BY r.created_at, r.id
     """
-    Get the current (latest) translation prompt from the database.
-
-    Returns (version, prompt_text) tuple.
-    """
-    cur.execute(
-        """
-        SELECT version, prompt_text
-        FROM translation_prompts
-        ORDER BY version DESC
-        LIMIT 1
-        """
-    )
-    row = cur.fetchone()
-    if not row:
-        raise RuntimeError("No translation prompts found in database. Run database setup first.")
-    return row[0], row[1]
-
-def fetch_lemmas_needing_translation(cur, current_prompt_version: int):
-    """
-    Fetch assembled lemmas that need (re)translation.
-
-    Priority order:
-    1. Entries with outdated prompt versions (older AI translations needing update)
-    2. Never translated entries (translated = 0)
-
-    Excludes entries with human translations (corrected or reviewed) since
-    those don't need AI retranslation.
-    """
-    cur.execute(
-        """
-        SELECT id, lemma, entry_number, type, greek_text, human_greek_text, human_notes, confidence, assembled_json
-        FROM assembled_lemmas
-        WHERE
-            -- Exclude entries that have human translations
-            (corrected_english_translation IS NULL OR corrected_english_translation = '')
-            AND (reviewed_english_translation IS NULL OR reviewed_english_translation = '')
-            AND (
-                -- Outdated prompt version (prioritized)
-                (translated = 1 AND (translation_prompt_version IS NULL OR translation_prompt_version < %s))
-                OR
-                -- Never translated
-                translated = 0
-            )
-        ORDER BY
-            -- Priority 1: Outdated translations first
-            CASE WHEN translated = 1 AND (translation_prompt_version IS NULL OR translation_prompt_version < %s)
-                 THEN 0 ELSE 1 END,
-            -- Priority 2: Volume 3 (kappa) first within each group
-            CASE WHEN volume_number = 3 THEN 0 ELSE 1 END,
-            id
-        """,
-        (current_prompt_version, current_prompt_version)
-    )
+    params = [DEFAULT_MODEL]
+    if request_limit is not None:
+        query += f" LIMIT {int(request_limit)}"
+    cur.execute(query, params)
     return cur.fetchall()
 
-def mark_translated(conn, cur, lemma_id, translation: str, tokens_used: int, prompt_version: int, lemma_data: dict = None):
-    """
-    Mark a lemma as translated, storing the translation in the normalized column.
 
-    Also updates translation_json for backward compatibility during migration period.
-    """
-    # Build translation_json for backward compatibility
-    translation_json = None
-    if lemma_data and translation:
-        translation_json = json.dumps({
-            "lemma": lemma_data.get("lemma"),
-            "entry_number": lemma_data.get("entry_number"),
-            "type": lemma_data.get("type"),
-            "greek_text": lemma_data.get("greek_text"),
-            "confidence": lemma_data.get("confidence", "normal"),
-            "translation": translation
-        }, ensure_ascii=False)
-
+def completed_run_count(cur, request_id: int):
     cur.execute(
         """
-        UPDATE assembled_lemmas
-        SET translated = 1,
-            translation = %s,
-            translation_json = %s,
-            translated_at = %s,
-            translation_tokens = %s,
-            translation_prompt_version = %s
+        SELECT COUNT(*)
+        FROM translation_runs
+        WHERE request_id = %s
+          AND status IN ('completed', 'approved', 'blocked', 'hidden')
+        """,
+        (request_id,),
+    )
+    return cur.fetchone()[0]
+
+
+def mark_request_running(cur, request_id: int):
+    cur.execute(
+        """
+        UPDATE translation_run_requests
+        SET status = 'running',
+            started_at = COALESCE(started_at, NOW()),
+            updated_at = NOW(),
+            error_message = NULL
         WHERE id = %s
         """,
-        (translation, translation_json, datetime.now(timezone.utc).isoformat(), tokens_used, prompt_version, lemma_id)
+        (request_id,),
     )
-    conn.commit()
 
-def translate_lemma(client, lemma_text: str, greek_text: str, entry_number: int, system_prompt: str, model: str = DEFAULT_MODEL):
-    """
-    Translate Greek text using tool calling for structured output.
 
-    Args:
-        client: OpenAI client
-        lemma_text: The headword/lemma
-        greek_text: The Greek text to translate
-        entry_number: Entry number for context
-        system_prompt: The translation system prompt from the database
-        model: OpenAI model to use
+def mark_request_done(cur, request_id: int, status: str, error_message: str | None = None):
+    cur.execute(
+        """
+        UPDATE translation_run_requests
+        SET status = %s,
+            finished_at = NOW(),
+            updated_at = NOW(),
+            error_message = %s
+        WHERE id = %s
+        """,
+        (status, error_message, request_id),
+    )
 
-    Returns:
-        (translation: str, tokens_used: int)
-    """
-    prompt = f"""Translate this lemma entry from Stephanos of Byzantium's Ethnika:
 
-Headword: {lemma_text}
-Entry #{entry_number}
+def insert_run(
+    cur,
+    *,
+    request_id: int,
+    lemma_id: int,
+    profile_id: int,
+    profile_version_id: int,
+    source_text_version_id: int,
+    run_index: int,
+    model: str,
+    temperature: float,
+    top_p: float,
+    translation_text: str,
+    tokens_used: int,
+    status: str,
+    error_message: str | None = None,
+):
+    cur.execute(
+        """
+        INSERT INTO translation_runs (
+            request_id, lemma_id, profile_id, profile_version_id, source_text_version_id,
+            run_index, model, temperature, top_p,
+            translation_text, tokens_used, status,
+            public_eligible, created_at, completed_at, error_message
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW(), %s)
+        """,
+        (
+            request_id,
+            lemma_id,
+            profile_id,
+            profile_version_id,
+            source_text_version_id,
+            run_index,
+            model,
+            temperature,
+            top_p,
+            translation_text,
+            tokens_used,
+            status,
+            True,
+            error_message,
+        ),
+    )
 
-Greek text:
-{greek_text}
 
-Provide a scholarly English translation. Preserve place names and technical terminology."""
+def call_model(
+    client: OpenAI,
+    *,
+    model: str,
+    system_prompt: str,
+    lemma: str,
+    entry_number: int | None,
+    source_text: str,
+):
+    prompt = f"""Translate this Stephanos entry.
 
+Headword: {lemma}
+Entry number: {entry_number or 0}
+
+Source Greek text:
+{source_text}
+"""
     response = client.chat.completions.create(
         model=model,
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
+            {"role": "user", "content": prompt},
         ],
         tools=[TRANSLATE_TOOL],
-        tool_choice={"type": "function", "function": {"name": "submit_translation"}}
+        tool_choice={"type": "function", "function": {"name": "submit_translation"}},
     )
-
     tokens_used = response.usage.total_tokens if response.usage else 0
-
-    # Extract translation from tool call
     tool_call = response.choices[0].message.tool_calls[0]
-    arguments = json.loads(tool_call.function.arguments)
-    translation = arguments.get("translation", "")
-
+    args = json.loads(tool_call.function.arguments)
+    translation = (args.get("translation") or "").strip()
     return translation, tokens_used
 
 
-def should_skip_translation(greek_text: str):
-    """
-    Decide whether to skip translation (no Greek to translate).
-    Returns (skip: bool, reason: str | None)
-    """
-    if not greek_text or not greek_text.strip():
-        return True, "no_greek_text"
-    return False, None
-
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, help="Max number of lemmas to translate in this run")
-    parser.add_argument("--translation-daily-token-limit", type=int, default=DEFAULT_TRANSLATION_DAILY_TOKEN_LIMIT,
-                       help=f"Daily translation token limit for GPT (default: {DEFAULT_TRANSLATION_DAILY_TOKEN_LIMIT:,})")
-    parser.add_argument("--delay", type=float, default=1.0,
-                       help="Delay in seconds between API calls (default: 1.0)")
-    parser.add_argument("--model", default=DEFAULT_MODEL,
-                       help=f"OpenAI model to use (default: {DEFAULT_MODEL})")
+    parser = argparse.ArgumentParser(description="Queue-driven translation worker.")
+    parser.add_argument("--request-limit", type=int, help="Max queued requests to inspect this run")
+    parser.add_argument("--run-limit", type=int, help="Max generated runs in this invocation")
+    parser.add_argument("--daily-token-limit", type=int, default=DEFAULT_DAILY_TOKEN_LIMIT)
+    parser.add_argument("--delay", type=float, default=1.0)
     args = parser.parse_args()
 
     conn = get_connection()
     cur = conn.cursor()
 
-    # Get current translation prompt from database
-    prompt_version, system_prompt = get_current_translation_prompt(cur)
-    print(f"Using translation prompt version {prompt_version}")
-
-    # Check translation tokens used today
-    tokens_today = get_translation_tokens_today(cur)
-    print(f"Translation tokens used today: {tokens_today:,} / {args.translation_daily_token_limit:,}")
-
-    if tokens_today >= args.translation_daily_token_limit:
-        print("Daily translation token limit reached. Exiting.")
+    required_tables = [
+        "translation_run_requests",
+        "translation_runs",
+        "translation_prompt_profiles",
+        "translation_prompt_profile_versions",
+        "lemma_source_text_versions",
+    ]
+    missing = []
+    for table in required_tables:
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table}",))
+        if not bool(cur.fetchone()[0]):
+            missing.append(table)
+    if missing:
+        print("Missing required tables for queue-driven translation worker:")
+        for table in missing:
+            print(f"  - {table}")
+        print("Run migrations first.")
         conn.close()
         return
 
-    # Get lemmas needing translation (untranslated or outdated prompt version)
-    # Excludes entries with human translations
-    needs_translation = fetch_lemmas_needing_translation(cur, prompt_version)
-
-    print(f"Lemmas needing translation: {len(needs_translation)}")
-
-    if not needs_translation:
-        print("No lemmas need translation.")
+    tokens_today = get_tokens_today(cur)
+    print(f"Tokens used today: {tokens_today:,} / {args.daily_token_limit:,}")
+    if tokens_today >= args.daily_token_limit:
+        print("Daily token limit reached.")
         conn.close()
         return
 
-    # Load API key
-    api_key = load_api_key()
-    client = OpenAI(api_key=api_key)
+    requests = fetch_requests(cur, args.request_limit)
+    print(f"Queued requests: {len(requests)}")
+    if not requests:
+        conn.close()
+        return
 
-    # Process lemmas
-    translated_count = 0
-    total_tokens_this_run = 0
+    client = OpenAI(api_key=load_api_key())
+    total_runs = 0
+    total_tokens_run = 0
 
-    for lemma_id, lemma_text, entry_number, lemma_type, greek_text, human_greek_text, human_notes, confidence, assembled_json in needs_translation:
-        # Check if we've hit the limit
-        if args.limit and translated_count >= args.limit:
-            print(f"Reached translation limit ({args.limit} lemmas).")
+    for (
+        request_id,
+        lemma_id,
+        requested_runs,
+        model_name,
+        temperature,
+        top_p,
+        profile_id,
+        profile_name,
+        profile_version_id,
+        profile_version_number,
+        prompt_text,
+        source_text_version_id,
+        source_text,
+        lemma,
+        entry_number,
+    ) in requests:
+        if args.run_limit is not None and total_runs >= args.run_limit:
+            print(f"Reached run limit ({args.run_limit}).")
             break
 
-        # Check daily translation token limit
-        current_tokens_today = tokens_today + total_tokens_this_run
-        if current_tokens_today >= args.translation_daily_token_limit:
-            print(f"Daily translation token limit reached ({current_tokens_today:,} tokens).")
-            break
-
-        source_greek = human_greek_text or greek_text
-        skip, reason = should_skip_translation(source_greek)
-        display_name = f"{lemma_text or '(unknown lemma)'} (#{entry_number})"
-
-        if skip:
-            # Record as translated without spending tokens
-            mark_translated(conn, cur, lemma_id, "", 0, prompt_version)
-            translated_count += 1
-            print(f"SKIPPED {display_name} (reason: {reason})")
+        existing_count = completed_run_count(cur, request_id)
+        remaining = max(0, requested_runs - existing_count)
+        if remaining == 0:
+            mark_request_done(cur, request_id, "completed")
+            conn.commit()
             continue
 
-        # Build lemma data for backward compatibility
-        lemma_data = {
-            "lemma": lemma_text,
-            "entry_number": entry_number,
-            "type": lemma_type,
-            "greek_text": source_greek,
-            "confidence": confidence or "normal"
-        }
+        mark_request_running(cur, request_id)
+        conn.commit()
 
-        print(f"Translating {display_name} ({translated_count + 1}/{len(needs_translation)})...", end=" ", flush=True)
+        print(
+            f"Request {request_id}: lemma={lemma} profile={profile_name} "
+            f"v{profile_version_number} remaining_runs={remaining}"
+        )
 
-        try:
-            # Use tool calling for structured translation output
-            translation, tokens_used = translate_lemma(
-                client,
-                lemma_text=lemma_text or "",
-                greek_text=source_greek,
-                entry_number=entry_number or 0,
-                system_prompt=system_prompt,
-                model=args.model
-            )
+        failed = False
+        for run_offset in range(1, remaining + 1):
+            if args.run_limit is not None and total_runs >= args.run_limit:
+                break
 
-            if not translation:
-                print("FAILED (empty translation)")
-                continue
+            if tokens_today + total_tokens_run >= args.daily_token_limit:
+                print("Daily token limit reached during batch.")
+                break
 
-            # Save to database (both new column and legacy JSON for compatibility)
-            mark_translated(conn, cur, lemma_id, translation, tokens_used, prompt_version, lemma_data)
+            run_index = existing_count + run_offset
+            try:
+                translation, tokens_used = call_model(
+                    client,
+                    model=model_name,
+                    system_prompt=prompt_text,
+                    lemma=lemma or "",
+                    entry_number=entry_number,
+                    source_text=source_text or "",
+                )
+                if not translation:
+                    raise RuntimeError("Empty translation result")
 
-            translated_count += 1
-            total_tokens_this_run += tokens_used
-            print(f"OK (tokens: {tokens_used:,}, total today: {tokens_today + total_tokens_this_run:,})")
+                insert_run(
+                    cur,
+                    request_id=request_id,
+                    lemma_id=lemma_id,
+                    profile_id=profile_id,
+                    profile_version_id=profile_version_id,
+                    source_text_version_id=source_text_version_id,
+                    run_index=run_index,
+                    model=model_name,
+                    temperature=temperature,
+                    top_p=top_p,
+                    translation_text=translation,
+                    tokens_used=tokens_used,
+                    status="completed",
+                )
+                conn.commit()
 
-            # Delay between requests
-            if args.delay > 0:
-                time.sleep(args.delay)
+                total_runs += 1
+                total_tokens_run += tokens_used
+                print(f"  run {run_index}: ok (tokens={tokens_used})")
 
-        except Exception as e:
-            print(f"FAILED ({type(e).__name__}: {e})")
-            continue
+                if args.delay > 0:
+                    time.sleep(args.delay)
+
+            except Exception as exc:
+                failed = True
+                insert_run(
+                    cur,
+                    request_id=request_id,
+                    lemma_id=lemma_id,
+                    profile_id=profile_id,
+                    profile_version_id=profile_version_id,
+                    source_text_version_id=source_text_version_id,
+                    run_index=run_index,
+                    model=model_name,
+                    temperature=temperature,
+                    top_p=top_p,
+                    translation_text="",
+                    tokens_used=0,
+                    status="failed",
+                    error_message=f"{type(exc).__name__}: {exc}",
+                )
+                conn.commit()
+                print(f"  run {run_index}: failed ({type(exc).__name__}: {exc})")
+
+        final_completed = completed_run_count(cur, request_id)
+        if final_completed >= requested_runs:
+            mark_request_done(cur, request_id, "completed")
+        elif failed:
+            mark_request_done(cur, request_id, "failed", "One or more runs failed")
+        else:
+            mark_request_done(cur, request_id, "running")
+        conn.commit()
 
     conn.close()
-    print(f"\nTranslation batch complete:")
-    print(f"  Translated: {translated_count} lemmas")
-    print(f"  Tokens this run: {total_tokens_this_run:,}")
-    print(f"  Total tokens today: {tokens_today + total_tokens_this_run:,}")
+    print("Translation worker complete:")
+    print(f"  Generated runs: {total_runs}")
+    print(f"  Tokens this run: {total_tokens_run:,}")
+    print(f"  Tokens total today: {tokens_today + total_tokens_run:,}")
+
 
 if __name__ == "__main__":
     main()

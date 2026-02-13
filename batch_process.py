@@ -64,6 +64,7 @@ def fetch_unprocessed_images(cur):
         LEFT JOIN epubs e ON h.epub_id = e.id
         LEFT JOIN pdf_files p ON i.pdf_file_id = p.id
         WHERE i.processed = 0
+          AND COALESCE(i.source_document, 'billerbeck') = 'billerbeck'
         ORDER BY CASE WHEN COALESCE(i.volume_number, e.volume_number, p.volume_number) = 3 THEN 0 ELSE 1 END,
                  i.id
         """

@@ -44,6 +44,7 @@ def ensure_ocr_generation_table(cur):
         """
     )
     cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS ocr_generation_id INTEGER")
+    cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS source_document TEXT DEFAULT 'billerbeck'")
     cur.execute(
         """
         SELECT 1 FROM information_schema.table_constraints
@@ -390,7 +391,14 @@ def fetch_next_image(cur, specific=None):
         )
     else:
         cur.execute(
-            "SELECT id, image_filename FROM images WHERE processed = 0 ORDER BY id LIMIT 1"
+            """
+            SELECT id, image_filename
+            FROM images
+            WHERE processed = 0
+              AND COALESCE(source_document, 'billerbeck') = 'billerbeck'
+            ORDER BY id
+            LIMIT 1
+            """
         )
     return cur.fetchone()
 

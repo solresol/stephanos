@@ -46,6 +46,10 @@ func main() {
 	correctedEnglish := strings.TrimSpace(formData.Get("corrected_english"))
 	reviewedEnglish := strings.TrimSpace(formData.Get("reviewed_english"))
 	notes := strings.TrimSpace(formData.Get("notes"))
+	variantKind := strings.TrimSpace(formData.Get("variant_kind"))
+	variantID := strings.TrimSpace(formData.Get("variant_id"))
+	variantStatus := strings.TrimSpace(formData.Get("variant_status"))
+	sourceTextVersionID := strings.TrimSpace(formData.Get("source_text_version_id"))
 	action := formData.Get("action") // "stay" or "continue" (default)
 	remoteUser := os.Getenv("REMOTE_USER")
 
@@ -115,6 +119,21 @@ func main() {
 	err = SaveReview(db, review, oldReview, remoteUser)
 	if err != nil {
 		showErrorAndExit(fmt.Sprintf("Failed to save review: %v", err))
+		return
+	}
+
+	err = SaveTranslationVariantReview(
+		db,
+		lemmaID,
+		variantKind,
+		variantID,
+		variantStatus,
+		sourceTextVersionID,
+		notes,
+		remoteUser,
+	)
+	if err != nil {
+		showErrorAndExit(fmt.Sprintf("Failed to save translation variant review: %v", err))
 		return
 	}
 

@@ -194,6 +194,23 @@ def get_all_lemmas(cur):
     """Get all lemmas (translated and untranslated) from assembled_lemmas"""
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS translation_risk_flags (
+            id SERIAL PRIMARY KEY,
+            lemma_id INTEGER NOT NULL REFERENCES assembled_lemmas(id) ON DELETE CASCADE,
+            variant_kind TEXT NOT NULL,
+            variant_id TEXT NOT NULL,
+            source_document TEXT NOT NULL,
+            risk_code TEXT NOT NULL,
+            is_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+            evidence_difference_id INTEGER,
+            details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    cur.execute(
+        """
         SELECT a.id, a.lemma, a.entry_number, a.type, a.greek_text, a.human_greek_text, a.confidence,
                a.translation, a.translation_json, a.translated, a.ocr_processed_at, g.name as ocr_generation_name,
                (SELECT i.ocr_model FROM images i
@@ -212,13 +229,34 @@ def get_all_lemmas(cur):
                a.corrected_greek_scan, a.corrected_english_translation,
                a.review_status, a.reviewed_by, a.reviewed_at,
                a.wikidata_place_qid, a.wikidata_place_label, a.latitude, a.longitude, a.pleiades_id,
-               a.translation_prompt_version
+               a.translation_prompt_version,
+               COALESCE(risk_match.translation_blocked, FALSE) AS translation_blocked,
+               COALESCE(risk_match.translation_block_reason, '') AS translation_block_reason
         FROM assembled_lemmas a
         LEFT JOIN ocr_generations g ON a.ocr_generation_id = g.id
+        LEFT JOIN LATERAL (
+            SELECT
+                trf.is_blocked AS translation_blocked,
+                COALESCE(trf.details_json->>'summary', '') AS translation_block_reason
+            FROM translation_risk_flags trf
+            WHERE trf.lemma_id = a.id
+              AND trf.variant_kind = 'legacy_assembled'
+              AND trf.variant_id = 'translation'
+              AND trf.risk_code = 'billerbeck_likely_translation_change'
+            ORDER BY trf.updated_at DESC
+            LIMIT 1
+        ) risk_match ON TRUE
         ORDER BY a.id
         """
     )
     rows = cur.fetchall()
+
+    cur.execute("SELECT to_regclass('public.lemma_publication_targets') IS NOT NULL")
+    has_publication_targets = bool(cur.fetchone()[0])
+    cur.execute("SELECT to_regclass('public.translation_runs') IS NOT NULL")
+    has_translation_runs = bool(cur.fetchone()[0])
+    cur.execute("SELECT to_regclass('public.human_translations') IS NOT NULL")
+    has_human_translations = bool(cur.fetchone()[0])
 
     # Fetch proper nouns for all lemmas
     cur.execute("""
@@ -262,7 +300,7 @@ def get_all_lemmas(cur):
     aliases_by_name = {row[0]: row[1] for row in cur.fetchall()}
 
     all_lemmas = []
-    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at, wikidata_place_qid, wikidata_place_label, latitude, longitude, pleiades_id, translation_prompt_version in rows:
+    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at, wikidata_place_qid, wikidata_place_label, latitude, longitude, pleiades_id, translation_prompt_version, translation_blocked, translation_block_reason in rows:
         # Prefer corrected versions, fallback to human_greek_text, then OCR
         greek = (corrected_greek_scan or human_greek_text or greek_text or "").strip()
 
@@ -282,6 +320,43 @@ def get_all_lemmas(cur):
         if corrected_english_translation:
             english_translation = corrected_english_translation
             translation = corrected_english_translation
+
+        # Prefer canonical publication pointer when available.
+        if has_publication_targets:
+            cur.execute(
+                """
+                SELECT variant_kind, variant_id
+                FROM lemma_publication_targets
+                WHERE lemma_id = %s
+                  AND surface = 'public_translation'
+                LIMIT 1
+                """,
+                (lemma_id,),
+            )
+            pointer = cur.fetchone()
+            if pointer:
+                variant_kind, variant_id = pointer
+                canonical_text = ""
+                if variant_kind == "translation_run" and has_translation_runs:
+                    cur.execute(
+                        "SELECT COALESCE(translation_text, '') FROM translation_runs WHERE id = %s LIMIT 1",
+                        (variant_id,),
+                    )
+                    row = cur.fetchone()
+                    canonical_text = (row[0] if row else "") or ""
+                elif variant_kind == "human_translation" and has_human_translations:
+                    cur.execute(
+                        "SELECT COALESCE(translation_text, '') FROM human_translations WHERE id = %s LIMIT 1",
+                        (variant_id,),
+                    )
+                    row = cur.fetchone()
+                    canonical_text = (row[0] if row else "") or ""
+                elif variant_kind == "legacy_assembled":
+                    canonical_text = translation
+
+                if canonical_text.strip():
+                    translation = canonical_text
+                    english_translation = canonical_text
 
         # Parse image filenames (psycopg2 auto-deserializes JSON)
         if isinstance(image_filenames, list):
@@ -325,6 +400,8 @@ def get_all_lemmas(cur):
             "longitude": longitude,
             "pleiades_id": pleiades_id,
             "translation_prompt_version": translation_prompt_version,
+            "translation_blocked": bool(translation_blocked),
+            "translation_block_reason": translation_block_reason or "",
         }
         lemma_data["letter_slug"] = get_initial_slug(lemma_data["lemma"])
         all_lemmas.append(lemma_data)
@@ -396,8 +473,11 @@ def render_lemma_cards(lemmas):
             version_badge = ""
 
         is_translated = lemma.get("translated")
+        is_blocked = bool(lemma.get("translation_blocked"))
         translation = lemma.get('translation') or lemma.get('english_translation') or ""
-        if not is_translated or not translation:
+        if is_blocked:
+            translation = '<span class="pending-translation">Translation pending</span>'
+        elif not is_translated or not translation:
             translation = '<span class="pending-translation">Translation pending</span>'
         else:
             # Highlight proper nouns with alias tooltips
@@ -434,6 +514,9 @@ def render_lemma_cards(lemmas):
         # Add translation prompt version (only for AI translations, not human)
         if lemma.get("translation_prompt_version") and lemma.get("translated"):
             meta_lines.append(f"AI prompt: v{lemma['translation_prompt_version']}")
+        if is_blocked:
+            block_reason = lemma.get("translation_block_reason") or "Likely translation-affecting Meineke/Billerbeck difference"
+            meta_lines.append(f"Translation blocked: {block_reason}")
 
         # Add proper nouns (separated by role)
         if lemma.get("proper_nouns"):

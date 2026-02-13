@@ -482,6 +482,22 @@ const reviewTemplate = `<!DOCTYPE html>
                 and ignores citation wrappers and punctuation.
             </div>
 
+            {{if .Lemma.TranslationBlocked}}
+            <div class="comparison-box" style="border-left-color:#c0392b; background:#fdecea;">
+                <div><strong>Retranslation required for public display.</strong></div>
+                <div>This translation is currently blocked because Meineke/Billerbeck differences were flagged as likely translation-affecting.</div>
+                {{if .Lemma.TranslationBlockReason}}
+                <div style="margin-top: 6px;"><strong>Reason:</strong> {{.Lemma.TranslationBlockReason}}</div>
+                {{end}}
+                {{if .Lemma.TranslationDifferenceEvidence}}
+                <details style="margin-top: 8px;">
+                    <summary>Difference evidence JSON</summary>
+                    <pre style="white-space: pre-wrap; margin-top: 8px;">{{.Lemma.TranslationDifferenceEvidence}}</pre>
+                </details>
+                {{end}}
+            </div>
+            {{end}}
+
             {{if .ShowMeineke}}
             <details class="meineke-details" {{if eq .MeinekeStatus "different"}}open{{end}}>
                 <summary>Show Meineke Greek paragraph</summary>
@@ -517,6 +533,26 @@ const reviewTemplate = `<!DOCTYPE html>
             <div class="section-title">AI-generated English Translation</div>
             <div class="original-text">{{.Lemma.EnglishTranslation}}</div>
 
+            {{if .Lemma.TranslationVariants}}
+            <div class="section-title">Translation Variants</div>
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.92em;">
+                <tr style="background: #f6f8fa;">
+                    <th style="text-align: left; padding: 8px;">Kind</th>
+                    <th style="text-align: left; padding: 8px;">ID</th>
+                    <th style="text-align: left; padding: 8px;">Status</th>
+                    <th style="text-align: left; padding: 8px;">Source Version</th>
+                </tr>
+                {{range .Lemma.TranslationVariants}}
+                <tr>
+                    <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "kind"}}</td>
+                    <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "id"}}</td>
+                    <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "status"}}</td>
+                    <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "source_text_version_id"}}</td>
+                </tr>
+                {{end}}
+            </table>
+            {{end}}
+
         </div>
 
         <div class="card">
@@ -525,6 +561,7 @@ const reviewTemplate = `<!DOCTYPE html>
                 <input type="hidden" name="lemma_id" value="{{.Lemma.ID}}">
                 <input type="hidden" name="current_position" value="{{.Lemma.SortOrder}}">
                 <input type="hidden" id="ai_translation" value="{{.Lemma.EnglishTranslation}}">
+                <input type="hidden" name="source_text_version_id" value="">
 
                 <div class="form-group">
                     <label>OCR Status:</label>
@@ -545,6 +582,27 @@ const reviewTemplate = `<!DOCTYPE html>
                             Skip / Not Reviewed
                         </label>
                     </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="variant_kind">Variant Kind:</label>
+                    <input type="text" name="variant_kind" id="variant_kind" value="legacy_assembled" style="width: 100%; padding: 8px;">
+                </div>
+
+                <div class="form-group">
+                    <label for="variant_id">Variant ID:</label>
+                    <input type="text" name="variant_id" id="variant_id" value="translation" style="width: 100%; padding: 8px;">
+                </div>
+
+                <div class="form-group">
+                    <label for="variant_status">Variant Status:</label>
+                    <select name="variant_status" id="variant_status" style="width: 100%; padding: 8px;">
+                        <option value="draft">draft</option>
+                        <option value="approved" {{if not .Lemma.TranslationBlocked}}selected{{end}}>approved</option>
+                        <option value="rejected">rejected</option>
+                        <option value="hidden">hidden</option>
+                        <option value="blocked" {{if .Lemma.TranslationBlocked}}selected{{end}}>blocked</option>
+                    </select>
                 </div>
 
                 <div class="form-group">

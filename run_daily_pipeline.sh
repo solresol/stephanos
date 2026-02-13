@@ -40,9 +40,37 @@ uv run batch_process.py \
     --delay 1 \
     2>&1 | tee -a "$LOGFILE"
 
+# Step 3b: Process queued Meineke images with line/apparatus OCR
+echo "Step 3b: Processing Meineke images..." | tee -a "$LOGFILE"
+uv run process_meineke_pages.py --delay 1 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Meineke OCR step failed" | tee -a "$LOGFILE"
+
 # Step 4: Assemble lemmas across pages (handles continuations and human overrides)
 echo "Step 4: Assembling lemmas..." | tee -a "$LOGFILE"
 uv run assemble_lemmas.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 4b: Assemble Meineke source text versions (OCR + CSV fallback)
+echo "Step 4b: Assembling Meineke source texts..." | tee -a "$LOGFILE"
+uv run assemble_meineke_texts.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Meineke assembly step failed" | tee -a "$LOGFILE"
+
+# Step 4c: Backfill canonical source text versions from legacy fields
+echo "Step 4c: Backfilling source text versions..." | tee -a "$LOGFILE"
+uv run backfill_source_text_versions.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: source text backfill failed" | tee -a "$LOGFILE"
+
+# Step 4d: Seed prompt profiles from legacy translation prompts (idempotent)
+echo "Step 4d: Seeding translation prompt profiles..." | tee -a "$LOGFILE"
+uv run seed_translation_profiles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: profile seed failed" | tee -a "$LOGFILE"
+
+# Step 4e: Optionally enqueue translation run requests (set TRANSLATION_ENQUEUE_LIMIT>0)
+TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-0}"
+if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
+    echo "Step 4e: Enqueuing translation run requests..." | tee -a "$LOGFILE"
+    uv run enqueue_translation_runs.py \
+        --profile legacy_scholarly \
+        --source-document billerbeck \
+        --limit "$TRANSLATION_ENQUEUE_LIMIT" \
+        --repeat 1 \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: enqueue step failed" | tee -a "$LOGFILE"
+fi
 
 # Step 5: Translate lemmas with gpt-5.2
 echo "Step 5: Translating lemmas with gpt-5.2..." | tee -a "$LOGFILE"
@@ -83,6 +111,18 @@ echo "Step 5g: Analyzing Meineke/Billerbeck differences..." | tee -a "$LOGFILE"
 MEINEKE_DIFF_DAILY_TOKEN_LIMIT="${MEINEKE_DIFF_DAILY_TOKEN_LIMIT:-1000000}"
 uv run analyze_meineke_differences.py --limit 20 --daily-token-limit "$MEINEKE_DIFF_DAILY_TOKEN_LIMIT" --delay 1 2>&1 | tee -a "$LOGFILE"
 
+# Step 5g2: Sync versioned text-pair differences from current source versions
+echo "Step 5g2: Syncing text-pair differences..." | tee -a "$LOGFILE"
+uv run sync_text_pair_differences.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 5h: Sync translation risk flags (blocks likely translation-changing Billerbeck-dependent rows)
+echo "Step 5h: Syncing translation risk flags..." | tee -a "$LOGFILE"
+uv run sync_translation_risk_flags.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 5i: Refresh legacy canonical fields from publication pointers
+echo "Step 5i: Refreshing legacy canonical fields..." | tee -a "$LOGFILE"
+uv run refresh_legacy_canonical_fields.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: legacy canonical refresh failed" | tee -a "$LOGFILE"
+
 # Step 6: Generate progress website
 echo "Step 6: Generating progress website..." | tee -a "$LOGFILE"
 uv run generate_progress_site.py 2>&1 | tee -a "$LOGFILE"
@@ -120,6 +160,10 @@ uv run generate_meineke_difference_analysis_page.py 2>&1 | tee -a "$LOGFILE"
 # Step 7c: Generate protected pages
 echo "Step 7c: Generating protected pages..." | tee -a "$LOGFILE"
 uv run generate_protected_pages.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 7c2: Generate translation risk report
+echo "Step 7c2: Generating translation risk report..." | tee -a "$LOGFILE"
+uv run generate_translation_risk_report.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 8: Export lemmas CSV
 echo "Step 8: Exporting lemmas CSV..." | tee -a "$LOGFILE"

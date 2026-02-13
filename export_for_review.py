@@ -203,6 +203,144 @@ def export_lemmas():
     cur.execute(query)
     rows = cur.fetchall()
 
+    cur.execute("SELECT to_regclass('public.translation_risk_flags') IS NOT NULL")
+    has_risk_table = bool(cur.fetchone()[0])
+    risk_by_lemma = {}
+    if has_risk_table:
+        cur.execute(
+            """
+            SELECT
+                t.lemma_id,
+                COALESCE(t.is_blocked, FALSE) AS is_blocked,
+                COALESCE(t.details_json->>'summary', '') AS block_reason,
+                COALESCE(t.details_json::text, '{}') AS evidence_json
+            FROM (
+                SELECT DISTINCT ON (trf.lemma_id)
+                    trf.lemma_id,
+                    trf.is_blocked,
+                    trf.details_json,
+                    trf.updated_at
+                FROM translation_risk_flags trf
+                WHERE trf.variant_kind = 'legacy_assembled'
+                  AND trf.variant_id = 'translation'
+                  AND trf.risk_code = 'billerbeck_likely_translation_change'
+                ORDER BY trf.lemma_id, trf.updated_at DESC
+            ) t
+            """
+        )
+        risk_by_lemma = {
+            lemma_id: {
+                "translation_blocked": bool(is_blocked),
+                "translation_block_reason": block_reason or "",
+                "translation_difference_evidence": evidence_json or "{}",
+            }
+            for lemma_id, is_blocked, block_reason, evidence_json in cur.fetchall()
+        }
+
+    source_versions_by_lemma = {}
+    cur.execute("SELECT to_regclass('public.lemma_source_text_versions') IS NOT NULL")
+    has_source_versions = bool(cur.fetchone()[0])
+    if has_source_versions:
+        cur.execute(
+            """
+            SELECT
+                lemma_id,
+                id,
+                source_document,
+                source_variant,
+                is_current,
+                is_public_greek,
+                created_at
+            FROM lemma_source_text_versions
+            ORDER BY lemma_id, id DESC
+            """
+        )
+        for lemma_id, version_id, source_document, source_variant, is_current, is_public_greek, created_at in cur.fetchall():
+            source_versions_by_lemma.setdefault(lemma_id, []).append(
+                {
+                    "id": version_id,
+                    "source_document": source_document,
+                    "source_variant": source_variant,
+                    "is_current": bool(is_current),
+                    "is_public_greek": bool(is_public_greek),
+                    "created_at": str(created_at) if created_at else "",
+                }
+            )
+
+    translation_variants_by_lemma = {}
+    cur.execute("SELECT to_regclass('public.translation_runs') IS NOT NULL")
+    has_translation_runs = bool(cur.fetchone()[0])
+    if has_translation_runs:
+        cur.execute(
+            """
+            SELECT
+                lemma_id,
+                id,
+                status,
+                source_text_version_id,
+                model,
+                created_at
+            FROM translation_runs
+            ORDER BY lemma_id, created_at DESC, id DESC
+            """
+        )
+        for lemma_id, run_id, status, source_text_version_id, model, created_at in cur.fetchall():
+            translation_variants_by_lemma.setdefault(lemma_id, []).append(
+                {
+                    "kind": "translation_run",
+                    "id": str(run_id),
+                    "status": status or "draft",
+                    "source_text_version_id": str(source_text_version_id or ""),
+                    "model": model or "",
+                    "created_at": str(created_at) if created_at else "",
+                }
+            )
+
+    cur.execute("SELECT to_regclass('public.human_translations') IS NOT NULL")
+    has_human_translations = bool(cur.fetchone()[0])
+    if has_human_translations:
+        cur.execute(
+            """
+            SELECT
+                lemma_id,
+                id,
+                status,
+                stage,
+                source_text_version_id,
+                updated_at
+            FROM human_translations
+            ORDER BY lemma_id, updated_at DESC, id DESC
+            """
+        )
+        for lemma_id, human_id, status, stage, source_text_version_id, updated_at in cur.fetchall():
+            translation_variants_by_lemma.setdefault(lemma_id, []).append(
+                {
+                    "kind": "human_translation",
+                    "id": str(human_id),
+                    "status": status or "draft",
+                    "stage": stage or "",
+                    "source_text_version_id": str(source_text_version_id or ""),
+                    "updated_at": str(updated_at) if updated_at else "",
+                }
+            )
+
+    canonical_variant_by_lemma = {}
+    cur.execute("SELECT to_regclass('public.lemma_publication_targets') IS NOT NULL")
+    has_publication_targets = bool(cur.fetchone()[0])
+    if has_publication_targets:
+        cur.execute(
+            """
+            SELECT lemma_id, variant_kind, variant_id
+            FROM lemma_publication_targets
+            WHERE surface = 'public_translation'
+            """
+        )
+        for lemma_id, variant_kind, variant_id in cur.fetchall():
+            canonical_variant_by_lemma[lemma_id] = {
+                "kind": variant_kind,
+                "id": str(variant_id),
+            }
+
     lemmas = []
     for row in rows:
         (lemma_id, lemma, entry_number, version, greek_text, english_translation,
@@ -229,6 +367,17 @@ def export_lemmas():
         elif meineke_word_pairs is None:
             meineke_word_pairs = []
 
+        default_variant = {
+            "kind": "legacy_assembled",
+            "id": "translation",
+            "status": "blocked" if risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False) else "approved",
+            "source_document": "billerbeck",
+            "text": english_translation or "",
+        }
+        variants = translation_variants_by_lemma.get(lemma_id, [])
+        if not variants:
+            variants = [default_variant]
+
         lemma_data = {
             "id": lemma_id,
             "lemma": lemma or "",
@@ -252,7 +401,17 @@ def export_lemmas():
             "meineke_difference_summary": meineke_difference_summary or "",
             "meineke_word_pairs": meineke_word_pairs if isinstance(meineke_word_pairs, list) else [],
             "letter": get_letter_slug(lemma or ""),
-            "sort_order": 0  # Will be set after sorting
+            "sort_order": 0,  # Will be set after sorting
+            "translation_blocked": risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False),
+            "translation_block_reason": risk_by_lemma.get(lemma_id, {}).get("translation_block_reason", ""),
+            "translation_difference_evidence": risk_by_lemma.get(lemma_id, {}).get("translation_difference_evidence", "{}"),
+            "translation_variants": variants,
+            "source_text_versions": source_versions_by_lemma.get(lemma_id, []),
+            "canonical_variant_ref": canonical_variant_by_lemma.get(lemma_id, {"kind": "legacy_assembled", "id": "translation"}),
+            "blocked_reasons": [risk_by_lemma.get(lemma_id, {}).get("translation_block_reason", "")]
+            if risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False)
+            else [],
+            "apparatus": [],
         }
 
         lemmas.append(lemma_data)

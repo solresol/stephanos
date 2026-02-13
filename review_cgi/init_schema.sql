@@ -38,3 +38,19 @@ INSERT OR IGNORE INTO metadata (key, value) VALUES
     ('schema_version', '1.0'),
     ('created_at', datetime('now')),
     ('last_sync_to_postgres', NULL);
+
+-- Variant-level translation review metadata
+CREATE TABLE IF NOT EXISTS translation_variant_reviews (
+    lemma_id INTEGER NOT NULL,
+    variant_kind TEXT NOT NULL,
+    variant_id TEXT NOT NULL,
+    variant_status TEXT NOT NULL DEFAULT 'draft',
+    source_text_version_id TEXT,
+    notes TEXT,
+    reviewer_username TEXT,
+    reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (lemma_id, variant_kind, variant_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_variant_reviews_lemma
+ON translation_variant_reviews(lemma_id);
