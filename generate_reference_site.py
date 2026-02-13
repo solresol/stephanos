@@ -190,6 +190,18 @@ def get_initial_slug(text: str) -> str:
     return "other"
 
 
+def normalize_headword_for_display(headword: str) -> str:
+    """Normalize OCR headword display by removing outer angle brackets."""
+    if not headword:
+        return ""
+    text = headword.strip()
+    match = re.fullmatch(r"<\s*(.*?)\s*>", text)
+    if match:
+        inner = match.group(1).strip()
+        return inner if inner else text
+    return text
+
+
 def get_all_lemmas(cur):
     """Get all lemmas (translated and untranslated) from assembled_lemmas"""
     cur.execute(
@@ -372,7 +384,7 @@ def get_all_lemmas(cur):
         lemma_data = {
             "lemma_id": lemma_id,
             "entry_number": entry_number or "",
-            "lemma": lemma or "",
+            "lemma": normalize_headword_for_display(lemma or ""),
             "type": lemma_type or "",
             "greek_text": greek,
             "english_translation": english_translation,

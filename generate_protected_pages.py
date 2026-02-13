@@ -3,6 +3,7 @@
 Generate HTML wrapper pages for protected images showing processing status and lemmas.
 """
 import json
+import re
 import unicodedata
 from pathlib import Path
 from datetime import datetime, timezone
@@ -20,6 +21,18 @@ GREEK_LETTERS = {
     "Π": "pi", "Ρ": "rho", "Σ": "sigma", "Τ": "tau", "Υ": "upsilon",
     "Φ": "phi", "Χ": "chi", "Ψ": "psi", "Ω": "omega",
 }
+
+
+def normalize_headword_for_display(headword: str) -> str:
+    """Remove full outer angle-bracket wrapper from OCR headwords."""
+    if not headword:
+        return ""
+    text = headword.strip()
+    match = re.fullmatch(r"<\s*(.*?)\s*>", text)
+    if match:
+        inner = match.group(1).strip()
+        return inner if inner else text
+    return text
 
 def get_letter_slug(text):
     """Get the letter slug for a Greek word"""
@@ -189,13 +202,15 @@ def generate_image_page(image_data, lemmas, image_src: str, prev_page: str | Non
             if not translation:
                 translation = '<span class="pending">Translation pending</span>'
 
+            display_lemma = normalize_headword_for_display(lemma)
+
             # Determine letter page for link
-            letter_slug = get_letter_slug(lemma)
+            letter_slug = get_letter_slug(display_lemma)
             reference_link = f"../letter_{letter_slug}.html#lemma-{lem_id}"
 
             lemma_cards.append(f"""
                 <div class="lemma-card">
-                    <h3>{lemma} {conf_badge}</h3>
+                    <h3>{display_lemma} {conf_badge}</h3>
                     {f'<div class="lemma-type">{lem_type}</div>' if lem_type else ''}
                     <div class="entry-number">Entry #{entry_num}</div>
                     <div class="greek-text">{greek_text}</div>
@@ -210,7 +225,7 @@ def generate_image_page(image_data, lemmas, image_src: str, prev_page: str | Non
         entries_items = []
         for entry in raw_entries:
             entry_num = entry.get("entry_number", "?")
-            entry_lemma = entry.get("lemma", "")
+            entry_lemma = normalize_headword_for_display(entry.get("lemma", ""))
             entry_greek = entry.get("greek_text", "")[:200]
             entries_items.append(f"""
                 <li>

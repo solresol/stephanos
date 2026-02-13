@@ -92,6 +92,18 @@ def ensure_table(cur):
     )
 
 
+def strip_headword_brackets(headword: str) -> str:
+    """Remove full outer angle-bracket wrapper from OCR headwords."""
+    if not headword:
+        return ""
+    text = headword.strip()
+    match = re.fullmatch(r"<\s*(.*?)\s*>", text)
+    if match:
+        inner = match.group(1).strip()
+        return inner or text
+    return text
+
+
 def load_headword_lookup(cur):
     """Load mapping of greek_headword -> ids from meineke_headwords."""
     cur.execute(
@@ -102,7 +114,7 @@ def load_headword_lookup(cur):
     )
     lookup = {}
     for greek_headword, nodegoat_id, meineke_id, billerbeck_id in cur.fetchall():
-        key = greek_headword.strip()
+        key = strip_headword_brackets(greek_headword)
         lookup.setdefault(key, []).append(
             {
                 "nodegoat_id": nodegoat_id,
@@ -225,11 +237,11 @@ def build_assembled_entries(rows, headword_lookup):
             greek_text = (entry.get("greek_text", "") or "").strip()
             greek_text = re.sub(r"^\d+\s+", "", greek_text)
 
-            lemma = (entry.get("lemma", "") or "").strip()
+            lemma = strip_headword_brackets((entry.get("lemma", "") or "").strip())
             # OCR sometimes returns an incorrect headword field while the greek_text starts correctly.
             lemma_from_text = extract_headword_from_greek_text(greek_text)
             if lemma_from_text:
-                lemma = lemma_from_text
+                lemma = strip_headword_brackets(lemma_from_text)
 
             assembled = {
                 "lemma": lemma,
