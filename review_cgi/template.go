@@ -266,6 +266,50 @@ const reviewTemplate = `<!DOCTYPE html>
             height: auto;
             display: block;
         }
+        .meineke-lines {
+            margin-top: 8px;
+        }
+        .meineke-line-row {
+            display: grid;
+            grid-template-columns: 80px 1fr;
+            gap: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #eef2f5;
+        }
+        .meineke-line-row:last-child {
+            border-bottom: none;
+        }
+        .line-label {
+            font-weight: 700;
+            color: #2c3e50;
+            font-size: 0.9em;
+        }
+        .line-text {
+            font-family: 'Times New Roman', serif;
+            font-size: 1.05em;
+        }
+        .apparatus-list {
+            margin-top: 8px;
+        }
+        .apparatus-row {
+            display: grid;
+            grid-template-columns: 80px 1fr;
+            gap: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #eef2f5;
+        }
+        .apparatus-row:last-child {
+            border-bottom: none;
+        }
+        .apparatus-text {
+            font-family: 'Times New Roman', serif;
+            font-size: 1.02em;
+        }
+        .apparatus-meta {
+            color: #7f8c8d;
+            font-size: 0.85em;
+            margin-top: 3px;
+        }
         @media (min-width: 1100px) {
             .ocr-meineke-wrap {
                 display: grid;
@@ -448,9 +492,25 @@ const reviewTemplate = `<!DOCTYPE html>
             <div class="ocr-meineke-wrap">
                 {{if .Lemma.ImageFilenames}}
                 <div class="ocr-panel">
-                    <div class="section-title">Source Page Images</div>
+                    <div class="section-title">Billerbeck Scan Images</div>
                     <div class="images">
                         {{range $filename := .Lemma.ImageFilenames}}
+                        <div>
+                            <img src="/protected/{{$filename}}" alt="{{$filename}}">
+                            <div style="text-align: center; font-size: 0.85em; color: #7f8c8d; margin-top: 5px;">
+                                {{$filename}}
+                            </div>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+                {{end}}
+
+                {{if .Lemma.MeinekeScanFilenames}}
+                <div class="ocr-panel">
+                    <div class="section-title">Meineke Scan Images</div>
+                    <div class="images">
+                        {{range $filename := .Lemma.MeinekeScanFilenames}}
                         <div>
                             <img src="/protected/{{$filename}}" alt="{{$filename}}">
                             <div style="text-align: center; font-size: 0.85em; color: #7f8c8d; margin-top: 5px;">
@@ -500,8 +560,44 @@ const reviewTemplate = `<!DOCTYPE html>
 
             {{if .ShowMeineke}}
             <details class="meineke-details" {{if eq .MeinekeStatus "different"}}open{{end}}>
-                <summary>Show Meineke Greek paragraph</summary>
+                <summary>Show Meineke text{{if .Lemma.MeinekeSourceVariant}} ({{.Lemma.MeinekeSourceVariant}}){{end}}</summary>
+                {{if .Lemma.MeinekeMainTextLines}}
+                <div class="meineke-lines">
+                    {{range .Lemma.MeinekeMainTextLines}}
+                    <div class="meineke-line-row">
+                        <div class="line-label">
+                            {{if .PrintedLineLabel}}{{.PrintedLineLabel}}{{else}}{{.LineSeq}}{{end}}
+                        </div>
+                        <div class="line-text">{{.LineText}}</div>
+                    </div>
+                    {{end}}
+                </div>
+                {{else}}
                 <div class="original-text">{{.Lemma.MeinekeGreekParagraph}}</div>
+                {{end}}
+
+                {{if .Lemma.Apparatus}}
+                <div class="section-title">Meineke Apparatus</div>
+                <div class="apparatus-list">
+                    {{range .Lemma.Apparatus}}
+                    <div class="apparatus-row">
+                        <div class="line-label">
+                            {{if .PrintedLineLabel}}{{.PrintedLineLabel}}{{else if .LineSeq}}{{.LineSeq}}{{else}}–{{end}}
+                        </div>
+                        <div>
+                            <div class="apparatus-text">{{.ApparatusText}}</div>
+                            {{if or .AnchorToken .NoteKind}}
+                            <div class="apparatus-meta">
+                                {{if .AnchorToken}}anchor: {{.AnchorToken}}{{end}}
+                                {{if and .AnchorToken .NoteKind}} · {{end}}
+                                {{if .NoteKind}}type: {{.NoteKind}}{{end}}
+                            </div>
+                            {{end}}
+                        </div>
+                    </div>
+                    {{end}}
+                </div>
+                {{end}}
             </details>
             {{end}}
 

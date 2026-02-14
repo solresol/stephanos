@@ -439,7 +439,10 @@ func main() {
 		billerbeckText = review.CorrectedGreekText
 	}
 	meinekeStatus := classifyMeinekeDifference(billerbeckText, currentLemma.MeinekeGreekParagraph)
-	showMeineke := strings.TrimSpace(currentLemma.MeinekeGreekParagraph) != ""
+	showMeineke := strings.TrimSpace(currentLemma.MeinekeGreekParagraph) != "" ||
+		len(currentLemma.MeinekeMainTextLines) > 0 ||
+		len(currentLemma.Apparatus) > 0 ||
+		len(currentLemma.MeinekeScanFilenames) > 0
 
 	pageData := PageData{
 		Lemma:                 currentLemma,

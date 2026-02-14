@@ -1,5 +1,8 @@
 # TODO
 
+## Operational Notes
+- [ ] IMPORTANT: On `udara`, do not use `localhost` for PostgreSQL. The Stephanos database is on `raksasa`.
+
 ## Future Development Tasks
 
 ### Data Extraction

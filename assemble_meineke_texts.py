@@ -8,9 +8,58 @@ as source_variant='csv_fallback' when OCR text is absent.
 import argparse
 import hashlib
 import json
+import unicodedata
 from datetime import datetime, timezone
 
 from db import get_connection
+
+_NORMALIZED_LEMMA_INDEX = None
+
+
+def normalize_lemma_for_match(text: str) -> str:
+    """Normalize OCR lemma strings for fuzzy matching against assembled lemmas."""
+    if not text:
+        return ""
+    # Common OCR confusions seen in Meineke scans.
+    text = (
+        text.strip()
+        .replace("0", "ο")
+        .replace("1", "ι")
+        .replace("I", "Ι")
+        .replace("l", "ι")
+        .replace("|", "ι")
+    )
+
+    # Remove diacritics and keep only letters.
+    decomposed = unicodedata.normalize("NFD", text)
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    letters_only = "".join(ch for ch in stripped if ch.isalpha())
+    normalized = unicodedata.normalize("NFC", letters_only).lower().replace("ς", "σ")
+    return normalized
+
+
+def get_normalized_lemma_index(cur):
+    """Build a one-time normalized lemma index for fuzzy fallback lookup."""
+    global _NORMALIZED_LEMMA_INDEX
+    if _NORMALIZED_LEMMA_INDEX is not None:
+        return _NORMALIZED_LEMMA_INDEX
+
+    cur.execute(
+        """
+        SELECT id, lemma, version
+        FROM assembled_lemmas
+        WHERE lemma IS NOT NULL
+        ORDER BY CASE WHEN version = 'epitome' THEN 0 ELSE 1 END, id
+        """
+    )
+    index = {}
+    for lemma_id, lemma_text, _version in cur.fetchall():
+        key = normalize_lemma_for_match(lemma_text or "")
+        if key and key not in index:
+            index[key] = lemma_id
+
+    _NORMALIZED_LEMMA_INDEX = index
+    return _NORMALIZED_LEMMA_INDEX
 
 
 def ensure_source_tables(cur):
@@ -115,6 +164,14 @@ def choose_lemma_id(cur, entry):
         if row:
             return row[0]
 
+        # OCR fallback: tolerate minor glyph confusion (e.g., Ἄβα1 -> Ἄβαι).
+        normalized = normalize_lemma_for_match(lemma)
+        if normalized:
+            lemma_index = get_normalized_lemma_index(cur)
+            lemma_id = lemma_index.get(normalized)
+            if lemma_id:
+                return lemma_id
+
     return None
 
 
@@ -202,6 +259,20 @@ def insert_lines_and_apparatus(cur, version_id, main_lines, apparatus_entries):
         line_id = line_id_map.get((line_seq, printed_label))
         if line_id is None and line_seq is not None:
             line_id = line_id_map.get((line_seq, None))
+        if line_id is None and printed_label is not None:
+            label_matches = [
+                candidate_line_id
+                for (_seq, candidate_label), candidate_line_id in line_id_map.items()
+                if candidate_label == printed_label
+            ]
+            if len(label_matches) == 1:
+                line_id = label_matches[0]
+        if line_id is None:
+            raise RuntimeError(
+                "Apparatus entry could not be linked to a main text line "
+                f"(source_text_version_id={version_id}): "
+                f"{json.dumps(app, ensure_ascii=False)}"
+            )
         cur.execute(
             """
             INSERT INTO lemma_apparatus_entries (
@@ -251,15 +322,15 @@ def backfill_csv_fallback(cur):
             SELECT mh.greek_paragraph
             FROM meineke_headwords mh
             WHERE (
-                (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
-                OR (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
+                (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
                 OR (a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id)
+                OR (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
             )
             ORDER BY
                 CASE
-                    WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 0
-                    WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 1
-                    WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 2
+                    WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 0
+                    WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 1
+                    WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 2
                     ELSE 3
                 END,
                 mh.id

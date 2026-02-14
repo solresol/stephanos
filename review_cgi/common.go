@@ -19,6 +19,20 @@ type DifferenceWordPair struct {
 	Note        string `json:"note"`
 }
 
+type SourceLine struct {
+	LineSeq          int    `json:"line_seq"`
+	PrintedLineLabel string `json:"printed_line_label"`
+	LineText         string `json:"line_text"`
+}
+
+type ApparatusEntry struct {
+	LineSeq          int    `json:"line_seq"`
+	PrintedLineLabel string `json:"printed_line_label"`
+	ApparatusText    string `json:"apparatus_text"`
+	AnchorToken      string `json:"anchor_token"`
+	NoteKind         string `json:"note_kind"`
+}
+
 // Lemma represents a single lemma entry from the JSON export
 type Lemma struct {
 	ID                           int                  `json:"id"`
@@ -49,7 +63,11 @@ type Lemma struct {
 	SourceTextVersions           []map[string]interface{} `json:"source_text_versions"`
 	CanonicalVariantRef          map[string]interface{}   `json:"canonical_variant_ref"`
 	BlockedReasons               []string                 `json:"blocked_reasons"`
-	Apparatus                    []map[string]interface{} `json:"apparatus"`
+	MeinekeSourceVariant         string               `json:"meineke_source_variant"`
+	MeinekeSourceVersionID       string               `json:"meineke_source_version_id"`
+	MeinekeScanFilenames         []string             `json:"meineke_scan_filenames"`
+	MeinekeMainTextLines         []SourceLine         `json:"meineke_main_text_lines"`
+	Apparatus                    []ApparatusEntry     `json:"apparatus"`
 	Letter                       string               `json:"letter"`
 	SortOrder                    int                  `json:"sort_order"`
 }

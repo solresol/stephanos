@@ -269,6 +269,58 @@ def get_all_lemmas(cur):
     has_translation_runs = bool(cur.fetchone()[0])
     cur.execute("SELECT to_regclass('public.human_translations') IS NOT NULL")
     has_human_translations = bool(cur.fetchone()[0])
+    cur.execute("SELECT to_regclass('public.lemma_source_text_versions') IS NOT NULL")
+    has_source_text_versions = bool(cur.fetchone()[0])
+    cur.execute("SELECT to_regclass('public.meineke_headwords') IS NOT NULL")
+    has_meineke_headwords = bool(cur.fetchone()[0])
+
+    meineke_source_text_by_lemma = {}
+    if has_source_text_versions:
+        cur.execute(
+            """
+            SELECT lemma_id, text_body
+            FROM lemma_source_text_versions
+            WHERE source_document = 'meineke'
+              AND is_current = TRUE
+            """
+        )
+        meineke_source_text_by_lemma = {
+            lemma_id: (text_body or "")
+            for lemma_id, text_body in cur.fetchall()
+        }
+
+    meineke_headwords_fallback_by_lemma = {}
+    if has_meineke_headwords:
+        cur.execute(
+            """
+            SELECT
+                a.id AS lemma_id,
+                COALESCE(mh_match.greek_paragraph, '') AS meineke_paragraph
+            FROM assembled_lemmas a
+            LEFT JOIN LATERAL (
+                SELECT mh.greek_paragraph
+                FROM meineke_headwords mh
+                WHERE (
+                    (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
+                    OR (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
+                    OR (a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id)
+                )
+                ORDER BY
+                    CASE
+                        WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 0
+                        WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 1
+                        WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 2
+                        ELSE 3
+                    END,
+                    mh.id
+                LIMIT 1
+            ) mh_match ON TRUE
+            """
+        )
+        meineke_headwords_fallback_by_lemma = {
+            lemma_id: (meineke_paragraph or "")
+            for lemma_id, meineke_paragraph in cur.fetchall()
+        }
 
     # Fetch proper nouns for all lemmas
     cur.execute("""
@@ -313,8 +365,16 @@ def get_all_lemmas(cur):
 
     all_lemmas = []
     for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at, wikidata_place_qid, wikidata_place_label, latitude, longitude, pleiades_id, translation_prompt_version, translation_blocked, translation_block_reason in rows:
-        # Prefer corrected versions, fallback to human_greek_text, then OCR
-        greek = (corrected_greek_scan or human_greek_text or greek_text or "").strip()
+        # Public Greek preference: Meineke current source text -> Meineke fallback paragraph -> Billerbeck lane.
+        meineke_candidate = (meineke_source_text_by_lemma.get(lemma_id) or "").strip()
+        if not meineke_candidate:
+            meineke_candidate = (meineke_headwords_fallback_by_lemma.get(lemma_id) or "").strip()
+        if meineke_candidate:
+            greek = _MEINEKE_OBJECT_TAG_RE.sub("", meineke_candidate).strip()
+            greek_source = "meineke"
+        else:
+            greek = (corrected_greek_scan or human_greek_text or greek_text or "").strip()
+            greek_source = "billerbeck"
 
         # Use normalized translation column, fall back to parsing translation_json for legacy data
         translation = translation_col or ""
@@ -414,6 +474,7 @@ def get_all_lemmas(cur):
             "translation_prompt_version": translation_prompt_version,
             "translation_blocked": bool(translation_blocked),
             "translation_block_reason": translation_block_reason or "",
+            "greek_source": greek_source,
         }
         lemma_data["letter_slug"] = get_initial_slug(lemma_data["lemma"])
         all_lemmas.append(lemma_data)
@@ -501,6 +562,8 @@ def render_lemma_cards(lemmas):
         meta_lines = []
         if lemma.get("entry_number"):
             meta_lines.append(f"Entry #{lemma['entry_number']}")
+        if lemma.get("greek_source"):
+            meta_lines.append(f"Greek source: {lemma.get('greek_source')}")
         if lemma.get("meineke_id") or lemma.get("billerbeck_id"):
             meta_lines.append(
                 f"Meineke: {lemma.get('meineke_id') or '-'} | Billerbeck: {lemma.get('billerbeck_id') or '-'}"

@@ -19,6 +19,7 @@ from db import get_connection
 
 OUTPUT_FILE = "review_data.json"
 _MEINEKE_OBJECT_TAG_RE = re.compile(r"\[/?object[^\]]*\]")
+_OCR_IMAGE_NOTE_RE = re.compile(r"OCR from image ([^\s]+)")
 
 # Greek letter ordering for sort
 GREEK_LETTERS = [
@@ -129,15 +130,15 @@ def export_lemmas():
                 SELECT mh.greek_paragraph
                 FROM meineke_headwords mh
                 WHERE (
-                    (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
-                    OR (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
+                    (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
                     OR (a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id)
+                    OR (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
                 )
                 ORDER BY
                     CASE
-                        WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 0
-                        WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 1
-                        WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 2
+                        WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 0
+                        WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 1
+                        WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 2
                         ELSE 3
                     END,
                     mh.id
@@ -183,15 +184,15 @@ def export_lemmas():
                 SELECT mh.greek_paragraph
                 FROM meineke_headwords mh
                 WHERE (
-                    (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
-                    OR (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
+                    (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
                     OR (a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id)
+                    OR (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
                 )
                 ORDER BY
                     CASE
-                        WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 0
-                        WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 1
-                        WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 2
+                        WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 0
+                        WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 1
+                        WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 2
                         ELSE 3
                     END,
                     mh.id
@@ -238,6 +239,10 @@ def export_lemmas():
         }
 
     source_versions_by_lemma = {}
+    current_meineke_by_lemma = {}
+    meineke_lines_by_version = {}
+    meineke_apparatus_by_version = {}
+    meineke_scan_filenames_by_lemma = {}
     cur.execute("SELECT to_regclass('public.lemma_source_text_versions') IS NOT NULL")
     has_source_versions = bool(cur.fetchone()[0])
     if has_source_versions:
@@ -250,12 +255,24 @@ def export_lemmas():
                 source_variant,
                 is_current,
                 is_public_greek,
-                created_at
+                created_at,
+                COALESCE(text_body, '') AS text_body,
+                COALESCE(notes, '') AS notes
             FROM lemma_source_text_versions
             ORDER BY lemma_id, id DESC
             """
         )
-        for lemma_id, version_id, source_document, source_variant, is_current, is_public_greek, created_at in cur.fetchall():
+        for (
+            lemma_id,
+            version_id,
+            source_document,
+            source_variant,
+            is_current,
+            is_public_greek,
+            created_at,
+            text_body,
+            notes,
+        ) in cur.fetchall():
             source_versions_by_lemma.setdefault(lemma_id, []).append(
                 {
                     "id": version_id,
@@ -266,6 +283,78 @@ def export_lemmas():
                     "created_at": str(created_at) if created_at else "",
                 }
             )
+            if source_document == "meineke" and is_current:
+                current_meineke_by_lemma[lemma_id] = {
+                    "id": version_id,
+                    "source_variant": source_variant or "",
+                    "text_body": text_body or "",
+                    "notes": notes or "",
+                }
+                if source_variant == "ocr" and notes:
+                    match = _OCR_IMAGE_NOTE_RE.search(notes)
+                    if match:
+                        meineke_scan_filenames_by_lemma.setdefault(lemma_id, []).append(match.group(1))
+
+        current_meineke_version_ids = [
+            info["id"]
+            for info in current_meineke_by_lemma.values()
+            if info.get("id")
+        ]
+        if current_meineke_version_ids:
+            cur.execute(
+                """
+                SELECT
+                    source_text_version_id,
+                    line_seq,
+                    COALESCE(printed_line_label, '') AS printed_line_label,
+                    COALESCE(line_text, '') AS line_text
+                FROM lemma_source_lines
+                WHERE source_text_version_id = ANY(%s)
+                ORDER BY source_text_version_id, line_seq, id
+                """,
+                (current_meineke_version_ids,),
+            )
+            for source_text_version_id, line_seq, printed_line_label, line_text in cur.fetchall():
+                meineke_lines_by_version.setdefault(source_text_version_id, []).append(
+                    {
+                        "line_seq": int(line_seq or 0),
+                        "printed_line_label": printed_line_label or "",
+                        "line_text": line_text or "",
+                    }
+                )
+
+            cur.execute(
+                """
+                SELECT
+                    source_text_version_id,
+                    line_seq,
+                    COALESCE(printed_line_label, '') AS printed_line_label,
+                    COALESCE(apparatus_text, '') AS apparatus_text,
+                    COALESCE(anchor_token, '') AS anchor_token,
+                    COALESCE(note_kind, '') AS note_kind
+                FROM lemma_apparatus_entries
+                WHERE source_text_version_id = ANY(%s)
+                ORDER BY source_text_version_id, line_seq NULLS LAST, id
+                """,
+                (current_meineke_version_ids,),
+            )
+            for (
+                source_text_version_id,
+                line_seq,
+                printed_line_label,
+                apparatus_text,
+                anchor_token,
+                note_kind,
+            ) in cur.fetchall():
+                meineke_apparatus_by_version.setdefault(source_text_version_id, []).append(
+                    {
+                        "line_seq": int(line_seq or 0),
+                        "printed_line_label": printed_line_label or "",
+                        "apparatus_text": apparatus_text or "",
+                        "anchor_token": anchor_token or "",
+                        "note_kind": note_kind or "",
+                    }
+                )
 
     translation_variants_by_lemma = {}
     cur.execute("SELECT to_regclass('public.translation_runs') IS NOT NULL")
@@ -378,13 +467,17 @@ def export_lemmas():
         if not variants:
             variants = [default_variant]
 
+        current_meineke = current_meineke_by_lemma.get(lemma_id, {})
+        current_meineke_version_id = current_meineke.get("id")
+        current_meineke_text = current_meineke.get("text_body") or meineke_greek_paragraph or ""
+
         lemma_data = {
             "id": lemma_id,
             "lemma": lemma or "",
             "entry_number": entry_number or 0,
             "version": version or "epitome",
             "greek_text": greek_text or "",
-            "meineke_greek_paragraph": _MEINEKE_OBJECT_TAG_RE.sub("", meineke_greek_paragraph or ""),
+            "meineke_greek_paragraph": _MEINEKE_OBJECT_TAG_RE.sub("", current_meineke_text),
             "english_translation": english_translation,
             "type": lemma_type or "",
             "volume_label": volume_label or "",
@@ -411,7 +504,11 @@ def export_lemmas():
             "blocked_reasons": [risk_by_lemma.get(lemma_id, {}).get("translation_block_reason", "")]
             if risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False)
             else [],
-            "apparatus": [],
+            "meineke_source_variant": current_meineke.get("source_variant", ""),
+            "meineke_source_version_id": str(current_meineke_version_id or ""),
+            "meineke_scan_filenames": meineke_scan_filenames_by_lemma.get(lemma_id, []),
+            "meineke_main_text_lines": meineke_lines_by_version.get(current_meineke_version_id, []),
+            "apparatus": meineke_apparatus_by_version.get(current_meineke_version_id, []),
         }
 
         lemmas.append(lemma_data)

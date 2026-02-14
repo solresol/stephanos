@@ -5,6 +5,7 @@
 #
 
 set -e
+set -o pipefail
 
 # Change to project directory
 cd "$(dirname "$0")"
@@ -50,7 +51,11 @@ uv run assemble_lemmas.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 4b: Assemble Meineke source text versions (OCR + CSV fallback)
 echo "Step 4b: Assembling Meineke source texts..." | tee -a "$LOGFILE"
-uv run assemble_meineke_texts.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Meineke assembly step failed" | tee -a "$LOGFILE"
+uv run assemble_meineke_texts.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 4b2: Report holes in Meineke OCR coverage up to current max processed page
+echo "Step 4b2: Generating Meineke holes report..." | tee -a "$LOGFILE"
+uv run generate_meineke_holes_report.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Meineke holes report step failed" | tee -a "$LOGFILE"
 
 # Step 4c: Backfill canonical source text versions from legacy fields
 echo "Step 4c: Backfilling source text versions..." | tee -a "$LOGFILE"
