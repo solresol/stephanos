@@ -33,6 +33,7 @@ from openai import OpenAI
 from db import get_connection
 
 DEFAULT_MODEL = "gpt-5.1"
+ALLOWED_STATUS = {"entries_present", "continuation_only", "apparatus_only", "non_greek_error"}
 
 SYSTEM_PROMPT = """You are a philological OCR assistant for the Meineke text of Stephanos of Byzantium.
 Extract both:
@@ -160,6 +161,103 @@ def process_image(client, model, image_data):
     return payload, tokens
 
 
+def _coerce_positive_int(value, field_name: str, *, required: bool, context: str):
+    if value is None:
+        if required:
+            raise ValueError(f"{context}: missing required integer field '{field_name}'")
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{context}: invalid integer field '{field_name}'")
+    if isinstance(value, int):
+        intval = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        intval = int(value.strip())
+    else:
+        raise ValueError(f"{context}: field '{field_name}' must be an integer")
+    if intval <= 0:
+        raise ValueError(f"{context}: field '{field_name}' must be > 0")
+    return intval
+
+
+def validate_payload(payload, image_filename: str):
+    if not isinstance(payload, dict):
+        raise ValueError(f"{image_filename}: OCR payload is not a JSON object")
+
+    status = payload.get("status")
+    if status not in ALLOWED_STATUS:
+        raise ValueError(f"{image_filename}: invalid status '{status}'")
+
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        raise ValueError(f"{image_filename}: 'entries' must be a list")
+    if status == "entries_present" and not entries:
+        raise ValueError(f"{image_filename}: status is entries_present but entries is empty")
+
+    for entry_idx, entry in enumerate(entries, start=1):
+        entry_ctx = f"{image_filename} entry[{entry_idx}]"
+        if not isinstance(entry, dict):
+            raise ValueError(f"{entry_ctx}: entry must be an object")
+
+        main_lines = entry.get("main_text_lines")
+        apparatus_entries = entry.get("apparatus_entries")
+        if not isinstance(main_lines, list):
+            raise ValueError(f"{entry_ctx}: main_text_lines must be a list")
+        if not isinstance(apparatus_entries, list):
+            raise ValueError(f"{entry_ctx}: apparatus_entries must be a list")
+
+        line_refs = set()
+        line_seq_refs = set()
+        printed_label_counts = {}
+
+        for line_idx, line in enumerate(main_lines, start=1):
+            line_ctx = f"{entry_ctx} main_text_lines[{line_idx}]"
+            if not isinstance(line, dict):
+                raise ValueError(f"{line_ctx}: line must be an object")
+
+            line_seq = _coerce_positive_int(line.get("line_seq"), "line_seq", required=True, context=line_ctx)
+            printed_label = (line.get("printed_line_label") or "").strip() or None
+            line_text = (line.get("line_text") or "").strip()
+            if not line_text:
+                raise ValueError(f"{line_ctx}: line_text is required")
+
+            line["line_seq"] = line_seq
+            if printed_label is not None:
+                line["printed_line_label"] = printed_label
+                printed_label_counts[printed_label] = printed_label_counts.get(printed_label, 0) + 1
+            line_refs.add((line_seq, printed_label))
+            line_seq_refs.add(line_seq)
+
+        for app_idx, app in enumerate(apparatus_entries, start=1):
+            app_ctx = f"{entry_ctx} apparatus_entries[{app_idx}]"
+            if not isinstance(app, dict):
+                raise ValueError(f"{app_ctx}: apparatus entry must be an object")
+
+            app_text = (app.get("apparatus_text") or "").strip()
+            if not app_text:
+                raise ValueError(f"{app_ctx}: apparatus_text is required")
+
+            line_seq = _coerce_positive_int(app.get("line_seq"), "line_seq", required=False, context=app_ctx)
+            printed_label = (app.get("printed_line_label") or "").strip() or None
+            if line_seq is not None:
+                app["line_seq"] = line_seq
+            if printed_label is not None:
+                app["printed_line_label"] = printed_label
+
+            anchored = False
+            if line_seq is not None and (line_seq, printed_label) in line_refs:
+                anchored = True
+            elif line_seq is not None and line_seq in line_seq_refs:
+                anchored = True
+            elif printed_label and printed_label_counts.get(printed_label) == 1:
+                anchored = True
+
+            if not anchored:
+                raise ValueError(
+                    f"{app_ctx}: apparatus entry is not linkable to any main text line "
+                    f"(line_seq={line_seq}, printed_line_label={printed_label})"
+                )
+
+
 def mark_processed(conn, cur, image_id, payload, tokens_used, model):
     cur.execute(
         """
@@ -202,10 +300,11 @@ def main():
     done = 0
     for image_id, filename, image_data in rows:
         if not image_data:
-            print(f"Skipping {filename}: no image_data BLOB")
-            continue
+            conn.close()
+            raise RuntimeError(f"{filename}: no image_data BLOB")
         try:
             payload, tokens = process_image(client, args.model, image_data)
+            validate_payload(payload, filename)
             mark_processed(conn, cur, image_id, payload, tokens, args.model)
             done += 1
             print(f"Processed {filename} (tokens={tokens})")
@@ -213,6 +312,8 @@ def main():
                 time.sleep(args.delay)
         except Exception as exc:
             print(f"Failed {filename}: {type(exc).__name__}: {exc}")
+            conn.close()
+            raise
 
     conn.close()
     print(f"Meineke OCR complete: {done} images.")

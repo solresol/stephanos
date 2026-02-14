@@ -35,6 +35,10 @@ done
 echo "Step 2: Extracting images from HTML files..." | tee -a "$LOGFILE"
 uv run extract_images_to_postgres.py --from-db 2>&1 | tee -a "$LOGFILE"
 
+# Step 2b: Queue missing Meineke page scans based on headword hole detection
+echo "Step 2b: Queueing missing Meineke hole pages..." | tee -a "$LOGFILE"
+uv run enqueue_meineke_holes.py --image-dir pdf_pages_meineke 2>&1 | tee -a "$LOGFILE"
+
 # Step 3: Process images with gpt-5 (no limit, will stop at daily token limit)
 echo "Step 3: Processing images with gpt-5..." | tee -a "$LOGFILE"
 uv run batch_process.py \
@@ -43,7 +47,7 @@ uv run batch_process.py \
 
 # Step 3b: Process queued Meineke images with line/apparatus OCR
 echo "Step 3b: Processing Meineke images..." | tee -a "$LOGFILE"
-uv run process_meineke_pages.py --delay 1 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Meineke OCR step failed" | tee -a "$LOGFILE"
+uv run process_meineke_pages.py --delay 1 2>&1 | tee -a "$LOGFILE"
 
 # Step 4: Assemble lemmas across pages (handles continuations and human overrides)
 echo "Step 4: Assembling lemmas..." | tee -a "$LOGFILE"
