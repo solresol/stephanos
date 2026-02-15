@@ -41,9 +41,7 @@ uv run enqueue_meineke_holes.py --image-dir pdf_pages_meineke 2>&1 | tee -a "$LO
 
 # Step 3: Process images with gpt-5 (no limit, will stop at daily token limit)
 echo "Step 3: Processing images with gpt-5..." | tee -a "$LOGFILE"
-uv run batch_process.py \
-    --delay 1 \
-    2>&1 | tee -a "$LOGFILE"
+uv run batch_process.py --delay 1 2>&1 | tee -a "$LOGFILE"
 
 # Step 3b: Process queued Meineke images with line/apparatus OCR
 echo "Step 3b: Processing Meineke images..." | tee -a "$LOGFILE"

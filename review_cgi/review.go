@@ -414,12 +414,12 @@ func main() {
 	// If total is 0, initialize all lemmas in reviews table
 	if total == 0 {
 		for _, lemma := range data.Lemmas {
-			defaultReview := &Review{
-				LemmaID:      lemma.ID,
-				ReviewStatus: "not_reviewed",
+				defaultReview := &Review{
+					LemmaID:      lemma.ID,
+					ReviewStatus: "not_reviewed",
+				}
+				SaveReview(db, defaultReview, nil, "system")
 			}
-			SaveReview(db, defaultReview, nil, "system")
-		}
 		total = len(data.Lemmas)
 		reviewed = 0
 	}

@@ -363,25 +363,49 @@ def export_lemmas():
         cur.execute(
             """
             SELECT
-                lemma_id,
-                id,
-                status,
-                source_text_version_id,
-                model,
-                created_at
-            FROM translation_runs
-            ORDER BY lemma_id, created_at DESC, id DESC
+                tr.lemma_id,
+                tr.id,
+                tr.status,
+                tr.source_text_version_id,
+                tr.model,
+                tr.created_at,
+                COALESCE(tr.translation_text, '') AS translation_text,
+                COALESCE(tr.public_eligible, TRUE) AS public_eligible,
+                COALESCE(tr.public_block_reason, '') AS public_block_reason,
+                COALESCE(stv.source_document, '') AS source_document
+            FROM translation_runs tr
+            LEFT JOIN lemma_source_text_versions stv
+              ON stv.id = tr.source_text_version_id
+            ORDER BY tr.lemma_id, tr.created_at DESC, tr.id DESC
             """
         )
-        for lemma_id, run_id, status, source_text_version_id, model, created_at in cur.fetchall():
+        for (
+            lemma_id,
+            run_id,
+            status,
+            source_text_version_id,
+            model,
+            created_at,
+            translation_text,
+            public_eligible,
+            public_block_reason,
+            source_document,
+        ) in cur.fetchall():
+            preview = (translation_text or "").strip()
+            if len(preview) > 180:
+                preview = preview[:177].rstrip() + "..."
             translation_variants_by_lemma.setdefault(lemma_id, []).append(
                 {
                     "kind": "translation_run",
                     "id": str(run_id),
                     "status": status or "draft",
                     "source_text_version_id": str(source_text_version_id or ""),
+                    "source_document": source_document or "",
                     "model": model or "",
                     "created_at": str(created_at) if created_at else "",
+                    "public_eligible": bool(public_eligible),
+                    "public_block_reason": public_block_reason or "",
+                    "preview": preview,
                 }
             )
 
@@ -391,17 +415,33 @@ def export_lemmas():
         cur.execute(
             """
             SELECT
-                lemma_id,
-                id,
-                status,
-                stage,
-                source_text_version_id,
-                updated_at
-            FROM human_translations
-            ORDER BY lemma_id, updated_at DESC, id DESC
+                ht.lemma_id,
+                ht.id,
+                ht.status,
+                ht.stage,
+                ht.source_text_version_id,
+                ht.updated_at,
+                COALESCE(ht.translation_text, '') AS translation_text,
+                COALESCE(stv.source_document, '') AS source_document
+            FROM human_translations ht
+            LEFT JOIN lemma_source_text_versions stv
+              ON stv.id = ht.source_text_version_id
+            ORDER BY ht.lemma_id, ht.updated_at DESC, ht.id DESC
             """
         )
-        for lemma_id, human_id, status, stage, source_text_version_id, updated_at in cur.fetchall():
+        for (
+            lemma_id,
+            human_id,
+            status,
+            stage,
+            source_text_version_id,
+            updated_at,
+            translation_text,
+            source_document,
+        ) in cur.fetchall():
+            preview = (translation_text or "").strip()
+            if len(preview) > 180:
+                preview = preview[:177].rstrip() + "..."
             translation_variants_by_lemma.setdefault(lemma_id, []).append(
                 {
                     "kind": "human_translation",
@@ -409,7 +449,9 @@ def export_lemmas():
                     "status": status or "draft",
                     "stage": stage or "",
                     "source_text_version_id": str(source_text_version_id or ""),
+                    "source_document": source_document or "",
                     "updated_at": str(updated_at) if updated_at else "",
+                    "preview": preview,
                 }
             )
 
@@ -461,7 +503,9 @@ def export_lemmas():
             "id": "translation",
             "status": "blocked" if risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False) else "approved",
             "source_document": "billerbeck",
+            "source_text_version_id": "",
             "text": english_translation or "",
+            "preview": (english_translation or "").strip()[:180],
         }
         variants = translation_variants_by_lemma.get(lemma_id, [])
         if not variants:

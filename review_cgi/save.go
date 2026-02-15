@@ -50,8 +50,10 @@ func main() {
 	variantID := strings.TrimSpace(formData.Get("variant_id"))
 	variantStatus := strings.TrimSpace(formData.Get("variant_status"))
 	sourceTextVersionID := strings.TrimSpace(formData.Get("source_text_version_id"))
+	setCanonicalRaw := strings.TrimSpace(formData.Get("set_canonical"))
 	action := formData.Get("action") // "stay" or "continue" (default)
 	remoteUser := os.Getenv("REMOTE_USER")
+	setCanonical := setCanonicalRaw == "1" || strings.EqualFold(setCanonicalRaw, "true") || strings.EqualFold(setCanonicalRaw, "on")
 
 	// Validate required fields
 	if lemmaIDStr == "" {
@@ -63,6 +65,23 @@ func main() {
 	if err != nil {
 		showErrorAndExit("Invalid lemma ID")
 		return
+	}
+
+	if variantKind == "" {
+		variantKind = "legacy_assembled"
+	}
+	if variantID == "" {
+		variantID = "translation"
+	}
+	validVariantStatuses := map[string]bool{
+		"draft":    true,
+		"approved": true,
+		"rejected": true,
+		"hidden":   true,
+		"blocked":  true,
+	}
+	if !validVariantStatuses[variantStatus] {
+		variantStatus = "draft"
 	}
 
 	// Validate review status
@@ -83,6 +102,11 @@ func main() {
 	data, err := LoadLemmaData(config.DataFile)
 	if err != nil {
 		showErrorAndExit(fmt.Sprintf("Failed to load data: %v", err))
+		return
+	}
+	currentLemma := FindLemmaByID(data, lemmaID)
+	if currentLemma == nil {
+		showErrorAndExit("Lemma not found in review data")
 		return
 	}
 
@@ -122,6 +146,11 @@ func main() {
 		return
 	}
 
+	if currentLemma.TranslationBlocked && variantKind == "legacy_assembled" {
+		variantStatus = "blocked"
+		setCanonical = false
+	}
+
 	err = SaveTranslationVariantReview(
 		db,
 		lemmaID,
@@ -129,6 +158,7 @@ func main() {
 		variantID,
 		variantStatus,
 		sourceTextVersionID,
+		setCanonical,
 		notes,
 		remoteUser,
 	)
@@ -145,8 +175,7 @@ func main() {
 		redirectID = lemmaID
 	} else {
 		// Default: continue to next lemma
-		currentLemma := FindLemmaByID(data, lemmaID)
-		if currentLemma != nil {
+			if currentLemma != nil {
 			nextLemma := GetNextLemma(data, currentLemma)
 			if nextLemma != nil {
 				redirectID = nextLemma.ID

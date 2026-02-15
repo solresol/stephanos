@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS translation_variant_reviews (
     variant_id TEXT NOT NULL,
     variant_status TEXT NOT NULL DEFAULT 'draft',
     source_text_version_id TEXT,
+    set_canonical INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
     reviewer_username TEXT,
     reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

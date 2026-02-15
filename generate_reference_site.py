@@ -393,7 +393,64 @@ def get_all_lemmas(cur):
             english_translation = corrected_english_translation
             translation = corrected_english_translation
 
-        # Prefer canonical publication pointer when available.
+        selected_translation_blocked = bool(translation_blocked)
+        selected_translation_block_reason = (translation_block_reason or "").strip()
+
+        def resolve_pointer_variant(variant_kind: str, variant_id: str):
+            if variant_kind == "translation_run" and has_translation_runs:
+                cur.execute(
+                    """
+                    SELECT COALESCE(translation_text, ''), COALESCE(status, ''),
+                           COALESCE(public_eligible, TRUE), COALESCE(public_block_reason, '')
+                    FROM translation_runs
+                    WHERE id = %s
+                      AND lemma_id = %s
+                    LIMIT 1
+                    """,
+                    (variant_id, lemma_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return "", True, "Canonical pointer references missing translation run"
+                translation_text, run_status, public_eligible, public_block_reason = row
+                if run_status != "approved":
+                    return "", True, f"Canonical translation run is {run_status or 'not approved'}"
+                if not public_eligible:
+                    return "", True, "Canonical translation run is not public-eligible"
+                if (public_block_reason or "").strip():
+                    return "", True, public_block_reason
+                return (translation_text or "").strip(), False, ""
+
+            if variant_kind == "human_translation" and has_human_translations:
+                cur.execute(
+                    """
+                    SELECT COALESCE(translation_text, ''), COALESCE(status, '')
+                    FROM human_translations
+                    WHERE id = %s
+                      AND lemma_id = %s
+                    LIMIT 1
+                    """,
+                    (variant_id, lemma_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return "", True, "Canonical pointer references missing human translation"
+                translation_text, human_status = row
+                if human_status != "approved":
+                    return "", True, f"Canonical human translation is {human_status or 'not approved'}"
+                return (translation_text or "").strip(), False, ""
+
+            if variant_kind == "legacy_assembled":
+                if variant_id not in ("", "translation", str(lemma_id)):
+                    return "", True, "Canonical legacy pointer has unsupported variant id"
+                if selected_translation_blocked:
+                    return "", True, selected_translation_block_reason or "Legacy translation blocked by risk gating"
+                return (translation or "").strip(), False, ""
+
+            return "", True, "Canonical pointer references unknown variant kind"
+
+        # Canonical pointer first; fallback to newest approved eligible variant.
+        pointer = None
         if has_publication_targets:
             cur.execute(
                 """
@@ -406,29 +463,73 @@ def get_all_lemmas(cur):
                 (lemma_id,),
             )
             pointer = cur.fetchone()
-            if pointer:
-                variant_kind, variant_id = pointer
-                canonical_text = ""
-                if variant_kind == "translation_run" and has_translation_runs:
-                    cur.execute(
-                        "SELECT COALESCE(translation_text, '') FROM translation_runs WHERE id = %s LIMIT 1",
-                        (variant_id,),
-                    )
-                    row = cur.fetchone()
-                    canonical_text = (row[0] if row else "") or ""
-                elif variant_kind == "human_translation" and has_human_translations:
-                    cur.execute(
-                        "SELECT COALESCE(translation_text, '') FROM human_translations WHERE id = %s LIMIT 1",
-                        (variant_id,),
-                    )
-                    row = cur.fetchone()
-                    canonical_text = (row[0] if row else "") or ""
-                elif variant_kind == "legacy_assembled":
-                    canonical_text = translation
 
-                if canonical_text.strip():
-                    translation = canonical_text
-                    english_translation = canonical_text
+        selected_translation_text = (translation or "").strip()
+        if pointer:
+            pointer_kind, pointer_id = pointer
+            pointer_text, pointer_blocked, pointer_reason = resolve_pointer_variant(pointer_kind, str(pointer_id))
+            if pointer_text:
+                selected_translation_text = pointer_text
+                selected_translation_blocked = False
+                selected_translation_block_reason = ""
+            else:
+                selected_translation_text = ""
+                selected_translation_blocked = bool(pointer_blocked)
+                selected_translation_block_reason = pointer_reason or selected_translation_block_reason
+
+        if not selected_translation_text or selected_translation_blocked:
+            fallback_choice = None
+            if has_human_translations:
+                cur.execute(
+                    """
+                    SELECT id::text, COALESCE(translation_text, ''), updated_at
+                    FROM human_translations
+                    WHERE lemma_id = %s
+                      AND status = 'approved'
+                      AND COALESCE(translation_text, '') != ''
+                    ORDER BY updated_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (lemma_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    fallback_choice = ("human_translation", row[0], row[1], row[2])
+
+            if has_translation_runs:
+                cur.execute(
+                    """
+                    SELECT id::text, COALESCE(translation_text, ''),
+                           COALESCE(reviewed_at, completed_at, created_at) AS ts
+                    FROM translation_runs
+                    WHERE lemma_id = %s
+                      AND status = 'approved'
+                      AND public_eligible = TRUE
+                      AND COALESCE(public_block_reason, '') = ''
+                      AND COALESCE(translation_text, '') != ''
+                    ORDER BY COALESCE(reviewed_at, completed_at, created_at) DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (lemma_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    run_choice = ("translation_run", row[0], row[1], row[2])
+                    if fallback_choice is None:
+                        fallback_choice = run_choice
+                    else:
+                        fallback_ts = fallback_choice[3]
+                        run_ts = run_choice[3]
+                        if run_ts and (fallback_ts is None or run_ts > fallback_ts):
+                            fallback_choice = run_choice
+
+            if fallback_choice:
+                selected_translation_text = (fallback_choice[2] or "").strip()
+                selected_translation_blocked = False
+                selected_translation_block_reason = ""
+
+        translation = selected_translation_text
+        english_translation = selected_translation_text
 
         # Parse image filenames (psycopg2 auto-deserializes JSON)
         if isinstance(image_filenames, list):
@@ -472,8 +573,8 @@ def get_all_lemmas(cur):
             "longitude": longitude,
             "pleiades_id": pleiades_id,
             "translation_prompt_version": translation_prompt_version,
-            "translation_blocked": bool(translation_blocked),
-            "translation_block_reason": translation_block_reason or "",
+            "translation_blocked": bool(selected_translation_blocked),
+            "translation_block_reason": selected_translation_block_reason or "",
             "greek_source": greek_source,
         }
         lemma_data["letter_slug"] = get_initial_slug(lemma_data["lemma"])

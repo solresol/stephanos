@@ -410,6 +410,21 @@ const reviewTemplate = `<!DOCTYPE html>
         .btn-skip:hover {
             background: #7f8c8d;
         }
+        .variant-select-btn {
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            background: #95a5a6;
+            color: white;
+            cursor: pointer;
+            font-size: 0.85em;
+        }
+        .variant-select-btn:hover {
+            background: #7f8c8d;
+        }
+        .variant-select-btn.active {
+            background: #2c3e50;
+        }
     </style>
 </head>
 <body>
@@ -631,22 +646,49 @@ const reviewTemplate = `<!DOCTYPE html>
 
             {{if .Lemma.TranslationVariants}}
             <div class="section-title">Translation Variants</div>
+            <div style="margin: 8px 0 12px; color: #555;">Select one variant for status and canonical publication actions.</div>
             <table style="width: 100%; border-collapse: collapse; font-size: 0.92em;">
                 <tr style="background: #f6f8fa;">
+                    <th style="text-align: left; padding: 8px;">Select</th>
                     <th style="text-align: left; padding: 8px;">Kind</th>
                     <th style="text-align: left; padding: 8px;">ID</th>
                     <th style="text-align: left; padding: 8px;">Status</th>
-                    <th style="text-align: left; padding: 8px;">Source Version</th>
+                    <th style="text-align: left; padding: 8px;">Source</th>
+                    <th style="text-align: left; padding: 8px;">Snippet</th>
+                    <th style="text-align: left; padding: 8px;">Canonical</th>
                 </tr>
                 {{range .Lemma.TranslationVariants}}
                 <tr>
+                    <td style="padding: 8px; border-top: 1px solid #eee;">
+                        <button
+                            type="button"
+                            class="variant-select-btn"
+                            data-kind="{{index . "kind"}}"
+                            data-id="{{index . "id"}}"
+                            data-status="{{index . "status"}}"
+                            data-source-text-version-id="{{index . "source_text_version_id"}}"
+                            data-blocked-legacy="{{if and (eq (index . "kind") "legacy_assembled") $.Lemma.TranslationBlocked}}1{{else}}0{{end}}"
+                        >Select</button>
+                    </td>
                     <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "kind"}}</td>
                     <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "id"}}</td>
                     <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "status"}}</td>
-                    <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "source_text_version_id"}}</td>
+                    <td style="padding: 8px; border-top: 1px solid #eee;">
+                        {{if index . "source_document"}}{{index . "source_document"}}{{else}}unknown{{end}}
+                        {{if index . "source_text_version_id"}} / {{index . "source_text_version_id"}}{{end}}
+                    </td>
+                    <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "preview"}}</td>
+                    <td style="padding: 8px; border-top: 1px solid #eee;">
+                        {{if and (eq (index . "kind") (index $.Lemma.CanonicalVariantRef "kind")) (eq (index . "id") (index $.Lemma.CanonicalVariantRef "id"))}}
+                        current
+                        {{else}}
+                        –
+                        {{end}}
+                    </td>
                 </tr>
                 {{end}}
             </table>
+            <div id="selected_variant_label" style="margin-top: 8px; color: #2c3e50; font-weight: 600;"></div>
             {{end}}
 
         </div>
@@ -657,7 +699,11 @@ const reviewTemplate = `<!DOCTYPE html>
                 <input type="hidden" name="lemma_id" value="{{.Lemma.ID}}">
                 <input type="hidden" name="current_position" value="{{.Lemma.SortOrder}}">
                 <input type="hidden" id="ai_translation" value="{{.Lemma.EnglishTranslation}}">
-                <input type="hidden" name="source_text_version_id" value="">
+                <input type="hidden" name="variant_kind" id="variant_kind" value="">
+                <input type="hidden" name="variant_id" id="variant_id" value="">
+                <input type="hidden" name="source_text_version_id" id="source_text_version_id" value="">
+                <input type="hidden" id="canonical_kind" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "kind"}}{{end}}">
+                <input type="hidden" id="canonical_id" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "id"}}{{end}}">
 
                 <div class="form-group">
                     <label>OCR Status:</label>
@@ -681,24 +727,31 @@ const reviewTemplate = `<!DOCTYPE html>
                 </div>
 
                 <div class="form-group">
-                    <label for="variant_kind">Variant Kind:</label>
-                    <input type="text" name="variant_kind" id="variant_kind" value="legacy_assembled" style="width: 100%; padding: 8px;">
-                </div>
-
-                <div class="form-group">
-                    <label for="variant_id">Variant ID:</label>
-                    <input type="text" name="variant_id" id="variant_id" value="translation" style="width: 100%; padding: 8px;">
+                    <label>Selected Variant:</label>
+                    <div id="selected_variant_summary" style="padding: 10px; border: 1px solid #dfe6e9; border-radius: 4px; background: #fafcfe;">
+                        No variant selected.
+                    </div>
                 </div>
 
                 <div class="form-group">
                     <label for="variant_status">Variant Status:</label>
                     <select name="variant_status" id="variant_status" style="width: 100%; padding: 8px;">
                         <option value="draft">draft</option>
-                        <option value="approved" {{if not .Lemma.TranslationBlocked}}selected{{end}}>approved</option>
+                        <option value="approved">approved</option>
                         <option value="rejected">rejected</option>
                         <option value="hidden">hidden</option>
                         <option value="blocked" {{if .Lemma.TranslationBlocked}}selected{{end}}>blocked</option>
                     </select>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" name="set_canonical" id="set_canonical" value="1">
+                        Set selected variant as canonical public translation
+                    </label>
+                    <div style="color: #666; font-size: 0.9em; margin-top: 4px;">
+                        Canonical update applies only to eligible approved variants.
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -759,6 +812,72 @@ const reviewTemplate = `<!DOCTYPE html>
             var ai = document.getElementById('ai_translation').value;
             document.getElementById('corrected_english').value = ai;
         }
+        function setVariantSelection(kind, id, sourceTextVersionID, status, blockedLegacy) {
+            document.getElementById('variant_kind').value = kind || '';
+            document.getElementById('variant_id').value = id || '';
+            document.getElementById('source_text_version_id').value = sourceTextVersionID || '';
+
+            var summary = document.getElementById('selected_variant_summary');
+            if (summary) {
+                summary.textContent = 'kind=' + (kind || '') + ', id=' + (id || '') + ', source=' + (sourceTextVersionID || '');
+            }
+            var label = document.getElementById('selected_variant_label');
+            if (label) {
+                label.textContent = 'Selected variant: ' + (kind || '') + ' / ' + (id || '');
+            }
+
+            var statusSelect = document.getElementById('variant_status');
+            if (statusSelect && status) {
+                var option = statusSelect.querySelector('option[value="' + status + '"]');
+                if (option) {
+                    statusSelect.value = status;
+                }
+            }
+
+            var canonicalCheckbox = document.getElementById('set_canonical');
+            if (canonicalCheckbox) {
+                if (blockedLegacy) {
+                    canonicalCheckbox.checked = false;
+                    canonicalCheckbox.disabled = true;
+                    statusSelect.value = 'blocked';
+                } else {
+                    canonicalCheckbox.disabled = false;
+                }
+            }
+        }
+
+        function initializeVariantSelection() {
+            var buttons = Array.prototype.slice.call(document.querySelectorAll('.variant-select-btn'));
+            if (!buttons.length) {
+                setVariantSelection('legacy_assembled', 'translation', '', document.getElementById('variant_status').value, false);
+                return;
+            }
+
+            buttons.forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    buttons.forEach(function (b) { b.classList.remove('active'); });
+                    btn.classList.add('active');
+                    setVariantSelection(
+                        btn.getAttribute('data-kind'),
+                        btn.getAttribute('data-id'),
+                        btn.getAttribute('data-source-text-version-id'),
+                        btn.getAttribute('data-status'),
+                        btn.getAttribute('data-blocked-legacy') === '1'
+                    );
+                });
+            });
+
+            var canonicalKind = document.getElementById('canonical_kind') ? document.getElementById('canonical_kind').value : '';
+            var canonicalID = document.getElementById('canonical_id') ? document.getElementById('canonical_id').value : '';
+            var initial = buttons.find(function (btn) {
+                return btn.getAttribute('data-kind') === canonicalKind && btn.getAttribute('data-id') === canonicalID;
+            }) || buttons[0];
+            if (initial) {
+                initial.click();
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', initializeVariantSelection);
     </script>
 </body>
 </html>

@@ -159,11 +159,13 @@ func OpenDatabase(dbPath string) (*sql.DB, error) {
 			variant_id TEXT NOT NULL,
 			variant_status TEXT NOT NULL DEFAULT 'draft',
 			source_text_version_id TEXT,
+			set_canonical INTEGER NOT NULL DEFAULT 0,
 			notes TEXT,
 			reviewer_username TEXT,
 			reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (lemma_id, variant_kind, variant_id)
 		)`,
+		"ALTER TABLE translation_variant_reviews ADD COLUMN set_canonical INTEGER NOT NULL DEFAULT 0",
 	}
 	for _, migration := range migrations {
 		db.Exec(migration) // Ignore errors (column may already exist)
@@ -296,6 +298,7 @@ func SaveTranslationVariantReview(
 	variantID string,
 	variantStatus string,
 	sourceTextVersionID string,
+	setCanonical bool,
 	notes string,
 	username string,
 ) error {
@@ -305,15 +308,20 @@ func SaveTranslationVariantReview(
 	if strings.TrimSpace(variantStatus) == "" {
 		variantStatus = "draft"
 	}
+	setCanonicalValue := 0
+	if setCanonical {
+		setCanonicalValue = 1
+	}
 
 	query := `
 		INSERT INTO translation_variant_reviews (
 			lemma_id, variant_kind, variant_id, variant_status,
-			source_text_version_id, notes, reviewer_username, reviewed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			source_text_version_id, set_canonical, notes, reviewer_username, reviewed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(lemma_id, variant_kind, variant_id) DO UPDATE SET
 			variant_status = excluded.variant_status,
 			source_text_version_id = excluded.source_text_version_id,
+			set_canonical = excluded.set_canonical,
 			notes = excluded.notes,
 			reviewer_username = excluded.reviewer_username,
 			reviewed_at = excluded.reviewed_at
@@ -326,6 +334,7 @@ func SaveTranslationVariantReview(
 		variantID,
 		variantStatus,
 		sourceTextVersionID,
+		setCanonicalValue,
 		notes,
 		username,
 		time.Now(),

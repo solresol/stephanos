@@ -23,7 +23,7 @@ def fetch_canonical_rows(cur):
     return cur.fetchall()
 
 
-def resolve_translation_text(cur, variant_kind: str, variant_id: str):
+def resolve_translation_text(cur, lemma_id: int, variant_kind: str, variant_id: str):
     if variant_kind == "translation_run":
         cur.execute(
             """
@@ -58,7 +58,7 @@ def resolve_translation_text(cur, variant_kind: str, variant_id: str):
             WHERE id = %s
             LIMIT 1
             """,
-            (variant_id,),
+            (lemma_id,),
         )
         row = cur.fetchone()
         return row if row else ("", "")
@@ -79,7 +79,7 @@ def main():
     rows = fetch_canonical_rows(cur)
     updated = 0
     for lemma_id, variant_kind, variant_id in rows:
-        text, status = resolve_translation_text(cur, variant_kind, variant_id)
+        text, status = resolve_translation_text(cur, lemma_id, variant_kind, variant_id)
         if not (text or "").strip():
             continue
 

@@ -35,41 +35,86 @@ def sqlite_table_exists(cur, table_name: str) -> bool:
     return cur.fetchone() is not None
 
 
+def sqlite_column_exists(cur, table_name: str, column_name: str) -> bool:
+    cur.execute(f"PRAGMA table_info({table_name})")
+    return any((row["name"] or "").strip().lower() == column_name.lower() for row in cur.fetchall())
+
+
 def import_variant_reviews(sqlite_cur, pg_cur):
     """
     Import optional variant-level review rows from SQLite bridge table.
-    Returns (updated_count, skipped_count, error_count).
+    Returns (updated_count, skipped_count, error_count, canonical_set_count, canonical_skipped_count).
     """
     if not sqlite_table_exists(sqlite_cur, "translation_variant_reviews"):
-        return 0, 0, 0
+        return 0, 0, 0, 0, 0
 
-    sqlite_cur.execute(
-        """
-        SELECT lemma_id, variant_kind, variant_id, variant_status,
-               source_text_version_id, notes, reviewer_username, reviewed_at
-        FROM translation_variant_reviews
-        ORDER BY reviewed_at
-        """
-    )
+    has_set_canonical = sqlite_column_exists(sqlite_cur, "translation_variant_reviews", "set_canonical")
+    if has_set_canonical:
+        sqlite_cur.execute(
+            """
+            SELECT lemma_id, variant_kind, variant_id, variant_status,
+                   source_text_version_id, set_canonical, notes, reviewer_username, reviewed_at
+            FROM translation_variant_reviews
+            ORDER BY reviewed_at
+            """
+        )
+    else:
+        sqlite_cur.execute(
+            """
+            SELECT lemma_id, variant_kind, variant_id, variant_status,
+                   source_text_version_id, 0 AS set_canonical, notes, reviewer_username, reviewed_at
+            FROM translation_variant_reviews
+            ORDER BY reviewed_at
+            """
+        )
     rows = sqlite_cur.fetchall()
     if not rows:
-        return 0, 0, 0
+        return 0, 0, 0, 0, 0
 
     updated_count = 0
     skipped_count = 0
     error_count = 0
+    canonical_set_count = 0
+    canonical_skipped_count = 0
+
+    pg_cur.execute("SELECT to_regclass('public.lemma_publication_targets') IS NOT NULL")
+    has_publication_targets = bool(pg_cur.fetchone()[0])
+    pg_cur.execute("SELECT to_regclass('public.translation_risk_flags') IS NOT NULL")
+    has_risk_table = bool(pg_cur.fetchone()[0])
+
+    def legacy_variant_is_blocked(lemma_id: int) -> bool:
+        if not has_risk_table:
+            return False
+        pg_cur.execute(
+            """
+            SELECT COALESCE(is_blocked, FALSE)
+            FROM translation_risk_flags
+            WHERE lemma_id = %s
+              AND variant_kind = 'legacy_assembled'
+              AND variant_id = 'translation'
+              AND risk_code = 'billerbeck_likely_translation_change'
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (lemma_id,),
+        )
+        row = pg_cur.fetchone()
+        return bool(row[0]) if row else False
 
     for row in rows:
         lemma_id = row["lemma_id"]
         variant_kind = (row["variant_kind"] or "").strip()
         variant_id = (row["variant_id"] or "").strip()
         variant_status = (row["variant_status"] or "draft").strip()
+        set_canonical = bool(row["set_canonical"] or 0)
         notes = row["notes"] or None
         reviewer = row["reviewer_username"] or None
         reviewed_at = row["reviewed_at"] or None
 
         if not variant_kind or not variant_id:
             skipped_count += 1
+            if set_canonical:
+                canonical_skipped_count += 1
             continue
 
         try:
@@ -90,9 +135,7 @@ def import_variant_reviews(sqlite_cur, pg_cur):
                     updated_count += 1
                 else:
                     skipped_count += 1
-                continue
-
-            if variant_kind == "human_translation":
+            elif variant_kind == "human_translation":
                 pg_cur.execute(
                     """
                     UPDATE human_translations
@@ -110,15 +153,87 @@ def import_variant_reviews(sqlite_cur, pg_cur):
                     updated_count += 1
                 else:
                     skipped_count += 1
-                continue
+            elif variant_kind == "legacy_assembled":
+                skipped_count += 1
+            else:
+                skipped_count += 1
 
-            # Legacy variant lane: no additional import action needed beyond existing fields.
-            skipped_count += 1
+            if set_canonical:
+                canonical_applied = False
+                if has_publication_targets and variant_status == "approved":
+                    if variant_kind == "translation_run":
+                        pg_cur.execute(
+                            """
+                            SELECT COALESCE(status, ''), COALESCE(public_eligible, TRUE),
+                                   COALESCE(public_block_reason, ''), COALESCE(translation_text, '')
+                            FROM translation_runs
+                            WHERE id = %s
+                              AND lemma_id = %s
+                            LIMIT 1
+                            """,
+                            (variant_id, lemma_id),
+                        )
+                        run_row = pg_cur.fetchone()
+                        if run_row:
+                            run_status, public_eligible, public_block_reason, translation_text = run_row
+                            canonical_applied = (
+                                run_status == "approved"
+                                and bool(public_eligible)
+                                and not (public_block_reason or "").strip()
+                                and bool((translation_text or "").strip())
+                            )
+                    elif variant_kind == "human_translation":
+                        pg_cur.execute(
+                            """
+                            SELECT COALESCE(status, ''), COALESCE(translation_text, '')
+                            FROM human_translations
+                            WHERE id = %s
+                              AND lemma_id = %s
+                            LIMIT 1
+                            """,
+                            (variant_id, lemma_id),
+                        )
+                        human_row = pg_cur.fetchone()
+                        if human_row:
+                            human_status, translation_text = human_row
+                            canonical_applied = (
+                                human_status == "approved"
+                                and bool((translation_text or "").strip())
+                            )
+                    elif variant_kind == "legacy_assembled":
+                        if variant_id == "translation" and not legacy_variant_is_blocked(lemma_id):
+                            pg_cur.execute(
+                                "SELECT COALESCE(translation, '') FROM assembled_lemmas WHERE id = %s LIMIT 1",
+                                (lemma_id,),
+                            )
+                            legacy_row = pg_cur.fetchone()
+                            canonical_applied = bool((legacy_row[0] if legacy_row else "").strip())
+
+                    if canonical_applied:
+                        pg_cur.execute(
+                            """
+                            INSERT INTO lemma_publication_targets (
+                                lemma_id, surface, variant_kind, variant_id, updated_by, updated_at
+                            )
+                            VALUES (%s, 'public_translation', %s, %s, %s, NOW())
+                            ON CONFLICT (lemma_id, surface) DO UPDATE SET
+                                variant_kind = EXCLUDED.variant_kind,
+                                variant_id = EXCLUDED.variant_id,
+                                updated_by = EXCLUDED.updated_by,
+                                updated_at = EXCLUDED.updated_at
+                            """,
+                            (lemma_id, variant_kind, variant_id, reviewer),
+                        )
+                        canonical_set_count += 1
+                    else:
+                        canonical_skipped_count += 1
+                else:
+                    canonical_skipped_count += 1
         except Exception as e:
             log(f"  ERROR importing variant review lemma={lemma_id} kind={variant_kind} id={variant_id}: {e}")
             error_count += 1
 
-    return updated_count, skipped_count, error_count
+    return updated_count, skipped_count, error_count, canonical_set_count, canonical_skipped_count
 
 
 def import_reviews():
@@ -234,12 +349,26 @@ def import_reviews():
 
     # Commit changes
     variant_updated = variant_skipped = variant_errors = 0
+    variant_canonical_set = variant_canonical_skipped = 0
     try:
-        variant_updated, variant_skipped, variant_errors = import_variant_reviews(sqlite_cur, pg_cur)
-        if variant_updated or variant_skipped or variant_errors:
+        (
+            variant_updated,
+            variant_skipped,
+            variant_errors,
+            variant_canonical_set,
+            variant_canonical_skipped,
+        ) = import_variant_reviews(sqlite_cur, pg_cur)
+        if (
+            variant_updated
+            or variant_skipped
+            or variant_errors
+            or variant_canonical_set
+            or variant_canonical_skipped
+        ):
             log(
                 "Variant review import: "
-                f"updated={variant_updated}, skipped={variant_skipped}, errors={variant_errors}"
+                f"updated={variant_updated}, skipped={variant_skipped}, errors={variant_errors}, "
+                f"canonical_set={variant_canonical_set}, canonical_skipped={variant_canonical_skipped}"
             )
     except Exception as e:
         log(f"WARNING: Variant review import skipped due to error: {e}")
@@ -255,10 +384,12 @@ def import_reviews():
     log(f"  Updated: {updated_count}")
     log(f"  Skipped: {skipped_count}")
     log(f"  Errors: {error_count}")
-    if variant_updated or variant_skipped or variant_errors:
+    if variant_updated or variant_skipped or variant_errors or variant_canonical_set or variant_canonical_skipped:
         log(f"  Variant Updated: {variant_updated}")
         log(f"  Variant Skipped: {variant_skipped}")
         log(f"  Variant Errors: {variant_errors}")
+        log(f"  Variant Canonical Set: {variant_canonical_set}")
+        log(f"  Variant Canonical Skipped: {variant_canonical_skipped}")
 
     if error_count > 0 or variant_errors > 0:
         return 1
