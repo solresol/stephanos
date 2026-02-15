@@ -62,6 +62,12 @@ location "/cgi-bin/*" {
 }
 ```
 
+## Operational note: OpenBSD httpd chroot
+
+- CGI runs under httpd/slowcgi chroot semantics, but admin SSH sessions are not chrooted.
+- `canonical_translation.cgi` must resolve canonicals from local `../db/reviews.db` plus `../db/review_data.json`; do not implement SSH proxy calls from CGI.
+- Do not create or manage `/var/www/home/...` manually for this workflow.
+
 ## Database Schema
 
 The `reviews` table in SQLite tracks review state:

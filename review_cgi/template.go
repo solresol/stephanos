@@ -699,7 +699,6 @@ const reviewTemplate = `<!DOCTYPE html>
                 <input type="hidden" name="lemma_id" value="{{.Lemma.ID}}">
                 <input type="hidden" name="current_position" value="{{.Lemma.SortOrder}}">
                 <input type="hidden" id="ai_translation" value="{{.Lemma.EnglishTranslation}}">
-                <input type="hidden" name="variant_kind" id="variant_kind" value="">
                 <input type="hidden" name="variant_id" id="variant_id" value="">
                 <input type="hidden" name="source_text_version_id" id="source_text_version_id" value="">
                 <input type="hidden" id="canonical_kind" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "kind"}}{{end}}">
@@ -734,6 +733,15 @@ const reviewTemplate = `<!DOCTYPE html>
                 </div>
 
                 <div class="form-group">
+                    <label for="variant_kind">Variant Kind:</label>
+                    <select name="variant_kind" id="variant_kind" style="width: 100%; padding: 8px;">
+                        <option value="translation_run">translation_run</option>
+                        <option value="human_translation">human_translation</option>
+                        <option value="legacy_assembled">legacy_assembled</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
                     <label for="variant_status">Variant Status:</label>
                     <select name="variant_status" id="variant_status" style="width: 100%; padding: 8px;">
                         <option value="draft">draft</option>
@@ -752,6 +760,10 @@ const reviewTemplate = `<!DOCTYPE html>
                     <div style="color: #666; font-size: 0.9em; margin-top: 4px;">
                         Canonical update applies only to eligible approved variants.
                     </div>
+                    <label style="display: block; margin-top: 8px;">
+                        <input type="checkbox" name="clear_canonical" id="clear_canonical" value="1">
+                        Clear canonical public translation (pending nightly import)
+                    </label>
                 </div>
 
                 <div class="form-group">
@@ -813,7 +825,10 @@ const reviewTemplate = `<!DOCTYPE html>
             document.getElementById('corrected_english').value = ai;
         }
         function setVariantSelection(kind, id, sourceTextVersionID, status, blockedLegacy) {
-            document.getElementById('variant_kind').value = kind || '';
+            var variantKindField = document.getElementById('variant_kind');
+            if (variantKindField) {
+                variantKindField.value = kind || 'legacy_assembled';
+            }
             document.getElementById('variant_id').value = id || '';
             document.getElementById('source_text_version_id').value = sourceTextVersionID || '';
 
@@ -835,10 +850,14 @@ const reviewTemplate = `<!DOCTYPE html>
             }
 
             var canonicalCheckbox = document.getElementById('set_canonical');
+            var clearCanonicalCheckbox = document.getElementById('clear_canonical');
             if (canonicalCheckbox) {
                 if (blockedLegacy) {
                     canonicalCheckbox.checked = false;
                     canonicalCheckbox.disabled = true;
+                    if (clearCanonicalCheckbox) {
+                        clearCanonicalCheckbox.checked = false;
+                    }
                     statusSelect.value = 'blocked';
                 } else {
                     canonicalCheckbox.disabled = false;
@@ -846,10 +865,29 @@ const reviewTemplate = `<!DOCTYPE html>
             }
         }
 
+        function bindCanonicalCheckboxes() {
+            var setCanonical = document.getElementById('set_canonical');
+            var clearCanonical = document.getElementById('clear_canonical');
+            if (!setCanonical || !clearCanonical) {
+                return;
+            }
+            setCanonical.addEventListener('change', function () {
+                if (setCanonical.checked) {
+                    clearCanonical.checked = false;
+                }
+            });
+            clearCanonical.addEventListener('change', function () {
+                if (clearCanonical.checked) {
+                    setCanonical.checked = false;
+                }
+            });
+        }
+
         function initializeVariantSelection() {
             var buttons = Array.prototype.slice.call(document.querySelectorAll('.variant-select-btn'));
             if (!buttons.length) {
                 setVariantSelection('legacy_assembled', 'translation', '', document.getElementById('variant_status').value, false);
+                bindCanonicalCheckboxes();
                 return;
             }
 
@@ -875,6 +913,7 @@ const reviewTemplate = `<!DOCTYPE html>
             if (initial) {
                 initial.click();
             }
+            bindCanonicalCheckboxes();
         }
 
         document.addEventListener('DOMContentLoaded', initializeVariantSelection);

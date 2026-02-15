@@ -8,12 +8,15 @@ as source_variant='csv_fallback' when OCR text is absent.
 import argparse
 import hashlib
 import json
+import re
 import unicodedata
 from datetime import datetime, timezone
 
 from db import get_connection
 
 _NORMALIZED_LEMMA_INDEX = None
+_GREEK_BLOCK_RE = re.compile(r"[\u0370-\u03FF\u1F00-\u1FFF]")
+_APPARATUS_LINE_PREFIX_RE = re.compile(r"^\s*(\d+)\.")
 
 
 def normalize_lemma_for_match(text: str) -> str:
@@ -36,6 +39,56 @@ def normalize_lemma_for_match(text: str) -> str:
     letters_only = "".join(ch for ch in stripped if ch.isalpha())
     normalized = unicodedata.normalize("NFC", letters_only).lower().replace("ς", "σ")
     return normalized
+
+
+def normalize_ocr_greek_text(text: str) -> str:
+    """Fix common OCR confusions inside Greek words only."""
+    if not text:
+        return text
+
+    chars = list(text)
+    for i, ch in enumerate(chars):
+        if ch not in {"1", "0"}:
+            continue
+        prev_is_greek = i > 0 and bool(_GREEK_BLOCK_RE.match(chars[i - 1]))
+        next_is_greek = i + 1 < len(chars) and bool(_GREEK_BLOCK_RE.match(chars[i + 1]))
+        if not (prev_is_greek or next_is_greek):
+            continue
+        if ch == "1":
+            chars[i] = "ι"
+        elif ch == "0":
+            chars[i] = "ο"
+    return "".join(chars)
+
+
+def parse_apparatus_line_seq(text: str) -> int | None:
+    if not text:
+        return None
+    match = _APPARATUS_LINE_PREFIX_RE.match(text)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def normalize_printed_label(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def unpack_main_line(line, idx: int) -> tuple[int, str | None, str]:
+    if isinstance(line, dict):
+        line_seq = line.get("line_seq") or idx
+        printed_label = normalize_printed_label(line.get("printed_line_label"))
+        line_text = normalize_ocr_greek_text((line.get("line_text") or "").strip())
+        return line_seq, printed_label, line_text
+
+    line_text = normalize_ocr_greek_text(str(line or "").strip())
+    return idx, None, line_text
 
 
 def get_normalized_lemma_index(cur):
@@ -234,9 +287,7 @@ def insert_meineke_version(cur, lemma_id, text_body, source_variant, created_by,
 def insert_lines_and_apparatus(cur, version_id, main_lines, apparatus_entries):
     line_id_map = {}
     for idx, line in enumerate(main_lines, start=1):
-        line_seq = line.get("line_seq") or idx
-        printed_label = (line.get("printed_line_label") or "").strip() or None
-        line_text = (line.get("line_text") or "").strip()
+        line_seq, printed_label, line_text = unpack_main_line(line, idx)
         if not line_text:
             continue
         cur.execute(
@@ -250,12 +301,21 @@ def insert_lines_and_apparatus(cur, version_id, main_lines, apparatus_entries):
         line_id = cur.fetchone()[0]
         line_id_map[(line_seq, printed_label)] = line_id
 
+    last_line_seq = None
     for app in apparatus_entries:
-        text = (app.get("apparatus_text") or "").strip()
+        text = normalize_ocr_greek_text((app.get("apparatus_text") or "").strip())
         if not text:
             continue
         line_seq = app.get("line_seq")
-        printed_label = (app.get("printed_line_label") or "").strip() or None
+        if line_seq is None:
+            line_seq = parse_apparatus_line_seq(text)
+        printed_label = normalize_printed_label(app.get("printed_line_label"))
+        if line_seq is None and printed_label and printed_label.isdigit():
+            line_seq = int(printed_label)
+        if line_seq is None and last_line_seq is not None:
+            line_seq = last_line_seq
+        note_kind = (app.get("note_kind") or "").strip() or None
+        normalized_note_kind = (note_kind or "").lower()
         line_id = line_id_map.get((line_seq, printed_label))
         if line_id is None and line_seq is not None:
             line_id = line_id_map.get((line_seq, None))
@@ -267,12 +327,15 @@ def insert_lines_and_apparatus(cur, version_id, main_lines, apparatus_entries):
             ]
             if len(label_matches) == 1:
                 line_id = label_matches[0]
-        if line_id is None:
-            raise RuntimeError(
-                "Apparatus entry could not be linked to a main text line "
-                f"(source_text_version_id={version_id}): "
-                f"{json.dumps(app, ensure_ascii=False)}"
-            )
+
+        # Some apparatus notes are legitimately entry-level (not line-anchored).
+        # Preserve them with line_seq=0 when no explicit anchor exists.
+        if line_id is None and normalized_note_kind in {"title", "source", "textual"} and line_seq is None:
+            line_seq = 0
+
+        has_anchor = line_id is not None or line_seq is not None or printed_label is not None
+        if not has_anchor:
+            line_seq = 0
         cur.execute(
             """
             INSERT INTO lemma_apparatus_entries (
@@ -288,10 +351,12 @@ def insert_lines_and_apparatus(cur, version_id, main_lines, apparatus_entries):
                 printed_label,
                 text,
                 (app.get("anchor_token") or "").strip() or None,
-                (app.get("note_kind") or "").strip() or None,
+                note_kind,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
+        if line_seq is not None:
+            last_line_seq = line_seq
 
 
 def parse_entries(lemma_json):
@@ -381,11 +446,12 @@ def main():
 
             main_lines = entry.get("main_text_lines") or []
             apparatus_entries = entry.get("apparatus_entries") or []
-            text_body = "\n".join(
-                (line.get("line_text") or "").strip()
-                for line in main_lines
-                if (line.get("line_text") or "").strip()
-            ).strip()
+            text_body_lines = []
+            for idx, line in enumerate(main_lines, start=1):
+                _line_seq, _printed_label, line_text = unpack_main_line(line, idx)
+                if line_text:
+                    text_body_lines.append(line_text)
+            text_body = "\n".join(text_body_lines).strip()
             if not text_body:
                 continue
 

@@ -40,6 +40,109 @@ def sqlite_column_exists(cur, table_name: str, column_name: str) -> bool:
     return any((row["name"] or "").strip().lower() == column_name.lower() for row in cur.fetchall())
 
 
+def sync_human_translation_from_review(
+    pg_cur,
+    *,
+    lemma_id: int,
+    corrected_english: str | None,
+    reviewed_english: str | None,
+    reviewer: str | None,
+    reviewed_at,
+    notes: str | None,
+) -> bool:
+    """
+    Upsert a human_translations variant from legacy review fields.
+    Returns True when a row is inserted/updated, False when there is no human translation text.
+    """
+    reviewed_text = (reviewed_english or "").strip()
+    corrected_text = (corrected_english or "").strip()
+    chosen_text = reviewed_text or corrected_text
+    if not chosen_text:
+        return False
+
+    if reviewed_text:
+        stage = "reviewed"
+        status = "approved"
+        reviewed_by = reviewer
+        reviewed_at_value = reviewed_at
+    else:
+        stage = "initial"
+        status = "draft"
+        reviewed_by = None
+        reviewed_at_value = None
+
+    actor = reviewer or "import_reviews.py"
+
+    pg_cur.execute(
+        """
+        SELECT id
+        FROM human_translations
+        WHERE lemma_id = %s
+          AND stage = %s
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+        """,
+        (lemma_id, stage),
+    )
+    existing = pg_cur.fetchone()
+
+    if existing:
+        human_id = existing[0]
+        pg_cur.execute(
+            """
+            UPDATE human_translations
+            SET status = %s,
+                translation_text = %s,
+                updated_by = %s,
+                reviewed_by = COALESCE(%s, reviewed_by),
+                reviewed_at = COALESCE(%s, reviewed_at),
+                notes = COALESCE(%s, notes),
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (
+                status,
+                chosen_text,
+                actor,
+                reviewed_by,
+                reviewed_at_value,
+                notes,
+                human_id,
+            ),
+        )
+    else:
+        pg_cur.execute(
+            """
+            INSERT INTO human_translations (
+                lemma_id,
+                source_text_version_id,
+                stage,
+                status,
+                translation_text,
+                created_by,
+                updated_by,
+                reviewed_by,
+                reviewed_at,
+                notes
+            )
+            VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                lemma_id,
+                stage,
+                status,
+                chosen_text,
+                actor,
+                actor,
+                reviewed_by,
+                reviewed_at_value,
+                notes,
+            ),
+        )
+
+    return True
+
+
 def import_variant_reviews(sqlite_cur, pg_cur):
     """
     Import optional variant-level review rows from SQLite bridge table.
@@ -110,6 +213,22 @@ def import_variant_reviews(sqlite_cur, pg_cur):
         notes = row["notes"] or None
         reviewer = row["reviewer_username"] or None
         reviewed_at = row["reviewed_at"] or None
+
+        if variant_kind == "canonical_request" and variant_id == "clear":
+            if set_canonical and has_publication_targets:
+                pg_cur.execute(
+                    """
+                    DELETE FROM lemma_publication_targets
+                    WHERE lemma_id = %s
+                      AND surface = 'public_translation'
+                    """,
+                    (lemma_id,),
+                )
+                canonical_set_count += 1
+                updated_count += 1
+            else:
+                skipped_count += 1
+            continue
 
         if not variant_kind or not variant_id:
             skipped_count += 1
@@ -256,6 +375,9 @@ def import_reviews():
     pg_conn = get_connection()
     pg_cur = pg_conn.cursor()
 
+    pg_cur.execute("SELECT to_regclass('public.human_translations') IS NOT NULL")
+    has_human_translations = bool(pg_cur.fetchone()[0])
+
     # Get all reviewed entries from SQLite
     sqlite_cur.execute("""
         SELECT lemma_id, review_status,
@@ -280,6 +402,8 @@ def import_reviews():
     updated_count = 0
     skipped_count = 0
     error_count = 0
+    human_synced_count = 0
+    human_sync_errors = 0
 
     # Process each review
     for review in reviews:
@@ -329,6 +453,23 @@ def import_reviews():
             ))
 
             updated_count += 1
+
+            if has_human_translations:
+                try:
+                    synced = sync_human_translation_from_review(
+                        pg_cur,
+                        lemma_id=lemma_id,
+                        corrected_english=corrected_english,
+                        reviewed_english=reviewed_english,
+                        reviewer=reviewer,
+                        reviewed_at=reviewed_at,
+                        notes=notes,
+                    )
+                    if synced:
+                        human_synced_count += 1
+                except Exception as e:
+                    log(f"  ERROR syncing human translation for lemma ID {lemma_id}: {e}")
+                    human_sync_errors += 1
 
             # Log details for reviewed_corrections
             if review_status == 'reviewed_corrections':
@@ -390,8 +531,11 @@ def import_reviews():
         log(f"  Variant Errors: {variant_errors}")
         log(f"  Variant Canonical Set: {variant_canonical_set}")
         log(f"  Variant Canonical Skipped: {variant_canonical_skipped}")
+    if has_human_translations:
+        log(f"  Human translation variants synced: {human_synced_count}")
+        log(f"  Human translation sync errors: {human_sync_errors}")
 
-    if error_count > 0 or variant_errors > 0:
+    if error_count > 0 or variant_errors > 0 or human_sync_errors > 0:
         return 1
 
     return 0

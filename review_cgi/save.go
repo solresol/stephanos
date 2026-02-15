@@ -51,9 +51,11 @@ func main() {
 	variantStatus := strings.TrimSpace(formData.Get("variant_status"))
 	sourceTextVersionID := strings.TrimSpace(formData.Get("source_text_version_id"))
 	setCanonicalRaw := strings.TrimSpace(formData.Get("set_canonical"))
+	clearCanonicalRaw := strings.TrimSpace(formData.Get("clear_canonical"))
 	action := formData.Get("action") // "stay" or "continue" (default)
 	remoteUser := os.Getenv("REMOTE_USER")
 	setCanonical := setCanonicalRaw == "1" || strings.EqualFold(setCanonicalRaw, "true") || strings.EqualFold(setCanonicalRaw, "on")
+	clearCanonical := clearCanonicalRaw == "1" || strings.EqualFold(clearCanonicalRaw, "true") || strings.EqualFold(clearCanonicalRaw, "on")
 
 	// Validate required fields
 	if lemmaIDStr == "" {
@@ -150,6 +152,9 @@ func main() {
 		variantStatus = "blocked"
 		setCanonical = false
 	}
+	if clearCanonical {
+		setCanonical = false
+	}
 
 	err = SaveTranslationVariantReview(
 		db,
@@ -164,6 +169,24 @@ func main() {
 	)
 	if err != nil {
 		showErrorAndExit(fmt.Sprintf("Failed to save translation variant review: %v", err))
+		return
+	}
+
+	// Store explicit canonical clear/set intent as a sentinel row.
+	// This is used by local canonical resolution on merah and by import on raksasa.
+	err = SaveTranslationVariantReview(
+		db,
+		lemmaID,
+		"canonical_request",
+		"clear",
+		"approved",
+		"",
+		clearCanonical,
+		notes,
+		remoteUser,
+	)
+	if err != nil {
+		showErrorAndExit(fmt.Sprintf("Failed to save canonical clear request: %v", err))
 		return
 	}
 

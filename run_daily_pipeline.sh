@@ -20,7 +20,11 @@ echo "========================================" | tee -a "$LOGFILE"
 
 # Step 0: Git pull to get latest instructions/code
 echo "Step 0: Pulling latest changes from git..." | tee -a "$LOGFILE"
-git pull 2>&1 | tee -a "$LOGFILE" || echo "Git pull failed (continuing anyway)" | tee -a "$LOGFILE"
+if git diff --quiet && git diff --cached --quiet; then
+    git pull 2>&1 | tee -a "$LOGFILE" || echo "Git pull failed (continuing anyway)" | tee -a "$LOGFILE"
+else
+    echo "Git working tree has local changes; skipping git pull" | tee -a "$LOGFILE"
+fi
 
 # Step 1: Process any new EPUB files in home directory
 echo "Step 1: Extracting new EPUB files..." | tee -a "$LOGFILE"
