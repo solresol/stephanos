@@ -1629,8 +1629,18 @@ def main():
         """Normalize Greek text for alphabetical sorting by removing accents."""
         return ''.join(strip_combining(ch) for ch in text)
 
+    def entry_number_for_sort(item) -> int:
+        raw = item.get("entry_number")
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str):
+            raw = raw.strip()
+            if raw.isdigit():
+                return int(raw)
+        return 0
+
     for slug in buckets:
-        buckets[slug].sort(key=lambda x: (normalize_for_sort(x['lemma']), x.get('entry_number', '')))
+        buckets[slug].sort(key=lambda x: (normalize_for_sort(x['lemma']), entry_number_for_sort(x)))
 
     # Create output directory
     output_dir = Path(OUTPUT_DIR)
