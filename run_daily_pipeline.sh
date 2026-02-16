@@ -128,7 +128,7 @@ uv run analyze_meineke_differences.py --limit 20 --daily-token-limit "$MEINEKE_D
 
 # Step 5g2: Sync versioned text-pair differences from current source versions
 echo "Step 5g2: Syncing text-pair differences..." | tee -a "$LOGFILE"
-uv run sync_text_pair_differences.py 2>&1 | tee -a "$LOGFILE"
+uv run sync_text_pair_differences.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: text-pair differences sync failed" | tee -a "$LOGFILE"
 
 # Step 5h: Sync translation risk flags (blocks likely translation-changing Billerbeck-dependent rows)
 echo "Step 5h: Syncing translation risk flags..." | tee -a "$LOGFILE"

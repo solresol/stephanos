@@ -2,6 +2,10 @@
 """
 Backfill/update text_pair_differences from current source text versions and
 legacy meineke_text_differences outputs.
+
+Creates the destination table without FOREIGN KEY constraints so the script can
+run under restricted DB roles (FK creation requires REFERENCES privilege on the
+target tables).
 """
 import hashlib
 
@@ -13,9 +17,9 @@ def ensure_table(cur):
         """
         CREATE TABLE IF NOT EXISTS text_pair_differences (
             id SERIAL PRIMARY KEY,
-            lemma_id INTEGER NOT NULL REFERENCES assembled_lemmas(id) ON DELETE CASCADE,
-            billerbeck_text_version_id INTEGER NOT NULL REFERENCES lemma_source_text_versions(id) ON DELETE CASCADE,
-            meineke_text_version_id INTEGER NOT NULL REFERENCES lemma_source_text_versions(id) ON DELETE CASCADE,
+            lemma_id INTEGER NOT NULL,
+            billerbeck_text_version_id INTEGER NOT NULL,
+            meineke_text_version_id INTEGER NOT NULL,
             pair_hash TEXT NOT NULL,
             normalized_class TEXT NOT NULL,
             llm_status TEXT NOT NULL DEFAULT 'pending',
