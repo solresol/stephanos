@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,15 +16,6 @@ type apiError struct {
 
 func (e *apiError) Error() string {
 	return e.Message
-}
-
-type canonicalIntent struct {
-	Action     string
-	Kind       string
-	ID         string
-	Status     string
-	Reviewer   string
-	ReviewedAt string
 }
 
 func main() {
@@ -93,30 +83,22 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 		baselineID = "translation"
 	}
 
-	intent, err := fetchCanonicalIntent(db, lemma.ID)
+	actions, err := FetchCanonicalVariantActions(db, lemma.ID)
 	if err != nil {
 		return &apiError{
 			Status:  http.StatusInternalServerError,
-			Message: fmt.Sprintf("failed to read canonical intent from SQLite: %v", err),
+			Message: fmt.Sprintf("failed to read canonical actions from SQLite: %v", err),
 		}
 	}
+	baselineCanon := baselineCanonicalMemberships(lemma)
+	effectiveCanon := ApplyCanonicalActions(baselineCanon, actions)
+	effectiveKind, effectiveID := ChooseEffectiveCanonicalRef(effectiveCanon)
 
-	effectiveKind := baselineKind
-	effectiveID := baselineID
 	canonicalSource := "review_data_json"
 	notes := []string{}
-
-	if intent != nil {
-		canonicalSource = "sqlite_override"
-		if intent.Action == "clear" {
-			effectiveKind = ""
-			effectiveID = ""
-			notes = append(notes, "SQLite canonical clear request overrides baseline canonical pointer")
-		} else {
-			effectiveKind = intent.Kind
-			effectiveID = intent.ID
-			notes = append(notes, "SQLite canonical set request overrides baseline canonical pointer")
-		}
+	if len(actions) > 0 {
+		canonicalSource = "sqlite_action_log"
+		notes = append(notes, fmt.Sprintf("Applied %d SQLite canonical actions on top of baseline snapshot", len(actions)))
 	}
 
 	selectedStatus := ""
@@ -125,35 +107,52 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 	translationText := ""
 	foundVariant := false
 
-	if strings.TrimSpace(effectiveKind) != "" && strings.TrimSpace(effectiveID) != "" {
-		foundVariant, selectedStatus, selectedSourceDocument, selectedSourceTextVersionID, translationText =
-			resolveVariant(lemma, effectiveKind, effectiveID)
-	}
-
 	translationBlocked := false
 	translationBlockReason := ""
 
 	if strings.TrimSpace(effectiveKind) == "" || strings.TrimSpace(effectiveID) == "" {
 		translationBlocked = true
-		translationBlockReason = "Canonical translation cleared locally in SQLite (pending nightly import)"
-	} else if !foundVariant {
-		translationBlocked = true
-		translationBlockReason = "Selected canonical variant not found in review_data.json"
-	} else if strings.TrimSpace(translationText) == "" {
-		translationBlocked = true
-		translationBlockReason = "Selected canonical variant has empty translation text"
-	} else if strings.TrimSpace(selectedStatus) != "" && selectedStatus != "approved" {
-		translationBlocked = true
-		translationBlockReason = fmt.Sprintf("Selected canonical variant status is %s", selectedStatus)
+		if len(effectiveCanon) == 0 {
+			translationBlockReason = "Canonical set cleared locally in SQLite (pending nightly import)"
+		} else if len(effectiveCanon) > 1 {
+			translationBlockReason = "Multiple canonical variants present; no primary set"
+		} else {
+			translationBlockReason = "No effective canonical variant selected"
+		}
+	} else {
+		foundVariant, selectedStatus, selectedSourceDocument, selectedSourceTextVersionID, translationText =
+			resolveVariant(lemma, effectiveKind, effectiveID)
+
+		if !foundVariant {
+			translationBlocked = true
+			translationBlockReason = "Selected canonical variant not found in review_data.json"
+		} else if strings.TrimSpace(translationText) == "" {
+			translationBlocked = true
+			translationBlockReason = "Selected canonical variant has empty translation text"
+		} else if strings.TrimSpace(selectedStatus) != "" && selectedStatus != "approved" {
+			translationBlocked = true
+			translationBlockReason = fmt.Sprintf("Selected canonical variant status is %s", selectedStatus)
+		}
+
+		// Risk gating (legacy lane only in review_data.json).
+		if effectiveKind == "legacy_assembled" && effectiveID == "translation" && lemma.TranslationBlocked {
+			translationBlocked = true
+			if strings.TrimSpace(lemma.TranslationBlockReason) != "" {
+				translationBlockReason = lemma.TranslationBlockReason
+			} else {
+				translationBlockReason = "Legacy translation blocked by risk gating"
+			}
+		}
 	}
 
-	if effectiveKind == "legacy_assembled" && effectiveID == "translation" && lemma.TranslationBlocked {
-		translationBlocked = true
-		if strings.TrimSpace(lemma.TranslationBlockReason) != "" {
-			translationBlockReason = lemma.TranslationBlockReason
-		} else {
-			translationBlockReason = "Legacy translation blocked by risk gating"
-		}
+	// Include canonical membership state for debugging.
+	canonicalMemberships := []map[string]interface{}{}
+	for _, m := range effectiveCanon {
+		canonicalMemberships = append(canonicalMemberships, map[string]interface{}{
+			"kind":       m.Kind,
+			"id":         m.ID,
+			"is_primary": m.IsPrimary,
+		})
 	}
 
 	result := map[string]interface{}{
@@ -175,16 +174,19 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 		"translation_block_reason": translationBlockReason,
 		"notes":                    notes,
 		"canonical_source":         canonicalSource,
+		"canonical_memberships":    canonicalMemberships,
 	}
 
-	if intent != nil {
-		result["sqlite_canonical_intent"] = map[string]interface{}{
-			"action":      intent.Action,
-			"variant_kind": intent.Kind,
-			"variant_id":  intent.ID,
-			"status":      intent.Status,
-			"reviewer":    intent.Reviewer,
-			"reviewed_at": intent.ReviewedAt,
+	if len(actions) > 0 {
+		last := actions[len(actions)-1]
+		result["sqlite_canonical_actions_applied"] = len(actions)
+		result["sqlite_last_action"] = map[string]interface{}{
+			"id":               last.ID,
+			"action":           last.Action,
+			"variant_kind":     last.VariantKind,
+			"variant_id":       last.VariantID,
+			"reviewer_username": last.Reviewer,
+			"reviewed_at":      last.ReviewedAt,
 		}
 	}
 
@@ -247,60 +249,6 @@ func resolveLemmaTarget(r *http.Request, data *LemmaData) (*Lemma, error) {
 	}
 }
 
-func fetchCanonicalIntent(db *sql.DB, lemmaID int) (*canonicalIntent, error) {
-	query := `
-		SELECT variant_kind, variant_id, COALESCE(variant_status, ''),
-		       COALESCE(set_canonical, 0), COALESCE(reviewer_username, ''),
-		       COALESCE(reviewed_at, '')
-		FROM translation_variant_reviews
-		WHERE lemma_id = ?
-		ORDER BY reviewed_at DESC, rowid DESC
-	`
-	rows, err := db.Query(query, lemmaID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var kind, id, status, reviewer string
-		var setCanonical int
-		var reviewedAt string
-		if err := rows.Scan(&kind, &id, &status, &setCanonical, &reviewer, &reviewedAt); err != nil {
-			return nil, err
-		}
-		if setCanonical != 1 {
-			continue
-		}
-		if kind == "canonical_request" && id == "clear" {
-			return &canonicalIntent{
-				Action:     "clear",
-				Kind:       kind,
-				ID:         id,
-				Status:     status,
-				Reviewer:   reviewer,
-				ReviewedAt: reviewedAt,
-			}, nil
-		}
-		if strings.TrimSpace(kind) == "" || strings.TrimSpace(id) == "" {
-			continue
-		}
-		if strings.TrimSpace(status) != "" && status != "approved" {
-			continue
-		}
-		return &canonicalIntent{
-			Action:     "set",
-			Kind:       kind,
-			ID:         id,
-			Status:     status,
-			Reviewer:   reviewer,
-			ReviewedAt: reviewedAt,
-		}, nil
-	}
-
-	return nil, rows.Err()
-}
-
 func resolveVariant(lemma *Lemma, kind string, id string) (bool, string, string, string, string) {
 	for _, variant := range lemma.TranslationVariants {
 		if mapString(variant, "kind") != kind || mapString(variant, "id") != id {
@@ -310,6 +258,9 @@ func resolveVariant(lemma *Lemma, kind string, id string) (bool, string, string,
 		sourceDocument := mapString(variant, "source_document")
 		sourceTextVersionID := mapString(variant, "source_text_version_id")
 		text := mapString(variant, "text")
+		if text == "" {
+			text = mapString(variant, "preview")
+		}
 		if text == "" && kind == "legacy_assembled" && id == "translation" {
 			text = strings.TrimSpace(lemma.EnglishTranslation)
 		}
