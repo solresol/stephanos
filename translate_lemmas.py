@@ -182,6 +182,8 @@ def call_model(
     client: OpenAI,
     *,
     model: str,
+    temperature: float,
+    top_p: float,
     system_prompt: str,
     lemma: str,
     entry_number: int | None,
@@ -197,6 +199,8 @@ Source Greek text:
 """
     response = client.chat.completions.create(
         model=model,
+        temperature=temperature,
+        top_p=top_p,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
@@ -309,6 +313,8 @@ def main():
                 translation, tokens_used = call_model(
                     client,
                     model=model_name,
+                    temperature=temperature,
+                    top_p=top_p,
                     system_prompt=prompt_text,
                     lemma=lemma or "",
                     entry_number=entry_number,

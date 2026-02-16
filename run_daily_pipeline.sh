@@ -71,6 +71,10 @@ uv run backfill_source_text_versions.py 2>&1 | tee -a "$LOGFILE" || echo "  Warn
 echo "Step 4d: Seeding translation prompt profiles..." | tee -a "$LOGFILE"
 uv run seed_translation_profiles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: profile seed failed" | tee -a "$LOGFILE"
 
+# Step 4d2: Seed curated translation styles (idempotent)
+echo "Step 4d2: Seeding curated translation styles..." | tee -a "$LOGFILE"
+uv run seed_translation_styles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: style seed failed" | tee -a "$LOGFILE"
+
 # Step 4e: Optionally enqueue translation run requests (set TRANSLATION_ENQUEUE_LIMIT>0)
 TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-0}"
 if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
