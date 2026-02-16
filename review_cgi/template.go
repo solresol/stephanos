@@ -656,6 +656,7 @@ const reviewTemplate = `<!DOCTYPE html>
                     <th style="text-align: left; padding: 8px;">Source</th>
                     <th style="text-align: left; padding: 8px;">Snippet</th>
                     <th style="text-align: left; padding: 8px;">Canonical</th>
+                    <th style="text-align: left; padding: 8px;">Primary</th>
                 </tr>
                 {{range .Lemma.TranslationVariants}}
                 <tr>
@@ -679,11 +680,10 @@ const reviewTemplate = `<!DOCTYPE html>
                     </td>
                     <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "preview"}}</td>
                     <td style="padding: 8px; border-top: 1px solid #eee;">
-                        {{if and (eq (index . "kind") (index $.Lemma.CanonicalVariantRef "kind")) (eq (index . "id") (index $.Lemma.CanonicalVariantRef "id"))}}
-                        current
-                        {{else}}
-                        –
-                        {{end}}
+                        {{if index . "canonical"}}yes{{else}}–{{end}}
+                    </td>
+                    <td style="padding: 8px; border-top: 1px solid #eee;">
+                        {{if index . "primary"}}primary{{else}}–{{end}}
                     </td>
                 </tr>
                 {{end}}
@@ -753,17 +753,18 @@ const reviewTemplate = `<!DOCTYPE html>
                 </div>
 
                 <div class="form-group">
-                    <label>
-                        <input type="checkbox" name="set_canonical" id="set_canonical" value="1">
-                        Set selected variant as canonical public translation
-                    </label>
+                    <label for="canonical_action">Canonical action:</label>
+                    <select name="canonical_action" id="canonical_action" style="width: 100%; padding: 8px;">
+                        <option value="">(none)</option>
+                        <option value="add">Add as canonical</option>
+                        <option value="remove">Remove from canonicals</option>
+                        <option value="set_primary">Set as primary</option>
+                        <option value="clear_primary">Clear primary</option>
+                        <option value="clear_all">Clear all canonicals</option>
+                    </select>
                     <div style="color: #666; font-size: 0.9em; margin-top: 4px;">
-                        Canonical update applies only to eligible approved variants.
+                        Canonical changes are queued in SQLite and apply publicly after nightly import.
                     </div>
-                    <label style="display: block; margin-top: 8px;">
-                        <input type="checkbox" name="clear_canonical" id="clear_canonical" value="1">
-                        Clear canonical public translation (pending nightly import)
-                    </label>
                 </div>
 
                 <div class="form-group">
@@ -848,46 +849,19 @@ const reviewTemplate = `<!DOCTYPE html>
                     statusSelect.value = status;
                 }
             }
-
-            var canonicalCheckbox = document.getElementById('set_canonical');
-            var clearCanonicalCheckbox = document.getElementById('clear_canonical');
-            if (canonicalCheckbox) {
-                if (blockedLegacy) {
-                    canonicalCheckbox.checked = false;
-                    canonicalCheckbox.disabled = true;
-                    if (clearCanonicalCheckbox) {
-                        clearCanonicalCheckbox.checked = false;
-                    }
-                    statusSelect.value = 'blocked';
-                } else {
-                    canonicalCheckbox.disabled = false;
+            if (blockedLegacy && statusSelect) {
+                statusSelect.value = 'blocked';
+                var canonicalAction = document.getElementById('canonical_action');
+                if (canonicalAction) {
+                    canonicalAction.value = '';
                 }
             }
-        }
-
-        function bindCanonicalCheckboxes() {
-            var setCanonical = document.getElementById('set_canonical');
-            var clearCanonical = document.getElementById('clear_canonical');
-            if (!setCanonical || !clearCanonical) {
-                return;
-            }
-            setCanonical.addEventListener('change', function () {
-                if (setCanonical.checked) {
-                    clearCanonical.checked = false;
-                }
-            });
-            clearCanonical.addEventListener('change', function () {
-                if (clearCanonical.checked) {
-                    setCanonical.checked = false;
-                }
-            });
         }
 
         function initializeVariantSelection() {
             var buttons = Array.prototype.slice.call(document.querySelectorAll('.variant-select-btn'));
             if (!buttons.length) {
                 setVariantSelection('legacy_assembled', 'translation', '', document.getElementById('variant_status').value, false);
-                bindCanonicalCheckboxes();
                 return;
             }
 
@@ -913,7 +887,6 @@ const reviewTemplate = `<!DOCTYPE html>
             if (initial) {
                 initial.click();
             }
-            bindCanonicalCheckboxes();
         }
 
         document.addEventListener('DOMContentLoaded', initializeVariantSelection);

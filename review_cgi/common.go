@@ -61,6 +61,7 @@ type Lemma struct {
 	TranslationDifferenceEvidence string              `json:"translation_difference_evidence"`
 	TranslationVariants          []map[string]interface{} `json:"translation_variants"`
 	SourceTextVersions           []map[string]interface{} `json:"source_text_versions"`
+	CanonicalVariants            []map[string]interface{}   `json:"canonical_variants"`
 	CanonicalVariantRef          map[string]interface{}   `json:"canonical_variant_ref"`
 	BlockedReasons               []string                 `json:"blocked_reasons"`
 	MeinekeSourceVariant         string               `json:"meineke_source_variant"`
@@ -166,12 +167,333 @@ func OpenDatabase(dbPath string) (*sql.DB, error) {
 			PRIMARY KEY (lemma_id, variant_kind, variant_id)
 		)`,
 		"ALTER TABLE translation_variant_reviews ADD COLUMN set_canonical INTEGER NOT NULL DEFAULT 0",
+		`CREATE TABLE IF NOT EXISTS canonical_variant_actions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			lemma_id INTEGER NOT NULL,
+			action TEXT NOT NULL CHECK (action IN ('add', 'remove', 'set_primary', 'clear_all', 'clear_primary')),
+			variant_kind TEXT,
+			variant_id TEXT,
+			reviewer_username TEXT,
+			reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			notes TEXT,
+			CHECK (
+				action IN ('clear_all', 'clear_primary')
+				OR (
+					variant_kind IS NOT NULL AND variant_kind <> ''
+					AND variant_id IS NOT NULL AND variant_id <> ''
+				)
+			)
+		)`,
+		"CREATE INDEX IF NOT EXISTS idx_canonical_actions_lemma ON canonical_variant_actions(lemma_id, reviewed_at, id)",
 	}
 	for _, migration := range migrations {
 		db.Exec(migration) // Ignore errors (column may already exist)
 	}
 
 	return db, nil
+}
+
+type CanonicalMembership struct {
+	Kind      string
+	ID        string
+	IsPrimary bool
+}
+
+type CanonicalAction struct {
+	ID          int
+	Action      string
+	VariantKind string
+	VariantID   string
+	Reviewer    string
+	ReviewedAt  string
+	Notes       string
+}
+
+func mapStringValue(m map[string]interface{}, key string) string {
+	if m == nil {
+		return ""
+	}
+	value, exists := m[key]
+	if !exists || value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case json.Number:
+		return strings.TrimSpace(typed.String())
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", typed))
+	}
+}
+
+func canonicalKey(kind string, id string) string {
+	return strings.TrimSpace(kind) + "|" + strings.TrimSpace(id)
+}
+
+func baselineCanonicalMemberships(lemma *Lemma) []CanonicalMembership {
+	if lemma == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var memberships []CanonicalMembership
+
+	for _, item := range lemma.CanonicalVariants {
+		kind := mapStringValue(item, "kind")
+		id := mapStringValue(item, "id")
+		if kind == "" || id == "" {
+			continue
+		}
+		key := canonicalKey(kind, id)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		isPrimary := false
+		if raw, ok := item["is_primary"]; ok {
+			if b, okb := raw.(bool); okb {
+				isPrimary = b
+			}
+		}
+		memberships = append(memberships, CanonicalMembership{Kind: kind, ID: id, IsPrimary: isPrimary})
+	}
+
+	// Backward-compatible fallback: treat the legacy single-pointer ref as a primary membership.
+	if len(memberships) == 0 {
+		kind := mapStringValue(lemma.CanonicalVariantRef, "kind")
+		id := mapStringValue(lemma.CanonicalVariantRef, "id")
+		if kind != "" && id != "" {
+			key := canonicalKey(kind, id)
+			if !seen[key] {
+				memberships = append(memberships, CanonicalMembership{Kind: kind, ID: id, IsPrimary: true})
+			}
+		}
+	}
+
+	return memberships
+}
+
+func FetchCanonicalVariantActions(db *sql.DB, lemmaID int) ([]CanonicalAction, error) {
+	if db == nil || lemmaID <= 0 {
+		return nil, nil
+	}
+	rows, err := db.Query(
+		`
+		SELECT
+			id,
+			COALESCE(action, ''),
+			COALESCE(variant_kind, ''),
+			COALESCE(variant_id, ''),
+			COALESCE(reviewer_username, ''),
+			COALESCE(reviewed_at, ''),
+			COALESCE(notes, '')
+		FROM canonical_variant_actions
+		WHERE lemma_id = ?
+		ORDER BY reviewed_at ASC, id ASC
+		`,
+		lemmaID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var actions []CanonicalAction
+	for rows.Next() {
+		var a CanonicalAction
+		if err := rows.Scan(
+			&a.ID,
+			&a.Action,
+			&a.VariantKind,
+			&a.VariantID,
+			&a.Reviewer,
+			&a.ReviewedAt,
+			&a.Notes,
+		); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(a.Action) == "" {
+			continue
+		}
+		actions = append(actions, a)
+	}
+	return actions, rows.Err()
+}
+
+func InsertCanonicalVariantAction(
+	db *sql.DB,
+	lemmaID int,
+	action string,
+	variantKind string,
+	variantID string,
+	notes string,
+	username string,
+) error {
+	if db == nil || lemmaID <= 0 {
+		return nil
+	}
+	action = strings.TrimSpace(strings.ToLower(action))
+	variantKind = strings.TrimSpace(variantKind)
+	variantID = strings.TrimSpace(variantID)
+
+	if action == "" {
+		return nil
+	}
+	valid := map[string]bool{
+		"add":          true,
+		"remove":       true,
+		"set_primary":  true,
+		"clear_all":    true,
+		"clear_primary": true,
+	}
+	if !valid[action] {
+		return nil
+	}
+	if action == "clear_all" || action == "clear_primary" {
+		variantKind = ""
+		variantID = ""
+	} else if variantKind == "" || variantID == "" {
+		return nil
+	}
+
+		_, err := db.Exec(
+			`
+			INSERT INTO canonical_variant_actions (
+				lemma_id, action, variant_kind, variant_id, reviewer_username, notes
+			) VALUES (?, ?, ?, ?, ?, ?)
+			`,
+			lemmaID,
+			action,
+			variantKind,
+			variantID,
+			username,
+			notes,
+		)
+	if err != nil {
+		return fmt.Errorf("failed to insert canonical action: %w", err)
+	}
+	return nil
+}
+
+func ApplyCanonicalActions(baseline []CanonicalMembership, actions []CanonicalAction) []CanonicalMembership {
+	state := map[string]CanonicalMembership{}
+
+	for _, m := range baseline {
+		kind := strings.TrimSpace(m.Kind)
+		id := strings.TrimSpace(m.ID)
+		if kind == "" || id == "" {
+			continue
+		}
+		key := canonicalKey(kind, id)
+		state[key] = CanonicalMembership{Kind: kind, ID: id, IsPrimary: m.IsPrimary}
+	}
+
+	clearPrimary := func() {
+		for k, m := range state {
+			if m.IsPrimary {
+				m.IsPrimary = false
+				state[k] = m
+			}
+		}
+	}
+
+	for _, a := range actions {
+		action := strings.TrimSpace(strings.ToLower(a.Action))
+		kind := strings.TrimSpace(a.VariantKind)
+		id := strings.TrimSpace(a.VariantID)
+		key := canonicalKey(kind, id)
+
+		switch action {
+		case "add":
+			if kind == "" || id == "" {
+				continue
+			}
+			if _, ok := state[key]; !ok {
+				state[key] = CanonicalMembership{Kind: kind, ID: id, IsPrimary: false}
+			}
+		case "remove":
+			if kind == "" || id == "" {
+				continue
+			}
+			delete(state, key)
+		case "set_primary":
+			if kind == "" || id == "" {
+				continue
+			}
+			clearPrimary()
+			state[key] = CanonicalMembership{Kind: kind, ID: id, IsPrimary: true}
+		case "clear_primary":
+			clearPrimary()
+		case "clear_all":
+			state = map[string]CanonicalMembership{}
+		}
+	}
+
+	var memberships []CanonicalMembership
+	for _, m := range state {
+		memberships = append(memberships, m)
+	}
+
+	kindPriority := map[string]int{
+		"human_translation": 0,
+		"translation_run":   1,
+		"legacy_assembled":  2,
+	}
+	sort.Slice(memberships, func(i, j int) bool {
+		a := memberships[i]
+		b := memberships[j]
+		if a.IsPrimary != b.IsPrimary {
+			return a.IsPrimary
+		}
+		pa := kindPriority[a.Kind]
+		pb := kindPriority[b.Kind]
+		if pa != pb {
+			return pa < pb
+		}
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		return a.ID < b.ID
+	})
+
+	return memberships
+}
+
+func ChooseEffectiveCanonicalRef(memberships []CanonicalMembership) (string, string) {
+	for _, m := range memberships {
+		if m.IsPrimary && strings.TrimSpace(m.Kind) != "" && strings.TrimSpace(m.ID) != "" {
+			return m.Kind, m.ID
+		}
+	}
+	if len(memberships) == 1 {
+		m := memberships[0]
+		if strings.TrimSpace(m.Kind) != "" && strings.TrimSpace(m.ID) != "" {
+			return m.Kind, m.ID
+		}
+	}
+	return "", ""
+}
+
+func AnnotateTranslationVariants(lemma *Lemma, memberships []CanonicalMembership) {
+	if lemma == nil {
+		return
+	}
+	memberState := map[string]CanonicalMembership{}
+	for _, m := range memberships {
+		memberState[canonicalKey(m.Kind, m.ID)] = m
+	}
+	for _, v := range lemma.TranslationVariants {
+		kind := mapStringValue(v, "kind")
+		id := mapStringValue(v, "id")
+		key := canonicalKey(kind, id)
+		if m, ok := memberState[key]; ok {
+			v["canonical"] = true
+			v["primary"] = bool(m.IsPrimary)
+		} else {
+			v["canonical"] = false
+			v["primary"] = false
+		}
+	}
 }
 
 // GetReview retrieves review data for a lemma

@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 from db import get_connection
+import canonical_variants
 
 
 def table_exists(cur, table_name: str) -> bool:
@@ -84,310 +85,26 @@ def fetch_current_pointer(cur, lemma_id: int) -> dict | None:
         return None
     return {"kind": row[0], "id": str(row[1])}
 
-
-def legacy_block_status(cur, lemma_id: int) -> tuple[bool, str]:
-    if not table_exists(cur, "translation_risk_flags"):
-        return False, ""
-    cur.execute(
-        """
-        SELECT COALESCE(is_blocked, FALSE),
-               COALESCE(details_json->>'summary', '')
-        FROM translation_risk_flags
-        WHERE lemma_id = %s
-          AND variant_kind = 'legacy_assembled'
-          AND variant_id = 'translation'
-          AND risk_code = 'billerbeck_likely_translation_change'
-        ORDER BY updated_at DESC
-        LIMIT 1
-        """,
-        (lemma_id,),
-    )
-    row = cur.fetchone()
-    if not row:
-        return False, ""
-    return bool(row[0]), (row[1] or "").strip()
-
-
 def resolve_variant(cur, lemma_id: int, variant_kind: str, variant_id: str) -> dict:
-    variant_kind = (variant_kind or "").strip()
-    variant_id = str(variant_id or "").strip()
-
-    if variant_kind == "translation_run":
-        if not table_exists(cur, "translation_runs"):
-            return {
-                "exists": False,
-                "publishable": False,
-                "block_reason": "translation_runs table missing",
-            }
-        cur.execute(
-            """
-            SELECT id,
-                   COALESCE(translation_text, ''),
-                   COALESCE(status, ''),
-                   COALESCE(public_eligible, TRUE),
-                   COALESCE(public_block_reason, ''),
-                   source_text_version_id
-            FROM translation_runs
-            WHERE id = %s
-              AND lemma_id = %s
-            LIMIT 1
-            """,
-            (variant_id, lemma_id),
-        )
-        row = cur.fetchone()
-        if not row:
-            return {
-                "exists": False,
-                "publishable": False,
-                "block_reason": "translation run not found for lemma",
-            }
-        translation_text, status, public_eligible, public_block_reason = row[1], row[2], bool(row[3]), (row[4] or "").strip()
-        publishable = (
-            status == "approved"
-            and public_eligible
-            and not public_block_reason
-            and bool((translation_text or "").strip())
-        )
-        block_reason = ""
-        if not publishable:
-            if status != "approved":
-                block_reason = f"translation_run status is {status or 'unknown'}"
-            elif not public_eligible:
-                block_reason = "translation_run is not public_eligible"
-            elif public_block_reason:
-                block_reason = public_block_reason
-            else:
-                block_reason = "translation_run has empty translation_text"
-        return {
-            "exists": True,
-            "publishable": publishable,
-            "block_reason": block_reason,
-            "translation_text": (translation_text or "").strip(),
-            "status": status,
-            "source_document": "billerbeck",
-            "source_text_version_id": str(row[5] or ""),
-            "kind": variant_kind,
-            "id": variant_id,
-        }
-
-    if variant_kind == "human_translation":
-        if not table_exists(cur, "human_translations"):
-            return {
-                "exists": False,
-                "publishable": False,
-                "block_reason": "human_translations table missing",
-            }
-        cur.execute(
-            """
-            SELECT id,
-                   COALESCE(translation_text, ''),
-                   COALESCE(status, ''),
-                   source_text_version_id
-            FROM human_translations
-            WHERE id = %s
-              AND lemma_id = %s
-            LIMIT 1
-            """,
-            (variant_id, lemma_id),
-        )
-        row = cur.fetchone()
-        if not row:
-            return {
-                "exists": False,
-                "publishable": False,
-                "block_reason": "human translation not found for lemma",
-            }
-        translation_text, status = row[1], row[2]
-        publishable = status == "approved" and bool((translation_text or "").strip())
-        block_reason = ""
-        if not publishable:
-            if status != "approved":
-                block_reason = f"human_translation status is {status or 'unknown'}"
-            else:
-                block_reason = "human_translation has empty translation_text"
-        return {
-            "exists": True,
-            "publishable": publishable,
-            "block_reason": block_reason,
-            "translation_text": (translation_text or "").strip(),
-            "status": status,
-            "source_document": "billerbeck",
-            "source_text_version_id": str(row[3] or ""),
-            "kind": variant_kind,
-            "id": variant_id,
-        }
-
-    if variant_kind == "legacy_assembled":
-        if variant_id not in ("translation", str(lemma_id), ""):
-            return {
-                "exists": False,
-                "publishable": False,
-                "block_reason": "legacy_assembled variant_id must be 'translation' (or lemma id)",
-            }
-        cur.execute(
-            """
-            SELECT COALESCE(translation, ''),
-                   COALESCE(corrected_english_translation, ''),
-                   COALESCE(reviewed_english_translation, '')
-            FROM assembled_lemmas
-            WHERE id = %s
-            LIMIT 1
-            """,
-            (lemma_id,),
-        )
-        row = cur.fetchone()
-        if not row:
-            return {
-                "exists": False,
-                "publishable": False,
-                "block_reason": "assembled lemma not found",
-            }
-        translation_text = (row[2] or row[1] or row[0] or "").strip()
-        is_blocked, block_reason = legacy_block_status(cur, lemma_id)
-        publishable = bool(translation_text) and not is_blocked
-        if not block_reason and is_blocked:
-            block_reason = "Legacy translation blocked by risk gating"
-        if not block_reason and not translation_text:
-            block_reason = "Legacy translation is empty"
-        return {
-            "exists": True,
-            "publishable": publishable,
-            "block_reason": block_reason,
-            "translation_text": translation_text,
-            "status": "approved" if publishable else "blocked",
-            "source_document": "billerbeck",
-            "source_text_version_id": "",
-            "kind": "legacy_assembled",
-            "id": "translation",
-        }
-
-    return {
-        "exists": False,
-        "publishable": False,
-        "block_reason": f"unsupported variant_kind: {variant_kind}",
-    }
+    return canonical_variants.resolve_variant(
+        cur, lemma_id=lemma_id, variant_kind=variant_kind, variant_id=variant_id
+    )
 
 
 def resolve_fallback_variant(cur, lemma_id: int) -> dict | None:
-    best: dict | None = None
-
-    if table_exists(cur, "human_translations"):
-        cur.execute(
-            """
-            SELECT id::text,
-                   COALESCE(translation_text, ''),
-                   updated_at,
-                   source_text_version_id
-            FROM human_translations
-            WHERE lemma_id = %s
-              AND status = 'approved'
-              AND COALESCE(translation_text, '') != ''
-            ORDER BY updated_at DESC, id DESC
-            LIMIT 1
-            """,
-            (lemma_id,),
-        )
-        row = cur.fetchone()
-        if row:
-            best = {
-                "kind": "human_translation",
-                "id": row[0],
-                "translation_text": (row[1] or "").strip(),
-                "status": "approved",
-                "source_document": "billerbeck",
-                "source_text_version_id": str(row[3] or ""),
-                "sort_ts": row[2],
-            }
-
-    if table_exists(cur, "translation_runs"):
-        cur.execute(
-            """
-            SELECT id::text,
-                   COALESCE(translation_text, ''),
-                   COALESCE(reviewed_at, completed_at, created_at) AS sort_ts,
-                   source_text_version_id
-            FROM translation_runs
-            WHERE lemma_id = %s
-              AND status = 'approved'
-              AND public_eligible = TRUE
-              AND COALESCE(public_block_reason, '') = ''
-              AND COALESCE(translation_text, '') != ''
-            ORDER BY COALESCE(reviewed_at, completed_at, created_at) DESC, id DESC
-            LIMIT 1
-            """,
-            (lemma_id,),
-        )
-        row = cur.fetchone()
-        if row:
-            run_choice = {
-                "kind": "translation_run",
-                "id": row[0],
-                "translation_text": (row[1] or "").strip(),
-                "status": "approved",
-                "source_document": "billerbeck",
-                "source_text_version_id": str(row[3] or ""),
-                "sort_ts": row[2],
-            }
-            if best is None:
-                best = run_choice
-            else:
-                best_ts = best.get("sort_ts")
-                run_ts = run_choice.get("sort_ts")
-                if run_ts is not None and (best_ts is None or run_ts > best_ts):
-                    best = run_choice
-
-    legacy_choice = resolve_variant(cur, lemma_id, "legacy_assembled", "translation")
-    if legacy_choice.get("publishable"):
-        if best is None:
-            best = {
-                "kind": legacy_choice["kind"],
-                "id": legacy_choice["id"],
-                "translation_text": legacy_choice["translation_text"],
-                "status": legacy_choice.get("status", ""),
-                "source_document": legacy_choice.get("source_document", ""),
-                "source_text_version_id": legacy_choice.get("source_text_version_id", ""),
-                "sort_ts": None,
-            }
-
-    if not best:
-        return None
-    best.pop("sort_ts", None)
-    return best
+    return canonical_variants.resolve_fallback_variant(cur, lemma_id=lemma_id)
 
 
 def resolve_canonical(cur, lemma_id: int, lemma_text: str) -> dict:
     pointer = fetch_current_pointer(cur, lemma_id)
 
-    selected = None
-    blocked = False
-    block_reason = ""
     notes: list[str] = []
 
+    selected = canonical_variants.select_pointer_variant(cur, lemma_id=lemma_id)
     if pointer:
         pointer_variant = resolve_variant(cur, lemma_id, pointer["kind"], pointer["id"])
-        if pointer_variant.get("publishable"):
-            selected = {
-                "kind": pointer_variant["kind"],
-                "id": pointer_variant["id"],
-                "translation_text": pointer_variant["translation_text"],
-                "status": pointer_variant.get("status", ""),
-                "source_document": pointer_variant.get("source_document", ""),
-                "source_text_version_id": pointer_variant.get("source_text_version_id", ""),
-            }
-        else:
-            blocked = True
-            block_reason = pointer_variant.get("block_reason", "") or "Canonical pointer is not publishable"
+        if not pointer_variant.get("publishable") and selected is not None:
             notes.append("Canonical pointer is not publishable; using fallback selection")
-
-    if selected is None:
-        fallback = resolve_fallback_variant(cur, lemma_id)
-        if fallback:
-            selected = fallback
-            blocked = False
-            block_reason = ""
-        elif not blocked:
-            blocked = True
-            block_reason = "No publishable translation variant found"
 
     return {
         "lemma_id": lemma_id,
@@ -401,8 +118,8 @@ def resolve_canonical(cur, lemma_id: int, lemma_text: str) -> dict:
             "source_text_version_id": selected.get("source_text_version_id", "") if selected else "",
         },
         "translation_text": selected.get("translation_text", "") if selected else "",
-        "translation_blocked": bool(blocked or not selected),
-        "translation_block_reason": block_reason,
+        "translation_blocked": bool(not selected),
+        "translation_block_reason": "No publishable translation variant found" if not selected else "",
         "notes": notes,
     }
 
@@ -552,13 +269,56 @@ def command_set(cur, args) -> dict:
     if not candidate.get("publishable"):
         raise RuntimeError(candidate.get("block_reason", "Variant is not publishable"))
 
-    upsert_pointer(cur, lemma_id, variant_kind, variant_id, args.updated_by)
+    has_canonical_set = table_exists(cur, "lemma_canonical_variants")
+    if has_canonical_set:
+        # Ensure membership is active, set primary, clear other primaries.
+        cur.execute(
+            """
+            INSERT INTO lemma_canonical_variants (
+                lemma_id, variant_kind, variant_id, is_active, is_primary, updated_by, updated_at
+            )
+            VALUES (%s, %s, %s, TRUE, TRUE, %s, NOW())
+            ON CONFLICT (lemma_id, variant_kind, variant_id) DO UPDATE SET
+                is_active = TRUE,
+                is_primary = TRUE,
+                updated_by = EXCLUDED.updated_by,
+                updated_at = EXCLUDED.updated_at
+            """,
+            (lemma_id, variant_kind, str(variant_id), args.updated_by),
+        )
+        cur.execute(
+            """
+            UPDATE lemma_canonical_variants
+            SET is_primary = FALSE,
+                updated_by = %s,
+                updated_at = NOW()
+            WHERE lemma_id = %s
+              AND is_primary = TRUE
+              AND NOT (variant_kind = %s AND variant_id = %s)
+            """,
+            (args.updated_by, lemma_id, variant_kind, str(variant_id)),
+        )
+
+        pointer_choice = canonical_variants.select_pointer_variant(cur, lemma_id=lemma_id)
+        if pointer_choice:
+            upsert_pointer(cur, lemma_id, pointer_choice["kind"], pointer_choice["id"], args.updated_by)
+        else:
+            cur.execute(
+                """
+                DELETE FROM lemma_publication_targets
+                WHERE lemma_id = %s
+                  AND surface = 'public_translation'
+                """,
+                (lemma_id,),
+            )
+    else:
+        upsert_pointer(cur, lemma_id, variant_kind, variant_id, args.updated_by)
 
     selected_variant = {
-        "kind": candidate["kind"],
-        "id": candidate["id"],
-        "translation_text": candidate["translation_text"],
-        "status": candidate.get("status", ""),
+        "kind": (pointer_choice["kind"] if has_canonical_set and pointer_choice else candidate["kind"]),
+        "id": (pointer_choice["id"] if has_canonical_set and pointer_choice else candidate["id"]),
+        "translation_text": (pointer_choice["translation_text"] if has_canonical_set and pointer_choice else candidate["translation_text"]),
+        "status": (pointer_choice["status"] if has_canonical_set and pointer_choice else candidate.get("status", "")),
     }
     refresh_legacy_cache(cur, lemma_id, selected_variant)
 

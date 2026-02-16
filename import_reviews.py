@@ -12,9 +12,11 @@ from datetime import datetime
 from pathlib import Path
 
 from db import get_connection
+import canonical_variants
 
 SQLITE_DB = Path.home() / "stephanos" / "review_data" / "reviews.db"
 LOG_FILE = Path.home() / "stephanos" / "logs" / "review_import.log"
+CANONICAL_ACTION_SOURCE = "merah_reviews"
 
 
 def log(message):
@@ -39,6 +41,292 @@ def sqlite_column_exists(cur, table_name: str, column_name: str) -> bool:
     cur.execute(f"PRAGMA table_info({table_name})")
     return any((row["name"] or "").strip().lower() == column_name.lower() for row in cur.fetchall())
 
+
+def ensure_canonical_import_state_table(pg_cur):
+    pg_cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS canonical_action_import_state (
+            source TEXT PRIMARY KEY,
+            last_action_id BIGINT NOT NULL DEFAULT 0,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+
+
+def get_last_imported_canonical_action_id(pg_cur) -> int:
+    ensure_canonical_import_state_table(pg_cur)
+    pg_cur.execute(
+        """
+        INSERT INTO canonical_action_import_state (source, last_action_id, updated_at)
+        VALUES (%s, 0, NOW())
+        ON CONFLICT (source) DO NOTHING
+        """,
+        (CANONICAL_ACTION_SOURCE,),
+    )
+    pg_cur.execute(
+        """
+        SELECT COALESCE(last_action_id, 0)
+        FROM canonical_action_import_state
+        WHERE source = %s
+        LIMIT 1
+        """,
+        (CANONICAL_ACTION_SOURCE,),
+    )
+    row = pg_cur.fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def set_last_imported_canonical_action_id(pg_cur, last_action_id: int):
+    ensure_canonical_import_state_table(pg_cur)
+    pg_cur.execute(
+        """
+        INSERT INTO canonical_action_import_state (source, last_action_id, updated_at)
+        VALUES (%s, %s, NOW())
+        ON CONFLICT (source) DO UPDATE SET
+            last_action_id = EXCLUDED.last_action_id,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (CANONICAL_ACTION_SOURCE, int(last_action_id or 0)),
+    )
+
+
+def canonical_actions_preflight(sqlite_cur, pg_cur) -> None:
+    """
+    Abort early if the SQLite canonical action log appears to have been reset/rewound.
+
+    Condition: MAX(sqlite_action_id) < last_imported_action_id
+    """
+    if not sqlite_table_exists(sqlite_cur, "canonical_variant_actions"):
+        return
+    sqlite_cur.execute("SELECT COALESCE(MAX(id), 0) AS max_id FROM canonical_variant_actions")
+    sqlite_max_id = int(sqlite_cur.fetchone()["max_id"] or 0)
+
+    pg_last_id = get_last_imported_canonical_action_id(pg_cur)
+    if sqlite_max_id < pg_last_id:
+        raise RuntimeError(
+            "SQLite canonical action log appears to be reset/rewound: "
+            f"max_id={sqlite_max_id} < last_imported_id={pg_last_id}"
+        )
+
+
+def import_canonical_actions(sqlite_cur, pg_cur) -> tuple[int, int, int, int]:
+    """
+    Import new canonical actions (append-only) from SQLite into Postgres.
+
+    Returns (applied_count, skipped_count, rejected_count, touched_lemmas_count).
+    """
+    if not sqlite_table_exists(sqlite_cur, "canonical_variant_actions"):
+        return 0, 0, 0, 0
+
+    pg_cur.execute("SELECT to_regclass('public.lemma_canonical_variants') IS NOT NULL")
+    has_canonical_set = bool(pg_cur.fetchone()[0])
+    if not has_canonical_set:
+        log("WARNING: canonical_variant_actions present in SQLite, but lemma_canonical_variants missing in Postgres; skipping canonical import.")
+        return 0, 0, 0, 0
+
+    pg_last_id = get_last_imported_canonical_action_id(pg_cur)
+
+    sqlite_cur.execute(
+        """
+        SELECT
+            id,
+            lemma_id,
+            COALESCE(action, '') AS action,
+            COALESCE(variant_kind, '') AS variant_kind,
+            COALESCE(variant_id, '') AS variant_id,
+            COALESCE(reviewer_username, '') AS reviewer_username,
+            reviewed_at,
+            COALESCE(notes, '') AS notes
+        FROM canonical_variant_actions
+        WHERE id > ?
+        ORDER BY reviewed_at ASC, id ASC
+        """,
+        (pg_last_id,),
+    )
+    rows = sqlite_cur.fetchall()
+    if not rows:
+        return 0, 0, 0, 0
+
+    applied = skipped = rejected = 0
+    touched_lemmas: set[int] = set()
+    last_actor_by_lemma: dict[int, str] = {}
+    last_ts_by_lemma: dict[int, object] = {}
+    max_seen_id = pg_last_id
+
+    for row in rows:
+        action_id = int(row["id"] or 0)
+        max_seen_id = max(max_seen_id, action_id)
+
+        lemma_id = int(row["lemma_id"] or 0)
+        action = (row["action"] or "").strip().lower()
+        kind = (row["variant_kind"] or "").strip()
+        vid = str(row["variant_id"] or "").strip()
+        reviewer = (row["reviewer_username"] or "").strip() or "import_reviews.py"
+        reviewed_at = row["reviewed_at"] or None
+
+        if lemma_id <= 0 or not action:
+            skipped += 1
+            continue
+
+        touched_lemmas.add(lemma_id)
+
+        def mark_applied():
+            last_actor_by_lemma[lemma_id] = reviewer
+            last_ts_by_lemma[lemma_id] = reviewed_at
+
+        if action in {"add", "set_primary"}:
+            candidate = canonical_variants.resolve_variant(pg_cur, lemma_id=lemma_id, variant_kind=kind, variant_id=vid)
+            if not candidate.get("publishable"):
+                rejected += 1
+                reason = candidate.get("block_reason", "Variant is not publishable")
+                log(
+                    f"  REJECT canonical action id={action_id} lemma={lemma_id} action={action} kind={kind} id={vid}: {reason}"
+                )
+                continue
+
+        if action == "add":
+            pg_cur.execute(
+                """
+                INSERT INTO lemma_canonical_variants (
+                    lemma_id, variant_kind, variant_id, is_active, is_primary, updated_by, updated_at
+                )
+                VALUES (%s, %s, %s, TRUE, FALSE, %s, COALESCE(%s, NOW()))
+                ON CONFLICT (lemma_id, variant_kind, variant_id) DO UPDATE SET
+                    is_active = TRUE,
+                    is_primary = lemma_canonical_variants.is_primary,
+                    updated_by = EXCLUDED.updated_by,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (lemma_id, kind, vid, reviewer, reviewed_at),
+            )
+            applied += 1
+            mark_applied()
+            continue
+
+        if action == "remove":
+            pg_cur.execute(
+                """
+                INSERT INTO lemma_canonical_variants (
+                    lemma_id, variant_kind, variant_id, is_active, is_primary, updated_by, updated_at
+                )
+                VALUES (%s, %s, %s, FALSE, FALSE, %s, COALESCE(%s, NOW()))
+                ON CONFLICT (lemma_id, variant_kind, variant_id) DO UPDATE SET
+                    is_active = FALSE,
+                    is_primary = FALSE,
+                    updated_by = EXCLUDED.updated_by,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (lemma_id, kind, vid, reviewer, reviewed_at),
+            )
+            applied += 1
+            mark_applied()
+            continue
+
+        if action == "set_primary":
+            pg_cur.execute(
+                """
+                INSERT INTO lemma_canonical_variants (
+                    lemma_id, variant_kind, variant_id, is_active, is_primary, updated_by, updated_at
+                )
+                VALUES (%s, %s, %s, TRUE, TRUE, %s, COALESCE(%s, NOW()))
+                ON CONFLICT (lemma_id, variant_kind, variant_id) DO UPDATE SET
+                    is_active = TRUE,
+                    is_primary = TRUE,
+                    updated_by = EXCLUDED.updated_by,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (lemma_id, kind, vid, reviewer, reviewed_at),
+            )
+            pg_cur.execute(
+                """
+                UPDATE lemma_canonical_variants
+                SET is_primary = FALSE,
+                    updated_by = %s,
+                    updated_at = COALESCE(%s, NOW())
+                WHERE lemma_id = %s
+                  AND is_primary = TRUE
+                  AND NOT (variant_kind = %s AND variant_id = %s)
+                """,
+                (reviewer, reviewed_at, lemma_id, kind, vid),
+            )
+            applied += 1
+            mark_applied()
+            continue
+
+        if action == "clear_primary":
+            pg_cur.execute(
+                """
+                UPDATE lemma_canonical_variants
+                SET is_primary = FALSE,
+                    updated_by = %s,
+                    updated_at = COALESCE(%s, NOW())
+                WHERE lemma_id = %s
+                  AND is_primary = TRUE
+                """,
+                (reviewer, reviewed_at, lemma_id),
+            )
+            applied += 1
+            mark_applied()
+            continue
+
+        if action == "clear_all":
+            pg_cur.execute(
+                """
+                UPDATE lemma_canonical_variants
+                SET is_active = FALSE,
+                    is_primary = FALSE,
+                    updated_by = %s,
+                    updated_at = COALESCE(%s, NOW())
+                WHERE lemma_id = %s
+                  AND (is_active = TRUE OR is_primary = TRUE)
+                """,
+                (reviewer, reviewed_at, lemma_id),
+            )
+            applied += 1
+            mark_applied()
+            continue
+
+        skipped += 1
+
+    # Update legacy single-pointer projection for touched lemmas.
+    pg_cur.execute("SELECT to_regclass('public.lemma_publication_targets') IS NOT NULL")
+    has_publication_targets = bool(pg_cur.fetchone()[0])
+    if has_publication_targets and touched_lemmas:
+        for lemma_id in sorted(touched_lemmas):
+            pointer_choice = canonical_variants.select_pointer_variant(pg_cur, lemma_id=lemma_id)
+            actor = last_actor_by_lemma.get(lemma_id) or "import_reviews.py"
+            ts = last_ts_by_lemma.get(lemma_id)
+
+            if pointer_choice:
+                pg_cur.execute(
+                    """
+                    INSERT INTO lemma_publication_targets (
+                        lemma_id, surface, variant_kind, variant_id, updated_by, updated_at
+                    )
+                    VALUES (%s, 'public_translation', %s, %s, %s, COALESCE(%s, NOW()))
+                    ON CONFLICT (lemma_id, surface) DO UPDATE SET
+                        variant_kind = EXCLUDED.variant_kind,
+                        variant_id = EXCLUDED.variant_id,
+                        updated_by = EXCLUDED.updated_by,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (lemma_id, pointer_choice["kind"], str(pointer_choice["id"]), actor, ts),
+                )
+            else:
+                pg_cur.execute(
+                    """
+                    DELETE FROM lemma_publication_targets
+                    WHERE lemma_id = %s
+                      AND surface = 'public_translation'
+                    """,
+                    (lemma_id,),
+                )
+
+    # Advance cursor after applying all fetched rows (including rejected ones).
+    set_last_imported_canonical_action_id(pg_cur, max_seen_id)
+
+    return applied, skipped, rejected, len(touched_lemmas)
 
 def sync_human_translation_from_review(
     pg_cur,
@@ -151,6 +439,8 @@ def import_variant_reviews(sqlite_cur, pg_cur):
     if not sqlite_table_exists(sqlite_cur, "translation_variant_reviews"):
         return 0, 0, 0, 0, 0
 
+    use_canonical_actions = sqlite_table_exists(sqlite_cur, "canonical_variant_actions")
+
     has_set_canonical = sqlite_column_exists(sqlite_cur, "translation_variant_reviews", "set_canonical")
     if has_set_canonical:
         sqlite_cur.execute(
@@ -210,11 +500,13 @@ def import_variant_reviews(sqlite_cur, pg_cur):
         variant_id = (row["variant_id"] or "").strip()
         variant_status = (row["variant_status"] or "draft").strip()
         set_canonical = bool(row["set_canonical"] or 0)
+        if use_canonical_actions:
+            set_canonical = False
         notes = row["notes"] or None
         reviewer = row["reviewer_username"] or None
         reviewed_at = row["reviewed_at"] or None
 
-        if variant_kind == "canonical_request" and variant_id == "clear":
+        if not use_canonical_actions and variant_kind == "canonical_request" and variant_id == "clear":
             if set_canonical and has_publication_targets:
                 pg_cur.execute(
                     """
@@ -375,6 +667,14 @@ def import_reviews():
     pg_conn = get_connection()
     pg_cur = pg_conn.cursor()
 
+    try:
+        canonical_actions_preflight(sqlite_cur, pg_cur)
+    except Exception as e:
+        log(f"ERROR: canonical action preflight failed: {e}")
+        sqlite_conn.close()
+        pg_conn.close()
+        return 1
+
     pg_cur.execute("SELECT to_regclass('public.human_translations') IS NOT NULL")
     has_human_translations = bool(pg_cur.fetchone()[0])
 
@@ -391,12 +691,6 @@ def import_reviews():
 
     reviews = sqlite_cur.fetchall()
     log(f"Found {len(reviews)} reviewed entries in SQLite")
-
-    if len(reviews) == 0:
-        log("No reviews to import")
-        sqlite_conn.close()
-        pg_conn.close()
-        return 0
 
     # Statistics
     updated_count = 0
@@ -514,6 +808,21 @@ def import_reviews():
     except Exception as e:
         log(f"WARNING: Variant review import skipped due to error: {e}")
 
+    canonical_applied = canonical_skipped = canonical_rejected = canonical_touched = 0
+    try:
+        canonical_applied, canonical_skipped, canonical_rejected, canonical_touched = import_canonical_actions(sqlite_cur, pg_cur)
+        if canonical_applied or canonical_rejected:
+            log(
+                "Canonical action import: "
+                f"applied={canonical_applied}, skipped={canonical_skipped}, rejected={canonical_rejected}, touched_lemmas={canonical_touched}"
+            )
+    except Exception as e:
+        log(f"ERROR: Canonical action import failed: {e}")
+        pg_conn.rollback()
+        sqlite_conn.close()
+        pg_conn.close()
+        return 1
+
     pg_conn.commit()
 
     # Close connections
@@ -534,6 +843,10 @@ def import_reviews():
     if has_human_translations:
         log(f"  Human translation variants synced: {human_synced_count}")
         log(f"  Human translation sync errors: {human_sync_errors}")
+    if canonical_applied or canonical_rejected:
+        log(f"  Canonical actions applied: {canonical_applied}")
+        log(f"  Canonical actions rejected: {canonical_rejected}")
+        log(f"  Canonical lemmas touched: {canonical_touched}")
 
     if error_count > 0 or variant_errors > 0 or human_sync_errors > 0:
         return 1

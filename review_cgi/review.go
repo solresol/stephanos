@@ -404,6 +404,27 @@ func main() {
 		return
 	}
 
+	// Compute effective canonical memberships by applying local SQLite actions on top of
+	// the baseline snapshot from review_data.json.
+	actions, err := FetchCanonicalVariantActions(db, currentLemma.ID)
+	if err != nil {
+		showError(fmt.Sprintf("Failed to read canonical actions: %v", err))
+		return
+	}
+	baselineCanon := baselineCanonicalMemberships(currentLemma)
+	effectiveCanon := ApplyCanonicalActions(baselineCanon, actions)
+	AnnotateTranslationVariants(currentLemma, effectiveCanon)
+	effectiveKind, effectiveID := ChooseEffectiveCanonicalRef(effectiveCanon)
+	if effectiveKind != "" && effectiveID != "" {
+		currentLemma.CanonicalVariantRef = map[string]interface{}{
+			"kind": effectiveKind,
+			"id":   effectiveID,
+		}
+	} else {
+		// No effective primary (or canonical set cleared) -> don't auto-select a canonical variant.
+		currentLemma.CanonicalVariantRef = map[string]interface{}{}
+	}
+
 	// Get review stats
 	total, reviewed, _, _, err := GetReviewStats(db)
 	if err != nil {

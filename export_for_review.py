@@ -455,7 +455,36 @@ def export_lemmas():
                 }
             )
 
-    canonical_variant_by_lemma = {}
+    canonical_variants_by_lemma = {}
+    cur.execute("SELECT to_regclass('public.lemma_canonical_variants') IS NOT NULL")
+    has_canonical_variants = bool(cur.fetchone()[0])
+    if has_canonical_variants:
+        cur.execute(
+            """
+            SELECT
+                lemma_id,
+                variant_kind,
+                variant_id,
+                COALESCE(is_primary, FALSE) AS is_primary,
+                updated_at,
+                COALESCE(updated_by, '') AS updated_by
+            FROM lemma_canonical_variants
+            WHERE is_active = TRUE
+            ORDER BY lemma_id, COALESCE(is_primary, FALSE) DESC, updated_at DESC, variant_kind, variant_id
+            """
+        )
+        for lemma_id, variant_kind, variant_id, is_primary, updated_at, updated_by in cur.fetchall():
+            canonical_variants_by_lemma.setdefault(lemma_id, []).append(
+                {
+                    "kind": variant_kind or "",
+                    "id": str(variant_id),
+                    "is_primary": bool(is_primary),
+                    "updated_at": str(updated_at) if updated_at else "",
+                    "updated_by": updated_by or "",
+                }
+            )
+
+    canonical_pointer_by_lemma = {}
     cur.execute("SELECT to_regclass('public.lemma_publication_targets') IS NOT NULL")
     has_publication_targets = bool(cur.fetchone()[0])
     if has_publication_targets:
@@ -467,7 +496,7 @@ def export_lemmas():
             """
         )
         for lemma_id, variant_kind, variant_id in cur.fetchall():
-            canonical_variant_by_lemma[lemma_id] = {
+            canonical_pointer_by_lemma[lemma_id] = {
                 "kind": variant_kind,
                 "id": str(variant_id),
             }
@@ -544,7 +573,8 @@ def export_lemmas():
             "translation_difference_evidence": risk_by_lemma.get(lemma_id, {}).get("translation_difference_evidence", "{}"),
             "translation_variants": variants,
             "source_text_versions": source_versions_by_lemma.get(lemma_id, []),
-            "canonical_variant_ref": canonical_variant_by_lemma.get(lemma_id, {"kind": "legacy_assembled", "id": "translation"}),
+            "canonical_variants": canonical_variants_by_lemma.get(lemma_id, []),
+            "canonical_variant_ref": {"kind": "legacy_assembled", "id": "translation"},
             "blocked_reasons": [risk_by_lemma.get(lemma_id, {}).get("translation_block_reason", "")]
             if risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False)
             else [],
@@ -554,6 +584,14 @@ def export_lemmas():
             "meineke_main_text_lines": meineke_lines_by_version.get(current_meineke_version_id, []),
             "apparatus": meineke_apparatus_by_version.get(current_meineke_version_id, []),
         }
+
+        canon_list = canonical_variants_by_lemma.get(lemma_id, [])
+        if canon_list:
+            primary = next((c for c in canon_list if c.get("is_primary")), None)
+            chosen = primary or canon_list[0]
+            lemma_data["canonical_variant_ref"] = {"kind": chosen.get("kind", ""), "id": chosen.get("id", "")}
+        elif lemma_id in canonical_pointer_by_lemma:
+            lemma_data["canonical_variant_ref"] = canonical_pointer_by_lemma.get(lemma_id) or {"kind": "legacy_assembled", "id": "translation"}
 
         lemmas.append(lemma_data)
 

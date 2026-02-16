@@ -50,8 +50,9 @@ func main() {
 	variantID := strings.TrimSpace(formData.Get("variant_id"))
 	variantStatus := strings.TrimSpace(formData.Get("variant_status"))
 	sourceTextVersionID := strings.TrimSpace(formData.Get("source_text_version_id"))
-	setCanonicalRaw := strings.TrimSpace(formData.Get("set_canonical"))
-	clearCanonicalRaw := strings.TrimSpace(formData.Get("clear_canonical"))
+	canonicalAction := strings.TrimSpace(formData.Get("canonical_action"))
+	setCanonicalRaw := strings.TrimSpace(formData.Get("set_canonical"))       // legacy (deprecated)
+	clearCanonicalRaw := strings.TrimSpace(formData.Get("clear_canonical"))   // legacy (deprecated)
 	action := formData.Get("action") // "stay" or "continue" (default)
 	remoteUser := os.Getenv("REMOTE_USER")
 	setCanonical := setCanonicalRaw == "1" || strings.EqualFold(setCanonicalRaw, "true") || strings.EqualFold(setCanonicalRaw, "on")
@@ -148,13 +149,23 @@ func main() {
 		return
 	}
 
-	if currentLemma.TranslationBlocked && variantKind == "legacy_assembled" {
+	blockedLegacy := currentLemma.TranslationBlocked && variantKind == "legacy_assembled"
+	if blockedLegacy {
 		variantStatus = "blocked"
-		setCanonical = false
+		if canonicalAction == "" {
+			// legacy checkbox fallbacks will be ignored below
+		}
 	}
-	if clearCanonical {
-		setCanonical = false
+
+	// Backward-compatible mapping for older cached templates.
+	if canonicalAction == "" {
+		if clearCanonical {
+			canonicalAction = "clear_all"
+		} else if setCanonical {
+			canonicalAction = "set_primary"
+		}
 	}
+	canonicalAction = strings.TrimSpace(strings.ToLower(canonicalAction))
 
 	err = SaveTranslationVariantReview(
 		db,
@@ -163,7 +174,7 @@ func main() {
 		variantID,
 		variantStatus,
 		sourceTextVersionID,
-		setCanonical,
+		false,
 		notes,
 		remoteUser,
 	)
@@ -172,22 +183,30 @@ func main() {
 		return
 	}
 
-	// Store explicit canonical clear/set intent as a sentinel row.
-	// This is used by local canonical resolution on merah and by import on raksasa.
-	err = SaveTranslationVariantReview(
-		db,
-		lemmaID,
-		"canonical_request",
-		"clear",
-		"approved",
-		"",
-		clearCanonical,
-		notes,
-		remoteUser,
-	)
-	if err != nil {
-		showErrorAndExit(fmt.Sprintf("Failed to save canonical clear request: %v", err))
-		return
+	// Insert append-only canonical action log row.
+	if blockedLegacy && (canonicalAction == "add" || canonicalAction == "set_primary") {
+		canonicalAction = ""
+	}
+	if canonicalAction == "add" || canonicalAction == "set_primary" {
+		// Only queue canonical add/primary actions for approved variants.
+		if variantStatus != "approved" {
+			canonicalAction = ""
+		}
+	}
+	if canonicalAction != "" {
+		err = InsertCanonicalVariantAction(
+			db,
+			lemmaID,
+			canonicalAction,
+			variantKind,
+			variantID,
+			notes,
+			remoteUser,
+		)
+		if err != nil {
+			showErrorAndExit(fmt.Sprintf("Failed to save canonical action: %v", err))
+			return
+		}
 	}
 
 	// Determine redirect target based on action

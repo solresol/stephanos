@@ -11,6 +11,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from db import get_connection
+import canonical_variants
 
 OUTPUT_DIR = "reference_site"
 
@@ -396,137 +397,33 @@ def get_all_lemmas(cur):
         selected_translation_blocked = bool(translation_blocked)
         selected_translation_block_reason = (translation_block_reason or "").strip()
 
-        def resolve_pointer_variant(variant_kind: str, variant_id: str):
-            if variant_kind == "translation_run" and has_translation_runs:
-                cur.execute(
-                    """
-                    SELECT COALESCE(translation_text, ''), COALESCE(status, ''),
-                           COALESCE(public_eligible, TRUE), COALESCE(public_block_reason, '')
-                    FROM translation_runs
-                    WHERE id = %s
-                      AND lemma_id = %s
-                    LIMIT 1
-                    """,
-                    (variant_id, lemma_id),
-                )
-                row = cur.fetchone()
-                if not row:
-                    return "", True, "Canonical pointer references missing translation run"
-                translation_text, run_status, public_eligible, public_block_reason = row
-                if run_status != "approved":
-                    return "", True, f"Canonical translation run is {run_status or 'not approved'}"
-                if not public_eligible:
-                    return "", True, "Canonical translation run is not public-eligible"
-                if (public_block_reason or "").strip():
-                    return "", True, public_block_reason
-                return (translation_text or "").strip(), False, ""
-
-            if variant_kind == "human_translation" and has_human_translations:
-                cur.execute(
-                    """
-                    SELECT COALESCE(translation_text, ''), COALESCE(status, '')
-                    FROM human_translations
-                    WHERE id = %s
-                      AND lemma_id = %s
-                    LIMIT 1
-                    """,
-                    (variant_id, lemma_id),
-                )
-                row = cur.fetchone()
-                if not row:
-                    return "", True, "Canonical pointer references missing human translation"
-                translation_text, human_status = row
-                if human_status != "approved":
-                    return "", True, f"Canonical human translation is {human_status or 'not approved'}"
-                return (translation_text or "").strip(), False, ""
-
-            if variant_kind == "legacy_assembled":
-                if variant_id not in ("", "translation", str(lemma_id)):
-                    return "", True, "Canonical legacy pointer has unsupported variant id"
-                if selected_translation_blocked:
-                    return "", True, selected_translation_block_reason or "Legacy translation blocked by risk gating"
-                return (translation or "").strip(), False, ""
-
-            return "", True, "Canonical pointer references unknown variant kind"
-
-        # Canonical pointer first; fallback to newest approved eligible variant.
-        pointer = None
-        if has_publication_targets:
-            cur.execute(
-                """
-                SELECT variant_kind, variant_id
-                FROM lemma_publication_targets
-                WHERE lemma_id = %s
-                  AND surface = 'public_translation'
-                LIMIT 1
-                """,
-                (lemma_id,),
+        presented = canonical_variants.select_presented_variants(cur, lemma_id=lemma_id, ux_mode="multi")
+        presented_translations = []
+        for v in presented:
+            presented_translations.append(
+                {
+                    "kind": v.get("kind", ""),
+                    "id": str(v.get("id", "") or ""),
+                    "is_primary": bool(v.get("is_primary", False)),
+                    "status": v.get("status", ""),
+                    "source_text_version_id": str(v.get("source_text_version_id", "") or ""),
+                    "translation_text": (v.get("translation_text", "") or "").strip(),
+                }
             )
-            pointer = cur.fetchone()
 
-        selected_translation_text = (translation or "").strip()
-        if pointer:
-            pointer_kind, pointer_id = pointer
-            pointer_text, pointer_blocked, pointer_reason = resolve_pointer_variant(pointer_kind, str(pointer_id))
-            if pointer_text:
-                selected_translation_text = pointer_text
-                selected_translation_blocked = False
-                selected_translation_block_reason = ""
-            else:
-                selected_translation_text = ""
-                selected_translation_blocked = bool(pointer_blocked)
-                selected_translation_block_reason = pointer_reason or selected_translation_block_reason
-
-        if not selected_translation_text or selected_translation_blocked:
-            fallback_choice = None
-            if has_human_translations:
-                cur.execute(
-                    """
-                    SELECT id::text, COALESCE(translation_text, ''), updated_at
-                    FROM human_translations
-                    WHERE lemma_id = %s
-                      AND status = 'approved'
-                      AND COALESCE(translation_text, '') != ''
-                    ORDER BY updated_at DESC, id DESC
-                    LIMIT 1
-                    """,
-                    (lemma_id,),
-                )
-                row = cur.fetchone()
-                if row:
-                    fallback_choice = ("human_translation", row[0], row[1], row[2])
-
-            if has_translation_runs:
-                cur.execute(
-                    """
-                    SELECT id::text, COALESCE(translation_text, ''),
-                           COALESCE(reviewed_at, completed_at, created_at) AS ts
-                    FROM translation_runs
-                    WHERE lemma_id = %s
-                      AND status = 'approved'
-                      AND public_eligible = TRUE
-                      AND COALESCE(public_block_reason, '') = ''
-                      AND COALESCE(translation_text, '') != ''
-                    ORDER BY COALESCE(reviewed_at, completed_at, created_at) DESC, id DESC
-                    LIMIT 1
-                    """,
-                    (lemma_id,),
-                )
-                row = cur.fetchone()
-                if row:
-                    run_choice = ("translation_run", row[0], row[1], row[2])
-                    if fallback_choice is None:
-                        fallback_choice = run_choice
-                    else:
-                        fallback_ts = fallback_choice[3]
-                        run_ts = run_choice[3]
-                        if run_ts and (fallback_ts is None or run_ts > fallback_ts):
-                            fallback_choice = run_choice
-
-            if fallback_choice:
-                selected_translation_text = (fallback_choice[2] or "").strip()
-                selected_translation_blocked = False
-                selected_translation_block_reason = ""
+        selected_kind = ""
+        selected_id = ""
+        selected_translation_text = ""
+        if presented_translations:
+            selected_translation_text = presented_translations[0].get("translation_text", "")
+            selected_kind = presented_translations[0].get("kind", "")
+            selected_id = presented_translations[0].get("id", "")
+            selected_translation_blocked = False
+            selected_translation_block_reason = ""
+        else:
+            selected_translation_text = ""
+            selected_translation_blocked = bool(translation_blocked)
+            selected_translation_block_reason = (translation_block_reason or "").strip()
 
         translation = selected_translation_text
         english_translation = selected_translation_text
@@ -550,6 +447,9 @@ def get_all_lemmas(cur):
             "greek_text": greek,
             "english_translation": english_translation,
             "translation": translation,
+            "presented_translations": presented_translations,
+            "selected_translation_variant_kind": selected_kind,
+            "selected_translation_variant_id": selected_id,
             "confidence": confidence or "normal",
             "ocr_processed_at": ocr_processed_at,
             "ocr_generation_name": ocr_generation_name or "unknown",
@@ -646,20 +546,51 @@ def render_lemma_cards(lemmas):
             version_class = ""
             version_badge = ""
 
-        is_translated = lemma.get("translated")
         is_blocked = bool(lemma.get("translation_blocked"))
-        translation = lemma.get('translation') or lemma.get('english_translation') or ""
+        presented = lemma.get("presented_translations") or []
+        if not isinstance(presented, list):
+            presented = []
+
+        def render_translation_text(text: str) -> str:
+            return highlight_proper_nouns_in_translation(
+                text or "",
+                lemma.get("proper_nouns", []),
+                lemma.get("aliases_by_name", {}),
+            )
+
         if is_blocked:
             translation = '<span class="pending-translation">Translation pending</span>'
-        elif not is_translated or not translation:
+        elif not presented:
             translation = '<span class="pending-translation">Translation pending</span>'
         else:
-            # Highlight proper nouns with alias tooltips
-            translation = highlight_proper_nouns_in_translation(
-                translation,
-                lemma.get("proper_nouns", []),
-                lemma.get("aliases_by_name", {})
-            )
+            primary_text = (presented[0].get("translation_text") if isinstance(presented[0], dict) else "") or ""
+            translation = render_translation_text(primary_text)
+
+            if len(presented) > 1:
+                extra_rows = []
+                for v in presented[1:]:
+                    if not isinstance(v, dict):
+                        continue
+                    label = f"{v.get('kind', '')} {v.get('id', '')}".strip()
+                    if v.get("is_primary"):
+                        label = (label + " (primary)").strip()
+                    text = (v.get("translation_text") or "").strip()
+                    if not text:
+                        continue
+                    extra_rows.append(
+                        f"<div class='translation-variant'>"
+                        f"<div class='translation-variant-label'>{html_module.escape(label)}</div>"
+                        f"<div class='translation-variant-text'>{render_translation_text(text)}</div>"
+                        f"</div>"
+                    )
+
+                if extra_rows:
+                    translation += (
+                        f"<details class='translation-variants'>"
+                        f"<summary>Other canonical translations ({len(extra_rows)})</summary>"
+                        f"{''.join(extra_rows)}"
+                        f"</details>"
+                    )
         meta_lines = []
         if lemma.get("entry_number"):
             meta_lines.append(f"Entry #{lemma['entry_number']}")
@@ -688,7 +619,11 @@ def render_lemma_cards(lemmas):
             meta_lines.append(f"Word count: {lemma['word_count']}")
 
         # Add translation prompt version (only for AI translations, not human)
-        if lemma.get("translation_prompt_version") and lemma.get("translated"):
+        if (
+            lemma.get("translation_prompt_version")
+            and lemma.get("translated")
+            and lemma.get("selected_translation_variant_kind") == "legacy_assembled"
+        ):
             meta_lines.append(f"AI prompt: v{lemma['translation_prompt_version']}")
         if is_blocked:
             block_reason = lemma.get("translation_block_reason") or "Likely translation-affecting Meineke/Billerbeck difference"
@@ -992,17 +927,46 @@ def common_styles():
             font-size: 0.75em;
             margin-left: 10px;
         }
-        .translation {
-            font-size: 1em;
-            color: #2c2c2c;
-            line-height: 1.6;
-            margin: 10px 0;
-        }
-        .proper-noun-highlight {
-            border-bottom: 1px dotted #3f51b5;
-            cursor: help;
-            position: relative;
-        }
+	        .translation {
+	            font-size: 1em;
+	            color: #2c2c2c;
+	            line-height: 1.6;
+	            margin: 10px 0;
+	        }
+	        .translation-variants {
+	            margin-top: 10px;
+	            padding: 10px 12px;
+	            background: #f7f9ff;
+	            border: 1px solid #e0e4ff;
+	            border-radius: 6px;
+	        }
+	        .translation-variants summary {
+	            cursor: pointer;
+	            font-weight: 600;
+	            color: #1a237e;
+	            outline: none;
+	        }
+	        .translation-variants summary::-webkit-details-marker {
+	            color: #1a237e;
+	        }
+	        .translation-variant {
+	            margin-top: 10px;
+	            padding-top: 10px;
+	            border-top: 1px solid rgba(26, 35, 126, 0.12);
+	        }
+	        .translation-variant-label {
+	            font-size: 0.85em;
+	            color: #555;
+	            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+	        }
+	        .translation-variant-text {
+	            margin-top: 6px;
+	        }
+	        .proper-noun-highlight {
+	            border-bottom: 1px dotted #3f51b5;
+	            cursor: help;
+	            position: relative;
+	        }
         .proper-noun-highlight:hover {
             background: #e8eaf6;
         }

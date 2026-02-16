@@ -55,3 +55,26 @@ CREATE TABLE IF NOT EXISTS translation_variant_reviews (
 
 CREATE INDEX IF NOT EXISTS idx_variant_reviews_lemma
 ON translation_variant_reviews(lemma_id);
+
+-- Canonical actions (append-only log).
+-- Used to express multi-canonical intent safely under delayed import.
+CREATE TABLE IF NOT EXISTS canonical_variant_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lemma_id INTEGER NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('add', 'remove', 'set_primary', 'clear_all', 'clear_primary')),
+    variant_kind TEXT,
+    variant_id TEXT,
+    reviewer_username TEXT,
+    reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    notes TEXT,
+    CHECK (
+        action IN ('clear_all', 'clear_primary')
+        OR (
+            variant_kind IS NOT NULL AND variant_kind <> ''
+            AND variant_id IS NOT NULL AND variant_id <> ''
+        )
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_canonical_actions_lemma
+ON canonical_variant_actions(lemma_id, reviewed_at, id);
