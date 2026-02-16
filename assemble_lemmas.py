@@ -32,6 +32,9 @@ def ensure_table(cur):
             assembled_json TEXT,
             human_greek_text TEXT,
             human_notes TEXT,
+            quarantined BOOLEAN NOT NULL DEFAULT FALSE,
+            quarantine_reason TEXT,
+            quarantined_at TIMESTAMPTZ,
             translated INTEGER NOT NULL DEFAULT 0,
             translation_json TEXT,
             translation_tokens INTEGER DEFAULT 0,
@@ -65,6 +68,9 @@ def ensure_table(cur):
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS translation_prompt_version INTEGER")
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS corrected_english_translation TEXT")
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS reviewed_english_translation TEXT")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS quarantine_reason TEXT")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAMPTZ")
     # Ensure version column has default and NOT NULL constraint
     cur.execute("ALTER TABLE assembled_lemmas ALTER COLUMN version SET DEFAULT 'epitome'")
     try:
@@ -172,6 +178,7 @@ def load_processed_images(cur):
                ocr_generation_id, processed_at
         FROM images
         WHERE processed = 1
+          AND COALESCE(source_document, 'billerbeck') = 'billerbeck'
         ORDER BY id
         """
     )
@@ -469,6 +476,7 @@ def main():
     conn = get_connection()
     cur = conn.cursor()
 
+    cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS source_document TEXT DEFAULT 'billerbeck'")
     ensure_volume_columns(cur)
     ensure_table(cur)
     headword_lookup = load_headword_lookup(cur)

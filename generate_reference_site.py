@@ -205,6 +205,9 @@ def normalize_headword_for_display(headword: str) -> str:
 
 def get_all_lemmas(cur):
     """Get all lemmas (translated and untranslated) from assembled_lemmas"""
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS quarantine_reason TEXT")
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAMPTZ")
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS translation_risk_flags (
@@ -259,6 +262,7 @@ def get_all_lemmas(cur):
             ORDER BY trf.updated_at DESC
             LIMIT 1
         ) risk_match ON TRUE
+        WHERE COALESCE(a.quarantined, FALSE) = FALSE
         ORDER BY a.id
         """
     )
@@ -1255,6 +1259,7 @@ def compute_meineke_comparison_stats(cur) -> dict:
             LIMIT 1
         ) mh_match ON TRUE
         WHERE a.version = 'epitome'
+          AND COALESCE(a.quarantined, FALSE) = FALSE
           AND a.greek_text IS NOT NULL
           AND a.greek_text != ''
         ORDER BY a.id
@@ -1567,6 +1572,7 @@ def extract_images_from_database(cur, output_dir: Path):
                 ARRAY(
                     SELECT jsonb_array_elements_text(a.source_image_ids::jsonb)::int
                     FROM assembled_lemmas a
+                    WHERE COALESCE(a.quarantined, FALSE) = FALSE
                 )
             )
         )

@@ -48,7 +48,7 @@ def resolve_profile_version(cur, profile_id: int, explicit_version: int | None):
     return row[0]
 
 
-def find_candidates(cur, source_document: str, lemma_id: int | None, limit: int | None):
+def find_candidates(cur, source_document: str, lemma_id: int | None, limit: int | None, *, include_quarantined: bool):
     query = """
         SELECT a.id, stv.id
         FROM assembled_lemmas a
@@ -62,6 +62,8 @@ def find_candidates(cur, source_document: str, lemma_id: int | None, limit: int 
     if lemma_id is not None:
         query += " WHERE a.id = %s"
         params.append(lemma_id)
+    elif not include_quarantined:
+        query += " WHERE COALESCE(a.quarantined, FALSE) = FALSE"
 
     query += " ORDER BY a.id"
     if limit is not None:
@@ -106,6 +108,7 @@ def main():
     parser.add_argument("--lemma-id", type=int, help="Queue only a single lemma id")
     parser.add_argument("--limit", type=int, help="Max lemmas to queue")
     parser.add_argument("--repeat", type=int, default=1, help="Runs requested per lemma")
+    parser.add_argument("--include-quarantined", action="store_true", help="Include quarantined lemmas in selection")
     parser.add_argument("--model", default="gpt-5.2")
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-p", type=float, default=1.0)
@@ -114,6 +117,7 @@ def main():
 
     conn = get_connection()
     cur = conn.cursor()
+    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE")
 
     required_tables = [
         "translation_prompt_profiles",
@@ -136,7 +140,13 @@ def main():
 
     profile_id = resolve_profile(cur, args.profile)
     profile_version_id = resolve_profile_version(cur, profile_id, args.profile_version)
-    candidates = find_candidates(cur, args.source_document, args.lemma_id, args.limit)
+    candidates = find_candidates(
+        cur,
+        args.source_document,
+        args.lemma_id,
+        args.limit,
+        include_quarantined=bool(args.include_quarantined),
+    )
 
     if not candidates:
         print("No candidate lemmas found for enqueue.")
