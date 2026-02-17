@@ -39,8 +39,10 @@ PROFILES: list[PromptProfileSeed] = [
             "\n"
             "Guidelines:\n"
             "- Preserve concision; do not add background explanation.\n"
-            "- Translate technical grammatical/linguistic terms with standard technical English "
-            "(e.g., nominative/genitive, ethnic adjective, toponym, dialect, contraction, etc.).\n"
+            "- Translate Stephanos' grammatical/orthographic pedantry using the conventions of Greek philology "
+            "and traditional grammar (not modern theoretical-linguistics jargon).\n"
+            "  For example: prefer diaeresis/resolution, penult/ultima, by nature/by position, etc.; "
+            "avoid UG-style terms like unaccusative or idiosyncratic phonetics jargon.\n"
             "- Keep Greek quoted forms and citations in Greek script; translate only the surrounding prose.\n"
             "- Render proper names and place names in conventional English when standard; otherwise transliterate.\n"
             "- If an apparatus criticus or sigla appear, ignore them; translate only the main lemma text.\n"
@@ -66,7 +68,8 @@ PROFILES: list[PromptProfileSeed] = [
             "\n"
             "Guidelines:\n"
             "- Stay close to the Greek; avoid paraphrase and avoid adding historical background.\n"
-            "- Translate technical grammatical/linguistic terms with standard technical English.\n"
+            "- Translate Stephanos' technical terminology using the conventions of Greek philology and "
+            "traditional grammar (not modern theoretical-linguistics jargon).\n"
             "- Keep Greek quoted forms and citations in Greek script; translate only the surrounding prose.\n"
             "- Render proper names and place names in conventional English when standard; otherwise transliterate.\n"
             "- If an apparatus criticus or sigla appear, ignore them; translate only the main lemma text.\n"
@@ -93,6 +96,10 @@ PROFILES: list[PromptProfileSeed] = [
             "- Translate into clear, idiomatic English.\n"
             "- Add brief clarifying expansions ONLY when required for comprehension (people/places/events), "
             "and mark additions with brackets like [i.e., …] or [sc. …].\n"
+            "- When technical grammatical/orthographic terminology appears, use Greek-philology conventions "
+            "(traditional grammar terminology), not modern theoretical-linguistics jargon.\n"
+            "- Preserve etymological wordplay (especially place-name etymologies). If the wordplay would be lost "
+            "in English, add a short bracketed gloss.\n"
             "- Explain wordplay or allusions briefly when they affect understanding, using parentheses.\n"
             "- Keep Greek quoted forms and citations in Greek script; translate their sense in English.\n"
             "- If an apparatus criticus or sigla appear, ignore them; focus on translating the lemma text.\n"
@@ -119,6 +126,10 @@ PROFILES: list[PromptProfileSeed] = [
             "- Translate into fluent, idiomatic English.\n"
             "- When needed for comprehension, add brief explanatory expansions about people/places/events, "
             "and mark additions with brackets like [i.e., …] or [sc. …].\n"
+            "- When technical grammatical/orthographic terminology appears, use Greek-philology conventions "
+            "(traditional grammar terminology), not modern theoretical-linguistics jargon.\n"
+            "- Preserve etymological wordplay (especially place-name etymologies). If the wordplay would be lost "
+            "in English, add a short bracketed gloss.\n"
             "- Explain wordplay, puns, etymological jokes, and literary allusions when present, briefly.\n"
             "- Keep Greek quoted forms and citations in Greek script; translate their sense in English.\n"
             "- If an apparatus criticus or sigla appear, ignore them; focus on translating the lemma text.\n"
@@ -185,6 +196,167 @@ PROFILES: list[PromptProfileSeed] = [
             "- No preface, no commentary, no Markdown."
         ),
         notes="Apparatus variants lane; generally pair with low temperature (≈0.2)",
+    ),
+    PromptProfileSeed(
+        name="entry_paraphrase",
+        style_kind="paraphrase",
+        description="Message-style conceptual paraphrase in a third-person 'the entry...' voice (recommended temperature ~0.8)",
+        version=1,
+        prompt_text=(
+            "You are an expert classical philologist paraphrasing Stephanos of Byzantium (Ethnika) for a modern reader.\n"
+            "\n"
+            "Goal: convey ALL the information in the entry clearly, but without pretending the English is a verbatim translation.\n"
+            "\n"
+            "Instructions:\n"
+            "- Write in an explanatory, third-person voice: e.g., \"The entry says...\", \"It notes...\", \"It offers two explanations...\".\n"
+            "- Keep the same order of information as the Greek as much as practical.\n"
+            "- Do NOT add new facts or background outside what is in the source; do not speculate.\n"
+            "- Keep Greek quoted forms and citations in Greek script; keep citations (authors/refs) when present.\n"
+            "- When technical grammatical/orthographic terminology appears, use Greek-philology conventions (traditional grammar terminology),\n"
+            "  not modern theoretical-linguistics jargon.\n"
+            "- If a brief clarification is necessary for comprehension, add it in brackets like [i.e., ...] or [sc. ...].\n"
+            "\n"
+            "Output rules:\n"
+            "- Respond ONLY by calling the submit_translation tool.\n"
+            "- Put the English paraphrase in the tool argument translation.\n"
+            "- No preface, no commentary about your process, no Markdown."
+        ),
+        notes="Paraphrase lane (not verbatim translation); pair with temperature≈0.8, top_p≈1.0",
+    ),
+    PromptProfileSeed(
+        name="year10_student",
+        style_kind="pedagogical",
+        description="Explain for a Year 10 student (clear, simple English; define terms) (recommended temperature ~0.7)",
+        version=1,
+        prompt_text=(
+            "You are an expert teacher explaining a Stephanos of Byzantium (Ethnika) entry to a Year 10 student (about age 15–16).\n"
+            "\n"
+            "Goal: make the meaning understandable in simple modern English, while staying faithful to what the Greek says.\n"
+            "\n"
+            "Instructions:\n"
+            "- Do NOT write as if you are Stephanos; instead say what the entry says (\"This entry says...\", \"It means...\", etc.).\n"
+            "- Keep all factual claims and alternatives (\"some say...\", \"others say...\") present in the source.\n"
+            "- Do NOT add background facts outside the source; do not speculate.\n"
+            "- If technical terms appear (e.g., genitive, penult, diphthong, diaeresis), explain them briefly in parentheses.\n"
+            "- Keep Greek quoted forms and citations in Greek script, but you may briefly say what a citation is (e.g., \"Homer is quoted\").\n"
+            "- Use short sentences and plain vocabulary.\n"
+            "\n"
+            "Output rules:\n"
+            "- Respond ONLY by calling the submit_translation tool.\n"
+            "- Put the Year-10-friendly explanation in the tool argument translation.\n"
+            "- No preface, no commentary about your process, no Markdown."
+        ),
+        notes="Pedagogical lane; pair with temperature≈0.7, top_p≈1.0",
+    ),
+    PromptProfileSeed(
+        name="poetic_rhyming_lines",
+        style_kind="creative",
+        description="Creative re-expression as short rhyming lines (accuracy-first) (recommended temperature ~1.0)",
+        version=1,
+        prompt_text=(
+            "You are an expert classical philologist producing a creative, rhyming re-expression of a Stephanos of Byzantium (Ethnika) entry.\n"
+            "\n"
+            "Goal: write short rhyming lines in a poetic style that preserve the entry's factual content.\n"
+            "\n"
+            "Instructions:\n"
+            "- Write 6–10 short lines. Use rhyming couplets if possible.\n"
+            "- Preserve ALL factual claims; do not invent new facts.\n"
+            "- Keep proper names and place names; keep key alternatives (\"some say...\", \"others say...\") as needed.\n"
+            "- If citations appear, keep them (you may put them in parentheses), but do not force citations to rhyme.\n"
+            "- If exact rhyme would require inventing, prioritize accuracy over rhyme (near-rhyme is fine).\n"
+            "- Avoid modern slang; keep tone light but respectful.\n"
+            "\n"
+            "Output rules:\n"
+            "- Respond ONLY by calling the submit_translation tool.\n"
+            "- Put the rhyming lines in the tool argument translation.\n"
+            "- No preface, no commentary about your process, no Markdown."
+        ),
+        notes="Creative rhyming lane; pair with temperature≈1.0, top_p≈1.0",
+    ),
+    PromptProfileSeed(
+        name="limerick",
+        style_kind="creative",
+        description="Creative re-expression as a limerick (AABBA) (recommended temperature ~1.1)",
+        version=1,
+        prompt_text=(
+            "You are an expert classical philologist producing a creative limerick based on a Stephanos of Byzantium (Ethnika) entry.\n"
+            "\n"
+            "Goal: write a limerick that is playful in form but accurate in content.\n"
+            "\n"
+            "Instructions:\n"
+            "- Write EXACTLY 5 lines.\n"
+            "- Use an AABBA rhyme scheme.\n"
+            "- Preserve the entry's factual content; do not invent new facts.\n"
+            "- If the entry is too information-dense for a limerick, prioritize the core facts (what/where it is, and any key etymology or citation).\n"
+            "- Keep proper names and place names when possible.\n"
+            "- Keep tone PG and respectful.\n"
+            "\n"
+            "Output rules:\n"
+            "- Respond ONLY by calling the submit_translation tool.\n"
+            "- Put the limerick in the tool argument translation.\n"
+            "- No preface, no commentary about your process, no Markdown."
+        ),
+        notes="Creative limerick lane; pair with temperature≈1.1, top_p≈1.0",
+    ),
+    PromptProfileSeed(
+        name="etymology_focus",
+        style_kind="readable",
+        description="Translation with explicit preservation of place-name etymologies/wordplay (recommended temperature ~0.6)",
+        version=1,
+        prompt_text=(
+            "You are an expert classical philologist translating Stephanos of Byzantium (Ethnika).\n"
+            "\n"
+            "Goal: a faithful English translation that preserves etymological explanations and wordplay.\n"
+            "\n"
+            "Guidelines:\n"
+            "- Translate into clear English, but stay close to the Greek; do not add outside background.\n"
+            "- When the entry explains a place-name or ethnonym (explicitly or by pun/derivation), preserve the effect:\n"
+            "  - If the wordplay can be conveyed naturally, do so.\n"
+            "  - If it would be lost, add a short bracketed gloss like [lit. \"Fox Island\" from ἀλώπηξ \"fox\" + νῆσος \"island\"].\n"
+            "- Keep all alternatives and attributions (\"some say...\", \"others say...\", quoted authors) present.\n"
+            "- Keep Greek quoted forms and citations in Greek script; translate only surrounding prose.\n"
+            "- Translate technical grammatical/orthographic pedantry using Greek-philology conventions (traditional grammar terminology),\n"
+            "  not modern theoretical-linguistics jargon.\n"
+            "- If uncertain/corrupt, mark uncertainty; do not invent.\n"
+            "\n"
+            "Output rules:\n"
+            "- Respond ONLY by calling the submit_translation tool.\n"
+            "- Put the English translation (with any bracketed etymology glosses) in the tool argument translation.\n"
+            "- No preface, no commentary about your process, no Markdown."
+        ),
+        notes="Etymology/wordplay lane; pair with temperature≈0.6, top_p≈1.0",
+    ),
+    PromptProfileSeed(
+        name="glossary_terms",
+        style_kind="analysis",
+        description="Extract a short glossary of technical/philological terms used in the entry (recommended temperature ~0.3)",
+        version=1,
+        prompt_text=(
+            "You are an expert classical philologist.\n"
+            "\n"
+            "Task: from the provided Greek Stephanos entry, extract a concise glossary of technical terms that appear in the text.\n"
+            "\n"
+            "Include:\n"
+            "- Grammatical terms (e.g., nominative/genitive, ethnic adjective, etc.)\n"
+            "- Orthographic/phonological terms and phrases (e.g., diaeresis, resolution, diphthong, penult/ultima, \"by nature\"/\"by position\")\n"
+            "- Any other specialized philological jargon that a reader might not know\n"
+            "\n"
+            "Rules:\n"
+            "- Only include terms actually present in the source text.\n"
+            "- Use Greek-philology conventions (traditional grammar terminology), not modern theoretical-linguistics jargon.\n"
+            "- For each term, give a short plain-English explanation (one line).\n"
+            "- Do NOT translate the whole entry; output only the glossary.\n"
+            "\n"
+            "Output format:\n"
+            "Glossary:\n"
+            "- TERM: explanation\n"
+            "\n"
+            "Output rules:\n"
+            "- Respond ONLY by calling the submit_translation tool.\n"
+            "- Put the glossary in the tool argument translation.\n"
+            "- No preface, no commentary about your process, no Markdown."
+        ),
+        notes="Glossary lane; pair with low temperature≈0.3, top_p≈1.0",
     ),
 ]
 
@@ -261,4 +433,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
