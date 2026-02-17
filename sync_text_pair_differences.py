@@ -8,8 +8,29 @@ run under restricted DB roles (FK creation requires REFERENCES privilege on the
 target tables).
 """
 import hashlib
+import json
 
 from db import get_connection
+from psycopg2.extras import Json
+
+
+def _adapt_jsonb(value):
+    if value is None:
+        return None
+    if isinstance(value, Json):
+        return value
+    if isinstance(value, (dict, list)):
+        return Json(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return Json(json.loads(stripped))
+        except json.JSONDecodeError:
+            # Fall back to storing the raw string as a JSON string.
+            return Json(value)
+    return Json(value)
 
 
 def ensure_table(cur):
@@ -156,7 +177,7 @@ def main():
                 llm_status,
                 llm_model,
                 llm_tokens,
-                llm_result_json,
+                _adapt_jsonb(llm_result_json),
                 difference_level,
                 summary,
                 translation_impact,
