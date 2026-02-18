@@ -119,6 +119,41 @@ def load_nearest_neighbors(cur, *, metric: str, normalization: str, top_n: int) 
     return neighbors
 
 
+def load_entry_overlap_neighbors(
+    cur,
+    *,
+    ngram_size: int,
+    gram_kind: str,
+    text_mode: str,
+    top_n: int,
+) -> dict[int, list[tuple[int, float]]]:
+    if not table_exists(cur, "lemma_entry_ngram_overlaps"):
+        return {}
+    cur.execute(
+        """
+        SELECT lemma_id_a, lemma_id_b, overlap_coefficient
+        FROM lemma_entry_ngram_overlaps
+        WHERE ngram_size = %s
+          AND gram_kind = %s
+          AND text_mode = %s
+        ORDER BY overlap_coefficient DESC, shared_ngrams DESC, lemma_id_a ASC, lemma_id_b ASC
+        """,
+        (int(ngram_size), gram_kind, text_mode),
+    )
+    neighbors: dict[int, list[tuple[int, float]]] = {}
+    for lemma_id_a, lemma_id_b, overlap in cur.fetchall():
+        a = int(lemma_id_a)
+        b = int(lemma_id_b)
+        ov = float(overlap or 0.0)
+        neighbors.setdefault(a, []).append((b, ov))
+        neighbors.setdefault(b, []).append((a, ov))
+
+    if top_n > 0:
+        for lemma_id in list(neighbors.keys()):
+            neighbors[lemma_id] = neighbors[lemma_id][:top_n]
+    return neighbors
+
+
 def color_for_label(label: int, *, palette: list[str], noise_color: str) -> str:
     if label < 0:
         return noise_color
@@ -132,7 +167,8 @@ def build_figure(
     review_urls: list[str],
     dbscan_labels: np.ndarray,
     kmeans_labels: np.ndarray,
-    neighbor_texts: list[str],
+    headword_neighbor_texts: list[str],
+    entry_overlap_texts: list[str],
 ) -> go.Figure:
     palette = qualitative.Dark24 or qualitative.Plotly
     noise_color = "#B8B8B8"
@@ -145,13 +181,15 @@ def build_figure(
         entry_num = f"{row.entry_number}" if row.entry_number is not None else "—"
         version = row.version or "—"
         lemma_type = row.lemma_type or "—"
-        neighbors = neighbor_texts[idx]
+        headword_neighbors = headword_neighbor_texts[idx]
+        overlap_neighbors = entry_overlap_texts[idx]
         base_hover.append(
             "<br>".join(
                 [
                     f"<b>{row.lemma or '—'}</b> (id={row.lemma_id})",
                     f"version: {version} | entry: {entry_num} | type: {lemma_type}",
-                    f"neighbors: {neighbors}" if neighbors else "neighbors: —",
+                    f"headword neighbors: {headword_neighbors}" if headword_neighbors else "headword neighbors: —",
+                    f"entry overlap: {overlap_neighbors}" if overlap_neighbors else "entry overlap: —",
                     "click to open review.cgi",
                 ]
             )
@@ -254,9 +292,16 @@ def main() -> int:
     neighbor_edges = load_nearest_neighbors(
         cur, metric="levenshtein", normalization=normalization, top_n=max(args.neighbors_hover, 0)
     )
+    entry_overlap_edges = load_entry_overlap_neighbors(
+        cur,
+        ngram_size=5,
+        gram_kind="word",
+        text_mode="auto",
+        top_n=max(args.neighbors_hover, 0),
+    )
 
     lemma_by_id = {row.lemma_id: row for row in lemmas}
-    neighbor_texts: list[str] = []
+    headword_neighbor_texts: list[str] = []
     for row in lemmas:
         neighbors = neighbor_edges.get(row.lemma_id, [])
         parts = []
@@ -265,7 +310,18 @@ def main() -> int:
             if not other:
                 continue
             parts.append(f"{other.lemma} (d={d})")
-        neighbor_texts.append(", ".join(parts))
+        headword_neighbor_texts.append(", ".join(parts))
+
+    entry_overlap_texts: list[str] = []
+    for row in lemmas:
+        neighbors = entry_overlap_edges.get(row.lemma_id, [])
+        parts = []
+        for other_id, ov in neighbors[: max(args.neighbors_hover, 0)]:
+            other = lemma_by_id.get(other_id)
+            if not other:
+                continue
+            parts.append(f"{other.lemma} (ov={ov:.2f})")
+        entry_overlap_texts.append(", ".join(parts))
 
     headwords_norm = [normalize_headword(row.lemma, strip_diacritics=strip_diacritics) for row in lemmas]
 
@@ -308,7 +364,8 @@ def main() -> int:
         review_urls=review_urls,
         dbscan_labels=dbscan_labels,
         kmeans_labels=kmeans_labels,
-        neighbor_texts=neighbor_texts,
+        headword_neighbor_texts=headword_neighbor_texts,
+        entry_overlap_texts=entry_overlap_texts,
     )
 
     plot_html = fig.to_html(include_plotlyjs="cdn", full_html=False, div_id="headword-cluster-plot")
