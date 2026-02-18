@@ -1060,13 +1060,14 @@ def generate_index_html(letter_counts, stats):
 	            <a href="peoples.html">Ethnic Groups</a>
 	            <a href="aliases.html">Aliases</a>
 	            <a href="map.html">Places Map</a>
-	            <a href="statistics.html">Statistics</a>
-	            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
-	            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
-	            <a href="progress.html">Processing Progress</a>
-	            <a href="pipeline.html">Pipeline Status</a>
-	            <a href="protected/">Page Scans</a>
-	            <a href="cgi-bin/review.cgi">Human Review</a>
+		            <a href="statistics.html">Statistics</a>
+		            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
+		            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
+		            <a href="protected/clustering.html">Clustering</a>
+		            <a href="progress.html">Processing Progress</a>
+		            <a href="pipeline.html">Pipeline Status</a>
+		            <a href="protected/">Page Scans</a>
+		            <a href="cgi-bin/review.cgi">Human Review</a>
             <a href="downloads.html">Downloads</a>
             <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
         </div>
@@ -1200,12 +1201,13 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
 	            <a href="peoples.html">Ethnic Groups</a>
 	            <a href="aliases.html">Aliases</a>
 	            <a href="map.html">Places Map</a>
-	            <a href="statistics.html">Statistics</a>
-	            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
-	            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
-	            <a href="cgi-bin/review.cgi">Human Review</a>
-	            <a href="downloads.html">Downloads</a>
-	            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
+		            <a href="statistics.html">Statistics</a>
+		            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
+		            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
+		            <a href="protected/clustering.html">Clustering</a>
+		            <a href="cgi-bin/review.cgi">Human Review</a>
+		            <a href="downloads.html">Downloads</a>
+		            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
 	        </div>
         {body}
         <div class="footer">
@@ -1457,13 +1459,14 @@ def generate_meineke_comparison_page(stats: dict) -> str:
             <a href="../entities.html">People &amp; Deities</a>
             <a href="../peoples.html">Ethnic Groups</a>
             <a href="../aliases.html">Aliases</a>
-            <a href="../map.html">Places Map</a>
-            <a href="../statistics.html">Statistics</a>
-            <a href="meineke_difference_analysis.html">Difference Analysis</a>
-            <a href="../progress.html">Processing Progress</a>
-            <a href="../pipeline.html">Pipeline Status</a>
-            <a href="../protected/">Page Scans</a>
-            <a href="../cgi-bin/review.cgi">Human Review</a>
+	            <a href="../map.html">Places Map</a>
+	            <a href="../statistics.html">Statistics</a>
+	            <a href="meineke_difference_analysis.html">Difference Analysis</a>
+	            <a href="clustering.html">Clustering</a>
+	            <a href="../progress.html">Processing Progress</a>
+	            <a href="../pipeline.html">Pipeline Status</a>
+	            <a href="../protected/">Page Scans</a>
+	            <a href="../cgi-bin/review.cgi">Human Review</a>
             <a href="../downloads.html">Downloads</a>
         </div>
 
@@ -1689,13 +1692,14 @@ def main():
         <p>Greek text comparison and human review coverage</p>
     </div>
     <div class="container">
-        <div class="nav-links">
-            <a href="../index.html">All Letters</a>
-            <a href="../statistics.html">Statistics</a>
-            <a href="meineke_difference_analysis.html">Difference Analysis</a>
-            <a href="../pipeline.html">Pipeline Status</a>
-            <a href="../cgi-bin/review.cgi">Human Review</a>
-        </div>
+	        <div class="nav-links">
+	            <a href="../index.html">All Letters</a>
+	            <a href="../statistics.html">Statistics</a>
+	            <a href="meineke_difference_analysis.html">Difference Analysis</a>
+	            <a href="clustering.html">Clustering</a>
+	            <a href="../pipeline.html">Pipeline Status</a>
+	            <a href="../cgi-bin/review.cgi">Human Review</a>
+	        </div>
         <div class="breadcrumb"><a href="../index.html">All Letters</a> / Meineke vs Billerbeck</div>
         <h2>Page Unavailable</h2>
         <p>This page could not be generated.</p>

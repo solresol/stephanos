@@ -176,6 +176,10 @@ uv run generate_meineke_difference_analysis_page.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 7c: Generating protected pages..." | tee -a "$LOGFILE"
 uv run generate_protected_pages.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 7c1: Generate headword clustering page (UMAP + clustering)
+echo "Step 7c1: Generating headword clustering page..." | tee -a "$LOGFILE"
+uv run generate_headword_clustering_page.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: headword clustering page step failed" | tee -a "$LOGFILE"
+
 # Step 7c2: Generate translation risk report
 echo "Step 7c2: Generating translation risk report..." | tee -a "$LOGFILE"
 uv run generate_translation_risk_report.py 2>&1 | tee -a "$LOGFILE"

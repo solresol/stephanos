@@ -114,10 +114,15 @@ def export_lemmas():
                 a.word_count,
                 a.confidence,
                 COALESCE(mh_match.greek_paragraph, '') as meineke_greek_paragraph,
-                (SELECT json_agg(i.image_filename ORDER BY li.position)
-                 FROM images i
-                 JOIN lemma_images li ON li.image_id = i.id
-                 WHERE li.lemma_id = a.id) as image_filenames,
+	                (SELECT json_agg(i.image_filename ORDER BY li.position)
+	                 FROM images i
+	                 JOIN lemma_images li ON li.image_id = i.id
+	                 WHERE li.lemma_id = a.id
+	                   AND (
+	                       i.source_document IS NULL
+	                       OR i.source_document = ''
+	                       OR i.source_document = 'billerbeck'
+	                   )) as image_filenames,
                 COALESCE(md.normalized_class, '') as meineke_normalized_class,
                 COALESCE(md.llm_status, '') as meineke_llm_status,
                 COALESCE(md.difference_level, '') as meineke_difference_level,
@@ -168,10 +173,15 @@ def export_lemmas():
                 a.word_count,
                 a.confidence,
                 COALESCE(mh_match.greek_paragraph, '') as meineke_greek_paragraph,
-                (SELECT json_agg(i.image_filename ORDER BY li.position)
-                 FROM images i
-                 JOIN lemma_images li ON li.image_id = i.id
-                 WHERE li.lemma_id = a.id) as image_filenames,
+	                (SELECT json_agg(i.image_filename ORDER BY li.position)
+	                 FROM images i
+	                 JOIN lemma_images li ON li.image_id = i.id
+	                 WHERE li.lemma_id = a.id
+	                   AND (
+	                       i.source_document IS NULL
+	                       OR i.source_document = ''
+	                       OR i.source_document = 'billerbeck'
+	                   )) as image_filenames,
                 '' as meineke_normalized_class,
                 '' as meineke_llm_status,
                 '' as meineke_difference_level,
