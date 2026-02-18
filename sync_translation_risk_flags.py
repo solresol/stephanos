@@ -10,6 +10,7 @@ import json
 from datetime import datetime, timezone
 
 from db import get_connection
+import psycopg2.errors
 
 RISK_CODE = "billerbeck_likely_translation_change"
 VARIANT_KIND = "legacy_assembled"
@@ -18,35 +19,55 @@ SOURCE_DOCUMENT = "billerbeck"
 
 
 def ensure_table(cur):
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS translation_risk_flags (
-            id SERIAL PRIMARY KEY,
-            lemma_id INTEGER NOT NULL REFERENCES assembled_lemmas(id) ON DELETE CASCADE,
-            variant_kind TEXT NOT NULL,
-            variant_id TEXT NOT NULL,
-            source_document TEXT NOT NULL CHECK (source_document IN ('billerbeck', 'meineke')),
-            risk_code TEXT NOT NULL,
-            is_blocked BOOLEAN NOT NULL DEFAULT FALSE,
-            evidence_difference_id INTEGER,
-            details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-            detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    cur.execute("SELECT to_regclass('public.translation_risk_flags')")
+    table_exists = cur.fetchone()[0] is not None
+
+    if not table_exists:
+        try:
+            cur.execute(
+                """
+                CREATE TABLE translation_risk_flags (
+                    id SERIAL PRIMARY KEY,
+                    lemma_id INTEGER NOT NULL REFERENCES assembled_lemmas(id) ON DELETE CASCADE,
+                    variant_kind TEXT NOT NULL,
+                    variant_id TEXT NOT NULL,
+                    source_document TEXT NOT NULL CHECK (source_document IN ('billerbeck', 'meineke')),
+                    risk_code TEXT NOT NULL,
+                    is_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+                    evidence_difference_id INTEGER,
+                    details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+        except psycopg2.errors.InsufficientPrivilege:
+            raise RuntimeError(
+                "translation_risk_flags does not exist and could not be created because this user lacks "
+                "CREATE privileges. Run this step once as an admin user."
+            ) from None
+
+    try:
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS translation_risk_flags_unique_idx
+            ON translation_risk_flags (lemma_id, variant_kind, variant_id, risk_code)
+            """
         )
-        """
-    )
-    cur.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS translation_risk_flags_unique_idx
-        ON translation_risk_flags (lemma_id, variant_kind, variant_id, risk_code)
-        """
-    )
-    cur.execute(
-        """
-        CREATE INDEX IF NOT EXISTS translation_risk_flags_blocked_source_idx
-        ON translation_risk_flags (is_blocked, source_document)
-        """
-    )
+    except psycopg2.errors.InsufficientPrivilege:
+        # Non-owner users cannot own/index the legacy risk table. Skip index maintenance if missing.
+        pass
+
+    try:
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS translation_risk_flags_blocked_source_idx
+            ON translation_risk_flags (is_blocked, source_document)
+            """
+        )
+    except psycopg2.errors.InsufficientPrivilege:
+        # Non-owner users cannot own/index the legacy risk table. Skip index maintenance if missing.
+        pass
 
 
 def fetch_legacy_translations(cur):
