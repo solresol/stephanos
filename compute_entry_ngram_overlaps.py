@@ -157,35 +157,39 @@ def iter_pairs_for_lemma(
     *,
     lemma_index: int,
     lemma_texts: list[LemmaText],
+    index_ngrams_by_index: list[set[object]],
     inverted_index: dict[object, list[int]],
     min_shared: int,
     min_jaccard: float,
     min_overlap: float,
     top_k: int,
-) -> list[tuple[int, int, int, float, float]]:
+) -> list[tuple[int, int, float, float]]:
     """
     Returns list of candidate pairs for lemma_index:
       (other_index, shared, jaccard, overlap)
     """
     lemma_entry = lemma_texts[lemma_index]
-    grams = lemma_entry.ngrams
-    if not grams:
+    all_grams = lemma_entry.ngrams
+    index_grams = index_ngrams_by_index[lemma_index]
+    if not all_grams or not index_grams:
         return []
 
     candidate_counts: dict[int, int] = defaultdict(int)
-    for gram in grams:
+    for gram in index_grams:
         for other_index in inverted_index.get(gram, []):
             if other_index == lemma_index:
                 continue
             candidate_counts[other_index] += 1
 
     results: list[tuple[int, int, float, float]] = []
-    size_a = len(grams)
-    for other_index, shared in candidate_counts.items():
-        if shared < min_shared:
-            continue
-        size_b = len(lemma_texts[other_index].ngrams)
+    size_a = len(all_grams)
+    for other_index in candidate_counts.keys():
+        other_grams = lemma_texts[other_index].ngrams
+        size_b = len(other_grams)
         if size_b == 0:
+            continue
+        shared = len(all_grams & other_grams)
+        if shared < min_shared:
             continue
         union = size_a + size_b - shared
         if union <= 0:
@@ -342,7 +346,7 @@ def main() -> int:
 
     # Build inverted index, filtering out too-common/too-rare grams.
     inverted_index: dict[object, list[int]] = defaultdict(list)
-    filtered_ngrams_by_index: list[set[object]] = []
+    index_ngrams_by_index: list[set[object]] = []
     kept_grams = 0
     for idx, lemma_entry in enumerate(lemma_texts):
         filtered = {
@@ -350,23 +354,10 @@ def main() -> int:
             for gram in lemma_entry.ngrams
             if args.min_df <= df_counts.get(gram, 0) <= args.max_df
         }
-        filtered_ngrams_by_index.append(filtered)
+        index_ngrams_by_index.append(filtered)
         kept_grams += len(filtered)
         for gram in filtered:
             inverted_index[gram].append(idx)
-
-    # Replace ngram sets with filtered sets.
-    lemma_texts = [
-        LemmaText(
-            lemma_id=entry.lemma_id,
-            lemma=entry.lemma,
-            version=entry.version,
-            text_source=entry.text_source,
-            normalized_text=entry.normalized_text,
-            ngrams=filtered_ngrams_by_index[idx],
-        )
-        for idx, entry in enumerate(lemma_texts)
-    ]
 
     print(
         "Built inverted index:",
@@ -385,6 +376,7 @@ def main() -> int:
         matches = iter_pairs_for_lemma(
             lemma_index=i,
             lemma_texts=lemma_texts,
+            index_ngrams_by_index=index_ngrams_by_index,
             inverted_index=inverted_index,
             min_shared=int(args.min_shared),
             min_jaccard=float(args.min_jaccard),
