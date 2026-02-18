@@ -246,7 +246,7 @@ def main() -> int:
         description="Compute near-duplicate entry similarities using n-gram overlap and store results in PostgreSQL."
     )
     parser.add_argument("--kind", choices=("word", "char"), default="word", help="n-gram kind")
-    parser.add_argument("--ngram-size", type=int, default=3, help="n-gram size")
+    parser.add_argument("--ngram-size", type=int, default=2, help="n-gram size")
     parser.add_argument(
         "--text-mode",
         choices=("auto", "assembled", "meineke"),
@@ -261,9 +261,9 @@ def main() -> int:
     parser.add_argument("--no-strip-diacritics", action="store_true", help="Do not strip combining marks")
     parser.add_argument("--max-df", type=int, default=120, help="Ignore n-grams appearing in >max-df lemmas")
     parser.add_argument("--min-df", type=int, default=2, help="Ignore n-grams appearing in <min-df lemmas")
-    parser.add_argument("--min-shared", type=int, default=5, help="Minimum shared n-grams")
-    parser.add_argument("--min-jaccard", type=float, default=0.10, help="Minimum Jaccard similarity")
-    parser.add_argument("--min-overlap", type=float, default=0.40, help="Minimum overlap coefficient")
+    parser.add_argument("--min-shared", type=int, default=3, help="Minimum shared n-grams")
+    parser.add_argument("--min-jaccard", type=float, default=0.08, help="Minimum Jaccard similarity")
+    parser.add_argument("--min-overlap", type=float, default=0.30, help="Minimum overlap coefficient")
     parser.add_argument("--top-k", type=int, default=50, help="Keep up to top-k matches per lemma")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of lemmas (debug)")
     parser.add_argument(
