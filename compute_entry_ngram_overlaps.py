@@ -55,6 +55,22 @@ def normalize_text(text: str, *, strip_diacritics: bool = True) -> str:
     return " ".join(text.split())
 
 
+def drop_leading_headword(norm_text: str, norm_headword: str) -> str:
+    """
+    If the normalized entry text starts with the normalized headword tokens,
+    drop that token prefix so overlap focuses on the body of the entry.
+    """
+    norm_text = (norm_text or "").strip()
+    norm_headword = (norm_headword or "").strip()
+    if not norm_text or not norm_headword:
+        return norm_text
+    text_tokens = norm_text.split()
+    head_tokens = norm_headword.split()
+    if head_tokens and text_tokens[: len(head_tokens)] == head_tokens:
+        return " ".join(text_tokens[len(head_tokens) :]).strip()
+    return norm_text
+
+
 def word_ngrams(tokens: list[str], n: int) -> set[tuple[str, ...]]:
     if n <= 0:
         raise ValueError("n must be > 0")
@@ -226,20 +242,25 @@ def main() -> int:
         description="Compute near-duplicate entry similarities using n-gram overlap and store results in PostgreSQL."
     )
     parser.add_argument("--kind", choices=("word", "char"), default="word", help="n-gram kind")
-    parser.add_argument("--ngram-size", type=int, default=5, help="n-gram size")
+    parser.add_argument("--ngram-size", type=int, default=3, help="n-gram size")
     parser.add_argument(
         "--text-mode",
         choices=("auto", "assembled", "meineke"),
         default="auto",
         help="Which text field to compare",
     )
+    parser.add_argument(
+        "--include-headword",
+        action="store_true",
+        help="Include the leading headword in entry text n-grams (default: drop it if present)",
+    )
     parser.add_argument("--no-strip-diacritics", action="store_true", help="Do not strip combining marks")
-    parser.add_argument("--max-df", type=int, default=200, help="Ignore n-grams appearing in >max-df lemmas")
+    parser.add_argument("--max-df", type=int, default=120, help="Ignore n-grams appearing in >max-df lemmas")
     parser.add_argument("--min-df", type=int, default=2, help="Ignore n-grams appearing in <min-df lemmas")
-    parser.add_argument("--min-shared", type=int, default=8, help="Minimum shared n-grams")
-    parser.add_argument("--min-jaccard", type=float, default=0.12, help="Minimum Jaccard similarity")
-    parser.add_argument("--min-overlap", type=float, default=0.45, help="Minimum overlap coefficient")
-    parser.add_argument("--top-k", type=int, default=30, help="Keep up to top-k matches per lemma")
+    parser.add_argument("--min-shared", type=int, default=5, help="Minimum shared n-grams")
+    parser.add_argument("--min-jaccard", type=float, default=0.10, help="Minimum Jaccard similarity")
+    parser.add_argument("--min-overlap", type=float, default=0.40, help="Minimum overlap coefficient")
+    parser.add_argument("--top-k", type=int, default=50, help="Keep up to top-k matches per lemma")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of lemmas (debug)")
     parser.add_argument(
         "--reset",
@@ -294,6 +315,10 @@ def main() -> int:
             meineke_text=meineke_text,
         )
         norm = normalize_text(chosen_text, strip_diacritics=strip_diacritics)
+        if norm and not args.include_headword:
+            norm_headword = normalize_text(lemma or "", strip_diacritics=strip_diacritics)
+            if norm_headword:
+                norm = drop_leading_headword(norm, norm_headword)
         if not norm:
             grams: set[object] = set()
         else:
