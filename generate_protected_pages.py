@@ -518,7 +518,12 @@ def generate_protected_index(images_by_volume):
     """Generate index page for protected area"""
     volume_sections = []
 
-    for vol_key in sorted(images_by_volume.keys()):
+    # Some images may not have volume metadata; sort Unknown Volume last.
+    def _volume_sort_key(key):
+        volume_number, volume_label = key
+        return (volume_number is None, volume_number or 0, volume_label or "")
+
+    for vol_key in sorted(images_by_volume.keys(), key=_volume_sort_key):
         images = images_by_volume[vol_key]
         vol_label = images[0][11] if images[0][11] else f"Volume {images[0][10]}" if images[0][10] else "Unknown Volume"
 

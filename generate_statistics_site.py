@@ -314,6 +314,13 @@ def generate_histograms(df):
     """Generate word count histogram visualizations."""
     from scipy.stats import gaussian_kde
 
+    # Log-scale histograms/KDE cannot include zero/negative word counts.
+    # Some rows can legitimately have word_count=0 (e.g., empty-text artifacts),
+    # so we defensively filter them out.
+    def _positive_finite(values):
+        values = np.asarray(values, dtype=float)
+        return values[np.isfinite(values) & (values > 0)]
+
     # Histogram by entry type - normalized with KDE curves
     # Filter types with at least 10 entries
     type_counts = df['type'].value_counts()
@@ -322,11 +329,29 @@ def generate_histograms(df):
     fig1, ax1 = plt.subplots(figsize=(12, 6))
 
     # Use logarithmic bins for better distribution visualization
-    all_counts = df['word_count'].values
-    bins = np.logspace(np.log10(all_counts.min()), np.log10(all_counts.max()), 30)
+    all_counts = _positive_finite(df['word_count'].values)
+    if len(all_counts) == 0:
+        ax1.text(0.5, 0.5, "No positive word counts available", ha="center", va="center", transform=ax1.transAxes)
+        ax1.set_axis_off()
+        img1 = save_plot_to_file(fig1, "word_count_by_type.png")
+
+        fig2, ax2 = plt.subplots(figsize=(12, 6))
+        ax2.text(0.5, 0.5, "No positive word counts available", ha="center", va="center", transform=ax2.transAxes)
+        ax2.set_axis_off()
+        img2 = save_plot_to_file(fig2, "word_count_by_letter.png")
+        return img1, img2
+
+    min_count = float(all_counts.min())
+    max_count = float(all_counts.max())
+    if min_count == max_count:
+        min_count = max(min_count * 0.9, min_count - 1e-6)
+        max_count = max_count * 1.1
+    bins = np.logspace(np.log10(min_count), np.log10(max_count), 30)
 
     for type_val in sorted(valid_types):
-        subset = df[df['type'] == type_val]['word_count'].values
+        subset = _positive_finite(df[df['type'] == type_val]['word_count'].values)
+        if len(subset) == 0:
+            continue
 
         # Normalized histogram with log bins
         ax1.hist(subset, alpha=0.3, label=type_val, bins=bins, density=True)
@@ -334,12 +359,18 @@ def generate_histograms(df):
         # Add KDE curve on log scale
         if len(subset) > 1:
             log_subset = np.log10(subset)
-            kde = gaussian_kde(log_subset)
-            x_range_log = np.linspace(log_subset.min(), log_subset.max(), 200)
-            x_range = 10 ** x_range_log
-            # Transform density from log space
-            density = kde(x_range_log) / (x_range * np.log(10))
-            ax1.plot(x_range, density, linewidth=2, label=f'{type_val} (KDE)')
+            log_subset = log_subset[np.isfinite(log_subset)]
+            if len(log_subset) > 1 and np.nanstd(log_subset) > 0:
+                try:
+                    kde = gaussian_kde(log_subset)
+                except Exception:
+                    kde = None
+                if kde is not None:
+                    x_range_log = np.linspace(log_subset.min(), log_subset.max(), 200)
+                    x_range = 10 ** x_range_log
+                    # Transform density from log space
+                    density = kde(x_range_log) / (x_range * np.log(10))
+                    ax1.plot(x_range, density, linewidth=2, label=f'{type_val} (KDE)')
 
     ax1.set_xlabel('Word Count (log scale)')
     ax1.set_ylabel('Probability Density')
@@ -353,11 +384,11 @@ def generate_histograms(df):
     # Histogram by Parisinus vs Epitomised - normalized with KDE curves
     fig2, ax2 = plt.subplots(figsize=(12, 6))
 
-    parisinus_subset = df[df['is_parisinus'] == True]['word_count'].values
-    epitomised_subset = df[df['is_parisinus'] == False]['word_count'].values
+    parisinus_subset = _positive_finite(df[df['is_parisinus'] == True]['word_count'].values)
+    epitomised_subset = _positive_finite(df[df['is_parisinus'] == False]['word_count'].values)
 
     # Use logarithmic bins
-    bins2 = np.logspace(np.log10(all_counts.min()), np.log10(all_counts.max()), 30)
+    bins2 = np.logspace(np.log10(min_count), np.log10(max_count), 30)
 
     # Normalized histograms with log bins
     ax2.hist(parisinus_subset, alpha=0.3, label='Parisinus Coislinianus 228', bins=bins2, density=True, color='blue')
@@ -366,19 +397,31 @@ def generate_histograms(df):
     # Add KDE curves on log scale
     if len(parisinus_subset) > 1:
         log_parisinus = np.log10(parisinus_subset)
-        kde_parisinus = gaussian_kde(log_parisinus)
-        x_range_log = np.linspace(log_parisinus.min(), log_parisinus.max(), 200)
-        x_range = 10 ** x_range_log
-        density = kde_parisinus(x_range_log) / (x_range * np.log(10))
-        ax2.plot(x_range, density, linewidth=2, label='Parisinus (KDE)', color='darkblue')
+        log_parisinus = log_parisinus[np.isfinite(log_parisinus)]
+        if len(log_parisinus) > 1 and np.nanstd(log_parisinus) > 0:
+            try:
+                kde_parisinus = gaussian_kde(log_parisinus)
+            except Exception:
+                kde_parisinus = None
+            if kde_parisinus is not None:
+                x_range_log = np.linspace(log_parisinus.min(), log_parisinus.max(), 200)
+                x_range = 10 ** x_range_log
+                density = kde_parisinus(x_range_log) / (x_range * np.log(10))
+                ax2.plot(x_range, density, linewidth=2, label='Parisinus (KDE)', color='darkblue')
 
     if len(epitomised_subset) > 1:
         log_epitomised = np.log10(epitomised_subset)
-        kde_epitomised = gaussian_kde(log_epitomised)
-        x_range_log = np.linspace(log_epitomised.min(), log_epitomised.max(), 200)
-        x_range = 10 ** x_range_log
-        density = kde_epitomised(x_range_log) / (x_range * np.log(10))
-        ax2.plot(x_range, density, linewidth=2, label='Epitomised (KDE)', color='darkorange')
+        log_epitomised = log_epitomised[np.isfinite(log_epitomised)]
+        if len(log_epitomised) > 1 and np.nanstd(log_epitomised) > 0:
+            try:
+                kde_epitomised = gaussian_kde(log_epitomised)
+            except Exception:
+                kde_epitomised = None
+            if kde_epitomised is not None:
+                x_range_log = np.linspace(log_epitomised.min(), log_epitomised.max(), 200)
+                x_range = 10 ** x_range_log
+                density = kde_epitomised(x_range_log) / (x_range * np.log(10))
+                ax2.plot(x_range, density, linewidth=2, label='Epitomised (KDE)', color='darkorange')
 
     ax2.set_xlabel('Word Count (log scale)')
     ax2.set_ylabel('Probability Density')
