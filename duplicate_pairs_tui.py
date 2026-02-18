@@ -7,6 +7,9 @@ Workflow:
        uv run compute_entry_ngram_overlaps.py --letter kappa --reset --top-k 300 --min-overlap 0 --min-jaccard 0 --min-shared 1
   2) Launch the reviewer:
        uv run duplicate_pairs_tui.py --letter kappa
+  3) Non-TUI modes (for SSH / logging):
+       uv run duplicate_pairs_tui.py --mode suggest --letter kappa --count 20
+       uv run duplicate_pairs_tui.py --mode top --letter kappa --count 20 --min-p 0.9
 
 Labels are stored in PostgreSQL (table: lemma_duplicate_labels). The TUI trains
 two models (logistic regression + decision tree) on your labels and selects new
@@ -30,6 +33,7 @@ import argparse
 import curses
 import locale
 import math
+import re
 import textwrap
 import unicodedata
 from dataclasses import dataclass
@@ -44,6 +48,11 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
 
 from db import get_connection
+
+
+_DROP_SQUARE_BRACKET_RE = re.compile(r"\[[^\]]*\]")
+_DROP_PARENS_RE = re.compile(r"\([^)]*\)")
+_HYPHEN_LINEBREAK_RE = re.compile(r"[-‐‑‒–—−]\s*\n\s*")
 
 
 def table_exists(cur, table_name: str) -> bool:
@@ -112,15 +121,23 @@ def make_letter_regex(letter: str) -> str:
         raise ValueError(f"letter must be a single Greek letter (got {letter!r})")
     upper = letter.upper()
     lower = letter.lower()
+    prefix = r"^[[:space:]\[\(]*"
     if upper == "Σ":
-        return f"^[{upper}{lower}ς]"
-    return f"^[{upper}{lower}]"
+        return f"{prefix}[{upper}{lower}ς]"
+    return f"{prefix}[{upper}{lower}]"
 
 
 def normalize_headword(text: str) -> str:
     text = (text or "").strip()
     if not text:
         return ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Join hyphenated line breaks.
+    text = _HYPHEN_LINEBREAK_RE.sub("", text)
+    # Drop bracketed/parenthetical spans (often editorial / placeholders).
+    text = _DROP_SQUARE_BRACKET_RE.sub(" ", text)
+    text = _DROP_PARENS_RE.sub(" ", text)
+    text = text.replace("\n", " ")
     decomposed = unicodedata.normalize("NFD", text)
     stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
     stripped = unicodedata.normalize("NFC", stripped).casefold()
@@ -134,12 +151,22 @@ def normalize_headword(text: str) -> str:
     return "".join(kept)
 
 
+def char_ngrams(text: str, n: int) -> set[str]:
+    if n <= 0:
+        raise ValueError("n must be > 0")
+    text = "".join(ch for ch in (text or "") if not ch.isspace())
+    if len(text) < n:
+        return set()
+    return {text[i : i + n] for i in range(len(text) - n + 1)}
+
+
 @dataclass(frozen=True)
 class LemmaMeta:
     lemma_id: int
     lemma: str
     lemma_norm: str
     lemma_norm_len: int
+    headword_trigrams: frozenset[str]
     version: str
     entry_number: int | None
     lemma_type: str
@@ -176,11 +203,13 @@ def fetch_letter_lemmas(cur, *, letter_regex: str) -> dict[int, LemmaMeta]:
     metas: dict[int, LemmaMeta] = {}
     for lemma_id, lemma, version, entry_number, lemma_type in cur.fetchall():
         lemma_norm = normalize_headword(lemma or "")
+        headword_trigrams = frozenset(char_ngrams(lemma_norm, 3))
         metas[int(lemma_id)] = LemmaMeta(
             lemma_id=int(lemma_id),
             lemma=lemma or "",
             lemma_norm=lemma_norm,
             lemma_norm_len=len(lemma_norm),
+            headword_trigrams=headword_trigrams,
             version=version or "",
             entry_number=int(entry_number) if entry_number is not None else None,
             lemma_type=lemma_type or "",
@@ -410,6 +439,8 @@ def build_feature_row(edge: EdgeCandidate, *, meta_a: LemmaMeta, meta_b: LemmaMe
     n_max = float(max(edge.ngrams_a, edge.ngrams_b) or 1)
     size_ratio = (n_min / n_max) if n_max else 0.0
     shared_over_max = shared / n_max if n_max else 0.0
+    contain_a_in_b = shared / n_a if n_a else 0.0
+    contain_b_in_a = shared / n_b if n_b else 0.0
 
     hw_len_a = float(meta_a.lemma_norm_len)
     hw_len_b = float(meta_b.lemma_norm_len)
@@ -419,6 +450,24 @@ def build_feature_row(edge: EdgeCandidate, *, meta_a: LemmaMeta, meta_b: LemmaMe
     hw_len_delta = abs(hw_len_a - hw_len_b)
     hw_norm_equal = 1.0 if meta_a.lemma_norm and meta_a.lemma_norm == meta_b.lemma_norm else 0.0
 
+    hw_grams_a = meta_a.headword_trigrams
+    hw_grams_b = meta_b.headword_trigrams
+    hw_size_a = float(len(hw_grams_a))
+    hw_size_b = float(len(hw_grams_b))
+    if hw_size_a and hw_size_b:
+        hw_shared = float(len(hw_grams_a & hw_grams_b))
+        hw_union = hw_size_a + hw_size_b - hw_shared
+        hw_jaccard = (hw_shared / hw_union) if hw_union else 0.0
+        hw_overlap = hw_shared / float(min(hw_size_a, hw_size_b) or 1.0)
+        hw_contain_a = hw_shared / hw_size_a if hw_size_a else 0.0
+        hw_contain_b = hw_shared / hw_size_b if hw_size_b else 0.0
+    else:
+        hw_shared = 0.0
+        hw_jaccard = 0.0
+        hw_overlap = 0.0
+        hw_contain_a = 0.0
+        hw_contain_b = 0.0
+
     dist = float(edge.headword_distance) if edge.headword_distance is not None else math.nan
     norm_dist = float(edge.headword_norm_distance) if edge.headword_norm_distance is not None else math.nan
 
@@ -427,6 +476,8 @@ def build_feature_row(edge: EdgeCandidate, *, meta_a: LemmaMeta, meta_b: LemmaMe
     return [
         float(edge.overlap),
         float(edge.jaccard),
+        float(contain_a_in_b),
+        float(contain_b_in_a),
         float(edge.shared),
         n_a,
         n_b,
@@ -437,6 +488,13 @@ def build_feature_row(edge: EdgeCandidate, *, meta_a: LemmaMeta, meta_b: LemmaMe
         float(hw_len_ratio),
         float(hw_len_delta),
         float(hw_norm_equal),
+        float(hw_jaccard),
+        float(hw_overlap),
+        float(hw_contain_a),
+        float(hw_contain_b),
+        float(hw_shared),
+        float(hw_size_a),
+        float(hw_size_b),
         float(same_source),
     ]
 
@@ -645,16 +703,19 @@ def _fmt_meta(meta: LemmaMeta) -> str:
     return f"id={meta.lemma_id}  {meta.lemma}  [{meta.version or '—'}]  {entry}  type={meta.lemma_type or '—'}"
 
 
-def tui_main(stdscr, *, args):
-    curses.curs_set(0)
-    stdscr.nodelay(False)
-    stdscr.keypad(True)
+@dataclass
+class ReviewData:
+    lemma_meta: dict[int, LemmaMeta]
+    lemma_ids: list[int]
+    edges: list[EdgeCandidate]
+    labels: dict[tuple[int, int], bool]
+    key_to_index: dict[tuple[int, int], int]
+    X_all: np.ndarray
+    bootstrap_target_overlap: float
+    model_state: ModelState
 
-    conn = get_connection()
-    cur = conn.cursor()
-    ensure_label_table(cur)
-    conn.commit()
 
+def load_review_data(cur, *, args) -> ReviewData:
     letter = slug_to_letter(args.letter)
     letter_regex = make_letter_regex(letter)
 
@@ -695,14 +756,9 @@ def tui_main(stdscr, *, args):
             "No candidate edges found. Run compute_entry_ngram_overlaps.py for this letter/config first."
         )
 
-    text_cache: dict[int, str] = {}
-    skipped: set[tuple[int, int]] = set()
-    history: list[tuple[int, int]] = []
-    history_pos = -1
-    scroll = 0
-
     edge_keys = [e.key() for e in edges]
     key_to_index = {k: i for i, k in enumerate(edge_keys)}
+
     first_edge = edges[0]
     first_row = build_feature_row(
         first_edge,
@@ -721,19 +777,186 @@ def tui_main(stdscr, *, args):
             meta_b=lemma_meta[edge.lemma_id_b],
         )
         overlaps[i] = float(edge.overlap)
+
     bootstrap_target_overlap = float(np.quantile(overlaps, 0.95)) if len(overlaps) else 0.5
-
-    def get_text(lemma_id: int) -> str:
-        if lemma_id not in text_cache:
-            text_cache[lemma_id] = fetch_best_text(cur, lemma_id=lemma_id)
-        return text_cache[lemma_id]
-
     model_state = train_models(
         X_all=X_all,
         key_to_index=key_to_index,
         labels=labels,
         random_state=args.random_state,
     )
+
+    return ReviewData(
+        lemma_meta=lemma_meta,
+        lemma_ids=lemma_ids,
+        edges=edges,
+        labels=labels,
+        key_to_index=key_to_index,
+        X_all=X_all,
+        bootstrap_target_overlap=bootstrap_target_overlap,
+        model_state=model_state,
+    )
+
+
+def _review_urls(a_id: int, b_id: int, *, base_url: str) -> tuple[str, str]:
+    base = (base_url or "").rstrip("/")
+    url_a = f"{base}/cgi-bin/review.cgi?id={a_id}" if base else f"/cgi-bin/review.cgi?id={a_id}"
+    url_b = f"{base}/cgi-bin/review.cgi?id={b_id}" if base else f"/cgi-bin/review.cgi?id={b_id}"
+    return url_a, url_b
+
+
+def _fmt_edge_line(edge: EdgeCandidate, *, meta_a: LemmaMeta, meta_b: LemmaMeta, p: float | None, score: float | None) -> str:
+    contain_a = (edge.shared / edge.ngrams_a) if edge.ngrams_a else 0.0
+    contain_b = (edge.shared / edge.ngrams_b) if edge.ngrams_b else 0.0
+    hw_a = meta_a.headword_trigrams
+    hw_b = meta_b.headword_trigrams
+    hw_shared = len(hw_a & hw_b) if hw_a and hw_b else 0
+    hw_size_a = len(hw_a)
+    hw_size_b = len(hw_b)
+    hw_contain_a = (hw_shared / hw_size_a) if hw_size_a else 0.0
+    hw_contain_b = (hw_shared / hw_size_b) if hw_size_b else 0.0
+    hw_overlap = (hw_shared / min(hw_size_a, hw_size_b)) if hw_size_a and hw_size_b else 0.0
+
+    bits: list[str] = []
+    if score is not None:
+        bits.append(f"score={score:.3f}")
+    if p is not None:
+        bits.append(f"p={p:.3f}")
+    bits.append(f"{edge.lemma_id_a}↔{edge.lemma_id_b}")
+    bits.append(f"{meta_a.lemma} | {meta_b.lemma}")
+    bits.append(f"ov={edge.overlap:.3f} jac={edge.jaccard:.3f}")
+    bits.append(f"contain=({contain_a:.3f},{contain_b:.3f})")
+    bits.append(f"hw_overlap={hw_overlap:.3f} hw_contain=({hw_contain_a:.3f},{hw_contain_b:.3f})")
+    if edge.headword_distance is not None:
+        bits.append(f"hw_dist={edge.headword_distance}")
+    return "  ".join(bits)
+
+
+def run_suggest_mode(args) -> int:
+    conn = get_connection()
+    cur = conn.cursor()
+    ensure_label_table(cur)
+    conn.commit()
+
+    data = load_review_data(cur, args=args)
+    scored = score_candidates(
+        edges=data.edges,
+        X_all=data.X_all,
+        labels=data.labels,
+        skipped=set(),
+        model_state=data.model_state,
+        bootstrap_target_overlap=data.bootstrap_target_overlap,
+    )
+
+    to_show = scored[: max(0, int(args.count))]
+    print(
+        f"mode=suggest  letter={args.letter}  edges={len(data.edges):,}  "
+        f"labels={data.model_state.n_labels} dup={data.model_state.n_dup} not={data.model_state.n_not}"
+    )
+    for score, idx, p in to_show:
+        edge = data.edges[int(idx)]
+        meta_a = data.lemma_meta[edge.lemma_id_a]
+        meta_b = data.lemma_meta[edge.lemma_id_b]
+        url_a, url_b = _review_urls(edge.lemma_id_a, edge.lemma_id_b, base_url=args.base_url)
+        print(_fmt_edge_line(edge, meta_a=meta_a, meta_b=meta_b, p=p, score=score))
+        print(f"  {url_a}")
+        print(f"  {url_b}")
+
+    conn.close()
+    return 0
+
+
+def run_top_mode(args) -> int:
+    conn = get_connection()
+    cur = conn.cursor()
+    ensure_label_table(cur)
+    conn.commit()
+
+    data = load_review_data(cur, args=args)
+
+    print(
+        f"mode=top  letter={args.letter}  edges={len(data.edges):,}  "
+        f"labels={data.model_state.n_labels} dup={data.model_state.n_dup} not={data.model_state.n_not}"
+    )
+
+    unlabeled_indices = [i for i, e in enumerate(data.edges) if e.key() not in data.labels]
+    if not unlabeled_indices:
+        print("No unlabeled edges in pool.")
+        conn.close()
+        return 0
+
+    min_p = float(args.min_p) if args.min_p is not None else None
+
+    if data.model_state.trained and data.model_state.logreg and data.model_state.tree:
+        X = data.X_all[np.asarray(unlabeled_indices, dtype=int)]
+        p1 = data.model_state.logreg.predict_proba(X)[:, 1]
+        p2 = data.model_state.tree.predict_proba(X)[:, 1]
+        p_avg = (p1 + p2) / 2.0
+        order = np.argsort(-p_avg)
+        shown = 0
+        for pos in order.tolist():
+            idx = unlabeled_indices[int(pos)]
+            p = float(p_avg[int(pos)])
+            if min_p is not None and p < min_p:
+                continue
+            edge = data.edges[int(idx)]
+            meta_a = data.lemma_meta[edge.lemma_id_a]
+            meta_b = data.lemma_meta[edge.lemma_id_b]
+            url_a, url_b = _review_urls(edge.lemma_id_a, edge.lemma_id_b, base_url=args.base_url)
+            print(_fmt_edge_line(edge, meta_a=meta_a, meta_b=meta_b, p=p, score=None))
+            print(f"  {url_a}")
+            print(f"  {url_b}")
+            shown += 1
+            if shown >= int(args.count):
+                break
+    else:
+        # Fallback: no trained classifier yet; show highest-overlap pairs.
+        edges_with_idx = [(data.edges[i].overlap, i) for i in unlabeled_indices]
+        edges_with_idx.sort(reverse=True)
+        for overlap, idx in edges_with_idx[: int(args.count)]:
+            edge = data.edges[int(idx)]
+            meta_a = data.lemma_meta[edge.lemma_id_a]
+            meta_b = data.lemma_meta[edge.lemma_id_b]
+            url_a, url_b = _review_urls(edge.lemma_id_a, edge.lemma_id_b, base_url=args.base_url)
+            print(_fmt_edge_line(edge, meta_a=meta_a, meta_b=meta_b, p=None, score=None))
+            print(f"  {url_a}")
+            print(f"  {url_b}")
+
+    conn.close()
+    return 0
+
+
+def tui_main(stdscr, *, args):
+    curses.curs_set(0)
+    stdscr.nodelay(False)
+    stdscr.keypad(True)
+
+    conn = get_connection()
+    cur = conn.cursor()
+    ensure_label_table(cur)
+    conn.commit()
+
+    data = load_review_data(cur, args=args)
+    lemma_meta = data.lemma_meta
+    lemma_ids = data.lemma_ids
+    edges = data.edges
+    labels = data.labels
+    key_to_index = data.key_to_index
+    X_all = data.X_all
+    bootstrap_target_overlap = data.bootstrap_target_overlap
+
+    text_cache: dict[int, str] = {}
+    skipped: set[tuple[int, int]] = set()
+    history: list[tuple[int, int]] = []
+    history_pos = -1
+    scroll = 0
+
+    def get_text(lemma_id: int) -> str:
+        if lemma_id not in text_cache:
+            text_cache[lemma_id] = fetch_best_text(cur, lemma_id=lemma_id)
+        return text_cache[lemma_id]
+
+    model_state = data.model_state
 
     scored = score_candidates(
         edges=edges,
@@ -836,17 +1059,28 @@ def tui_main(stdscr, *, args):
             f"overlap={current_edge.overlap:.3f}  jaccard={current_edge.jaccard:.3f}  "
             f"shared={current_edge.shared}  ngrams=({current_edge.ngrams_a},{current_edge.ngrams_b})"
         )
+        contain_a = (current_edge.shared / current_edge.ngrams_a) if current_edge.ngrams_a else 0.0
+        contain_b = (current_edge.shared / current_edge.ngrams_b) if current_edge.ngrams_b else 0.0
+        feat += f"  contain=({contain_a:.3f},{contain_b:.3f})"
         if current_edge.text_source_a or current_edge.text_source_b:
             feat += f"  text=({current_edge.text_source_a or '—'},{current_edge.text_source_b or '—'})"
         if current_edge.headword_distance is not None:
             feat += f"  headword_dist={current_edge.headword_distance}"
         if current_edge.headword_norm_distance is not None:
             feat += f"  headword_norm={current_edge.headword_norm_distance:.3f}"
+
+        hw_a = meta_a.headword_trigrams
+        hw_b = meta_b.headword_trigrams
+        hw_shared = len(hw_a & hw_b) if hw_a and hw_b else 0
+        hw_size_a = len(hw_a)
+        hw_size_b = len(hw_b)
+        hw_contain_a = (hw_shared / hw_size_a) if hw_size_a else 0.0
+        hw_contain_b = (hw_shared / hw_size_b) if hw_size_b else 0.0
+        hw_overlap = (hw_shared / min(hw_size_a, hw_size_b)) if hw_size_a and hw_size_b else 0.0
+        feat += f"  hw_overlap={hw_overlap:.3f} hw_contain=({hw_contain_a:.3f},{hw_contain_b:.3f})"
         safe_addstr(6, 0, feat)
 
-        base = (args.base_url or "").rstrip("/")
-        url_a = f"{base}/cgi-bin/review.cgi?id={meta_a.lemma_id}" if base else f"/cgi-bin/review.cgi?id={meta_a.lemma_id}"
-        url_b = f"{base}/cgi-bin/review.cgi?id={meta_b.lemma_id}" if base else f"/cgi-bin/review.cgi?id={meta_b.lemma_id}"
+        url_a, url_b = _review_urls(meta_a.lemma_id, meta_b.lemma_id, base_url=args.base_url)
         safe_addstr(7, 0, f"Review: {url_a}  |  {url_b}")
 
         # Text region
@@ -1014,6 +1248,12 @@ def main() -> int:
     locale.setlocale(locale.LC_ALL, "")
 
     parser = argparse.ArgumentParser(description="Curses TUI for labeling duplicate lemma pairs with active learning.")
+    parser.add_argument(
+        "--mode",
+        default="tui",
+        choices=("tui", "suggest", "top"),
+        help="Run interactive TUI, or print candidate pairs to stdout",
+    )
     parser.add_argument("--letter", default="kappa", help="Greek letter (e.g. Κ) or slug (e.g. kappa)")
     parser.add_argument("--ngram-size", type=int, default=3)
     parser.add_argument("--gram-kind", default="char", choices=("char", "word"))
@@ -1028,6 +1268,8 @@ def main() -> int:
     parser.add_argument("--max-headword-norm-distance", type=float, default=None)
     parser.add_argument("--skip-labeled", action="store_true", help="Do not include already-labeled pairs in pool")
     parser.add_argument("--limit", type=int, default=None, help="Limit candidate edges (debug)")
+    parser.add_argument("--count", type=int, default=30, help="How many pairs to print in non-TUI modes")
+    parser.add_argument("--min-p", type=float, default=None, help="Minimum p(dup) to print in --mode top")
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--labeled-by", default="tui", help="Stored in lemma_duplicate_labels.labeled_by")
     parser.add_argument("--base-url", default="https://stephanos.symmachus.org", help="Base URL for review links")
@@ -1049,9 +1291,20 @@ def main() -> int:
         raise SystemExit("--max-headword-distance must be >= 0")
     if args.max_headword_norm_distance is not None and args.max_headword_norm_distance < 0:
         raise SystemExit("--max-headword-norm-distance must be >= 0")
+    if args.count <= 0:
+        raise SystemExit("--count must be > 0")
+    if args.min_p is not None and not (0 <= args.min_p <= 1):
+        raise SystemExit("--min-p must be in [0, 1]")
 
-    curses.wrapper(lambda stdscr: tui_main(stdscr, args=args))
-    return 0
+    if args.mode == "tui":
+        curses.wrapper(lambda stdscr: tui_main(stdscr, args=args))
+        return 0
+    if args.mode == "suggest":
+        return int(run_suggest_mode(args))
+    if args.mode == "top":
+        return int(run_top_mode(args))
+
+    raise SystemExit(f"Unknown mode: {args.mode!r}")
 
 
 if __name__ == "__main__":
