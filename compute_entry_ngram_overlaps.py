@@ -98,7 +98,9 @@ class LemmaText:
     ngrams: set[object]
 
 
-def fetch_lemma_texts(cur, *, limit: int | None) -> list[tuple[int, str, str, str, str]]:
+def fetch_lemma_texts(
+    cur, *, letter_regex: str | None, limit: int | None
+) -> list[tuple[int, str, str, str, str]]:
     """
     Returns rows of:
       (id, lemma, version, assembled_text, meineke_text)
@@ -116,10 +118,14 @@ def fetch_lemma_texts(cur, *, limit: int | None) -> list[tuple[int, str, str, st
         meineke_col = "COALESCE(stv.text_body, '')"
 
     limit_sql = ""
-    params: tuple[object, ...] = ()
+    where_sql = ""
+    params: list[object] = []
+    if letter_regex:
+        where_sql = "WHERE COALESCE(a.lemma, '') ~ %s"
+        params.append(str(letter_regex))
     if limit is not None:
         limit_sql = "LIMIT %s"
-        params = (int(limit),)
+        params.append(int(limit))
 
     cur.execute(
         f"""
@@ -131,10 +137,11 @@ def fetch_lemma_texts(cur, *, limit: int | None) -> list[tuple[int, str, str, st
             {meineke_col} AS meineke_text
         FROM assembled_lemmas a
         {meineke_join}
+        {where_sql}
         ORDER BY a.id
         {limit_sql}
         """,
-        params,
+        tuple(params),
     )
     return cur.fetchall()
 
@@ -245,13 +252,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Compute near-duplicate entry similarities using n-gram overlap and store results in PostgreSQL."
     )
-    parser.add_argument("--kind", choices=("word", "char"), default="word", help="n-gram kind")
-    parser.add_argument("--ngram-size", type=int, default=2, help="n-gram size")
+    parser.add_argument("--kind", choices=("word", "char"), default="char", help="n-gram kind")
+    parser.add_argument("--ngram-size", type=int, default=3, help="n-gram size")
     parser.add_argument(
         "--text-mode",
         choices=("auto", "assembled", "meineke"),
         default="auto",
         help="Which text field to compare",
+    )
+    parser.add_argument(
+        "--letter",
+        type=str,
+        default=None,
+        help="Restrict comparisons to lemmas starting with this Greek letter (e.g. Κ) or slug (e.g. kappa)",
     )
     parser.add_argument(
         "--include-headword",
@@ -294,20 +307,76 @@ def main() -> int:
     cur = conn.cursor()
     ensure_table(cur)
 
-    if args.reset:
-        cur.execute(
-            """
-            DELETE FROM lemma_entry_ngram_overlaps
-            WHERE ngram_size = %s
-              AND gram_kind = %s
-              AND text_mode = %s
-            """,
-            (int(args.ngram_size), args.kind, args.text_mode),
-        )
-        conn.commit()
+    slug_to_letter = {
+        "alpha": "Α",
+        "beta": "Β",
+        "gamma": "Γ",
+        "delta": "Δ",
+        "epsilon": "Ε",
+        "zeta": "Ζ",
+        "eta": "Η",
+        "theta": "Θ",
+        "iota": "Ι",
+        "kappa": "Κ",
+        "lambda": "Λ",
+        "mu": "Μ",
+        "nu": "Ν",
+        "xi": "Ξ",
+        "omicron": "Ο",
+        "pi": "Π",
+        "rho": "Ρ",
+        "sigma": "Σ",
+        "tau": "Τ",
+        "upsilon": "Υ",
+        "phi": "Φ",
+        "chi": "Χ",
+        "psi": "Ψ",
+        "omega": "Ω",
+    }
+    letter_regex: str | None = None
+    if args.letter:
+        raw = (args.letter or "").strip()
+        if not raw:
+            raise SystemExit("--letter must not be empty")
+        greek_letter = slug_to_letter.get(raw.casefold(), raw)
+        if len(greek_letter) != 1:
+            raise SystemExit(f"--letter must be a single Greek letter or slug (got: {args.letter!r})")
+        upper = greek_letter.upper()
+        lower = greek_letter.lower()
+        # Include final sigma for safety when filtering by sigma.
+        if upper == "Σ":
+            letter_regex = f"^[{upper}{lower}ς]"
+        else:
+            letter_regex = f"^[{upper}{lower}]"
 
-    rows = fetch_lemma_texts(cur, limit=args.limit)
+    rows = fetch_lemma_texts(cur, letter_regex=letter_regex, limit=args.limit)
     print(f"Loaded {len(rows)} lemmas")
+
+    if args.reset:
+        if letter_regex and rows:
+            lemma_ids = [int(row[0]) for row in rows]
+            cur.execute(
+                """
+                DELETE FROM lemma_entry_ngram_overlaps
+                WHERE ngram_size = %s
+                  AND gram_kind = %s
+                  AND text_mode = %s
+                  AND lemma_id_a = ANY(%s)
+                  AND lemma_id_b = ANY(%s)
+                """,
+                (int(args.ngram_size), args.kind, args.text_mode, lemma_ids, lemma_ids),
+            )
+        else:
+            cur.execute(
+                """
+                DELETE FROM lemma_entry_ngram_overlaps
+                WHERE ngram_size = %s
+                  AND gram_kind = %s
+                  AND text_mode = %s
+                """,
+                (int(args.ngram_size), args.kind, args.text_mode),
+            )
+        conn.commit()
 
     lemma_texts: list[LemmaText] = []
     df_counts: dict[object, int] = defaultdict(int)

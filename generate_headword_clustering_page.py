@@ -294,8 +294,8 @@ def main() -> int:
     )
     entry_overlap_edges = load_entry_overlap_neighbors(
         cur,
-        ngram_size=2,
-        gram_kind="word",
+        ngram_size=3,
+        gram_kind="char",
         text_mode="auto",
         top_n=max(args.neighbors_hover, 0),
     )
