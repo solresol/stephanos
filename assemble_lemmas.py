@@ -210,6 +210,16 @@ def build_assembled_entries(rows, headword_lookup):
         elif isinstance(data, list):
             page_entries = data
 
+        if page_entries and all(isinstance(entry, dict) for entry in page_entries):
+            # Guard against mistakenly attempting to assemble non-Billerbeck OCR payloads (e.g., Meineke),
+            # which use main_text_lines/apparatus_entries instead of greek_text.
+            has_meineke_keys = any("main_text_lines" in entry or "apparatus_entries" in entry for entry in page_entries)
+            has_billerbeck_keys = any("greek_text" in entry for entry in page_entries)
+            if has_meineke_keys and not has_billerbeck_keys:
+                print(f"Skipping {filename}: lemma_json schema looks like Meineke OCR (no greek_text fields).")
+                last_entry_by_version = {}
+                continue
+
         if status == "non_greek_error":
             print(f"Skipping {filename}: non-Greek page detected")
             last_entry_by_version = {}

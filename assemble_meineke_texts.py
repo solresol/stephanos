@@ -4,6 +4,10 @@ Assemble OCR'd Meineke entries into source-text version tables.
 
 Also backfills missing Meineke source text from meineke_headwords.greek_paragraph
 as source_variant='csv_fallback' when OCR text is absent.
+
+By default, this script skips end-matter/index pages in the current Meineke scan
+to avoid contaminating `lemma_source_text_versions` (override with
+`--include-end-matter`).
 """
 import argparse
 import hashlib
@@ -17,6 +21,14 @@ from db import get_connection
 _NORMALIZED_LEMMA_INDEX = None
 _GREEK_BLOCK_RE = re.compile(r"[\u0370-\u03FF\u1F00-\u1FFF]")
 _APPARATUS_LINE_PREFIX_RE = re.compile(r"^\s*(\d+)\.")
+
+# The Meineke PDF scan currently queued in `images` includes end-matter indices
+# (e.g., INDEX SCRIPTORUM). Those pages can contain short, index-like "entries"
+# which may accidentally match real lemmas and overwrite current source versions.
+#
+# This cutoff is a pragmatic safety guard for the current scan; override via CLI
+# if you intentionally want to ingest end-matter.
+DEFAULT_MAX_LEXICON_PAGE_NUMBER = 738
 
 
 def normalize_lemma_for_match(text: str) -> str:
@@ -164,18 +176,22 @@ def ensure_source_tables(cur):
     )
 
 
-def fetch_meineke_ocr_rows(cur, limit: int | None):
+def fetch_meineke_ocr_rows(cur, limit: int | None, max_page_number: int | None):
     query = """
-        SELECT id, image_filename, lemma_json
+        SELECT id, image_filename, page_number, lemma_json
         FROM images
         WHERE processed = 1
           AND COALESCE(source_document, 'billerbeck') = 'meineke'
           AND lemma_json IS NOT NULL
-        ORDER BY id
     """
+    params = []
+    if max_page_number is not None:
+        query += " AND (page_number IS NULL OR page_number <= %s)"
+        params.append(int(max_page_number))
+    query += " ORDER BY id"
     if limit is not None:
         query += f" LIMIT {int(limit)}"
-    cur.execute(query)
+    cur.execute(query, params)
     return cur.fetchall()
 
 
@@ -359,17 +375,20 @@ def insert_lines_and_apparatus(cur, version_id, main_lines, apparatus_entries):
             last_line_seq = line_seq
 
 
-def parse_entries(lemma_json):
+def parse_payload(lemma_json: str) -> tuple[str, list]:
     try:
         data = json.loads(lemma_json)
     except json.JSONDecodeError:
-        return []
+        return "", []
 
     if isinstance(data, dict):
-        return data.get("entries", []) or []
+        status = (data.get("status") or "").strip()
+        entries = data.get("entries", []) or []
+        return status, entries if isinstance(entries, list) else []
     if isinstance(data, list):
-        return data
-    return []
+        # Legacy payloads (list-only) are treated as "entries present".
+        return "entries_present", data
+    return "", []
 
 
 def backfill_csv_fallback(cur):
@@ -430,16 +449,33 @@ def backfill_csv_fallback(cur):
 def main():
     parser = argparse.ArgumentParser(description="Assemble OCR Meineke text into source-text tables.")
     parser.add_argument("--limit", type=int, help="Process up to N OCR'd Meineke images")
+    parser.add_argument(
+        "--max-page",
+        type=int,
+        default=DEFAULT_MAX_LEXICON_PAGE_NUMBER,
+        help=f"Only ingest OCR rows from images.page_number <= N (default: {DEFAULT_MAX_LEXICON_PAGE_NUMBER})",
+    )
+    parser.add_argument(
+        "--include-end-matter",
+        action="store_true",
+        help="Process all OCR'd Meineke images regardless of page_number (not recommended).",
+    )
     args = parser.parse_args()
 
     conn = get_connection()
     cur = conn.cursor()
     ensure_source_tables(cur)
 
-    rows = fetch_meineke_ocr_rows(cur, args.limit)
+    max_page_number = None if args.include_end_matter else args.max_page
+    rows = fetch_meineke_ocr_rows(cur, args.limit, max_page_number)
     inserted_versions = 0
-    for image_id, filename, lemma_json in rows:
-        for entry in parse_entries(lemma_json):
+    for image_id, filename, _page_number, lemma_json in rows:
+        status, entries = parse_payload(lemma_json)
+        if status and status != "entries_present":
+            continue
+        if not entries:
+            continue
+        for entry in entries:
             lemma_id = choose_lemma_id(cur, entry)
             if not lemma_id:
                 continue

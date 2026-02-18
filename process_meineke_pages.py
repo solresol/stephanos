@@ -2,6 +2,10 @@
 """
 OCR Meineke pages from images.source_document='meineke' into strict JSON.
 
+By default, this script skips end-matter/index pages in the current Meineke scan
+to avoid wasting tokens and contaminating downstream tables (override with
+`--include-end-matter`).
+
 Output schema:
 {
   "status": "entries_present|continuation_only|apparatus_only|non_greek_error",
@@ -34,6 +38,10 @@ from db import get_connection
 
 DEFAULT_MODEL = "gpt-5.1"
 ALLOWED_STATUS = {"entries_present", "continuation_only", "apparatus_only", "non_greek_error"}
+
+# Safety guard: the current Meineke scan includes end-matter indices after the main lexicon.
+# Those pages are not useful for lemma OCR and can waste tokens / pollute downstream tables.
+DEFAULT_MAX_LEXICON_PAGE_NUMBER = 738
 
 SYSTEM_PROMPT = """You are a philological OCR assistant for the Meineke text of Stephanos of Byzantium.
 Extract both:
@@ -117,22 +125,27 @@ def load_api_key():
     return key_path.read_text().strip()
 
 
-def fetch_unprocessed_images(cur, limit: int | None):
+def fetch_unprocessed_images(cur, limit: int | None, max_page_number: int | None):
     query = """
         SELECT id, image_filename, image_data
         FROM images
         WHERE processed = 0
           AND COALESCE(source_document, 'billerbeck') = 'meineke'
-        ORDER BY id
     """
+    params = []
+    if max_page_number is not None:
+        query += " AND (page_number IS NULL OR page_number <= %s)"
+        params.append(int(max_page_number))
+    query += " ORDER BY id"
     if limit is not None:
         query += f" LIMIT {int(limit)}"
-    cur.execute(query)
+    cur.execute(query, params)
     return cur.fetchall()
 
 
 def ensure_columns(cur):
     cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS source_document TEXT DEFAULT 'billerbeck'")
+    cur.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS page_number INTEGER")
 
 
 def process_image(client, model, image_data):
@@ -285,12 +298,24 @@ def main():
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--delay", type=float, default=1.0)
+    parser.add_argument(
+        "--max-page",
+        type=int,
+        default=DEFAULT_MAX_LEXICON_PAGE_NUMBER,
+        help=f"Only OCR images.page_number <= N (default: {DEFAULT_MAX_LEXICON_PAGE_NUMBER})",
+    )
+    parser.add_argument(
+        "--include-end-matter",
+        action="store_true",
+        help="OCR all queued Meineke images regardless of page_number (not recommended).",
+    )
     args = parser.parse_args()
 
     conn = get_connection()
     cur = conn.cursor()
     ensure_columns(cur)
-    rows = fetch_unprocessed_images(cur, args.limit)
+    max_page_number = None if args.include_end_matter else args.max_page
+    rows = fetch_unprocessed_images(cur, args.limit, max_page_number)
     if not rows:
         print("No unprocessed Meineke images found.")
         conn.close()
