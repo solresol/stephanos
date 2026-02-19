@@ -21,6 +21,9 @@ Usage:
 
 This script executes SQL on raksasa via `ssh ... psql ...` and does not require
 psycopg2 connectivity from the local machine.
+
+Safety:
+  - Source lemmas are filtered to have NO human translations.
 """
 
 from __future__ import annotations
@@ -198,6 +201,7 @@ WHERE COALESCE(ss.has_meineke, FALSE) = TRUE
   AND COALESCE(src.greek_text, '') = ''
   AND COALESCE(src.human_greek_text, '') = ''
   AND COALESCE(src.translated, 0) = 0
+  AND NOT EXISTS (SELECT 1 FROM human_translations ht WHERE ht.lemma_id = src.id)
   AND NOT EXISTS (SELECT 1 FROM translation_runs tr WHERE tr.lemma_id = src.id)
   AND NOT EXISTS (SELECT 1 FROM proper_nouns pn WHERE pn.lemma_id = src.id)
   AND NOT EXISTS (SELECT 1 FROM etymologies e WHERE e.lemma_id = src.id)
@@ -291,6 +295,7 @@ WHERE COALESCE(ss.has_meineke, FALSE) = TRUE
   AND COALESCE(src.greek_text, '') = ''
   AND COALESCE(src.human_greek_text, '') = ''
   AND COALESCE(src.translated, 0) = 0
+  AND NOT EXISTS (SELECT 1 FROM human_translations ht WHERE ht.lemma_id = src.id)
   AND NOT EXISTS (SELECT 1 FROM translation_runs tr WHERE tr.lemma_id = src.id)
   AND NOT EXISTS (SELECT 1 FROM proper_nouns pn WHERE pn.lemma_id = src.id)
   AND NOT EXISTS (SELECT 1 FROM etymologies e WHERE e.lemma_id = src.id)
@@ -456,4 +461,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
