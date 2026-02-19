@@ -191,6 +191,17 @@ If needed, parse apparatus into a witness graph:
 
 Useful for textual criticism, not essential for the place-name graph.
 
+## Duplicate Runbook
+
+When duplicates appear in `assembled_lemmas`, use these references and tools to diagnose and resolve them safely.
+
+- Documentation: `DATABASE_ISSUES.md` (root causes, evidence queries, and safe cleanup guidance).
+- Cleanup plan: `BILLERBECK_ID_CLEANUP_PLAN.md` (specific duplicate IDs + SQL deletion steps).
+- Detection (overlap scan): `uv run compute_entry_ngram_overlaps.py --letter kappa --reset --top-k 300 --min-overlap 0 --min-jaccard 0 --min-shared 1`
+- Review/labeling (TUI): `uv run duplicate_pairs_tui.py --letter kappa`
+- Review/labeling (non-TUI): `uv run duplicate_pairs_tui.py --mode suggest --letter kappa --count 20`
+- Meineke contamination cleanup (dry-run by default): `uv run cleanup_meineke_import_artifacts.py`
+
 ## Operational Notes
 
 ### Input Assumptions

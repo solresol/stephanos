@@ -42,6 +42,7 @@ def ensure_table(cur):
                 """
             )
         except psycopg2.errors.InsufficientPrivilege:
+            cur.connection.rollback()
             raise RuntimeError(
                 "translation_risk_flags does not exist and could not be created because this user lacks "
                 "CREATE privileges. Run this step once as an admin user."
@@ -55,6 +56,7 @@ def ensure_table(cur):
             """
         )
     except psycopg2.errors.InsufficientPrivilege:
+        cur.connection.rollback()
         # Non-owner users cannot own/index the legacy risk table. Skip index maintenance if missing.
         pass
 
@@ -66,6 +68,7 @@ def ensure_table(cur):
             """
         )
     except psycopg2.errors.InsufficientPrivilege:
+        cur.connection.rollback()
         # Non-owner users cannot own/index the legacy risk table. Skip index maintenance if missing.
         pass
 
