@@ -40,12 +40,14 @@ type Lemma struct {
 	EntryNumber                  int                  `json:"entry_number"`
 	Version                      string               `json:"version"`
 	GreekText                    string               `json:"greek_text"`
+	HumanGreekText               string               `json:"human_greek_text"`
 	MeinekeGreekParagraph        string               `json:"meineke_greek_paragraph"`
 	EnglishTranslation           string               `json:"english_translation"`
 	Type                         string               `json:"type"`
 	VolumeLabel                  string               `json:"volume_label"`
 	MeinekeID                    string               `json:"meineke_id"`
 	BillerbeckID                 string               `json:"billerbeck_id"`
+	NodegoatID                   string               `json:"nodegoat_id"`
 	WordCount                    int                  `json:"word_count"`
 	ImageFilenames               []string             `json:"image_filenames"`
 	Confidence                   string               `json:"confidence"`
@@ -69,6 +71,10 @@ type Lemma struct {
 	MeinekeScanFilenames         []string             `json:"meineke_scan_filenames"`
 	MeinekeMainTextLines         []SourceLine         `json:"meineke_main_text_lines"`
 	Apparatus                    []ApparatusEntry     `json:"apparatus"`
+	MeinekeOCRSourceVersionID    string               `json:"meineke_ocr_source_version_id"`
+	MeinekeOCRText               string               `json:"meineke_ocr_text"`
+	MeinekeOCRMainTextLines      []SourceLine         `json:"meineke_ocr_main_text_lines"`
+	MeinekeOCRApparatus          []ApparatusEntry     `json:"meineke_ocr_apparatus"`
 	Letter                       string               `json:"letter"`
 	SortOrder                    int                  `json:"sort_order"`
 }

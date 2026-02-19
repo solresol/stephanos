@@ -101,6 +101,7 @@ def export_lemmas():
                 a.entry_number,
                 a.version,
                 COALESCE(a.greek_text, '') as greek_text,
+                COALESCE(a.human_greek_text, '') as human_greek_text,
                 COALESCE(a.translation, (
                     SELECT COALESCE(
                         (a.translation_json::json)->>'translation',
@@ -111,6 +112,7 @@ def export_lemmas():
                 a.volume_label,
                 a.meineke_id,
                 a.billerbeck_id,
+                COALESCE(a.nodegoat_id, '') as nodegoat_id,
                 a.word_count,
                 a.confidence,
                 COALESCE(mh_match.greek_paragraph, '') as meineke_greek_paragraph,
@@ -123,6 +125,11 @@ def export_lemmas():
 	                       OR i.source_document = ''
 	                       OR i.source_document = 'billerbeck'
 	                   )) as image_filenames,
+	                (SELECT json_agg(i.image_filename ORDER BY li.position)
+	                 FROM images i
+	                 JOIN lemma_images li ON li.image_id = i.id
+	                 WHERE li.lemma_id = a.id
+	                   AND i.source_document = 'meineke') as meineke_image_filenames,
                 COALESCE(md.normalized_class, '') as meineke_normalized_class,
                 COALESCE(md.llm_status, '') as meineke_llm_status,
                 COALESCE(md.difference_level, '') as meineke_difference_level,
@@ -160,6 +167,7 @@ def export_lemmas():
                 a.entry_number,
                 a.version,
                 COALESCE(a.greek_text, '') as greek_text,
+                COALESCE(a.human_greek_text, '') as human_greek_text,
                 COALESCE(a.translation, (
                     SELECT COALESCE(
                         (a.translation_json::json)->>'translation',
@@ -170,6 +178,7 @@ def export_lemmas():
                 a.volume_label,
                 a.meineke_id,
                 a.billerbeck_id,
+                COALESCE(a.nodegoat_id, '') as nodegoat_id,
                 a.word_count,
                 a.confidence,
                 COALESCE(mh_match.greek_paragraph, '') as meineke_greek_paragraph,
@@ -182,6 +191,11 @@ def export_lemmas():
 	                       OR i.source_document = ''
 	                       OR i.source_document = 'billerbeck'
 	                   )) as image_filenames,
+	                (SELECT json_agg(i.image_filename ORDER BY li.position)
+	                 FROM images i
+	                 JOIN lemma_images li ON li.image_id = i.id
+	                 WHERE li.lemma_id = a.id
+	                   AND i.source_document = 'meineke') as meineke_image_filenames,
                 '' as meineke_normalized_class,
                 '' as meineke_llm_status,
                 '' as meineke_difference_level,
@@ -250,6 +264,7 @@ def export_lemmas():
 
     source_versions_by_lemma = {}
     current_meineke_by_lemma = {}
+    latest_meineke_ocr_by_lemma = {}
     meineke_lines_by_version = {}
     meineke_apparatus_by_version = {}
     meineke_scan_filenames_by_lemma = {}
@@ -293,14 +308,27 @@ def export_lemmas():
                     "created_at": str(created_at) if created_at else "",
                 }
             )
-            if source_document == "meineke" and is_current:
-                current_meineke_by_lemma[lemma_id] = {
-                    "id": version_id,
-                    "source_variant": source_variant or "",
-                    "text_body": text_body or "",
-                    "notes": notes or "",
-                }
-                if source_variant == "ocr" and notes:
+            if source_document == "meineke":
+                if source_variant == "ocr":
+                    if lemma_id not in latest_meineke_ocr_by_lemma:
+                        latest_meineke_ocr_by_lemma[lemma_id] = {
+                            "id": version_id,
+                            "source_variant": source_variant or "",
+                            "text_body": text_body or "",
+                            "notes": notes or "",
+                        }
+                    if notes:
+                        match = _OCR_IMAGE_NOTE_RE.search(notes)
+                        if match:
+                            meineke_scan_filenames_by_lemma.setdefault(lemma_id, []).append(match.group(1))
+                if is_current:
+                    current_meineke_by_lemma[lemma_id] = {
+                        "id": version_id,
+                        "source_variant": source_variant or "",
+                        "text_body": text_body or "",
+                        "notes": notes or "",
+                    }
+                if source_variant == "ocr" and is_current and notes:
                     match = _OCR_IMAGE_NOTE_RE.search(notes)
                     if match:
                         meineke_scan_filenames_by_lemma.setdefault(lemma_id, []).append(match.group(1))
@@ -513,9 +541,9 @@ def export_lemmas():
 
     lemmas = []
     for row in rows:
-        (lemma_id, lemma, entry_number, version, greek_text, english_translation,
-         lemma_type, volume_label, meineke_id, billerbeck_id, word_count,
-         confidence, meineke_greek_paragraph, image_filenames,
+        (lemma_id, lemma, entry_number, version, greek_text, human_greek_text, english_translation,
+         lemma_type, volume_label, meineke_id, billerbeck_id, nodegoat_id, word_count,
+         confidence, meineke_greek_paragraph, image_filenames, meineke_image_filenames,
          meineke_normalized_class, meineke_llm_status, meineke_difference_level,
          meineke_translation_impact, meineke_translation_impact_note,
          meineke_difference_summary, meineke_word_pairs) = row
@@ -528,6 +556,14 @@ def export_lemmas():
                 image_filenames = []
         elif image_filenames is None:
             image_filenames = []
+
+        if isinstance(meineke_image_filenames, str):
+            try:
+                meineke_image_filenames = json.loads(meineke_image_filenames)
+            except json.JSONDecodeError:
+                meineke_image_filenames = []
+        elif meineke_image_filenames is None:
+            meineke_image_filenames = []
 
         if isinstance(meineke_word_pairs, str):
             try:
@@ -553,6 +589,14 @@ def export_lemmas():
         current_meineke = current_meineke_by_lemma.get(lemma_id, {})
         current_meineke_version_id = current_meineke.get("id")
         current_meineke_text = current_meineke.get("text_body") or meineke_greek_paragraph or ""
+        latest_meineke_ocr = latest_meineke_ocr_by_lemma.get(lemma_id, {})
+        latest_meineke_ocr_version_id = latest_meineke_ocr.get("id")
+        latest_meineke_ocr_text = latest_meineke_ocr.get("text_body") or ""
+
+        merged_meineke_scan_filenames = []
+        for filename in meineke_scan_filenames_by_lemma.get(lemma_id, []) + meineke_image_filenames:
+            if filename and filename not in merged_meineke_scan_filenames:
+                merged_meineke_scan_filenames.append(filename)
 
         lemma_data = {
             "id": lemma_id,
@@ -560,12 +604,14 @@ def export_lemmas():
             "entry_number": entry_number or 0,
             "version": version or "epitome",
             "greek_text": greek_text or "",
+            "human_greek_text": human_greek_text or "",
             "meineke_greek_paragraph": _MEINEKE_OBJECT_TAG_RE.sub("", current_meineke_text),
             "english_translation": english_translation,
             "type": lemma_type or "",
             "volume_label": volume_label or "",
             "meineke_id": meineke_id or "",
             "billerbeck_id": billerbeck_id or "",
+            "nodegoat_id": nodegoat_id or "",
             "word_count": word_count or 0,
             "image_filenames": image_filenames,
             "confidence": confidence or "normal",
@@ -590,9 +636,13 @@ def export_lemmas():
             else [],
             "meineke_source_variant": current_meineke.get("source_variant", ""),
             "meineke_source_version_id": str(current_meineke_version_id or ""),
-            "meineke_scan_filenames": meineke_scan_filenames_by_lemma.get(lemma_id, []),
+            "meineke_scan_filenames": merged_meineke_scan_filenames,
             "meineke_main_text_lines": meineke_lines_by_version.get(current_meineke_version_id, []),
             "apparatus": meineke_apparatus_by_version.get(current_meineke_version_id, []),
+            "meineke_ocr_source_version_id": str(latest_meineke_ocr_version_id or ""),
+            "meineke_ocr_text": _MEINEKE_OBJECT_TAG_RE.sub("", latest_meineke_ocr_text),
+            "meineke_ocr_main_text_lines": meineke_lines_by_version.get(latest_meineke_ocr_version_id, []),
+            "meineke_ocr_apparatus": meineke_apparatus_by_version.get(latest_meineke_ocr_version_id, []),
         }
 
         canon_list = canonical_variants_by_lemma.get(lemma_id, [])

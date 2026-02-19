@@ -499,6 +499,7 @@ const reviewTemplate = `<!DOCTYPE html>
                     {{.Lemma.VolumeLabel}}<br>
                     {{if .Lemma.MeinekeID}}Meineke: {{.Lemma.MeinekeID}}<br>{{end}}
                     {{if .Lemma.BillerbeckID}}Billerbeck: {{.Lemma.BillerbeckID}}<br>{{end}}
+                    {{if .Lemma.NodegoatID}}nodegoat: {{.Lemma.NodegoatID}}<br>{{end}}
                     {{.Lemma.WordCount}} words<br>
                     <a href="/letter_{{.Lemma.Letter}}.html#lemma-{{.Lemma.ID}}" target="_blank" style="color: #3498db;">View on public site →</a>
                 </div>
@@ -575,7 +576,7 @@ const reviewTemplate = `<!DOCTYPE html>
 
             {{if .ShowMeineke}}
             <details class="meineke-details" {{if eq .MeinekeStatus "different"}}open{{end}}>
-                <summary>Show Meineke text{{if .Lemma.MeinekeSourceVariant}} ({{.Lemma.MeinekeSourceVariant}}){{end}}</summary>
+                <summary>Show current Meineke text{{if .Lemma.MeinekeSourceVariant}} ({{.Lemma.MeinekeSourceVariant}}){{end}}</summary>
                 {{if .Lemma.MeinekeMainTextLines}}
                 <div class="meineke-lines">
                     {{range .Lemma.MeinekeMainTextLines}}
@@ -613,6 +614,54 @@ const reviewTemplate = `<!DOCTYPE html>
                     {{end}}
                 </div>
                 {{end}}
+
+                {{if and .Lemma.MeinekeOCRSourceVersionID (ne .Lemma.MeinekeOCRSourceVersionID .Lemma.MeinekeSourceVersionID)}}
+                <div class="section-title">Meineke OCR Text</div>
+                {{if .Lemma.MeinekeOCRMainTextLines}}
+                <div class="meineke-lines">
+                    {{range .Lemma.MeinekeOCRMainTextLines}}
+                    <div class="meineke-line-row">
+                        <div class="line-label">
+                            {{if .PrintedLineLabel}}{{.PrintedLineLabel}}{{else}}{{.LineSeq}}{{end}}
+                        </div>
+                        <div class="line-text">{{.LineText}}</div>
+                    </div>
+                    {{end}}
+                </div>
+                {{else if .Lemma.MeinekeOCRText}}
+                <div class="original-text">{{.Lemma.MeinekeOCRText}}</div>
+                {{end}}
+
+                {{if .Lemma.MeinekeOCRApparatus}}
+                <div class="section-title">Meineke OCR Apparatus</div>
+                <div class="apparatus-list">
+                    {{range .Lemma.MeinekeOCRApparatus}}
+                    <div class="apparatus-row">
+                        <div class="line-label">
+                            {{if .PrintedLineLabel}}{{.PrintedLineLabel}}{{else if .LineSeq}}{{.LineSeq}}{{else}}–{{end}}
+                        </div>
+                        <div>
+                            <div class="apparatus-text">{{.ApparatusText}}</div>
+                            {{if or .AnchorToken .NoteKind}}
+                            <div class="apparatus-meta">
+                                {{if .AnchorToken}}anchor: {{.AnchorToken}}{{end}}
+                                {{if and .AnchorToken .NoteKind}} · {{end}}
+                                {{if .NoteKind}}type: {{.NoteKind}}{{end}}
+                            </div>
+                            {{end}}
+                        </div>
+                    </div>
+                    {{end}}
+                </div>
+                {{end}}
+                {{end}}
+            </details>
+            {{end}}
+
+            {{if .Lemma.HumanGreekText}}
+            <details class="meineke-details">
+                <summary>Show nodegoat-synced Greek (human_greek_text)</summary>
+                <div class="original-text">{{.Lemma.HumanGreekText}}</div>
             </details>
             {{end}}
 
