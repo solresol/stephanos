@@ -177,6 +177,54 @@ def insert_run(
         ),
     )
 
+def project_legacy_translation(
+    cur,
+    *,
+    lemma_id: int,
+    translation_text: str,
+    tokens_used: int,
+    prompt_version: int,
+):
+    """
+    Keep legacy assembled_lemmas translation fields in sync.
+
+    Much of the site generation / progress reporting still reads:
+      - assembled_lemmas.translation
+      - assembled_lemmas.translated / translated_at
+      - assembled_lemmas.translation_tokens
+      - assembled_lemmas.translation_prompt_version
+
+    The queue-driven pipeline stores primary artifacts in translation_runs, but we
+    still project a single-run request into the legacy columns so untranslated
+    headwords don't appear "stuck".
+    """
+    cur.execute(
+        """
+        UPDATE assembled_lemmas
+        SET translation = %s,
+            translated = 1,
+            translation_tokens = %s,
+            translated_at = NOW(),
+            translation_prompt_version = %s,
+            updated_at = NOW()
+        WHERE id = %s
+          AND COALESCE(reviewed_english_translation, '') = ''
+          AND COALESCE(corrected_english_translation, '') = ''
+          AND (
+            translated = 0
+            OR COALESCE(translation, '') = ''
+            OR COALESCE(translation_prompt_version, 0) < %s
+          )
+        """,
+        (
+            translation_text.strip(),
+            int(tokens_used or 0),
+            int(prompt_version or 0),
+            lemma_id,
+            int(prompt_version or 0),
+        ),
+    )
+
 
 def call_model(
     client: OpenAI,
@@ -338,6 +386,17 @@ def main():
                     tokens_used=tokens_used,
                     status="completed",
                 )
+
+                # Back-compat projection: only for single-run requests so we don't
+                # accidentally "pick a winner" among multiple variants.
+                if int(requested_runs or 0) == 1:
+                    project_legacy_translation(
+                        cur,
+                        lemma_id=lemma_id,
+                        translation_text=translation,
+                        tokens_used=tokens_used,
+                        prompt_version=int(profile_version_number or 0),
+                    )
                 conn.commit()
 
                 total_runs += 1

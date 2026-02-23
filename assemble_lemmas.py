@@ -99,14 +99,28 @@ def ensure_table(cur):
 
 
 def strip_headword_brackets(headword: str) -> str:
-    """Remove full outer angle-bracket wrapper from OCR headwords."""
+    """Remove outer angle-bracket wrappers from OCR headwords.
+
+    OCR sometimes wraps headwords in angle brackets (`<...>`) for easier extraction.
+    Occasionally the wrapper is malformed (e.g., leading `<` with no closing `>`).
+    We normalize both cases so downstream HTML generation is not broken.
+    """
     if not headword:
         return ""
     text = headword.strip()
-    match = re.fullmatch(r"<\s*(.*?)\s*>", text)
-    if match:
-        inner = match.group(1).strip()
-        return inner or text
+    # First, unwrap balanced wrappers like "< ... >" (and common Unicode variants).
+    for open_bracket, close_bracket in (("<", ">"), ("〈", "〉"), ("《", "》"), ("«", "»")):
+        match = re.fullmatch(
+            rf"{re.escape(open_bracket)}\s*(.*?)\s*{re.escape(close_bracket)}",
+            text,
+        )
+        if match:
+            inner = match.group(1).strip()
+            text = inner or text
+            break
+
+    # Then, strip any stray/unbalanced bracket characters at the ends.
+    text = text.lstrip("<〈《«").rstrip(">〉》»").strip()
     return text
 
 

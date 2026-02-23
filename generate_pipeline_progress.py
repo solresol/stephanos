@@ -61,11 +61,18 @@ def get_progress_stats(conn) -> dict:
         "unit": "lemmas",
     }
 
+    # Assembly rate (new/inserted rows in last 7 days).
+    cur.execute("""
+        SELECT COUNT(*) FROM assembled_lemmas
+        WHERE created_at > NOW() - INTERVAL '7 days'
+    """)
+    stats["assembly"]["rate_7d"] = cur.fetchone()[0]
+
     # 3. Translation
     cur.execute("""
         SELECT
             COUNT(*) as total,
-            COUNT(CASE WHEN translation IS NOT NULL THEN 1 END) as translated,
+            COUNT(CASE WHEN COALESCE(translation, '') != '' OR translation_json IS NOT NULL THEN 1 END) as translated,
             COUNT(CASE WHEN reviewed_english_translation IS NOT NULL THEN 1 END) as human_reviewed,
             COUNT(CASE WHEN corrected_english_translation IS NOT NULL THEN 1 END) as human_edited
         FROM assembled_lemmas
@@ -91,9 +98,22 @@ def get_progress_stats(conn) -> dict:
     # Translation rate (last 7 days)
     cur.execute("""
         SELECT COUNT(*) FROM assembled_lemmas
-        WHERE translated_at > NOW() - INTERVAL '7 days'
+        WHERE billerbeck_id IS NOT NULL
+          AND translated_at > NOW() - INTERVAL '7 days'
     """)
     stats["translation_ai"]["rate_7d"] = cur.fetchone()[0]
+
+    # Human review rate (last 7 days)
+    cur.execute("""
+        SELECT COUNT(*) FROM assembled_lemmas
+        WHERE billerbeck_id IS NOT NULL
+          AND reviewed_at > NOW() - INTERVAL '7 days'
+          AND (
+            reviewed_english_translation IS NOT NULL
+            OR corrected_english_translation IS NOT NULL
+          )
+    """)
+    stats["translation_human"]["rate_7d"] = cur.fetchone()[0]
 
     # 4. Wikidata linking - sources
     cur.execute("""
@@ -240,10 +260,10 @@ def get_progress_stats(conn) -> dict:
 
 def estimate_completion(pending: int, rate_7d: int) -> str:
     """Estimate days to completion based on 7-day rate."""
-    if rate_7d == 0:
-        return "stalled"
     if pending == 0:
         return "complete"
+    if rate_7d == 0:
+        return "stalled"
 
     days = pending / (rate_7d / 7)
     if days < 1:

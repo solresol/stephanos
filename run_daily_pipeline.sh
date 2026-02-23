@@ -75,8 +75,8 @@ uv run seed_translation_profiles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning:
 echo "Step 4d2: Seeding curated translation styles..." | tee -a "$LOGFILE"
 uv run seed_translation_styles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: style seed failed" | tee -a "$LOGFILE"
 
-# Step 4e: Optionally enqueue translation run requests (set TRANSLATION_ENQUEUE_LIMIT>0)
-TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-0}"
+# Step 4e: Enqueue translation run requests (set TRANSLATION_ENQUEUE_LIMIT=0 to disable)
+TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-20}"
 if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
     echo "Step 4e: Enqueuing translation run requests..." | tee -a "$LOGFILE"
     uv run enqueue_translation_runs.py \

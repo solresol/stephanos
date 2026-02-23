@@ -192,15 +192,28 @@ def get_initial_slug(text: str) -> str:
 
 
 def normalize_headword_for_display(headword: str) -> str:
-    """Normalize OCR headword display by removing outer angle brackets."""
+    """Normalize OCR headword display by removing outer angle brackets.
+
+    This is a display-layer fallback; the database should ideally already store
+    normalized headwords via `assemble_lemmas.py`, but malformed OCR output can
+    leak through (e.g., leading `<` with no closing `>`), which would otherwise
+    break HTML rendering.
+    """
     if not headword:
         return ""
     text = headword.strip()
-    match = re.fullmatch(r"<\s*(.*?)\s*>", text)
-    if match:
-        inner = match.group(1).strip()
-        return inner if inner else text
-    return text
+
+    for open_bracket, close_bracket in (("<", ">"), ("〈", "〉"), ("《", "》"), ("«", "»")):
+        match = re.fullmatch(
+            rf"{re.escape(open_bracket)}\s*(.*?)\s*{re.escape(close_bracket)}",
+            text,
+        )
+        if match:
+            inner = match.group(1).strip()
+            text = inner if inner else text
+            break
+
+    return text.lstrip("<〈《«").rstrip(">〉》»").strip()
 
 
 def get_all_lemmas(cur):
