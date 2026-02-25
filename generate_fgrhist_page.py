@@ -379,9 +379,7 @@ def main():
             for occ in occurrences:
                 lemma = occ['entry_lemma']
                 lemma_id = occ['lemma_id']
-                first_char = lemma[0] if lemma else ''
-                letter_page = f"letter_{get_letter_name(first_char)}.html"
-                entry_links.append(f'<a href="{letter_page}#lemma-{lemma_id}">{lemma}</a>')
+                entry_links.append(f'<a href="headword_{lemma_id}.html">{lemma}</a>')
                 if occ['work']:
                     works.add(occ['work'])
 

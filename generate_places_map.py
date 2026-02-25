@@ -35,29 +35,6 @@ def get_geocoded_places(cur):
     return cur.fetchall()
 
 
-def get_letter_slug(lemma: str) -> str:
-    """Get the letter page slug for a lemma."""
-    import unicodedata
-
-    letter_map = {
-        'Α': 'alpha', 'Β': 'beta', 'Γ': 'gamma', 'Δ': 'delta', 'Ε': 'epsilon',
-        'Ζ': 'zeta', 'Η': 'eta', 'Θ': 'theta', 'Ι': 'iota', 'Κ': 'kappa',
-        'Λ': 'lambda', 'Μ': 'mu', 'Ν': 'nu', 'Ξ': 'xi', 'Ο': 'omicron',
-        'Π': 'pi', 'Ρ': 'rho', 'Σ': 'sigma', 'Τ': 'tau', 'Υ': 'upsilon',
-        'Φ': 'phi', 'Χ': 'chi', 'Ψ': 'psi', 'Ω': 'omega',
-    }
-
-    if not lemma:
-        return 'alpha'
-
-    # Get first character, strip diacritics
-    first_char = lemma[0]
-    normalized = unicodedata.normalize('NFD', first_char)
-    base_char = ''.join(c for c in normalized if not unicodedata.combining(c)).upper()
-
-    return letter_map.get(base_char, 'alpha')
-
-
 def generate_map_html(places):
     """Generate the interactive map HTML."""
 
@@ -66,8 +43,6 @@ def generate_map_html(places):
     for place in places:
         (lemma_id, lemma, billerbeck_id, qid, wd_label, lat, lon,
          pleiades_id, translation) = place
-
-        letter_slug = get_letter_slug(lemma)
 
         # Truncate translation for popup
         short_trans = translation[:150] + "..." if len(translation) > 150 else translation
@@ -86,7 +61,6 @@ def generate_map_html(places):
                 "wikidata_label": wd_label or "",
                 "pleiades_id": pleiades_id or "",
                 "translation": short_trans,
-                "letter_slug": letter_slug,
             }
         }
         features.append(feature)
@@ -243,7 +217,7 @@ def generate_map_html(places):
                 }}
 
                 popupContent += '<div class="popup-links">';
-                popupContent += `<a href="letter_${{p.letter_slug}}.html#lemma-${{p.id}}">View Entry</a>`;
+                popupContent += `<a href="headword_${{p.id}}.html">View Entry</a>`;
 
                 if (p.wikidata_qid) {{
                     popupContent += `<a href="https://www.wikidata.org/wiki/${{p.wikidata_qid}}" target="_blank">Wikidata</a>`;

@@ -7,10 +7,15 @@ import re
 import html as html_module
 import hashlib
 import unicodedata
+import os
 from pathlib import Path
 from datetime import datetime, timezone
 
+import psycopg2
 from db import get_connection
+from db import DB_HOST as STEPHANOS_DB_HOST
+from db import DB_PORT as STEPHANOS_DB_PORT
+from db import DB_USER as STEPHANOS_DB_USER
 import canonical_variants
 
 OUTPUT_DIR = "reference_site"
@@ -44,6 +49,7 @@ GREEK_LETTERS = [
 ]
 
 LETTER_BY_CHAR = {char: slug for char, _, slug in GREEK_LETTERS}
+LETTER_META_BY_SLUG = {slug: (char, name) for char, name, slug in GREEK_LETTERS}
 
 _WS_RE = re.compile(r"\s+")
 _MEINEKE_OBJECT_TAG_RE = re.compile(r"\[/?object[^\]]*\]")
@@ -54,6 +60,9 @@ _CITE_CREF_RE = re.compile(r"\bC\s*\d")
 _GREEK_CHAR_RE = re.compile(r"[\u0370-\u03FF\u1F00-\u1FFF]")
 _LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
 _DIGIT_RE = re.compile(r"\d")
+_SAFE_REF_RE = re.compile(r"[^0-9A-Za-z._-]+")
+
+OVERLAP_COLOR_CLASSES = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"]
 
 
 def normalize_whitespace(text: str) -> str:
@@ -189,6 +198,228 @@ def get_initial_slug(text: str) -> str:
         if base in LETTER_BY_CHAR:
             return LETTER_BY_CHAR[base]
     return "other"
+
+
+def headword_page_filename(lemma_id: int) -> str:
+    """Canonical public URL path for a lemma headword page."""
+    try:
+        lemma_num = int(lemma_id)
+    except Exception:
+        lemma_num = 0
+    return f"headword_{lemma_num}.html"
+
+
+def ref_to_slug(ref: str) -> str:
+    """Convert a textual reference (for example '1.17') into a safe filename slug."""
+    slug = (ref or "").strip()
+    slug = slug.replace("/", "_").replace(" ", "_")
+    slug = _SAFE_REF_RE.sub("_", slug)
+    return slug or "ref"
+
+
+def _config_attr(name: str):
+    try:
+        import config as _config
+    except ImportError:
+        _config = None
+    return getattr(_config, name, None) if _config else None
+
+
+def _setting(config_name: str, env_names: tuple[str, ...], default=None):
+    cfg = _config_attr(config_name)
+    if cfg not in (None, ""):
+        return cfg
+    for env_name in env_names:
+        env_value = os.getenv(env_name)
+        if env_value not in (None, ""):
+            return env_value
+    return default
+
+
+def _prosodia_base_url(default: str) -> str:
+    return str(
+        _setting(
+            "PROSODIA_CATHOLICA_SITE_BASE_URL",
+            ("PROSODIA_CATHOLICA_SITE_BASE_URL",),
+            default,
+        )
+    ).rstrip("/")
+
+
+def _to_int(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def highlight_snippet_html(text: str, *, start, end, cls: str, context: int = 200) -> str:
+    start_i = _to_int(start)
+    end_i = _to_int(end)
+    raw = text or ""
+    if start_i is None or end_i is None:
+        return html_module.escape(raw)
+    if start_i < 0 or end_i <= start_i or end_i > len(raw):
+        return html_module.escape(raw)
+    left = max(0, start_i - int(context))
+    right = min(len(raw), end_i + int(context))
+    prefix = "…" if left > 0 else ""
+    suffix = "…" if right < len(raw) else ""
+    return (
+        html_module.escape(prefix)
+        + html_module.escape(raw[left:start_i])
+        + f'<span class="hl {html_module.escape(cls)}">'
+        + html_module.escape(raw[start_i:end_i])
+        + "</span>"
+        + html_module.escape(raw[end_i:right])
+        + html_module.escape(suffix)
+    )
+
+
+def get_herodian_connection():
+    """Open a connection to the Herodian overlap database."""
+    host = _setting("HERODIAN_DB_HOST", ("HERODIAN_DB_HOST",), STEPHANOS_DB_HOST)
+    if host in (None, ""):
+        return None
+
+    port_raw = _setting("HERODIAN_DB_PORT", ("HERODIAN_DB_PORT",), STEPHANOS_DB_PORT or 5432)
+    try:
+        port = int(port_raw)
+    except Exception:
+        port = int(STEPHANOS_DB_PORT or 5432)
+
+    db_name = str(_setting("HERODIAN_DB_NAME", ("HERODIAN_DB_NAME",), "herodian"))
+    user = str(_setting("HERODIAN_DB_USER", ("HERODIAN_DB_USER",), STEPHANOS_DB_USER or "stephanos"))
+    password = _setting("HERODIAN_DB_PASSWORD", ("HERODIAN_DB_PASSWORD",), None)
+
+    kwargs = {
+        "host": host,
+        "port": port,
+        "database": db_name,
+        "user": user,
+    }
+    if password not in (None, ""):
+        kwargs["password"] = password
+
+    return psycopg2.connect(**kwargs)
+
+
+def fetch_herodian_overlaps_by_lemma(
+    lemma_ids: list[int], *, metric_version: str = "v1", per_lemma_limit: int = 12
+) -> tuple[dict[int, list[dict]], int | None]:
+    """
+    Fetch overlap rows from the Herodian DB keyed by Stephanos lemma id.
+
+    Returns (overlaps_by_lemma, run_id). If the overlap DB is unavailable,
+    returns ({}, None) without failing site generation.
+    """
+    cleaned_ids = sorted({int(i) for i in lemma_ids if i is not None and int(i) > 0})
+    if not cleaned_ids:
+        return {}, None
+
+    try:
+        conn = get_herodian_connection()
+    except Exception:
+        return {}, None
+    if conn is None:
+        return {}, None
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id
+                FROM stephanos_overlap_runs
+                WHERE metric_version = %s
+                  AND finished_at IS NOT NULL
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (metric_version,),
+            )
+            run_row = cur.fetchone()
+            if not run_row:
+                return {}, None
+            run_id = int(run_row[0])
+
+            cur.execute(
+                """
+                SELECT
+                  m.stephanos_lemma_id,
+                  m.stephanos_meineke_id,
+                  m.stephanos_headword,
+                  m.char_lcs_len,
+                  m.char_lcs_ratio,
+                  m.word_lcs_len,
+                  m.word_lcs_ratio,
+                  m.herodian_char_start,
+                  m.herodian_char_end,
+                  m.stephanos_char_start,
+                  m.stephanos_char_end,
+                  l.id AS herodian_line_id,
+                  l.ref AS herodian_ref,
+                  l.greek_text AS herodian_greek_text
+                FROM stephanos_overlap_matches m
+                JOIN cathpros_lines l ON l.id = m.herodian_line_id
+                WHERE m.run_id = %s
+                  AND m.stephanos_lemma_id = ANY(%s)
+                ORDER BY
+                  m.stephanos_lemma_id,
+                  m.char_lcs_ratio DESC,
+                  m.word_lcs_ratio DESC,
+                  m.char_lcs_len DESC
+                """,
+                (run_id, cleaned_ids),
+            )
+            rows = cur.fetchall()
+    except Exception:
+        return {}, None
+    finally:
+        conn.close()
+
+    by_lemma: dict[int, list[dict]] = {}
+    for (
+        stephanos_lemma_id,
+        stephanos_meineke_id,
+        stephanos_headword,
+        char_lcs_len,
+        char_lcs_ratio,
+        word_lcs_len,
+        word_lcs_ratio,
+        herodian_char_start,
+        herodian_char_end,
+        stephanos_char_start,
+        stephanos_char_end,
+        herodian_line_id,
+        herodian_ref,
+        herodian_greek_text,
+    ) in rows:
+        lemma_id = int(stephanos_lemma_id)
+        lemma_rows = by_lemma.setdefault(lemma_id, [])
+        if len(lemma_rows) >= int(per_lemma_limit):
+            continue
+        lemma_rows.append(
+            {
+                "stephanos_lemma_id": lemma_id,
+                "stephanos_meineke_id": stephanos_meineke_id or "",
+                "stephanos_headword": stephanos_headword or "",
+                "char_lcs_len": int(char_lcs_len or 0),
+                "char_lcs_ratio": float(char_lcs_ratio or 0.0),
+                "word_lcs_len": int(word_lcs_len or 0),
+                "word_lcs_ratio": float(word_lcs_ratio or 0.0),
+                "herodian_char_start": herodian_char_start,
+                "herodian_char_end": herodian_char_end,
+                "stephanos_char_start": stephanos_char_start,
+                "stephanos_char_end": stephanos_char_end,
+                "herodian_line_id": int(herodian_line_id or 0),
+                "herodian_ref": herodian_ref or "",
+                "herodian_greek_text": herodian_greek_text or "",
+            }
+        )
+
+    return by_lemma, run_id
 
 
 def normalize_headword_for_display(headword: str) -> str:
@@ -740,6 +971,108 @@ def render_lemma_cards(lemmas):
     return "\n".join(cards_html)
 
 
+def render_letter_headword_list(lemmas):
+    """Render compact headword links for a letter page."""
+    if not lemmas:
+        return '<div class="no-results">No lemmas processed for this letter yet.</div>'
+
+    items = []
+    for lemma in lemmas:
+        lemma_id = int(lemma.get("lemma_id") or 0)
+        title = html_module.escape(lemma.get("lemma") or f"Lemma {lemma_id}")
+        headword_href = headword_page_filename(lemma_id)
+        meta_parts = []
+        if lemma.get("entry_number"):
+            meta_parts.append(f"Entry {html_module.escape(str(lemma.get('entry_number')))}")
+        if lemma.get("type"):
+            meta_parts.append(html_module.escape(str(lemma.get("type"))))
+        if lemma.get("meineke_id"):
+            meta_parts.append(f"Meineke {html_module.escape(str(lemma.get('meineke_id')))}")
+        meta_line = " · ".join(meta_parts)
+        meta_html = f'<div class="headword-meta">{meta_line}</div>' if meta_line else ""
+        items.append(
+            f"""
+            <li class="headword-item">
+                <a class="headword-link" href="{headword_href}">{title}</a>
+                {meta_html}
+            </li>
+            """.strip()
+        )
+
+    return f'<ol class="headword-list">{"".join(items)}</ol>'
+
+
+def render_herodian_overlap_rows(lemma: dict, overlaps: list[dict], overlap_run_id: int | None) -> str:
+    """Render Herodian overlap rows for a single lemma page."""
+    if not overlaps:
+        if overlap_run_id:
+            return "<div class='overlap-empty'>No significant Herodian overlaps were found for this headword in the latest run.</div>"
+        return "<div class='overlap-empty'>Herodian overlap data is not available in this environment.</div>"
+
+    stephanos_text = lemma.get("greek_text") or ""
+    prosodia_base = _prosodia_base_url("https://prosodia-catholica.symmachus.org")
+    rows = []
+    for idx, ov in enumerate(overlaps):
+        color_cls = OVERLAP_COLOR_CLASSES[idx % len(OVERLAP_COLOR_CLASSES)]
+        ref = (ov.get("herodian_ref") or "").strip()
+        ref_slug = ref_to_slug(ref)
+        ref_url = f"{prosodia_base}/passages/{ref_slug}.html" if ref else prosodia_base
+        char_pct = f"{float(ov.get('char_lcs_ratio') or 0.0) * 100.0:.1f}%"
+        word_pct = f"{float(ov.get('word_lcs_ratio') or 0.0) * 100.0:.1f}%"
+        herodian_snippet = highlight_snippet_html(
+            ov.get("herodian_greek_text") or "",
+            start=ov.get("herodian_char_start"),
+            end=ov.get("herodian_char_end"),
+            cls=color_cls,
+            context=220,
+        )
+        stephanos_snippet = highlight_snippet_html(
+            stephanos_text,
+            start=ov.get("stephanos_char_start"),
+            end=ov.get("stephanos_char_end"),
+            cls=color_cls,
+            context=220,
+        )
+        rows.append(
+            f"""
+            <div class="overlap-row">
+                <div class="overlap-row-head">
+                    <div>
+                        <span class="swatch {color_cls}"></span>
+                        <a href="{html_module.escape(ref_url)}" target="_blank" rel="noopener">Herodian {html_module.escape(ref or str(ov.get("herodian_line_id") or ""))}</a>
+                    </div>
+                    <div class="overlap-metrics">char LCS {int(ov.get('char_lcs_len') or 0)} ({char_pct}) · word LCS {int(ov.get('word_lcs_len') or 0)} ({word_pct})</div>
+                </div>
+                <div class="overlap-grid">
+                    <div>
+                        <div class="overlap-col-title">Stephanos</div>
+                        <pre class="greek overlap-snippet" lang="el">{stephanos_snippet}</pre>
+                    </div>
+                    <div>
+                        <div class="overlap-col-title">Herodian</div>
+                        <pre class="greek overlap-snippet" lang="el">{herodian_snippet}</pre>
+                    </div>
+                </div>
+            </div>
+            """.strip()
+        )
+    return "\n".join(rows)
+
+
+def generate_legacy_anchor_redirect_script():
+    """Redirect old #lemma-ID anchor links to canonical headword pages."""
+    return """
+<script>
+(function() {
+    const hash = window.location.hash || '';
+    const m = hash.match(/^#lemma-(\\d+)$/);
+    if (!m) return;
+    window.location.replace(`headword_${m[1]}.html`);
+})();
+</script>
+"""
+
+
 def common_styles():
     """Shared CSS for index and letter pages."""
     return """
@@ -820,6 +1153,31 @@ def common_styles():
             margin-top: 6px;
             font-weight: 600;
             color: #0d47a1;
+        }
+        .headword-list {
+            margin-top: 18px;
+            padding-left: 18px;
+        }
+        .headword-item {
+            background: #fff;
+            border: 1px solid #e8e8e8;
+            border-radius: 8px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+            margin: 8px 0;
+            padding: 10px 14px;
+        }
+        .headword-link {
+            color: #1a237e;
+            font-weight: 700;
+            text-decoration: none;
+        }
+        .headword-link:hover {
+            text-decoration: underline;
+        }
+        .headword-meta {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 4px;
         }
         .lemma-grid {
             display: grid;
@@ -976,14 +1334,94 @@ def common_styles():
 	            color: #555;
 	            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 	        }
-	        .translation-variant-text {
-	            margin-top: 6px;
-	        }
-	        .proper-noun-highlight {
-	            border-bottom: 1px dotted #3f51b5;
-	            cursor: help;
-	            position: relative;
-	        }
+        .translation-variant-text {
+            margin-top: 6px;
+        }
+        .overlap-section {
+            margin-top: 26px;
+        }
+        .overlap-row {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+            margin-top: 12px;
+            padding: 12px;
+        }
+        .overlap-row-head {
+            align-items: center;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: space-between;
+        }
+        .overlap-metrics {
+            color: #555;
+            font-size: 0.9em;
+        }
+        .overlap-grid {
+            display: grid;
+            gap: 10px;
+            grid-template-columns: 1fr;
+            margin-top: 10px;
+        }
+        @media (min-width: 980px) {
+            .overlap-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+        .overlap-col-title {
+            color: #666;
+            font-size: 0.85em;
+            font-weight: 700;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+        .overlap-snippet {
+            border-left: 4px solid #3949ab;
+            border-radius: 4px;
+            font-size: 1.0em;
+            line-height: 1.7;
+            margin: 0;
+            padding: 10px;
+            white-space: pre-wrap;
+        }
+        .overlap-empty {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            color: #666;
+            margin-top: 12px;
+            padding: 12px;
+        }
+        .hl {
+            border-radius: 4px;
+            padding: 0 2px;
+        }
+        .swatch {
+            border: 1px solid rgba(26,35,126,.12);
+            border-radius: 4px;
+            display: inline-block;
+            height: 12px;
+            margin-right: 8px;
+            vertical-align: -2px;
+            width: 12px;
+        }
+        .c0 { background: rgba(255,214,10,.24); }
+        .c1 { background: rgba(122,162,255,.24); }
+        .c2 { background: rgba(100,231,173,.22); }
+        .c3 { background: rgba(255,143,171,.22); }
+        .c4 { background: rgba(255,170,0,.20); }
+        .c5 { background: rgba(0,210,255,.18); }
+        .c6 { background: rgba(186,104,200,.20); }
+        .c7 { background: rgba(239,83,80,.18); }
+        .c8 { background: rgba(149,117,205,.20); }
+        .c9 { background: rgba(76,175,80,.18); }
+        .proper-noun-highlight {
+            border-bottom: 1px dotted #3f51b5;
+            cursor: help;
+            position: relative;
+        }
         .proper-noun-highlight:hover {
             background: #e8eaf6;
         }
@@ -1109,7 +1547,7 @@ def generate_index_html(letter_counts, stats):
 
         <div class="footer">
             <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
-            <p>Select a letter to view lemma entries. Empty letters will display a placeholder until processed.</p>
+            <p>Select a letter to browse headwords, then open canonical pages for each entry.</p>
         </div>
     </div>
 </body>
@@ -1178,16 +1616,13 @@ def generate_status_script(slug):
 
 
 def generate_letter_page(letter_char, letter_name, slug, lemmas):
-    """Generate a per-letter page."""
-    body = (
-        f"""
+    """Generate a per-letter page with just headword links."""
+    body = f"""
         <div class="breadcrumb"><a href="index.html">All Letters</a> / {letter_char} {letter_name}</div>
         <h2>{letter_char} {letter_name}</h2>
-        <div class="lemma-grid">
-        {render_lemma_cards(lemmas) if lemmas else '<div class="no-results">No lemmas processed for this letter yet.</div>'}
-        </div>
-        """
-    )
+        <p class="note">Select a headword to open its canonical page.</p>
+        {render_letter_headword_list(lemmas)}
+    """
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1224,13 +1659,84 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
 	        </div>
         {body}
         <div class="footer">
+            <p>Legacy links of the form <code>letter_*.html#lemma-ID</code> automatically redirect to canonical headword pages.</p>
             <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
         </div>
     </div>
-    {generate_status_script(slug)}
+    {generate_legacy_anchor_redirect_script()}
 </body>
     </html>
     """
+    return html
+
+
+def generate_headword_page(lemma: dict, overlaps: list[dict], overlap_run_id: int | None):
+    """Generate a canonical per-headword page."""
+    letter_slug = lemma.get("letter_slug") or get_initial_slug(lemma.get("lemma") or "")
+    letter_char, letter_name = LETTER_META_BY_SLUG.get(letter_slug, ("?", "Other"))
+    lemma_title = html_module.escape(lemma.get("lemma") or f"Lemma {lemma.get('lemma_id')}")
+    overlaps_html = render_herodian_overlap_rows(lemma, overlaps, overlap_run_id)
+
+    body = f"""
+        <div class="breadcrumb">
+            <a href="index.html">All Letters</a>
+            / <a href="letter_{html_module.escape(letter_slug)}.html">{letter_char} {letter_name}</a>
+            / {lemma_title}
+        </div>
+        <div class="lemma-grid">
+            {render_lemma_cards([lemma])}
+        </div>
+        <div class="overlap-section">
+            <h2>Herodian overlaps</h2>
+            <p class="note">Stephanos excerpt (left) is aligned with matched Herodian passages (right). Colors indicate corresponding overlap spans.</p>
+            {overlaps_html}
+        </div>
+    """
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{lemma_title} - Stephanos Ethnika</title>
+    <style>
+    {common_styles()}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{lemma_title}</h1>
+        <p>Stephanos of Byzantium - Ethnika</p>
+    </div>
+    <div class="container">
+	        <div class="nav-links">
+	            <a href="index.html">All Letters</a>
+	            <a href="letter_{html_module.escape(letter_slug)}.html">{letter_char} {letter_name}</a>
+	            <a href="sources.html">Ancient Sources</a>
+	            <a href="works.html">Works Cited</a>
+	            <a href="fgrhist.html">FGrHist Index</a>
+	            <a href="entities.html">People &amp; Deities</a>
+	            <a href="peoples.html">Ethnic Groups</a>
+	            <a href="aliases.html">Aliases</a>
+	            <a href="map.html">Places Map</a>
+	            <a href="statistics.html">Statistics</a>
+	            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
+	            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
+	            <a href="protected/clustering.html">Clustering</a>
+	            <a href="cgi-bin/review.cgi">Human Review</a>
+	            <a href="downloads.html">Downloads</a>
+	            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
+	        </div>
+        {body}
+        <div class="footer">
+            <p>Canonical URL: <code>{html_module.escape(headword_page_filename(int(lemma.get("lemma_id") or 0)))}</code></p>
+            <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+        </div>
+    </div>
+    {generate_status_script(letter_slug)}
+</body>
+</html>
+"""
     return html
 
 
@@ -1731,6 +2237,12 @@ def main():
 """
         (protected_dir / "meineke_comparison.html").write_text(fallback_html, encoding='utf-8')
 
+    overlap_by_lemma, overlap_run_id = fetch_herodian_overlaps_by_lemma(
+        [int(lemma.get("lemma_id") or 0) for lemma in lemmas],
+        metric_version="v1",
+        per_lemma_limit=10,
+    )
+
     conn.close()
 
     # Generate index
@@ -1738,16 +2250,30 @@ def main():
     index_html = generate_index_html(letter_counts, stats)
     (output_dir / "index.html").write_text(index_html, encoding='utf-8')
 
-    # Generate per-letter pages (include empty placeholders)
+    # Generate per-letter pages (list of links to canonical headword pages).
     for char, name, slug in GREEK_LETTERS:
         page_html = generate_letter_page(char, name, slug, buckets.get(slug, []))
         (output_dir / f"letter_{slug}.html").write_text(page_html, encoding='utf-8')
+
+    # Generate canonical per-headword pages.
+    for lemma in lemmas:
+        lemma_id = int(lemma.get("lemma_id") or 0)
+        page_html = generate_headword_page(
+            lemma,
+            overlaps=overlap_by_lemma.get(lemma_id, []),
+            overlap_run_id=overlap_run_id,
+        )
+        (output_dir / headword_page_filename(lemma_id)).write_text(page_html, encoding='utf-8')
 
     print(f"Reference website generated in {output_dir.absolute()}")
     print(f"  Total lemmas: {stats['total_lemmas']}")
     print(f"  Translated lemmas: {stats['translated_lemmas']}")
     print(f"  Pages OCR'd: {stats['processed_images']} / {stats['total_images']}")
     print(f"  Images extracted from database: {images_extracted}")
+    if overlap_run_id:
+        print(f"  Herodian overlap run used: {overlap_run_id}")
+    else:
+        print("  Herodian overlap run used: unavailable")
 
 if __name__ == "__main__":
     main()

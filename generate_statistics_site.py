@@ -879,17 +879,6 @@ def generate_etymology_visualization(etym_df):
 
 def get_proper_noun_details(cur, noun_lemmas):
     """Get details for proper nouns including English and entries where they appear."""
-    import unicodedata
-
-    # Greek letter mapping for file names
-    greek_letters = {
-        'Α': 'alpha', 'Β': 'beta', 'Γ': 'gamma', 'Δ': 'delta', 'Ε': 'epsilon',
-        'Ζ': 'zeta', 'Η': 'eta', 'Θ': 'theta', 'Ι': 'iota', 'Κ': 'kappa',
-        'Λ': 'lambda', 'Μ': 'mu', 'Ν': 'nu', 'Ξ': 'xi', 'Ο': 'omicron',
-        'Π': 'pi', 'Ρ': 'rho', 'Σ': 'sigma', 'Τ': 'tau', 'Υ': 'upsilon',
-        'Φ': 'phi', 'Χ': 'chi', 'Ψ': 'psi', 'Ω': 'omega'
-    }
-
     details = {}
 
     for noun in noun_lemmas:
@@ -916,11 +905,9 @@ def get_proper_noun_details(cur, noun_lemmas):
             for item in lemma_data:
                 lemma_name = item['lemma']
                 lemma_id = item['id']
-                first_letter = lemma_name[0] if lemma_name else ''
-                letter_file = greek_letters.get(first_letter, 'unknown')
                 entry_info.append({
                     'name': lemma_name,
-                    'link': f'../letter_{letter_file}.html#lemma-{lemma_id}'
+                    'link': f'../headword_{lemma_id}.html'
                 })
 
             # Sort entries alphabetically

@@ -4,7 +4,6 @@ Generate HTML wrapper pages for protected images showing processing status and l
 """
 import json
 import re
-import unicodedata
 from pathlib import Path
 from datetime import datetime, timezone
 from db import get_connection
@@ -12,16 +11,6 @@ from db import get_connection
 
 OUTPUT_DIR = "reference_site/protected"
 IMAGES_SUBDIR = "images"
-
-# Greek letter mapping for generating reference links
-GREEK_LETTERS = {
-    "Α": "alpha", "Β": "beta", "Γ": "gamma", "Δ": "delta", "Ε": "epsilon",
-    "Ζ": "zeta", "Η": "eta", "Θ": "theta", "Ι": "iota", "Κ": "kappa",
-    "Λ": "lambda", "Μ": "mu", "Ν": "nu", "Ξ": "xi", "Ο": "omicron",
-    "Π": "pi", "Ρ": "rho", "Σ": "sigma", "Τ": "tau", "Υ": "upsilon",
-    "Φ": "phi", "Χ": "chi", "Ψ": "psi", "Ω": "omega",
-}
-
 
 def normalize_headword_for_display(headword: str) -> str:
     """Remove full outer angle-bracket wrapper from OCR headwords."""
@@ -33,19 +22,6 @@ def normalize_headword_for_display(headword: str) -> str:
         inner = match.group(1).strip()
         return inner if inner else text
     return text
-
-def get_letter_slug(text):
-    """Get the letter slug for a Greek word"""
-    if not text:
-        return "index"
-    # Get first character, strip accents, uppercase
-    first_char = text[0]
-    decomposed = unicodedata.normalize("NFD", first_char)
-    for c in decomposed:
-        if not unicodedata.combining(c):
-            base = c.upper()
-            return GREEK_LETTERS.get(base, "index")
-    return "index"
 
 def _guess_ext_from_mime(mime_type: str | None) -> str:
     """Best-effort file extension for extracted images."""
@@ -204,9 +180,7 @@ def generate_image_page(image_data, lemmas, image_src: str, prev_page: str | Non
 
             display_lemma = normalize_headword_for_display(lemma)
 
-            # Determine letter page for link
-            letter_slug = get_letter_slug(display_lemma)
-            reference_link = f"../letter_{letter_slug}.html#lemma-{lem_id}"
+            reference_link = f"../headword_{lem_id}.html"
 
             lemma_cards.append(f"""
                 <div class="lemma-card">
@@ -472,8 +446,8 @@ def generate_image_page(image_data, lemmas, image_src: str, prev_page: str | Non
         </div>
 
 	        <div class="page-nav">
-	            {f'<a href=\"{prev_page}\">← Previous Page</a>' if prev_page else '<span class="disabled">← Previous Page</span>'}
-	            {f'<a href=\"{next_page}\">Next Page →</a>' if next_page else '<span class="disabled">Next Page →</span>'}
+	            {f'<a href="{prev_page}">← Previous Page</a>' if prev_page else '<span class="disabled">← Previous Page</span>'}
+	            {f'<a href="{next_page}">Next Page →</a>' if next_page else '<span class="disabled">Next Page →</span>'}
 	        </div>
 
         <h1>{filename}</h1>
@@ -492,7 +466,7 @@ def generate_image_page(image_data, lemmas, image_src: str, prev_page: str | Non
 	        <div class="content-wrapper">
 	            <div class="image-column">
 	                <div class="image-display">
-	                    {f'<img src=\"{image_src}\" alt=\"{filename}\">' if has_image else '<div class=\"missing-image\">Image data not available in database</div>'}
+	                    {f'<img src="{image_src}" alt="{filename}">' if has_image else '<div class="missing-image">Image data not available in database</div>'}
 	                </div>
 	            </div>
 

@@ -501,7 +501,7 @@ const reviewTemplate = `<!DOCTYPE html>
                     {{if .Lemma.BillerbeckID}}Billerbeck: {{.Lemma.BillerbeckID}}<br>{{end}}
                     {{if .Lemma.NodegoatID}}nodegoat: {{.Lemma.NodegoatID}}<br>{{end}}
                     {{.Lemma.WordCount}} words<br>
-                    <a href="/letter_{{.Lemma.Letter}}.html#lemma-{{.Lemma.ID}}" target="_blank" style="color: #3498db;">View on public site →</a>
+                    <a href="/headword_{{.Lemma.ID}}.html" target="_blank" style="color: #3498db;">View on public site →</a>
                 </div>
             </div>
 
