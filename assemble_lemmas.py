@@ -199,18 +199,30 @@ def load_processed_images(cur):
     return cur.fetchall()
 
 
-def build_assembled_entries(rows, headword_lookup):
+def build_assembled_entries(rows, headword_lookup, *, verbose=False):
     entries = []
     last_entry_by_version = {}
+    stats = {
+        "missing_lemma_json": 0,
+        "invalid_json": 0,
+        "meineke_schema": 0,
+        "non_greek": 0,
+        "apparatus_only": 0,
+        "continuation_attached": 0,
+        "continuation_orphan": 0,
+    }
 
     for image_id, filename, lemma_json, volume_number, volume_label, letter_range, ocr_generation_id, processed_at in rows:
         if not lemma_json:
+            stats["missing_lemma_json"] += 1
             continue
 
         try:
             data = json.loads(lemma_json)
         except json.JSONDecodeError:
-            print(f"Skipping {filename}: invalid JSON")
+            stats["invalid_json"] += 1
+            if verbose:
+                print(f"Skipping {filename}: invalid JSON")
             continue
 
         status = "lemmas_present"
@@ -230,20 +242,27 @@ def build_assembled_entries(rows, headword_lookup):
             has_meineke_keys = any("main_text_lines" in entry or "apparatus_entries" in entry for entry in page_entries)
             has_billerbeck_keys = any("greek_text" in entry for entry in page_entries)
             if has_meineke_keys and not has_billerbeck_keys:
-                print(f"Skipping {filename}: lemma_json schema looks like Meineke OCR (no greek_text fields).")
+                stats["meineke_schema"] += 1
+                if verbose:
+                    print(f"Skipping {filename}: lemma_json schema looks like Meineke OCR (no greek_text fields).")
                 last_entry_by_version = {}
                 continue
 
         if status == "non_greek_error":
-            print(f"Skipping {filename}: non-Greek page detected")
+            stats["non_greek"] += 1
+            if verbose:
+                print(f"Skipping {filename}: non-Greek page detected")
             last_entry_by_version = {}
             continue
         if status == "apparatus_only":
-            print(f"Skipping {filename}: apparatus only")
+            stats["apparatus_only"] += 1
+            if verbose:
+                print(f"Skipping {filename}: apparatus only")
             last_entry_by_version = {}
             continue
         if status == "continuation_only":
             if last_entry_by_version:
+                stats["continuation_attached"] += 1
                 for last_entry in last_entry_by_version.values():
                     last_entry["source_image_ids"].append(image_id)
                     last_entry.setdefault("source_image_filenames", []).append(filename)
@@ -258,7 +277,9 @@ def build_assembled_entries(rows, headword_lookup):
                     if processed_at and (not last_entry.get("ocr_processed_at") or processed_at > last_entry["ocr_processed_at"]):
                         last_entry["ocr_processed_at"] = processed_at
             else:
-                print(f"Continuation with no prior lemma on {filename}, ignoring")
+                stats["continuation_orphan"] += 1
+                if verbose:
+                    print(f"Continuation with no prior lemma on {filename}, ignoring")
             continue
 
         if not page_entries:
@@ -298,7 +319,7 @@ def build_assembled_entries(rows, headword_lookup):
             entries.append(assembled)
             last_entry_by_version[assembled["version"]] = assembled
 
-    return entries
+    return entries, stats
 
 
 def upsert_assembled(cur, assembled_entries):
@@ -495,6 +516,11 @@ def upsert_assembled(cur, assembled_entries):
 def main():
     parser = argparse.ArgumentParser(description="Assemble lemmas across pages into a translation queue.")
     parser.add_argument("--rebuild", action="store_true", help="Clear existing assembled lemmas before rebuilding")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print per-image skip reasons (non-Greek/apparatus/continuations).",
+    )
     args = parser.parse_args()
 
     conn = get_connection()
@@ -513,7 +539,30 @@ def main():
     rows = load_processed_images(cur)
     print(f"Loaded {len(rows)} processed images.")
 
-    assembled_entries = build_assembled_entries(rows, headword_lookup)
+    assembled_entries, stats = build_assembled_entries(rows, headword_lookup, verbose=args.verbose)
+    if not args.verbose:
+        skip_parts = []
+        if stats["non_greek"]:
+            skip_parts.append(f"{stats['non_greek']} non-Greek")
+        if stats["apparatus_only"]:
+            skip_parts.append(f"{stats['apparatus_only']} apparatus-only")
+        if stats["invalid_json"]:
+            skip_parts.append(f"{stats['invalid_json']} invalid JSON")
+        if stats["meineke_schema"]:
+            skip_parts.append(f"{stats['meineke_schema']} Meineke-schema")
+        if stats["missing_lemma_json"]:
+            skip_parts.append(f"{stats['missing_lemma_json']} empty lemma_json")
+
+        continuation_parts = []
+        if stats["continuation_attached"]:
+            continuation_parts.append(f"{stats['continuation_attached']} attached")
+        if stats["continuation_orphan"]:
+            continuation_parts.append(f"{stats['continuation_orphan']} orphaned")
+
+        if skip_parts:
+            print("Skipped pages: " + ", ".join(skip_parts) + ".")
+        if continuation_parts:
+            print("Continuation-only pages: " + ", ".join(continuation_parts) + ".")
     if not assembled_entries:
         print("No assembled lemmas found.")
         conn.close()
