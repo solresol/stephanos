@@ -1,0 +1,10 @@
+{
+  "missing_tables": [],
+  "extra_tables": [],
+  "missing_columns": [],
+  "extra_columns": [],
+  "missing_indexes": [],
+  "extra_indexes": [],
+  "missing_foreign_keys": [],
+  "extra_foreign_keys": []
+}

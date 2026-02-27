@@ -3,14 +3,15 @@
 Backfill/update text_pair_differences from current source text versions and
 legacy meineke_text_differences outputs.
 
-Creates the destination table without FOREIGN KEY constraints so the script can
-run under restricted DB roles (FK creation requires REFERENCES privilege on the
-target tables).
+Tries to create the destination table with FOREIGN KEY constraints; falls back
+to a no-FK table definition under restricted DB roles (FK creation requires
+REFERENCES privilege on the target tables).
 """
 import hashlib
 import json
 
 from db import get_connection
+import psycopg2
 from psycopg2.extras import Json
 
 
@@ -34,34 +35,76 @@ def _adapt_jsonb(value):
 
 
 def ensure_table(cur):
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS text_pair_differences (
-            id SERIAL PRIMARY KEY,
-            lemma_id INTEGER NOT NULL,
-            billerbeck_text_version_id INTEGER NOT NULL,
-            meineke_text_version_id INTEGER NOT NULL,
-            pair_hash TEXT NOT NULL,
-            normalized_class TEXT NOT NULL,
-            llm_status TEXT NOT NULL DEFAULT 'pending',
-            llm_model TEXT,
-            llm_tokens INTEGER,
-            llm_result_json JSONB,
-            difference_level TEXT,
-            summary TEXT,
-            translation_impact TEXT,
-            translation_impact_note TEXT,
-            likely_translation_change BOOLEAN NOT NULL DEFAULT FALSE,
-            analyzed_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS text_pair_differences (
+                id SERIAL PRIMARY KEY,
+                lemma_id INTEGER NOT NULL REFERENCES assembled_lemmas(id) ON DELETE CASCADE,
+                billerbeck_text_version_id INTEGER NOT NULL REFERENCES lemma_source_text_versions(id) ON DELETE CASCADE,
+                meineke_text_version_id INTEGER NOT NULL REFERENCES lemma_source_text_versions(id) ON DELETE CASCADE,
+                pair_hash TEXT NOT NULL,
+                normalized_class TEXT NOT NULL,
+                llm_status TEXT NOT NULL DEFAULT 'pending',
+                llm_model TEXT,
+                llm_tokens INTEGER,
+                llm_result_json JSONB,
+                difference_level TEXT,
+                summary TEXT,
+                translation_impact TEXT,
+                translation_impact_note TEXT,
+                likely_translation_change BOOLEAN NOT NULL DEFAULT FALSE,
+                analyzed_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
         )
-        """
-    )
+    except psycopg2.Error as e:
+        # Fall back for restricted roles missing REFERENCES privilege.
+        if getattr(e, "pgcode", "") != "42501":
+            raise
+        cur.connection.rollback()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS text_pair_differences (
+                id SERIAL PRIMARY KEY,
+                lemma_id INTEGER NOT NULL,
+                billerbeck_text_version_id INTEGER NOT NULL,
+                meineke_text_version_id INTEGER NOT NULL,
+                pair_hash TEXT NOT NULL,
+                normalized_class TEXT NOT NULL,
+                llm_status TEXT NOT NULL DEFAULT 'pending',
+                llm_model TEXT,
+                llm_tokens INTEGER,
+                llm_result_json JSONB,
+                difference_level TEXT,
+                summary TEXT,
+                translation_impact TEXT,
+                translation_impact_note TEXT,
+                likely_translation_change BOOLEAN NOT NULL DEFAULT FALSE,
+                analyzed_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
     cur.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS text_pair_differences_pair_unique_idx
         ON text_pair_differences (billerbeck_text_version_id, meineke_text_version_id)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_text_pair_differences_lemma_id
+        ON text_pair_differences (lemma_id)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_text_pair_differences_meineke_text_version_id
+        ON text_pair_differences (meineke_text_version_id)
         """
     )
 

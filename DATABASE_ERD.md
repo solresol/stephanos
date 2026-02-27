@@ -1,8 +1,8 @@
 # Database ERD (PostgreSQL)
 
-This project’s PostgreSQL schema is partially defined by SQL migrations in `migrations/` and partially “self-healed” at runtime by pipeline scripts that run `CREATE TABLE IF NOT EXISTS ...` / `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...`.
+This project’s PostgreSQL schema is now tracked via a canonical bootstrap schema (`schema/base_schema.sql`) plus post-baseline incremental migrations (`migrations/`). Some pipeline scripts still “self-heal” by running `CREATE TABLE IF NOT EXISTS ...` / `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...`, but schema drift is intended to be caught by the schema preflight gate (see `SCHEMA_BASELINE.md`).
 
-So: the relationships below are accurate at a conceptual level, but some FK constraints may be absent on older DBs (or when running under restricted DB roles).
+The relationships below are accurate for the canonical schema; older DBs (or restricted-role runs) may have missing constraints until repaired.
 
 ## Ingestion + OCR → images → assembled lemmas
 
@@ -97,7 +97,7 @@ erDiagram
         boolean quarantined
         string quarantine_reason
 
-        int ocr_generation_id
+        int ocr_generation_id FK
         timestamp ocr_processed_at
 
         string nodegoat_id
@@ -345,10 +345,10 @@ erDiagram
 
 ## Notes on “strange/unexpected” parts
 
-- **No single authoritative schema**: several important tables/columns are created (or backfilled) by scripts at runtime. This is convenient operationally, but it makes the schema easy to drift (migrations vs “ensure_table” code).
-- **Soft / missing FKs in practice**:
-  - Some scripts intentionally create tables *without* foreign keys (e.g., `sync_text_pair_differences.py`) so they can run under restricted DB roles.
-  - Several “obvious” relationships (e.g., `images.html_file_id → html_files.id`, `images.pdf_file_id → pdf_files.id`, `assembled_lemmas.ocr_generation_id → ocr_generations.id`) may exist only by convention on some DBs.
+- **No single authoritative schema (historically)**: this project accumulated DDL in both migrations and runtime “ensure_*” helpers. As of the 2026-02-27 baseline reset, the intended canonical schema is captured in `schema/base_schema.sql` + the checked-in `stephanos_schema.sql` snapshot (see `SCHEMA_BASELINE.md`).
+- **Soft / missing FKs (historical + edge cases)**:
+  - Some scripts intentionally create tables *without* foreign keys (e.g., `sync_text_pair_differences.py`) so they can run under restricted DB roles. That behavior is a compatibility fallback.
+  - The canonical schema snapshot enforces FKs for core provenance and pipeline joins (including `images.html_file_id → html_files.id`, `images.pdf_file_id → pdf_files.id`, `images.ocr_generation_id → ocr_generations.id`, `assembled_lemmas.ocr_generation_id → ocr_generations.id`, and `lemma_images.* → (assembled_lemmas, images)`). If a live DB is missing these constraints (e.g., because a restricted-role script created a table early), treat it as drift and repair via a migration so the preflight gate can enforce it.
 - **Polymorphic references by design**: `variant_kind` + `variant_id` (TEXT) in `translation_risk_flags`, `lemma_publication_targets`, and `lemma_canonical_variants` can point at *different* tables (`translation_runs`, `human_translations`, or legacy assembled columns). That makes referential integrity unenforceable at the DB level.
 - **Two competing “what’s public/canonical” mechanisms**:
   - `lemma_publication_targets` is a *single pointer per surface* (currently surface is constrained to `'public_translation'`).

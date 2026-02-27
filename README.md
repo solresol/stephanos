@@ -49,6 +49,21 @@ uv add bs4
 uv add openai
 ```
 
+### Schema Baseline and Drift Checks
+
+When preparing major DB changes, follow [`SCHEMA_BASELINE.md`](SCHEMA_BASELINE.md) to:
+- maintain bootstrap schema in `schema/base_schema.sql`
+- dump live schema into `stephanos_schema.sql`
+- compare live schema against expected tables/columns/indexes/FKs
+- generate drift reports before and after migrations
+
+Quick commands:
+```bash
+./dump_schema.sh --host raksasa --user stephanos --db-name stephanos --output stephanos_schema.sql --ssh-host stephanos@raksasa
+DB_HOST=raksasa DB_USER=stephanos uv run check_db_schema.py --schema-file stephanos_schema.sql --report-file schema_drift_report.md
+./apply_migrations.sh --host raksasa --user stephanos --db-name stephanos
+```
+
 ### Running the Pipeline
 
 #### Extract Page Images from PDF (volume 1)
