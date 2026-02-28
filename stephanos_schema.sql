@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict RC6x3Xe3C1fhnJcSzaJsdek07I1npjy28mOzbTmK5awa0iglHOeGprhx088QWsK
+\restrict EzdjPvp1XRoyZp5E2g5PDbFQXDhrpldUR5NDw3cg4CeG8sWa8EVQ58vXpJ4bCz2
 
 -- Dumped from database version 16.11 (Ubuntu 16.11-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.11 (Ubuntu 16.11-0ubuntu0.24.04.1)
@@ -522,43 +522,6 @@ CREATE TABLE public.lemma_images (
     image_id integer NOT NULL,
     "position" integer DEFAULT 0 NOT NULL
 );
-
-
---
--- Name: lemma_publication_targets; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.lemma_publication_targets (
-    id integer NOT NULL,
-    lemma_id integer NOT NULL,
-    surface text NOT NULL,
-    variant_kind text NOT NULL,
-    variant_id text NOT NULL,
-    updated_by text,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT lemma_publication_targets_surface_check CHECK ((surface = 'public_translation'::text)),
-    CONSTRAINT lemma_publication_targets_variant_kind_check CHECK ((variant_kind = ANY (ARRAY['translation_run'::text, 'human_translation'::text, 'legacy_assembled'::text])))
-);
-
-
---
--- Name: lemma_publication_targets_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.lemma_publication_targets_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: lemma_publication_targets_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.lemma_publication_targets_id_seq OWNED BY public.lemma_publication_targets.id;
 
 
 --
@@ -1215,13 +1178,6 @@ ALTER TABLE ONLY public.lemma_apparatus_entries ALTER COLUMN id SET DEFAULT next
 
 
 --
--- Name: lemma_publication_targets id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_publication_targets ALTER COLUMN id SET DEFAULT nextval('public.lemma_publication_targets_id_seq'::regclass);
-
-
---
 -- Name: lemma_source_lines id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1460,14 +1416,6 @@ ALTER TABLE ONLY public.lemma_headword_distances
 
 ALTER TABLE ONLY public.lemma_images
     ADD CONSTRAINT lemma_images_pkey PRIMARY KEY (lemma_id, image_id);
-
-
---
--- Name: lemma_publication_targets lemma_publication_targets_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_publication_targets
-    ADD CONSTRAINT lemma_publication_targets_pkey PRIMARY KEY (id);
 
 
 --
@@ -1856,13 +1804,6 @@ CREATE INDEX lemma_headword_distances_b_idx ON public.lemma_headword_distances U
 
 
 --
--- Name: lemma_publication_targets_unique_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX lemma_publication_targets_unique_idx ON public.lemma_publication_targets USING btree (lemma_id, surface);
-
-
---
 -- Name: lemma_source_lines_label_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2143,14 +2084,6 @@ ALTER TABLE ONLY public.lemma_images
 
 
 --
--- Name: lemma_publication_targets lemma_publication_targets_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_publication_targets
-    ADD CONSTRAINT lemma_publication_targets_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
-
-
---
 -- Name: lemma_source_lines lemma_source_lines_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2322,5 +2255,5 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict RC6x3Xe3C1fhnJcSzaJsdek07I1npjy28mOzbTmK5awa0iglHOeGprhx088QWsK
+\unrestrict EzdjPvp1XRoyZp5E2g5PDbFQXDhrpldUR5NDw3cg4CeG8sWa8EVQ58vXpJ4bCz2
 
