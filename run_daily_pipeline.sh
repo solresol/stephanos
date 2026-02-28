@@ -26,16 +26,27 @@ else
     echo "Git working tree has local changes; skipping git pull" | tee -a "$LOGFILE"
 fi
 
-# Step 0a: Schema preflight gate (strict by default)
-# Set SCHEMA_PREFLIGHT=0 to bypass in emergencies.
-SCHEMA_PREFLIGHT="${SCHEMA_PREFLIGHT:-1}"
-if [ "$SCHEMA_PREFLIGHT" -eq 1 ]; then
-    echo "Step 0a: Running schema preflight gate..." | tee -a "$LOGFILE"
-    SCHEMA_DB_HOST="${SCHEMA_DB_HOST:-${DB_HOST:-raksasa}}"
-    SCHEMA_DB_USER="${SCHEMA_DB_USER:-${DB_USER:-stephanos}}"
-    SCHEMA_DB_NAME="${SCHEMA_DB_NAME:-${DB_NAME:-stephanos}}"
-    SCHEMA_DB_PORT="${SCHEMA_DB_PORT:-${DB_PORT:-5432}}"
-    SCHEMA_SSH_HOST="${SCHEMA_SSH_HOST:-stephanos@raksasa}"
+	# Step 0a: Schema preflight gate (strict by default)
+	# Set SCHEMA_PREFLIGHT=0 to bypass in emergencies.
+	SCHEMA_PREFLIGHT="${SCHEMA_PREFLIGHT:-1}"
+	if [ "$SCHEMA_PREFLIGHT" -eq 1 ]; then
+	    echo "Step 0a: Running schema preflight gate..." | tee -a "$LOGFILE"
+	    if [ -z "${SCHEMA_DB_HOST:-}" ]; then
+	        if [ -n "${DB_HOST:-}" ]; then
+	            SCHEMA_DB_HOST="$DB_HOST"
+	        elif [ -d /var/run/postgresql ]; then
+	            # Prefer local socket auth on the DB host to avoid password prompts.
+	            SCHEMA_DB_HOST="/var/run/postgresql"
+	        elif [ -d /run/postgresql ]; then
+	            SCHEMA_DB_HOST="/run/postgresql"
+	        else
+	            SCHEMA_DB_HOST="raksasa"
+	        fi
+	    fi
+	    SCHEMA_DB_USER="${SCHEMA_DB_USER:-${DB_USER:-stephanos}}"
+	    SCHEMA_DB_NAME="${SCHEMA_DB_NAME:-${DB_NAME:-stephanos}}"
+	    SCHEMA_DB_PORT="${SCHEMA_DB_PORT:-${DB_PORT:-5432}}"
+	    SCHEMA_SSH_HOST="${SCHEMA_SSH_HOST:-stephanos@raksasa}"
 
     # Keep a live snapshot for audit/debugging each pipeline run.
     ./dump_schema.sh \
