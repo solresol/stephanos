@@ -522,23 +522,6 @@ def export_lemmas():
                 }
             )
 
-    canonical_pointer_by_lemma = {}
-    cur.execute("SELECT to_regclass('public.lemma_publication_targets') IS NOT NULL")
-    has_publication_targets = bool(cur.fetchone()[0])
-    if has_publication_targets:
-        cur.execute(
-            """
-            SELECT lemma_id, variant_kind, variant_id
-            FROM lemma_publication_targets
-            WHERE surface = 'public_translation'
-            """
-        )
-        for lemma_id, variant_kind, variant_id in cur.fetchall():
-            canonical_pointer_by_lemma[lemma_id] = {
-                "kind": variant_kind,
-                "id": str(variant_id),
-            }
-
     lemmas = []
     for row in rows:
         (lemma_id, lemma, entry_number, version, greek_text, human_greek_text, english_translation,
@@ -650,8 +633,6 @@ def export_lemmas():
             primary = next((c for c in canon_list if c.get("is_primary")), None)
             chosen = primary or canon_list[0]
             lemma_data["canonical_variant_ref"] = {"kind": chosen.get("kind", ""), "id": chosen.get("id", "")}
-        elif lemma_id in canonical_pointer_by_lemma:
-            lemma_data["canonical_variant_ref"] = canonical_pointer_by_lemma.get(lemma_id) or {"kind": "legacy_assembled", "id": "translation"}
 
         lemmas.append(lemma_data)
 

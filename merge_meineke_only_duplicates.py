@@ -201,11 +201,16 @@ WHERE COALESCE(ss.has_meineke, FALSE) = TRUE
   AND COALESCE(src.greek_text, '') = ''
   AND COALESCE(src.human_greek_text, '') = ''
   AND COALESCE(src.translated, 0) = 0
-  AND NOT EXISTS (SELECT 1 FROM human_translations ht WHERE ht.lemma_id = src.id)
-  AND NOT EXISTS (SELECT 1 FROM translation_runs tr WHERE tr.lemma_id = src.id)
-  AND NOT EXISTS (SELECT 1 FROM proper_nouns pn WHERE pn.lemma_id = src.id)
-  AND NOT EXISTS (SELECT 1 FROM etymologies e WHERE e.lemma_id = src.id)
-  AND NOT EXISTS (SELECT 1 FROM lemma_publication_targets lpt WHERE lpt.lemma_id = src.id);
+	  AND NOT EXISTS (SELECT 1 FROM human_translations ht WHERE ht.lemma_id = src.id)
+	  AND NOT EXISTS (SELECT 1 FROM translation_runs tr WHERE tr.lemma_id = src.id)
+	  AND NOT EXISTS (SELECT 1 FROM proper_nouns pn WHERE pn.lemma_id = src.id)
+	  AND NOT EXISTS (SELECT 1 FROM etymologies e WHERE e.lemma_id = src.id)
+	  AND NOT EXISTS (
+	    SELECT 1
+	    FROM lemma_canonical_variants lcv
+	    WHERE lcv.lemma_id = src.id
+	      AND lcv.is_active = TRUE
+	  );
 
 SELECT 'mapping_rows' AS metric, COUNT(*)::text AS value FROM merge_map
 UNION ALL
@@ -295,11 +300,16 @@ WHERE COALESCE(ss.has_meineke, FALSE) = TRUE
   AND COALESCE(src.greek_text, '') = ''
   AND COALESCE(src.human_greek_text, '') = ''
   AND COALESCE(src.translated, 0) = 0
-  AND NOT EXISTS (SELECT 1 FROM human_translations ht WHERE ht.lemma_id = src.id)
-  AND NOT EXISTS (SELECT 1 FROM translation_runs tr WHERE tr.lemma_id = src.id)
-  AND NOT EXISTS (SELECT 1 FROM proper_nouns pn WHERE pn.lemma_id = src.id)
-  AND NOT EXISTS (SELECT 1 FROM etymologies e WHERE e.lemma_id = src.id)
-  AND NOT EXISTS (SELECT 1 FROM lemma_publication_targets lpt WHERE lpt.lemma_id = src.id);
+	  AND NOT EXISTS (SELECT 1 FROM human_translations ht WHERE ht.lemma_id = src.id)
+	  AND NOT EXISTS (SELECT 1 FROM translation_runs tr WHERE tr.lemma_id = src.id)
+	  AND NOT EXISTS (SELECT 1 FROM proper_nouns pn WHERE pn.lemma_id = src.id)
+	  AND NOT EXISTS (SELECT 1 FROM etymologies e WHERE e.lemma_id = src.id)
+	  AND NOT EXISTS (
+	    SELECT 1
+	    FROM lemma_canonical_variants lcv
+	    WHERE lcv.lemma_id = src.id
+	      AND lcv.is_active = TRUE
+	  );
 
 -- Attach Meineke scan images to target lemmas (append after existing positions).
 WITH target_max AS (

@@ -3,88 +3,48 @@
 Refresh legacy assembled_lemmas translation fields from canonical publication pointers.
 
 This keeps legacy scripts operational while canonical variant storage moves to
-lemma_publication_targets + translation_runs/human_translations.
+lemma_canonical_variants + translation_runs/human_translations.
 """
 from db import get_connection
+import canonical_variants
 
 
-def fetch_canonical_rows(cur):
+def fetch_lemma_ids_with_canonical_memberships(cur) -> list[int]:
     cur.execute(
         """
-        SELECT
-            lpt.lemma_id,
-            lpt.variant_kind,
-            lpt.variant_id
-        FROM lemma_publication_targets lpt
-        WHERE lpt.surface = 'public_translation'
-        ORDER BY lpt.lemma_id
+        SELECT DISTINCT lemma_id
+        FROM lemma_canonical_variants
+        WHERE is_active = TRUE
+        ORDER BY lemma_id
         """
     )
-    return cur.fetchall()
-
-
-def resolve_translation_text(cur, lemma_id: int, variant_kind: str, variant_id: str):
-    if variant_kind == "translation_run":
-        cur.execute(
-            """
-            SELECT COALESCE(translation_text, ''), COALESCE(status, '')
-            FROM translation_runs
-            WHERE id = %s
-            LIMIT 1
-            """,
-            (variant_id,),
-        )
-        row = cur.fetchone()
-        return row if row else ("", "")
-
-    if variant_kind == "human_translation":
-        cur.execute(
-            """
-            SELECT COALESCE(translation_text, ''), COALESCE(status, '')
-            FROM human_translations
-            WHERE id = %s
-            LIMIT 1
-            """,
-            (variant_id,),
-        )
-        row = cur.fetchone()
-        return row if row else ("", "")
-
-    if variant_kind == "legacy_assembled":
-        cur.execute(
-            """
-            SELECT COALESCE(translation, ''), 'approved'
-            FROM assembled_lemmas
-            WHERE id = %s
-            LIMIT 1
-            """,
-            (lemma_id,),
-        )
-        row = cur.fetchone()
-        return row if row else ("", "")
-
-    return "", ""
+    return [int(row[0]) for row in cur.fetchall()]
 
 
 def main():
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute("SELECT to_regclass('public.lemma_publication_targets') IS NOT NULL")
-    if not bool(cur.fetchone()[0]):
-        print("lemma_publication_targets table missing; nothing to refresh.")
+    if not canonical_variants.table_exists(cur, "lemma_canonical_variants"):
+        print("lemma_canonical_variants table missing; nothing to refresh.")
         conn.close()
         return
 
-    rows = fetch_canonical_rows(cur)
+    lemma_ids = fetch_lemma_ids_with_canonical_memberships(cur)
     updated = 0
-    for lemma_id, variant_kind, variant_id in rows:
-        text, status = resolve_translation_text(cur, lemma_id, variant_kind, variant_id)
+    for lemma_id in lemma_ids:
+        choice = canonical_variants.select_pointer_variant(cur, lemma_id=lemma_id)
+        if not choice:
+            continue
+
+        text = (choice.get("translation_text") or "").strip()
         if not (text or "").strip():
             continue
 
+        variant_kind = choice.get("kind", "") or ""
+        status = choice.get("status", "") or ""
         if variant_kind == "human_translation":
-            reviewed_value = text if status == "approved" else None
+            reviewed_value = text if (status or "").strip() == "approved" else None
             corrected_value = text
         else:
             reviewed_value = None

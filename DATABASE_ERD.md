@@ -230,7 +230,6 @@ erDiagram
     LEMMA_SOURCE_TEXT_VERSIONS o|--o{ HUMAN_TRANSLATIONS : source_text_version_id
     TRANSLATION_RUNS o|--o{ HUMAN_TRANSLATIONS : derived_from_run_id
 
-    ASSEMBLED_LEMMAS ||--o{ LEMMA_PUBLICATION_TARGETS : lemma_id
     ASSEMBLED_LEMMAS ||--o{ LEMMA_CANONICAL_VARIANTS : lemma_id
 
     ASSEMBLED_LEMMAS ||--o{ PROPER_NOUNS : lemma_id
@@ -299,16 +298,6 @@ erDiagram
         timestamp reviewed_at
     }
 
-    LEMMA_PUBLICATION_TARGETS {
-        int id PK
-        int lemma_id FK
-        string surface
-        string variant_kind
-        string variant_id
-        string updated_by
-        timestamp updated_at
-    }
-
     LEMMA_CANONICAL_VARIANTS {
         int lemma_id FK
         string variant_kind
@@ -349,11 +338,10 @@ erDiagram
 - **Soft / missing FKs (historical + edge cases)**:
   - Some scripts intentionally create tables *without* foreign keys (e.g., `sync_text_pair_differences.py`) so they can run under restricted DB roles. That behavior is a compatibility fallback.
   - The canonical schema snapshot enforces FKs for core provenance and pipeline joins (including `images.html_file_id → html_files.id`, `images.pdf_file_id → pdf_files.id`, `images.ocr_generation_id → ocr_generations.id`, `assembled_lemmas.ocr_generation_id → ocr_generations.id`, and `lemma_images.* → (assembled_lemmas, images)`). If a live DB is missing these constraints (e.g., because a restricted-role script created a table early), treat it as drift and repair via a migration so the preflight gate can enforce it.
-- **Polymorphic references by design**: `variant_kind` + `variant_id` (TEXT) in `translation_risk_flags`, `lemma_publication_targets`, and `lemma_canonical_variants` can point at *different* tables (`translation_runs`, `human_translations`, or legacy assembled columns). That makes referential integrity unenforceable at the DB level.
-- **Two competing “what’s public/canonical” mechanisms**:
-  - `lemma_publication_targets` is a *single pointer per surface* (currently surface is constrained to `'public_translation'`).
-  - `lemma_canonical_variants` is a *set membership* model (with optional “primary”).
-  - The codebase contains both because it’s mid-migration from single-pointer → multi-canonical.
+- **Polymorphic references by design**: `variant_kind` + `variant_id` (TEXT) in `translation_risk_flags` and `lemma_canonical_variants` can point at *different* tables (`translation_runs`, `human_translations`, or legacy assembled columns). That makes referential integrity unenforceable at the DB level.
+- **Canonical/public consolidation**:
+  - Historically, `lemma_publication_targets` acted as a *single pointer* for public translation selection.
+  - As of the post-baseline migration `migrations/20260227_drop_lemma_publication_targets.sql`, the canonical schema uses **only** `lemma_canonical_variants` (set membership + optional “primary”) for public/canonical selection.
 - **`images` is a convergence point for multiple ingestion styles** (EPUB HTML vs rendered PDF pages), so the “where is the actual image?” story is split across `image_data` (BLOB) and `image_dir`+`image_filename` (filesystem).
 - **Legacy denormalized columns still matter operationally**:
   - `assembled_lemmas.source_image_ids` (JSON/TEXT) is deprecated in favor of `lemma_images`, but it historically drove uniqueness and deduplication.

@@ -512,8 +512,6 @@ def get_all_lemmas(cur):
     )
     rows = cur.fetchall()
 
-    cur.execute("SELECT to_regclass('public.lemma_publication_targets') IS NOT NULL")
-    has_publication_targets = bool(cur.fetchone()[0])
     cur.execute("SELECT to_regclass('public.translation_runs') IS NOT NULL")
     has_translation_runs = bool(cur.fetchone()[0])
     cur.execute("SELECT to_regclass('public.human_translations') IS NOT NULL")

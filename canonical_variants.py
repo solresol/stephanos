@@ -4,7 +4,7 @@ Canonical translation variant selection helpers.
 These utilities centralize the logic for:
 - Determining whether a variant is presentable (approved, non-empty, not risk-blocked)
 - Selecting presented variants for public UX (single or multi)
-- Selecting a single projection variant for legacy compatibility pointers
+- Selecting a single projection variant for downstream consumers
 
 All functions operate on a DB cursor and are safe to call when optional tables
 are missing (they return empty results / fall back deterministically).
@@ -375,28 +375,6 @@ def select_presented_variants(
 
     has_memberships = table_exists(cur, "lemma_canonical_variants")
 
-    # Transitional fallback: if the canonical set table is absent, honor the legacy single-pointer
-    # publication target as the effective canonical selection.
-    if not has_memberships and table_exists(cur, "lemma_publication_targets"):
-        cur.execute(
-            """
-            SELECT variant_kind, variant_id
-            FROM lemma_publication_targets
-            WHERE lemma_id = %s
-              AND surface = 'public_translation'
-            LIMIT 1
-            """,
-            (lemma_id,),
-        )
-        row = cur.fetchone()
-        if row:
-            pointer_kind, pointer_id = (row[0] or "").strip(), str(row[1] or "").strip()
-            pointer_variant = resolve_variant(
-                cur, lemma_id=lemma_id, variant_kind=pointer_kind, variant_id=pointer_id
-            )
-            if pointer_variant.get("publishable"):
-                return [pointer_variant]
-
     memberships = _fetch_active_canonical_memberships(cur, lemma_id=lemma_id) if has_memberships else []
     canonical_candidates: list[dict[str, Any]] = []
     for membership in memberships:
@@ -451,7 +429,7 @@ def select_presented_variants(
 
 def select_pointer_variant(cur, *, lemma_id: int) -> dict[str, Any] | None:
     """
-    Select a single variant for legacy projection tables (e.g., lemma_publication_targets).
+    Select a single presentable variant for a lemma.
 
     Uses canonical primary when present; otherwise deterministic canonical fallback; otherwise fallback policy.
     """

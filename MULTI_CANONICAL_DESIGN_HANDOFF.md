@@ -92,7 +92,7 @@ Add a canonical membership table (if not already present):
 - unique on (`lemma_id`, `variant_kind`, `variant_id`)
 - partial unique on (`lemma_id`) where `is_primary=true`
 
-Keep `lemma_publication_targets` for backward compatibility during migration.
+Update (2026-02-27): `lemma_publication_targets` has been removed from the canonical schema in favor of `lemma_canonical_variants` as the single source of truth.
 
 ## 5.2 SQLite (merah)
 
@@ -182,7 +182,7 @@ Do not overload a single checkbox for all canonical actions.
 1. Add Postgres canonical membership table.
 2. Add SQLite canonical action table.
 3. Update import pipeline to process canonical actions.
-4. Keep writing `lemma_publication_targets` as compatibility projection from canonical set + primary.
+4. Remove `lemma_publication_targets` (or replace with a derived view) once all writers have migrated to `lemma_canonical_variants`.
 
 ## Phase C: Nodegoat-safe sync
 1. Update `sync_nodegoat.py` to evaluate presentable set.
@@ -222,4 +222,3 @@ The robust solution is:
 2. Capture explicit canonical actions in SQLite.
 3. Apply deterministically on nightly import.
 4. Sync to Nodegoat only when exactly one translation is presentable.
-

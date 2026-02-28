@@ -275,7 +275,6 @@ def get_local_entries_to_push(conn, limit: int = None, catch_up: bool = False) -
     """
     cur = conn.cursor()
 
-    has_publication_targets = pg_table_exists(cur, "lemma_publication_targets")
     has_canonical_variants = pg_table_exists(cur, "lemma_canonical_variants")
     has_translation_runs = pg_table_exists(cur, "translation_runs")
     has_human_translations = pg_table_exists(cur, "human_translations")
@@ -295,21 +294,6 @@ def get_local_entries_to_push(conn, limit: int = None, catch_up: bool = False) -
     else:
         # Get entries modified since last sync
         extra_conditions = []
-        if has_publication_targets:
-            extra_conditions.append(
-                """
-                EXISTS (
-                    SELECT 1
-                    FROM lemma_publication_targets lpt
-                    WHERE lpt.lemma_id = assembled_lemmas.id
-                      AND lpt.surface = 'public_translation'
-                      AND (
-                          assembled_lemmas.last_synced_to_nodegoat_at IS NULL
-                          OR lpt.updated_at > assembled_lemmas.last_synced_to_nodegoat_at
-                      )
-                )
-                """
-            )
         if has_canonical_variants:
             extra_conditions.append(
                 """

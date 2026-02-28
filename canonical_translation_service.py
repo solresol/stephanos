@@ -26,7 +26,7 @@ def require_tables(cur):
     missing = []
     for table_name in (
         "assembled_lemmas",
-        "lemma_publication_targets",
+        "lemma_canonical_variants",
     ):
         if not table_exists(cur, table_name):
             missing.append(table_name)
@@ -69,13 +69,17 @@ def resolve_lemma(cur, lemma_id: int | None, headword: str | None) -> tuple[int,
     return int(row[0]), row[1] or ""
 
 
-def fetch_current_pointer(cur, lemma_id: int) -> dict | None:
+def fetch_primary_membership(cur, lemma_id: int) -> dict | None:
+    if not table_exists(cur, "lemma_canonical_variants"):
+        return None
     cur.execute(
         """
         SELECT variant_kind, variant_id
-        FROM lemma_publication_targets
+        FROM lemma_canonical_variants
         WHERE lemma_id = %s
-          AND surface = 'public_translation'
+          AND is_active = TRUE
+          AND is_primary = TRUE
+        ORDER BY updated_at DESC
         LIMIT 1
         """,
         (lemma_id,),
@@ -96,7 +100,7 @@ def resolve_fallback_variant(cur, lemma_id: int) -> dict | None:
 
 
 def resolve_canonical(cur, lemma_id: int, lemma_text: str) -> dict:
-    pointer = fetch_current_pointer(cur, lemma_id)
+    pointer = fetch_primary_membership(cur, lemma_id)
 
     notes: list[str] = []
 
@@ -146,23 +150,6 @@ def choose_default_source_text_version(cur, lemma_id: int) -> int | None:
     )
     row = cur.fetchone()
     return int(row[0]) if row else None
-
-
-def upsert_pointer(cur, lemma_id: int, variant_kind: str, variant_id: str, updated_by: str):
-    cur.execute(
-        """
-        INSERT INTO lemma_publication_targets (
-            lemma_id, surface, variant_kind, variant_id, updated_by, updated_at
-        )
-        VALUES (%s, 'public_translation', %s, %s, %s, NOW())
-        ON CONFLICT (lemma_id, surface) DO UPDATE SET
-            variant_kind = EXCLUDED.variant_kind,
-            variant_id = EXCLUDED.variant_id,
-            updated_by = EXCLUDED.updated_by,
-            updated_at = EXCLUDED.updated_at
-        """,
-        (lemma_id, variant_kind, str(variant_id), updated_by),
-    )
 
 
 def refresh_legacy_cache(cur, lemma_id: int, selected_variant: dict):
@@ -269,56 +256,43 @@ def command_set(cur, args) -> dict:
     if not candidate.get("publishable"):
         raise RuntimeError(candidate.get("block_reason", "Variant is not publishable"))
 
-    has_canonical_set = table_exists(cur, "lemma_canonical_variants")
-    if has_canonical_set:
-        # Ensure membership is active, set primary, clear other primaries.
-        cur.execute(
-            """
-            INSERT INTO lemma_canonical_variants (
-                lemma_id, variant_kind, variant_id, is_active, is_primary, updated_by, updated_at
-            )
-            VALUES (%s, %s, %s, TRUE, TRUE, %s, NOW())
-            ON CONFLICT (lemma_id, variant_kind, variant_id) DO UPDATE SET
-                is_active = TRUE,
-                is_primary = TRUE,
-                updated_by = EXCLUDED.updated_by,
-                updated_at = EXCLUDED.updated_at
-            """,
-            (lemma_id, variant_kind, str(variant_id), args.updated_by),
-        )
-        cur.execute(
-            """
-            UPDATE lemma_canonical_variants
-            SET is_primary = FALSE,
-                updated_by = %s,
-                updated_at = NOW()
-            WHERE lemma_id = %s
-              AND is_primary = TRUE
-              AND NOT (variant_kind = %s AND variant_id = %s)
-            """,
-            (args.updated_by, lemma_id, variant_kind, str(variant_id)),
-        )
+    if not table_exists(cur, "lemma_canonical_variants"):
+        raise RuntimeError("lemma_canonical_variants table is required to set canonical variants")
 
-        pointer_choice = canonical_variants.select_pointer_variant(cur, lemma_id=lemma_id)
-        if pointer_choice:
-            upsert_pointer(cur, lemma_id, pointer_choice["kind"], pointer_choice["id"], args.updated_by)
-        else:
-            cur.execute(
-                """
-                DELETE FROM lemma_publication_targets
-                WHERE lemma_id = %s
-                  AND surface = 'public_translation'
-                """,
-                (lemma_id,),
-            )
-    else:
-        upsert_pointer(cur, lemma_id, variant_kind, variant_id, args.updated_by)
+    # Ensure membership is active, set primary, clear other primaries.
+    cur.execute(
+        """
+        INSERT INTO lemma_canonical_variants (
+            lemma_id, variant_kind, variant_id, is_active, is_primary, updated_by, updated_at
+        )
+        VALUES (%s, %s, %s, TRUE, TRUE, %s, NOW())
+        ON CONFLICT (lemma_id, variant_kind, variant_id) DO UPDATE SET
+            is_active = TRUE,
+            is_primary = TRUE,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (lemma_id, variant_kind, str(variant_id), args.updated_by),
+    )
+    cur.execute(
+        """
+        UPDATE lemma_canonical_variants
+        SET is_primary = FALSE,
+            updated_by = %s,
+            updated_at = NOW()
+        WHERE lemma_id = %s
+          AND is_primary = TRUE
+          AND NOT (variant_kind = %s AND variant_id = %s)
+        """,
+        (args.updated_by, lemma_id, variant_kind, str(variant_id)),
+    )
 
+    pointer_choice = canonical_variants.select_pointer_variant(cur, lemma_id=lemma_id)
     selected_variant = {
-        "kind": (pointer_choice["kind"] if has_canonical_set and pointer_choice else candidate["kind"]),
-        "id": (pointer_choice["id"] if has_canonical_set and pointer_choice else candidate["id"]),
-        "translation_text": (pointer_choice["translation_text"] if has_canonical_set and pointer_choice else candidate["translation_text"]),
-        "status": (pointer_choice["status"] if has_canonical_set and pointer_choice else candidate.get("status", "")),
+        "kind": (pointer_choice["kind"] if pointer_choice else candidate["kind"]),
+        "id": (pointer_choice["id"] if pointer_choice else candidate["id"]),
+        "translation_text": (pointer_choice["translation_text"] if pointer_choice else candidate["translation_text"]),
+        "status": (pointer_choice["status"] if pointer_choice else candidate.get("status", "")),
     }
     refresh_legacy_cache(cur, lemma_id, selected_variant)
 

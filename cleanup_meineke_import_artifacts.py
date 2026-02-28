@@ -213,7 +213,12 @@ def count_deletable_empty_rows(cur) -> int:
           AND NOT EXISTS (SELECT 1 FROM translation_run_requests trr WHERE trr.lemma_id = a.id)
           AND NOT EXISTS (SELECT 1 FROM translation_runs tr WHERE tr.lemma_id = a.id)
           AND NOT EXISTS (SELECT 1 FROM translation_risk_flags trf WHERE trf.lemma_id = a.id)
-          AND NOT EXISTS (SELECT 1 FROM lemma_publication_targets lpt WHERE lpt.lemma_id = a.id)
+          AND NOT EXISTS (
+              SELECT 1
+              FROM lemma_canonical_variants lcv
+              WHERE lcv.lemma_id = a.id
+                AND lcv.is_active = TRUE
+          )
         """
     )
     return int(cur.fetchone()[0] or 0)
@@ -243,7 +248,12 @@ def delete_empty_rows(cur) -> int:
               AND NOT EXISTS (SELECT 1 FROM translation_run_requests trr WHERE trr.lemma_id = a.id)
               AND NOT EXISTS (SELECT 1 FROM translation_runs tr WHERE tr.lemma_id = a.id)
               AND NOT EXISTS (SELECT 1 FROM translation_risk_flags trf WHERE trf.lemma_id = a.id)
-              AND NOT EXISTS (SELECT 1 FROM lemma_publication_targets lpt WHERE lpt.lemma_id = a.id)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM lemma_canonical_variants lcv
+                  WHERE lcv.lemma_id = a.id
+                    AND lcv.is_active = TRUE
+              )
         )
         DELETE FROM assembled_lemmas a
         USING deletable d
@@ -387,4 +397,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
