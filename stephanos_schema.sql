@@ -856,7 +856,13 @@ CREATE TABLE public.proper_nouns (
     wikidata_confidence text,
     wikidata_linked_at timestamp with time zone,
     wikidata_linked_by text,
+    human_wikidata_qid text,
+    human_resolution_status text,
+    human_resolution_notes text,
+    human_resolved_by text,
+    human_resolved_at timestamp with time zone,
     CONSTRAINT proper_nouns_role_check CHECK ((role = ANY (ARRAY['entity'::text, 'source'::text]))),
+    CONSTRAINT proper_nouns_human_resolution_status_check CHECK ((human_resolution_status IS NULL) OR (human_resolution_status = ANY (ARRAY['approved'::text, 'corrected'::text, 'not_alignable'::text, 'removed'::text, 'added'::text]))),
     CONSTRAINT proper_nouns_wikidata_confidence_check CHECK ((wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text])))
 );
 
@@ -2333,6 +2339,187 @@ ALTER TABLE ONLY public.translation_runs
 
 ALTER TABLE ONLY public.translation_runs
     ADD CONSTRAINT translation_runs_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: source_citation_units; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.source_citation_units (
+    id integer NOT NULL,
+    unit_key text NOT NULL,
+    author_lemma_form text NOT NULL,
+    author_english text,
+    work_title text,
+    book_label text,
+    identifiers_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    raw_unit_text text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    author_wikidata_qid text,
+    author_wikidata_confidence text,
+    author_wikidata_linked_at timestamp with time zone,
+    author_wikidata_linked_by text,
+    work_wikidata_qid text,
+    work_wikidata_confidence text,
+    work_wikidata_linked_at timestamp with time zone,
+    work_wikidata_linked_by text,
+    CONSTRAINT source_citation_units_author_wikidata_confidence_check CHECK ((author_wikidata_confidence IS NULL) OR (author_wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text]))),
+    CONSTRAINT source_citation_units_work_wikidata_confidence_check CHECK ((work_wikidata_confidence IS NULL) OR (work_wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text])))
+);
+
+
+--
+-- Name: source_citation_units_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.source_citation_units_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: source_citation_units_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.source_citation_units_id_seq OWNED BY public.source_citation_units.id;
+
+
+--
+-- Name: lemma_source_citation_mentions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_source_citation_mentions (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    unit_id integer NOT NULL,
+    raw_citation_text text DEFAULT ''::text NOT NULL,
+    extracted_confidence text,
+    extracted_by_model text,
+    extracted_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT lemma_source_citation_mentions_extracted_confidence_check CHECK ((extracted_confidence IS NULL) OR (extracted_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])))
+);
+
+
+--
+-- Name: lemma_source_citation_mentions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.lemma_source_citation_mentions_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: lemma_source_citation_mentions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.lemma_source_citation_mentions_id_seq OWNED BY public.lemma_source_citation_mentions.id;
+
+
+--
+-- Name: source_citation_units id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_citation_units ALTER COLUMN id SET DEFAULT nextval('public.source_citation_units_id_seq'::regclass);
+
+
+--
+-- Name: lemma_source_citation_mentions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_source_citation_mentions ALTER COLUMN id SET DEFAULT nextval('public.lemma_source_citation_mentions_id_seq'::regclass);
+
+
+--
+-- Name: source_citation_units source_citation_units_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_citation_units
+    ADD CONSTRAINT source_citation_units_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: source_citation_units source_citation_units_unit_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_citation_units
+    ADD CONSTRAINT source_citation_units_unit_key_key UNIQUE (unit_key);
+
+
+--
+-- Name: lemma_source_citation_mentions lemma_source_citation_mentions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_source_citation_mentions
+    ADD CONSTRAINT lemma_source_citation_mentions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: lemma_source_citation_mentions_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_source_citation_mentions_lemma_idx ON public.lemma_source_citation_mentions USING btree (lemma_id);
+
+
+--
+-- Name: lemma_source_citation_mentions_unit_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_source_citation_mentions_unit_idx ON public.lemma_source_citation_mentions USING btree (unit_id);
+
+
+--
+-- Name: lemma_source_citation_mentions_unique_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX lemma_source_citation_mentions_unique_idx ON public.lemma_source_citation_mentions USING btree (lemma_id, unit_id, raw_citation_text);
+
+
+--
+-- Name: source_citation_units_author_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_citation_units_author_idx ON public.source_citation_units USING btree (author_lemma_form);
+
+
+--
+-- Name: source_citation_units_author_work_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_citation_units_author_work_idx ON public.source_citation_units USING btree (author_lemma_form, work_title);
+
+
+--
+-- Name: source_citation_units_work_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_citation_units_work_idx ON public.source_citation_units USING btree (work_title) WHERE (work_title IS NOT NULL);
+
+
+--
+-- Name: lemma_source_citation_mentions lemma_source_citation_mentions_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_source_citation_mentions
+    ADD CONSTRAINT lemma_source_citation_mentions_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: lemma_source_citation_mentions lemma_source_citation_mentions_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_source_citation_mentions
+    ADD CONSTRAINT lemma_source_citation_mentions_unit_id_fkey FOREIGN KEY (unit_id) REFERENCES public.source_citation_units(id) ON DELETE CASCADE;
 
 
 --

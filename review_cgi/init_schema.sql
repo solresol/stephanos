@@ -78,3 +78,27 @@ CREATE TABLE IF NOT EXISTS canonical_variant_actions (
 
 CREATE INDEX IF NOT EXISTS idx_canonical_actions_lemma
 ON canonical_variant_actions(lemma_id, reviewed_at, id);
+
+-- Named-entity resolution actions (append-only log).
+-- These express "human overrides machine linking" for Wikidata QIDs.
+-- Imported daily into PostgreSQL (raksasa).
+CREATE TABLE IF NOT EXISTS entity_resolution_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lemma_id INTEGER NOT NULL,
+    proper_noun_id INTEGER,
+    action TEXT NOT NULL CHECK (action IN ('set_qid', 'not_alignable', 'removed', 'approved', 'clear_override', 'add_entity')),
+    -- For set_qid / add_entity
+    qid TEXT,
+    -- For add_entity
+    text_form TEXT,
+    lemma_form TEXT,
+    english TEXT,
+    noun_type TEXT,
+    role TEXT DEFAULT 'entity',
+    notes TEXT,
+    reviewer_username TEXT,
+    reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_actions_lemma
+ON entity_resolution_actions(lemma_id, reviewed_at, id);

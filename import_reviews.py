@@ -17,6 +17,7 @@ import canonical_variants
 SQLITE_DB = Path.home() / "stephanos" / "review_data" / "reviews.db"
 LOG_FILE = Path.home() / "stephanos" / "logs" / "review_import.log"
 CANONICAL_ACTION_SOURCE = "merah_reviews"
+ENTITY_ACTION_SOURCE = "merah_entity_actions"
 
 
 def log(message):
@@ -91,6 +92,43 @@ def set_last_imported_canonical_action_id(pg_cur, last_action_id: int):
     )
 
 
+def get_last_imported_entity_action_id(pg_cur) -> int:
+    ensure_canonical_import_state_table(pg_cur)
+    pg_cur.execute(
+        """
+        INSERT INTO canonical_action_import_state (source, last_action_id, updated_at)
+        VALUES (%s, 0, NOW())
+        ON CONFLICT (source) DO NOTHING
+        """,
+        (ENTITY_ACTION_SOURCE,),
+    )
+    pg_cur.execute(
+        """
+        SELECT COALESCE(last_action_id, 0)
+        FROM canonical_action_import_state
+        WHERE source = %s
+        LIMIT 1
+        """,
+        (ENTITY_ACTION_SOURCE,),
+    )
+    row = pg_cur.fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def set_last_imported_entity_action_id(pg_cur, last_action_id: int):
+    ensure_canonical_import_state_table(pg_cur)
+    pg_cur.execute(
+        """
+        INSERT INTO canonical_action_import_state (source, last_action_id, updated_at)
+        VALUES (%s, %s, NOW())
+        ON CONFLICT (source) DO UPDATE SET
+            last_action_id = EXCLUDED.last_action_id,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (ENTITY_ACTION_SOURCE, int(last_action_id or 0)),
+    )
+
+
 def canonical_actions_preflight(sqlite_cur, pg_cur) -> None:
     """
     Abort early if the SQLite canonical action log appears to have been reset/rewound.
@@ -108,6 +146,240 @@ def canonical_actions_preflight(sqlite_cur, pg_cur) -> None:
             "SQLite canonical action log appears to be reset/rewound: "
             f"max_id={sqlite_max_id} < last_imported_id={pg_last_id}"
         )
+
+
+def entity_actions_preflight(sqlite_cur, pg_cur) -> None:
+    if not sqlite_table_exists(sqlite_cur, "entity_resolution_actions"):
+        return
+    sqlite_cur.execute("SELECT COALESCE(MAX(id), 0) AS max_id FROM entity_resolution_actions")
+    sqlite_max_id = int(sqlite_cur.fetchone()["max_id"] or 0)
+
+    pg_last_id = get_last_imported_entity_action_id(pg_cur)
+    if sqlite_max_id < pg_last_id:
+        raise RuntimeError(
+            "SQLite entity action log appears to be reset/rewound: "
+            f"max_id={sqlite_max_id} < last_imported_id={pg_last_id}"
+        )
+
+
+def import_entity_resolution_actions(sqlite_cur, pg_cur) -> tuple[int, int, int]:
+    """
+    Import entity_resolution_actions (append-only) from SQLite into Postgres.
+
+    Returns (applied_count, skipped_count, error_count).
+    """
+    if not sqlite_table_exists(sqlite_cur, "entity_resolution_actions"):
+        return 0, 0, 0
+
+    # Ensure target columns exist (migration gate).
+    pg_cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'proper_nouns'
+          AND column_name = 'human_resolution_status'
+        """
+    )
+    if not pg_cur.fetchone():
+        log("WARNING: proper_nouns human override columns missing; skipping entity_resolution_actions import.")
+        return 0, 0, 0
+
+    last_id = get_last_imported_entity_action_id(pg_cur)
+    sqlite_cur.execute(
+        """
+        SELECT
+            id,
+            lemma_id,
+            proper_noun_id,
+            COALESCE(action, '') AS action,
+            COALESCE(qid, '') AS qid,
+            COALESCE(text_form, '') AS text_form,
+            COALESCE(lemma_form, '') AS lemma_form,
+            COALESCE(english, '') AS english,
+            COALESCE(noun_type, '') AS noun_type,
+            COALESCE(role, 'entity') AS role,
+            COALESCE(notes, '') AS notes,
+            COALESCE(reviewer_username, '') AS reviewer_username,
+            reviewed_at
+        FROM entity_resolution_actions
+        WHERE id > ?
+        ORDER BY reviewed_at ASC, id ASC
+        """,
+        (last_id,),
+    )
+    rows = sqlite_cur.fetchall()
+    if not rows:
+        return 0, 0, 0
+
+    applied = skipped = errors = 0
+    max_seen_id = last_id
+
+    for row in rows:
+        action_id = int(row["id"] or 0)
+        max_seen_id = max(max_seen_id, action_id)
+
+        lemma_id = int(row["lemma_id"] or 0)
+        proper_noun_id = row["proper_noun_id"]
+        proper_noun_id = int(proper_noun_id) if proper_noun_id is not None else None
+
+        action = (row["action"] or "").strip().lower()
+        qid = (row["qid"] or "").strip() or None
+        notes = (row["notes"] or "").strip() or None
+        reviewer = (row["reviewer_username"] or "").strip() or "import_reviews.py"
+        reviewed_at = row["reviewed_at"] or None
+
+        try:
+            if action == "add_entity":
+                text_form = (row["text_form"] or "").strip()
+                lemma_form = (row["lemma_form"] or "").strip()
+                english = (row["english"] or "").strip() or None
+                noun_type = (row["noun_type"] or "").strip() or None
+                role = (row["role"] or "entity").strip() or "entity"
+                if role not in ("entity", "source"):
+                    role = "entity"
+                if lemma_id <= 0 or not (text_form and lemma_form):
+                    skipped += 1
+                    continue
+                pg_cur.execute(
+                    """
+                    INSERT INTO proper_nouns (
+                        lemma_id,
+                        proper_noun,
+                        lemma_form,
+                        english_translation,
+                        noun_type,
+                        role,
+                        human_wikidata_qid,
+                        human_resolution_status,
+                        human_resolution_notes,
+                        human_resolved_by,
+                        human_resolved_at,
+                        created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'added', %s, %s, %s, NOW())
+                    """,
+                    (
+                        lemma_id,
+                        text_form,
+                        lemma_form,
+                        english,
+                        noun_type,
+                        role,
+                        qid,
+                        notes,
+                        reviewer,
+                        reviewed_at,
+                    ),
+                )
+                applied += 1
+                continue
+
+            if lemma_id <= 0 or proper_noun_id is None or proper_noun_id <= 0:
+                skipped += 1
+                continue
+
+            # Ensure row exists (by id, plus lemma_id guard).
+            pg_cur.execute(
+                "SELECT 1 FROM proper_nouns WHERE id = %s AND lemma_id = %s",
+                (proper_noun_id, lemma_id),
+            )
+            if not pg_cur.fetchone():
+                skipped += 1
+                continue
+
+            if action == "set_qid":
+                pg_cur.execute(
+                    """
+                    UPDATE proper_nouns
+                    SET human_wikidata_qid = %s,
+                        human_resolution_status = 'corrected',
+                        human_resolution_notes = %s,
+                        human_resolved_by = %s,
+                        human_resolved_at = %s
+                    WHERE id = %s
+                      AND lemma_id = %s
+                    """,
+                    (qid, notes, reviewer, reviewed_at, proper_noun_id, lemma_id),
+                )
+                applied += 1
+                continue
+
+            if action == "approved":
+                pg_cur.execute(
+                    """
+                    UPDATE proper_nouns
+                    SET human_wikidata_qid = NULL,
+                        human_resolution_status = 'approved',
+                        human_resolution_notes = %s,
+                        human_resolved_by = %s,
+                        human_resolved_at = %s
+                    WHERE id = %s
+                      AND lemma_id = %s
+                    """,
+                    (notes, reviewer, reviewed_at, proper_noun_id, lemma_id),
+                )
+                applied += 1
+                continue
+
+            if action == "not_alignable":
+                pg_cur.execute(
+                    """
+                    UPDATE proper_nouns
+                    SET human_wikidata_qid = NULL,
+                        human_resolution_status = 'not_alignable',
+                        human_resolution_notes = %s,
+                        human_resolved_by = %s,
+                        human_resolved_at = %s
+                    WHERE id = %s
+                      AND lemma_id = %s
+                    """,
+                    (notes, reviewer, reviewed_at, proper_noun_id, lemma_id),
+                )
+                applied += 1
+                continue
+
+            if action == "removed":
+                pg_cur.execute(
+                    """
+                    UPDATE proper_nouns
+                    SET human_wikidata_qid = NULL,
+                        human_resolution_status = 'removed',
+                        human_resolution_notes = %s,
+                        human_resolved_by = %s,
+                        human_resolved_at = %s
+                    WHERE id = %s
+                      AND lemma_id = %s
+                    """,
+                    (notes, reviewer, reviewed_at, proper_noun_id, lemma_id),
+                )
+                applied += 1
+                continue
+
+            if action == "clear_override":
+                pg_cur.execute(
+                    """
+                    UPDATE proper_nouns
+                    SET human_wikidata_qid = NULL,
+                        human_resolution_status = NULL,
+                        human_resolution_notes = NULL,
+                        human_resolved_by = NULL,
+                        human_resolved_at = NULL
+                    WHERE id = %s
+                      AND lemma_id = %s
+                    """,
+                    (proper_noun_id, lemma_id),
+                )
+                applied += 1
+                continue
+
+            skipped += 1
+        except Exception as e:
+            log(f"  ERROR importing entity action id={action_id} lemma={lemma_id}: {e}")
+            errors += 1
+
+    set_last_imported_entity_action_id(pg_cur, max_seen_id)
+    return applied, skipped, errors
 
 
 def import_canonical_actions(sqlite_cur, pg_cur) -> tuple[int, int, int, int]:
@@ -583,6 +855,13 @@ def import_reviews():
         sqlite_conn.close()
         pg_conn.close()
         return 1
+    try:
+        entity_actions_preflight(sqlite_cur, pg_cur)
+    except Exception as e:
+        log(f"ERROR: entity action preflight failed: {e}")
+        sqlite_conn.close()
+        pg_conn.close()
+        return 1
 
     pg_cur.execute("SELECT to_regclass('public.human_translations') IS NOT NULL")
     has_human_translations = bool(pg_cur.fetchone()[0])
@@ -732,6 +1011,21 @@ def import_reviews():
         pg_conn.close()
         return 1
 
+    entity_applied = entity_skipped = entity_errors = 0
+    try:
+        entity_applied, entity_skipped, entity_errors = import_entity_resolution_actions(sqlite_cur, pg_cur)
+        if entity_applied or entity_errors:
+            log(
+                "Entity resolution import: "
+                f"applied={entity_applied}, skipped={entity_skipped}, errors={entity_errors}"
+            )
+    except Exception as e:
+        log(f"ERROR: Entity resolution import failed: {e}")
+        pg_conn.rollback()
+        sqlite_conn.close()
+        pg_conn.close()
+        return 1
+
     pg_conn.commit()
 
     # Close connections
@@ -756,8 +1050,11 @@ def import_reviews():
         log(f"  Canonical actions applied: {canonical_applied}")
         log(f"  Canonical actions rejected: {canonical_rejected}")
         log(f"  Canonical lemmas touched: {canonical_touched}")
+    if entity_applied or entity_errors:
+        log(f"  Entity actions applied: {entity_applied}")
+        log(f"  Entity action errors: {entity_errors}")
 
-    if error_count > 0 or variant_errors > 0 or human_sync_errors > 0:
+    if error_count > 0 or variant_errors > 0 or human_sync_errors > 0 or entity_errors > 0:
         return 1
 
     return 0

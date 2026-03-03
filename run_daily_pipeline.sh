@@ -147,6 +147,14 @@ uv run count_words.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 5b: Extracting proper nouns..." | tee -a "$LOGFILE"
 uv run extract_proper_nouns.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 5b2: Extract structured source-citation units (author+work+book)
+SOURCE_CITATION_EXTRACT_LIMIT="${SOURCE_CITATION_EXTRACT_LIMIT:-20}"
+if [ "$SOURCE_CITATION_EXTRACT_LIMIT" -gt 0 ]; then
+    echo "Step 5b2: Extracting source-citation units..." | tee -a "$LOGFILE"
+    uv run extract_source_citation_units.py --limit "$SOURCE_CITATION_EXTRACT_LIMIT" --delay 1 \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: source-citation extraction step failed" | tee -a "$LOGFILE"
+fi
+
 # Step 5c: Extract etymologies
 echo "Step 5c: Extracting etymologies..." | tee -a "$LOGFILE"
 uv run extract_etymologies.py 2>&1 | tee -a "$LOGFILE"
@@ -154,6 +162,14 @@ uv run extract_etymologies.py 2>&1 | tee -a "$LOGFILE"
 # Step 5d: Link proper nouns to Wikidata (limit to 20 per day to control costs)
 echo "Step 5d: Linking sources to Wikidata..." | tee -a "$LOGFILE"
 uv run link_wikidata.py --limit 20 2>&1 | tee -a "$LOGFILE"
+
+# Step 5d1: Link structured source-citation units to Wikidata (optional; defaults off)
+SOURCE_UNIT_WIKIDATA_LINK_LIMIT="${SOURCE_UNIT_WIKIDATA_LINK_LIMIT:-0}"
+if [ "$SOURCE_UNIT_WIKIDATA_LINK_LIMIT" -gt 0 ]; then
+    echo "Step 5d1: Linking source-citation units to Wikidata..." | tee -a "$LOGFILE"
+    uv run link_wikidata_source_citation_units.py --limit "$SOURCE_UNIT_WIKIDATA_LINK_LIMIT" --delay 1 \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: source-unit Wikidata linking step failed" | tee -a "$LOGFILE"
+fi
 
 # Step 5d2: Link place headwords to Wikidata (limit to 10 per day to control costs)
 echo "Step 5d2: Linking places to Wikidata..." | tee -a "$LOGFILE"

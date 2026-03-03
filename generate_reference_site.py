@@ -138,6 +138,35 @@ def strip_citation_markers(text: str) -> str:
     return current
 
 
+def strip_all_bracketed_spans(text: str) -> str:
+    """
+    Remove *all* (...) and [...] spans from text.
+
+    Used for public translation hygiene: bracketed/parenthetical material in our
+    translations is a strong indicator of Billerbeck leakage and must not be
+    visible on the public site.
+    """
+    if not text:
+        return ""
+
+    current = text
+    # Iteratively remove non-nested spans (enough passes to handle sequential spans).
+    for _ in range(8):
+        previous = current
+        current = _PAREN_SPAN_RE.sub("", current)
+        current = _BRACKET_SPAN_RE.sub("", current)
+        if current == previous:
+            break
+
+    # If anything unmatched remains, strip the bracket characters themselves.
+    current = current.replace("(", "").replace(")", "").replace("[", "").replace("]", "")
+
+    # Normalize spacing/punctuation after removals.
+    current = normalize_whitespace(current)
+    current = re.sub(r"\s+([,.;:!?])", r"\1", current)
+    return current.strip()
+
+
 def classify_text_difference(a: str, b: str) -> str:
     """
     Classify differences between two Greek strings.
@@ -799,8 +828,12 @@ def render_lemma_cards(lemmas):
             presented = []
 
         def render_translation_text(text: str) -> str:
+            raw = text or ""
+            text = strip_all_bracketed_spans(raw)
+            if raw.strip() and not text:
+                return '<span class="pending-translation">Translation pending</span>'
             return highlight_proper_nouns_in_translation(
-                text or "",
+                text,
                 lemma.get("proper_nouns", []),
                 lemma.get("aliases_by_name", {}),
             )
