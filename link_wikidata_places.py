@@ -17,6 +17,7 @@ Usage:
 """
 import argparse
 import json
+import os
 import time
 import re
 from datetime import datetime, timezone
@@ -482,24 +483,43 @@ def get_unlinked_lemmas(cur, limit: int = None, relink: bool = False):
 
 
 def update_place_link(cur, lemma_id: int, qid: str, label: str, confidence: str,
-                      lat: float, lon: float, pleiades_id: str, geonames_id: str):
+                      lat: float, lon: float, pleiades_id: str, geonames_id: str,
+                      *, linked_by: str | None = None, set_linked_by: bool = False):
     """Update the Wikidata place link for a lemma."""
-    cur.execute(
-        """
-        UPDATE assembled_lemmas
-        SET wikidata_place_qid = %s,
-            wikidata_place_label = %s,
-            wikidata_place_confidence = %s,
-            wikidata_place_linked_at = %s,
-            latitude = %s,
-            longitude = %s,
-            pleiades_id = %s,
-            geonames_id = %s
-        WHERE id = %s
-        """,
-        (qid, label, confidence, datetime.now(timezone.utc),
-         lat, lon, pleiades_id, geonames_id, lemma_id)
-    )
+    now = datetime.now(timezone.utc)
+    if set_linked_by:
+        cur.execute(
+            """
+            UPDATE assembled_lemmas
+            SET wikidata_place_qid = %s,
+                wikidata_place_label = %s,
+                wikidata_place_confidence = %s,
+                wikidata_place_linked_at = %s,
+                wikidata_place_linked_by = %s,
+                latitude = %s,
+                longitude = %s,
+                pleiades_id = %s,
+                geonames_id = %s
+            WHERE id = %s
+            """,
+            (qid, label, confidence, now, linked_by, lat, lon, pleiades_id, geonames_id, lemma_id),
+        )
+    else:
+        cur.execute(
+            """
+            UPDATE assembled_lemmas
+            SET wikidata_place_qid = %s,
+                wikidata_place_label = %s,
+                wikidata_place_confidence = %s,
+                wikidata_place_linked_at = %s,
+                latitude = %s,
+                longitude = %s,
+                pleiades_id = %s,
+                geonames_id = %s
+            WHERE id = %s
+            """,
+            (qid, label, confidence, now, lat, lon, pleiades_id, geonames_id, lemma_id),
+        )
     return cur.rowcount
 
 
@@ -507,12 +527,30 @@ def main():
     parser = argparse.ArgumentParser(description="Link lemma headwords to Wikidata places")
     parser.add_argument("--limit", type=int, help="Maximum number of entries to process")
     parser.add_argument("--relink", action="store_true", help="Re-process already linked entries")
+    parser.add_argument(
+        "--linked-by",
+        default=os.environ.get("WIKIDATA_LINKED_BY", "auto"),
+        help="Value for assembled_lemmas.wikidata_place_linked_by when updating links (default: auto)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
     parser.add_argument("--delay", type=float, default=1.0, help="Delay between API calls (default: 1.0)")
     args = parser.parse_args()
 
     conn = get_connection()
     cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'assembled_lemmas'
+          AND column_name = 'wikidata_place_linked_by'
+        """
+    )
+    has_linked_by_col = bool(cur.fetchone())
+    if not has_linked_by_col:
+        print("Note: assembled_lemmas.wikidata_place_linked_by missing; run migrations to enable attribution.")
 
     # Get lemmas to process
     lemmas = get_unlinked_lemmas(cur, args.limit, args.relink)
@@ -573,6 +611,8 @@ def main():
                 lon=selected.get("lon"),
                 pleiades_id=selected.get("pleiades_id"),
                 geonames_id=selected.get("geonames_id"),
+                linked_by=args.linked_by,
+                set_linked_by=has_linked_by_col,
             )
             geo_str = f" 📍 ({selected['lat']:.4f}, {selected['lon']:.4f})" if selected.get('lat') else ""
             print(f"  Linked to {qid} ({selected.get('label', '')}) [{confidence}]{geo_str}")
@@ -580,11 +620,35 @@ def main():
             if selected.get("lat"):
                 geocoded += 1
         elif confidence == "not_found":
-            update_place_link(cur, lemma_id, None, None, "not_found", None, None, None, None)
+            update_place_link(
+                cur,
+                lemma_id,
+                qid=None,
+                label=None,
+                confidence="not_found",
+                lat=None,
+                lon=None,
+                pleiades_id=None,
+                geonames_id=None,
+                linked_by=args.linked_by,
+                set_linked_by=has_linked_by_col,
+            )
             print(f"  No match found")
             not_found += 1
         else:
-            update_place_link(cur, lemma_id, None, None, "ambiguous", None, None, None, None)
+            update_place_link(
+                cur,
+                lemma_id,
+                qid=None,
+                label=None,
+                confidence="ambiguous",
+                lat=None,
+                lon=None,
+                pleiades_id=None,
+                geonames_id=None,
+                linked_by=args.linked_by,
+                set_linked_by=has_linked_by_col,
+            )
             print(f"  Ambiguous - manual review needed")
             ambiguous += 1
 

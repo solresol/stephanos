@@ -6,8 +6,10 @@ Pulls processed images, stitches continuation-only pages onto the previous lemma
 and records per-lemma rows in assembled_lemmas. Can optionally rebuild the table.
 """
 import argparse
+import difflib
 import json
 import re
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -124,40 +126,99 @@ def strip_headword_brackets(headword: str) -> str:
     return text
 
 
+def strip_diacritics(text: str) -> str:
+    if not text:
+        return ""
+    decomposed = unicodedata.normalize("NFD", text)
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return unicodedata.normalize("NFC", stripped)
+
+
+def normalize_headword(text: str) -> str:
+    stripped = strip_diacritics(text or "").strip().lower().replace("ς", "σ")
+    return "".join(ch for ch in stripped if ch.isalpha())
+
+
+def infer_billerbeck_prefix(text: str) -> str | None:
+    if not text:
+        return None
+    prefixes = {
+        "Α",
+        "Β",
+        "Γ",
+        "Δ",
+        "Ε",
+        "Ζ",
+        "Η",
+        "Θ",
+        "Ι",
+        "Κ",
+        "Λ",
+        "Μ",
+        "Ν",
+        "Ξ",
+        "Ο",
+        "Π",
+        "Ρ",
+        "Σ",
+        "Τ",
+        "Υ",
+        "Φ",
+        "Χ",
+        "Ψ",
+        "Ω",
+    }
+    for ch in text.strip():
+        if not ch.isalpha():
+            continue
+        base = strip_diacritics(ch).upper()
+        if base in {"Ϲ", "ϲ"}:
+            base = "Σ"
+        if base in prefixes:
+            return base
+    return None
+
+
 def load_headword_lookup(cur):
-    """Load mapping of greek_headword -> ids from meineke_headwords."""
+    """Load mapping of headwords and Billerbeck IDs -> ids from meineke_headwords."""
     cur.execute(
         """
         SELECT greek_headword, nodegoat_id, meineke_id, billerbeck_id
         FROM meineke_headwords
         """
     )
-    lookup = {}
+    by_exact = {}
+    by_norm = {}
+    by_billerbeck_id = {}
     for greek_headword, nodegoat_id, meineke_id, billerbeck_id in cur.fetchall():
-        key = strip_headword_brackets(greek_headword)
-        lookup.setdefault(key, []).append(
-            {
-                "nodegoat_id": nodegoat_id,
-                "meineke_id": meineke_id,
-                "billerbeck_id": billerbeck_id,
-            }
-        )
-    return lookup
+        headword = strip_headword_brackets(greek_headword)
+        headword_norm = normalize_headword(headword)
+        meta = {
+            "greek_headword": headword,
+            "headword_norm": headword_norm,
+            "nodegoat_id": nodegoat_id,
+            "meineke_id": meineke_id,
+            "billerbeck_id": billerbeck_id,
+        }
+        if headword:
+            by_exact.setdefault(headword, []).append(meta)
+            if headword_norm:
+                by_norm.setdefault(headword_norm, []).append(meta)
+        bid = (billerbeck_id or "").strip()
+        if bid:
+            by_billerbeck_id.setdefault(bid, []).append(meta)
+    return {
+        "by_exact": by_exact,
+        "by_norm": by_norm,
+        "by_billerbeck_id": by_billerbeck_id,
+    }
 
 
 def select_headword_meta(meta_list, entry_number):
     if not meta_list:
         return None
     if len(meta_list) == 1:
-        meta = meta_list[0]
-        if entry_number is None:
-            return meta
-        billerbeck_id = meta.get("billerbeck_id") or ""
-        match = re.search(r"(\d+)", billerbeck_id)
-        if match and match.group(1) != str(entry_number):
-            # Entry number doesn't match the canonical ID for this headword; treat as OCR mismatch.
-            return None
-        return meta
+        return meta_list[0]
     # Ambiguous headword: only select a meta row when we can disambiguate by entry number.
     if entry_number is None:
         return None
@@ -177,12 +238,23 @@ def extract_headword_from_greek_text(greek_text: str) -> str | None:
 
     # Some OCR runs accidentally include the entry number at the start.
     cleaned = re.sub(r"^\d+\s+", "", greek_text.strip())
-    dot = cleaned.find("·")
-    if dot <= 0:
+    delimiter_positions = []
+    for delim in ("·", "·", ":"):
+        pos = cleaned.find(delim)
+        if pos > 0:
+            delimiter_positions.append(pos)
+    if not delimiter_positions:
         return None
 
-    headword = cleaned[:dot].strip()
-    return headword or None
+    headword = cleaned[: min(delimiter_positions)].strip()
+    if not headword:
+        return None
+
+    # Guard: sometimes OCR includes a delimiter later in the paragraph, which would
+    # cause us to "extract" an entire sentence as the headword (e.g., Ἀλεξάνδρειαι ...).
+    if len(headword) > 120 or headword.count(" ") > 10:
+        return None
+    return headword
 
 
 def load_processed_images(cur):
@@ -310,9 +382,47 @@ def build_assembled_entries(rows, headword_lookup, *, verbose=False):
                 "ocr_generation_id": ocr_generation_id,
                 "ocr_processed_at": processed_at,
             }
-            meta_list = headword_lookup.get(assembled["lemma"])
+            meta = None
+            meta_list = headword_lookup["by_exact"].get(assembled["lemma"])
             meta = select_headword_meta(meta_list, assembled["entry_number"])
+            if not meta and assembled["lemma"]:
+                norm_key = normalize_headword(assembled["lemma"])
+                if norm_key:
+                    meta_list = headword_lookup["by_norm"].get(norm_key)
+                    meta = select_headword_meta(meta_list, assembled["entry_number"])
+            if not meta:
+                prefix = infer_billerbeck_prefix(greek_text) or infer_billerbeck_prefix(assembled["lemma"])
+                if prefix and assembled["entry_number"] is not None:
+                    entry_number = int(assembled["entry_number"])
+                    lemma_norm = normalize_headword(assembled["lemma"])
+                    best = None
+                    best_score = 0.0
+                    for delta in (0, -1, 1, -2, 2):
+                        candidate_num = entry_number + delta
+                        if candidate_num <= 0:
+                            continue
+                        candidate_id = f"{prefix}{candidate_num}"
+                        meta_list = headword_lookup["by_billerbeck_id"].get(candidate_id) or []
+                        for candidate_meta in meta_list:
+                            candidate_norm = candidate_meta.get("headword_norm") or ""
+                            if lemma_norm and candidate_norm:
+                                score = difflib.SequenceMatcher(a=lemma_norm, b=candidate_norm).ratio()
+                            else:
+                                score = 0.0
+                            if delta == 0:
+                                score += 0.05
+                            if score > best_score:
+                                best_score = score
+                                best = candidate_meta
+
+                    # Only accept a Billerbeck-ID guess when it looks close enough to the OCR headword.
+                    # This prevents mis-mapping when entry_number is off by ±1 (common OCR artifact).
+                    if best and (not lemma_norm or best_score >= 0.55):
+                        meta = best
             if meta:
+                canonical_headword = strip_headword_brackets((meta.get("greek_headword") or "").strip())
+                if canonical_headword:
+                    assembled["lemma"] = canonical_headword
                 assembled["nodegoat_id"] = meta["nodegoat_id"]
                 assembled["meineke_id"] = meta["meineke_id"]
                 assembled["billerbeck_id"] = meta["billerbeck_id"]

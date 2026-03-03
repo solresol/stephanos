@@ -17,6 +17,7 @@ from db import DB_HOST as STEPHANOS_DB_HOST
 from db import DB_PORT as STEPHANOS_DB_PORT
 from db import DB_USER as STEPHANOS_DB_USER
 import canonical_variants
+import citation_format
 
 OUTPUT_DIR = "reference_site"
 
@@ -518,56 +519,22 @@ def get_all_lemmas(cur):
     has_human_translations = bool(cur.fetchone()[0])
     cur.execute("SELECT to_regclass('public.lemma_source_text_versions') IS NOT NULL")
     has_source_text_versions = bool(cur.fetchone()[0])
-    cur.execute("SELECT to_regclass('public.meineke_headwords') IS NOT NULL")
-    has_meineke_headwords = bool(cur.fetchone()[0])
 
-    meineke_source_text_by_lemma = {}
+    billerbeck_source_text_by_lemma = {}
+    billerbeck_source_variant_by_lemma = {}
     if has_source_text_versions:
         cur.execute(
             """
-            SELECT lemma_id, text_body
+            SELECT lemma_id, text_body, source_variant
             FROM lemma_source_text_versions
-            WHERE source_document = 'meineke'
+            WHERE source_document = 'billerbeck'
               AND is_current = TRUE
+              AND is_public_greek = TRUE
             """
         )
-        meineke_source_text_by_lemma = {
-            lemma_id: (text_body or "")
-            for lemma_id, text_body in cur.fetchall()
-        }
-
-    meineke_headwords_fallback_by_lemma = {}
-    if has_meineke_headwords:
-        cur.execute(
-            """
-            SELECT
-                a.id AS lemma_id,
-                COALESCE(mh_match.greek_paragraph, '') AS meineke_paragraph
-            FROM assembled_lemmas a
-            LEFT JOIN LATERAL (
-                SELECT mh.greek_paragraph
-                FROM meineke_headwords mh
-                WHERE (
-                    (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
-                    OR (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
-                    OR (a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id)
-                )
-                ORDER BY
-                    CASE
-                        WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 0
-                        WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 1
-                        WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 2
-                        ELSE 3
-                    END,
-                    mh.id
-                LIMIT 1
-            ) mh_match ON TRUE
-            """
-        )
-        meineke_headwords_fallback_by_lemma = {
-            lemma_id: (meineke_paragraph or "")
-            for lemma_id, meineke_paragraph in cur.fetchall()
-        }
+        for lemma_id, text_body, source_variant in cur.fetchall():
+            billerbeck_source_text_by_lemma[lemma_id] = (text_body or "")
+            billerbeck_source_variant_by_lemma[lemma_id] = (source_variant or "")
 
     # Fetch proper nouns for all lemmas
     cur.execute("""
@@ -610,18 +577,49 @@ def get_all_lemmas(cur):
     """)
     aliases_by_name = {row[0]: row[1] for row in cur.fetchall()}
 
+    # Fetch phrase-level commentary entries (optional; table may not exist yet)
+    commentary_by_lemma = {}
+    cur.execute("SELECT to_regclass('public.lemma_commentary_entries') IS NOT NULL")
+    has_commentary_entries = bool(cur.fetchone()[0])
+    if has_commentary_entries:
+        cur.execute(
+            """
+            SELECT
+                lemma_id,
+                json_agg(json_build_object(
+                    'id', id,
+                    'phrase_text', phrase_text,
+                    'commentary_text', commentary_text,
+                    'created_by', COALESCE(created_by, ''),
+                    'created_at', created_at
+                ) ORDER BY id) AS comments
+            FROM lemma_commentary_entries
+            GROUP BY lemma_id
+            """
+        )
+        commentary_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
+
     all_lemmas = []
     for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at, wikidata_place_qid, wikidata_place_label, latitude, longitude, pleiades_id, translation_prompt_version, translation_blocked, translation_block_reason in rows:
-        # Public Greek preference: Meineke current source text -> Meineke fallback paragraph -> Billerbeck lane.
-        meineke_candidate = (meineke_source_text_by_lemma.get(lemma_id) or "").strip()
-        if not meineke_candidate:
-            meineke_candidate = (meineke_headwords_fallback_by_lemma.get(lemma_id) or "").strip()
-        if meineke_candidate:
-            greek = _MEINEKE_OBJECT_TAG_RE.sub("", meineke_candidate).strip()
-            greek_source = "meineke"
+        # Public Greek preference: current public Billerbeck source-text version (if available) -> assembled_lemmas lane.
+        greek_source_variant = ""
+        greek_source_origin = ""
+        billerbeck_candidate = (billerbeck_source_text_by_lemma.get(lemma_id) or "").strip()
+        if billerbeck_candidate:
+            greek = billerbeck_candidate
+            greek_source = "billerbeck"
+            greek_source_variant = (billerbeck_source_variant_by_lemma.get(lemma_id) or "").strip()
+            greek_source_origin = "lemma_source_text_versions"
         else:
             greek = (corrected_greek_scan or human_greek_text or greek_text or "").strip()
             greek_source = "billerbeck"
+            if (corrected_greek_scan or "").strip() or (human_greek_text or "").strip():
+                greek_source_variant = "manual"
+            elif (greek_text or "").strip():
+                greek_source_variant = "ocr"
+            else:
+                greek_source_variant = ""
+            greek_source_origin = "assembled_lemmas"
 
         # Use normalized translation column, fall back to parsing translation_json for legacy data
         translation = translation_col or ""
@@ -708,6 +706,7 @@ def get_all_lemmas(cur):
             "proper_nouns": proper_nouns_by_lemma.get(lemma_id, []),
             "etymologies": etymologies_by_lemma.get(lemma_id, []),
             "aliases_by_name": aliases_by_name,
+            "commentary_entries": commentary_by_lemma.get(lemma_id, []),
             "version": version or "epitome",
             "review_status": review_status or "not_reviewed",
             "reviewed_by": reviewed_by,
@@ -722,6 +721,8 @@ def get_all_lemmas(cur):
             "translation_blocked": bool(selected_translation_blocked),
             "translation_block_reason": selected_translation_block_reason or "",
             "greek_source": greek_source,
+            "greek_source_variant": greek_source_variant,
+            "greek_source_origin": greek_source_origin,
         }
         lemma_data["letter_slug"] = get_initial_slug(lemma_data["lemma"])
         all_lemmas.append(lemma_data)
@@ -837,11 +838,54 @@ def render_lemma_cards(lemmas):
                         f"{''.join(extra_rows)}"
                         f"</details>"
                     )
+
+        # Phrase-level commentary (optional)
+        commentary_html = ""
+        commentary_entries = lemma.get("commentary_entries") or []
+        if isinstance(commentary_entries, str):
+            try:
+                commentary_entries = json.loads(commentary_entries)
+            except (json.JSONDecodeError, TypeError):
+                commentary_entries = []
+        if isinstance(commentary_entries, list) and commentary_entries:
+            rows = []
+            for entry in commentary_entries:
+                if not isinstance(entry, dict):
+                    continue
+                phrase = html_module.escape((entry.get("phrase_text") or "").strip())
+                note = html_module.escape((entry.get("commentary_text") or "").strip())
+                if not phrase and not note:
+                    continue
+                if phrase:
+                    rows.append(
+                        f"<div class='commentary-entry'>"
+                        f"<div class='commentary-phrase'>{phrase}</div>"
+                        f"<div class='commentary-text'>{note}</div>"
+                        f"</div>"
+                    )
+                else:
+                    rows.append(
+                        f"<div class='commentary-entry'>"
+                        f"<div class='commentary-text'>{note}</div>"
+                        f"</div>"
+                    )
+            if rows:
+                commentary_html = (
+                    f"<details class='commentary'>"
+                    f"<summary>Commentary ({len(rows)})</summary>"
+                    f"{''.join(rows)}"
+                    f"</details>"
+                )
         meta_lines = []
         if lemma.get("entry_number"):
             meta_lines.append(f"Entry #{lemma['entry_number']}")
         if lemma.get("greek_source"):
-            meta_lines.append(f"Greek source: {lemma.get('greek_source')}")
+            greek_meta = f"{lemma.get('greek_source')}"
+            if lemma.get("greek_source_origin") == "lemma_source_text_versions":
+                greek_meta += " (current)"
+            if lemma.get("greek_source_variant"):
+                greek_meta += f" · {lemma.get('greek_source_variant')}"
+            meta_lines.append(f"Greek: {greek_meta}")
         if lemma.get("meineke_id") or lemma.get("billerbeck_id"):
             meta_lines.append(
                 f"Meineke: {lemma.get('meineke_id') or '-'} | Billerbeck: {lemma.get('billerbeck_id') or '-'}"
@@ -884,13 +928,12 @@ def render_lemma_cards(lemmas):
             if sources:
                 source_list = []
                 for noun in sources:
-                    noun_str = f"{noun['lemma_form']}"
-                    if noun.get('english'):
-                        noun_str += f" ({noun['english']})"
-                    if noun.get('citation'):
-                        noun_str += f" {noun['citation']}"
-                    if noun.get('work_title'):
-                        noun_str += f" [{noun['work_title']}]"
+                    noun_str = citation_format.format_source_reference(
+                        lemma_form=noun.get("lemma_form"),
+                        english=noun.get("english"),
+                        work_title=noun.get("work_title"),
+                        citation=noun.get("citation"),
+                    )
                     source_list.append(noun_str)
                 meta_lines.append(f"Sources: {', '.join(source_list)}")
 
@@ -963,6 +1006,7 @@ def render_lemma_cards(lemmas):
                 </div>
                 {f'<div class="greek-text {confidence_class}">{lemma["greek_text"]}</div>' if lemma['greek_text'] else ''}
                 <div class="translation">{translation}</div>
+                {commentary_html}
             </div>
             """
         )
@@ -1230,6 +1274,8 @@ def common_styles():
             background: #fafafa;
             border-left: 4px solid #3949ab;
             border-radius: 4px;
+            /* Preserve line breaks for quoted verse/poetry (and any manual lineation). */
+            white-space: pre-wrap;
         }
         .low-confidence {
             border-left-color: #ff9800;
@@ -1305,6 +1351,8 @@ def common_styles():
 	            color: #2c2c2c;
 	            line-height: 1.6;
 	            margin: 10px 0;
+                /* Preserve line breaks for verse translations. */
+                white-space: pre-wrap;
 	        }
 	        .translation-variants {
 	            margin-top: 10px;
@@ -1334,6 +1382,33 @@ def common_styles():
 	        }
         .translation-variant-text {
             margin-top: 6px;
+        }
+        .commentary {
+            margin-top: 10px;
+            padding: 10px 12px;
+            background: #fffdf5;
+            border: 1px solid #f0e6c8;
+            border-radius: 6px;
+        }
+        .commentary summary {
+            cursor: pointer;
+            font-weight: 600;
+            color: #6d4c00;
+            outline: none;
+        }
+        .commentary-entry {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(109, 76, 0, 0.12);
+        }
+        .commentary-phrase {
+            font-family: 'Times New Roman', serif;
+            color: #3a3a3a;
+            margin-bottom: 4px;
+        }
+        .commentary-text {
+            color: #2c2c2c;
+            line-height: 1.55;
         }
         .overlap-section {
             margin-top: 26px;

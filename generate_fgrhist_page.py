@@ -11,6 +11,7 @@ from collections import defaultdict
 from pathlib import Path
 from datetime import datetime, timezone
 from db import get_connection
+import citation_format
 
 
 LETTER_MAP = {
@@ -45,6 +46,10 @@ def parse_fgrhist_citation(citation: str) -> list:
 
     Returns list of (author_number, fragment_number, editor) tuples.
     """
+    if not citation:
+        return []
+
+    citation = citation_format.normalize_citation(citation)
     if not citation:
         return []
 

@@ -171,6 +171,32 @@ const reviewTemplate = `<!DOCTYPE html>
             border-left: 4px solid #3498db;
             border-radius: 4px;
             margin: 10px 0;
+            white-space: pre-wrap;
+        }
+        .commentary-list {
+            margin: 10px 0;
+        }
+        .commentary-entry {
+            background: #fffdf5;
+            border: 1px solid #f0e6c8;
+            border-radius: 6px;
+            margin: 10px 0;
+            padding: 10px 12px;
+        }
+        .commentary-phrase {
+            font-family: 'Times New Roman', serif;
+            font-style: italic;
+            color: #3a3a3a;
+        }
+        .commentary-text {
+            margin-top: 6px;
+            color: #2c2c2c;
+            line-height: 1.6;
+        }
+        .commentary-meta {
+            margin-top: 6px;
+            font-size: 0.85em;
+            color: #7f8c8d;
         }
         .comparison-status {
             margin: 10px 0;
@@ -614,47 +640,6 @@ const reviewTemplate = `<!DOCTYPE html>
                     {{end}}
                 </div>
                 {{end}}
-
-                {{if and .Lemma.MeinekeOCRSourceVersionID (ne .Lemma.MeinekeOCRSourceVersionID .Lemma.MeinekeSourceVersionID)}}
-                <div class="section-title">Meineke OCR Text</div>
-                {{if .Lemma.MeinekeOCRMainTextLines}}
-                <div class="meineke-lines">
-                    {{range .Lemma.MeinekeOCRMainTextLines}}
-                    <div class="meineke-line-row">
-                        <div class="line-label">
-                            {{if .PrintedLineLabel}}{{.PrintedLineLabel}}{{else}}{{.LineSeq}}{{end}}
-                        </div>
-                        <div class="line-text">{{.LineText}}</div>
-                    </div>
-                    {{end}}
-                </div>
-                {{else if .Lemma.MeinekeOCRText}}
-                <div class="original-text">{{.Lemma.MeinekeOCRText}}</div>
-                {{end}}
-
-                {{if .Lemma.MeinekeOCRApparatus}}
-                <div class="section-title">Meineke OCR Apparatus</div>
-                <div class="apparatus-list">
-                    {{range .Lemma.MeinekeOCRApparatus}}
-                    <div class="apparatus-row">
-                        <div class="line-label">
-                            {{if .PrintedLineLabel}}{{.PrintedLineLabel}}{{else if .LineSeq}}{{.LineSeq}}{{else}}–{{end}}
-                        </div>
-                        <div>
-                            <div class="apparatus-text">{{.ApparatusText}}</div>
-                            {{if or .AnchorToken .NoteKind}}
-                            <div class="apparatus-meta">
-                                {{if .AnchorToken}}anchor: {{.AnchorToken}}{{end}}
-                                {{if and .AnchorToken .NoteKind}} · {{end}}
-                                {{if .NoteKind}}type: {{.NoteKind}}{{end}}
-                            </div>
-                            {{end}}
-                        </div>
-                    </div>
-                    {{end}}
-                </div>
-                {{end}}
-                {{end}}
             </details>
             {{end}}
 
@@ -686,6 +671,23 @@ const reviewTemplate = `<!DOCTYPE html>
                     <li><code>{{.Billerbeck}}</code> → <code>{{.Meineke}}</code> {{if .PatternType}}<span class="pair-type">({{.PatternType}})</span>{{end}}</li>
                     {{end}}
                 </ul>
+                {{end}}
+            </div>
+            {{end}}
+
+            {{if .Lemma.CommentaryEntries}}
+            <div class="section-title">Commentary (phrase-level)</div>
+            <div class="commentary-list">
+                {{range .Lemma.CommentaryEntries}}
+                <div class="commentary-entry">
+                    {{if .PhraseText}}<div class="commentary-phrase">{{.PhraseText}}</div>{{end}}
+                    <div class="commentary-text">{{.CommentaryText}}</div>
+                    {{if or .CreatedBy .CreatedAt}}
+                    <div class="commentary-meta">
+                        {{if .CreatedBy}}by {{.CreatedBy}}{{end}}{{if and .CreatedBy .CreatedAt}} · {{end}}{{if .CreatedAt}}{{.CreatedAt}}{{end}}
+                    </div>
+                    {{end}}
+                </div>
                 {{end}}
             </div>
             {{end}}

@@ -91,7 +91,6 @@ def fetch_hole_pages(cur, max_page: int) -> list[int]:
                 FROM lemma_source_text_versions stv
                 WHERE stv.lemma_id = m.lemma_id
                   AND stv.source_document = 'meineke'
-                  AND stv.is_current = TRUE
                   AND stv.source_variant = 'ocr'
                 ORDER BY stv.id DESC
                 LIMIT 1

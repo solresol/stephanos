@@ -71,6 +71,7 @@ CREATE TABLE public.assembled_lemmas (
     wikidata_place_label text,
     wikidata_place_confidence text,
     wikidata_place_linked_at timestamp with time zone,
+    wikidata_place_linked_by text,
     latitude double precision,
     longitude double precision,
     pleiades_id text,
@@ -446,6 +447,43 @@ ALTER SEQUENCE public.lemma_apparatus_entries_id_seq OWNED BY public.lemma_appar
 
 
 --
+-- Name: lemma_commentary_entries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_commentary_entries (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    source_text_version_id integer,
+    phrase_text text NOT NULL,
+    commentary_text text NOT NULL,
+    created_by text,
+    updated_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: lemma_commentary_entries_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.lemma_commentary_entries_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: lemma_commentary_entries_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.lemma_commentary_entries_id_seq OWNED BY public.lemma_commentary_entries.id;
+
+
+--
 -- Name: lemma_canonical_variants; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -817,6 +855,7 @@ CREATE TABLE public.proper_nouns (
     wikidata_qid text,
     wikidata_confidence text,
     wikidata_linked_at timestamp with time zone,
+    wikidata_linked_by text,
     CONSTRAINT proper_nouns_role_check CHECK ((role = ANY (ARRAY['entity'::text, 'source'::text]))),
     CONSTRAINT proper_nouns_wikidata_confidence_check CHECK ((wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text])))
 );
@@ -1178,6 +1217,13 @@ ALTER TABLE ONLY public.lemma_apparatus_entries ALTER COLUMN id SET DEFAULT next
 
 
 --
+-- Name: lemma_commentary_entries id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_commentary_entries ALTER COLUMN id SET DEFAULT nextval('public.lemma_commentary_entries_id_seq'::regclass);
+
+
+--
 -- Name: lemma_source_lines id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1376,6 +1422,14 @@ ALTER TABLE ONLY public.images
 
 ALTER TABLE ONLY public.lemma_apparatus_entries
     ADD CONSTRAINT lemma_apparatus_entries_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: lemma_commentary_entries lemma_commentary_entries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_commentary_entries
+    ADD CONSTRAINT lemma_commentary_entries_pkey PRIMARY KEY (id);
 
 
 --
@@ -1755,6 +1809,20 @@ CREATE INDEX lemma_apparatus_entries_source_idx ON public.lemma_apparatus_entrie
 
 
 --
+-- Name: lemma_commentary_entries_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_commentary_entries_lemma_idx ON public.lemma_commentary_entries USING btree (lemma_id);
+
+
+--
+-- Name: lemma_commentary_entries_source_text_version_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_commentary_entries_source_text_version_idx ON public.lemma_commentary_entries USING btree (source_text_version_id) WHERE (source_text_version_id IS NOT NULL);
+
+
+--
 -- Name: lemma_canonical_variants_active_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2012,6 +2080,22 @@ ALTER TABLE ONLY public.lemma_apparatus_entries
 
 
 --
+-- Name: lemma_commentary_entries lemma_commentary_entries_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_commentary_entries
+    ADD CONSTRAINT lemma_commentary_entries_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: lemma_commentary_entries lemma_commentary_entries_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_commentary_entries
+    ADD CONSTRAINT lemma_commentary_entries_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE SET NULL;
+
+
+--
 -- Name: lemma_canonical_variants lemma_canonical_variants_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2256,4 +2340,3 @@ ALTER TABLE ONLY public.translation_runs
 --
 
 \unrestrict EzdjPvp1XRoyZp5E2g5PDbFQXDhrpldUR5NDw3cg4CeG8sWa8EVQ58vXpJ4bCz2
-

@@ -264,7 +264,6 @@ def export_lemmas():
 
     source_versions_by_lemma = {}
     current_meineke_by_lemma = {}
-    latest_meineke_ocr_by_lemma = {}
     meineke_lines_by_version = {}
     meineke_apparatus_by_version = {}
     meineke_scan_filenames_by_lemma = {}
@@ -309,29 +308,19 @@ def export_lemmas():
                 }
             )
             if source_document == "meineke":
-                if source_variant == "ocr":
-                    if lemma_id not in latest_meineke_ocr_by_lemma:
-                        latest_meineke_ocr_by_lemma[lemma_id] = {
-                            "id": version_id,
-                            "source_variant": source_variant or "",
-                            "text_body": text_body or "",
-                            "notes": notes or "",
-                        }
-                    if notes:
-                        match = _OCR_IMAGE_NOTE_RE.search(notes)
-                        if match:
-                            meineke_scan_filenames_by_lemma.setdefault(lemma_id, []).append(match.group(1))
-                if is_current:
+                if source_variant == "ocr" and notes:
+                    match = _OCR_IMAGE_NOTE_RE.search(notes)
+                    if match:
+                        meineke_scan_filenames_by_lemma.setdefault(lemma_id, []).append(match.group(1))
+                # Deprecate Meineke OCR as a displayed/public text source; keep only
+                # the current non-OCR Meineke source text for comparison.
+                if is_current and source_variant != "ocr":
                     current_meineke_by_lemma[lemma_id] = {
                         "id": version_id,
                         "source_variant": source_variant or "",
                         "text_body": text_body or "",
                         "notes": notes or "",
                     }
-                if source_variant == "ocr" and is_current and notes:
-                    match = _OCR_IMAGE_NOTE_RE.search(notes)
-                    if match:
-                        meineke_scan_filenames_by_lemma.setdefault(lemma_id, []).append(match.group(1))
 
         current_meineke_version_ids = [
             info["id"]
@@ -393,6 +382,28 @@ def export_lemmas():
                         "note_kind": note_kind or "",
                     }
                 )
+
+    # Phrase-level commentary (optional)
+    commentary_by_lemma = {}
+    cur.execute("SELECT to_regclass('public.lemma_commentary_entries') IS NOT NULL")
+    has_commentary_entries = bool(cur.fetchone()[0])
+    if has_commentary_entries:
+        cur.execute(
+            """
+            SELECT
+                lemma_id,
+                json_agg(json_build_object(
+                    'id', id,
+                    'phrase_text', phrase_text,
+                    'commentary_text', commentary_text,
+                    'created_by', COALESCE(created_by, ''),
+                    'created_at', created_at
+                ) ORDER BY id) AS comments
+            FROM lemma_commentary_entries
+            GROUP BY lemma_id
+            """
+        )
+        commentary_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
 
     translation_variants_by_lemma = {}
     cur.execute("SELECT to_regclass('public.translation_runs') IS NOT NULL")
@@ -572,9 +583,6 @@ def export_lemmas():
         current_meineke = current_meineke_by_lemma.get(lemma_id, {})
         current_meineke_version_id = current_meineke.get("id")
         current_meineke_text = current_meineke.get("text_body") or meineke_greek_paragraph or ""
-        latest_meineke_ocr = latest_meineke_ocr_by_lemma.get(lemma_id, {})
-        latest_meineke_ocr_version_id = latest_meineke_ocr.get("id")
-        latest_meineke_ocr_text = latest_meineke_ocr.get("text_body") or ""
 
         merged_meineke_scan_filenames = []
         for filename in meineke_scan_filenames_by_lemma.get(lemma_id, []) + meineke_image_filenames:
@@ -614,6 +622,7 @@ def export_lemmas():
             "source_text_versions": source_versions_by_lemma.get(lemma_id, []),
             "canonical_variants": canonical_variants_by_lemma.get(lemma_id, []),
             "canonical_variant_ref": {"kind": "legacy_assembled", "id": "translation"},
+            "commentary_entries": commentary_by_lemma.get(lemma_id, []),
             "blocked_reasons": [risk_by_lemma.get(lemma_id, {}).get("translation_block_reason", "")]
             if risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False)
             else [],
@@ -622,10 +631,6 @@ def export_lemmas():
             "meineke_scan_filenames": merged_meineke_scan_filenames,
             "meineke_main_text_lines": meineke_lines_by_version.get(current_meineke_version_id, []),
             "apparatus": meineke_apparatus_by_version.get(current_meineke_version_id, []),
-            "meineke_ocr_source_version_id": str(latest_meineke_ocr_version_id or ""),
-            "meineke_ocr_text": _MEINEKE_OBJECT_TAG_RE.sub("", latest_meineke_ocr_text),
-            "meineke_ocr_main_text_lines": meineke_lines_by_version.get(latest_meineke_ocr_version_id, []),
-            "meineke_ocr_apparatus": meineke_apparatus_by_version.get(latest_meineke_ocr_version_id, []),
         }
 
         canon_list = canonical_variants_by_lemma.get(lemma_id, [])

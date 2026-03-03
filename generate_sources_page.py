@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone
 from db import get_connection
+import citation_format
 
 
 LETTER_MAP = {
@@ -232,6 +233,7 @@ def main():
 
         # Filter out None values
         works = [w for w in works if w]
+        citations = [citation_format.normalize_citation(c) for c in citations if c]
         citations = [c for c in citations if c]
 
         # Create links to entry pages

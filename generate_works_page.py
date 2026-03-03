@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone
 from db import get_connection
+import citation_format
 
 
 LETTER_MAP = {
@@ -213,6 +214,7 @@ def main():
         lemmas = lemmas_json if isinstance(lemmas_json, list) else (json.loads(lemmas_json) if lemmas_json else [])
 
         # Filter out None values
+        citations = [citation_format.normalize_citation(c) for c in citations if c]
         citations = [c for c in citations if c]
 
         # Format authors

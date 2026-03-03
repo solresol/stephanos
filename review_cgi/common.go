@@ -33,6 +33,14 @@ type ApparatusEntry struct {
 	NoteKind         string `json:"note_kind"`
 }
 
+type CommentaryEntry struct {
+	ID             int    `json:"id"`
+	PhraseText     string `json:"phrase_text"`
+	CommentaryText string `json:"commentary_text"`
+	CreatedBy      string `json:"created_by"`
+	CreatedAt      string `json:"created_at"`
+}
+
 // Lemma represents a single lemma entry from the JSON export
 type Lemma struct {
 	ID                           int                  `json:"id"`
@@ -75,6 +83,7 @@ type Lemma struct {
 	MeinekeOCRText               string               `json:"meineke_ocr_text"`
 	MeinekeOCRMainTextLines      []SourceLine         `json:"meineke_ocr_main_text_lines"`
 	MeinekeOCRApparatus          []ApparatusEntry     `json:"meineke_ocr_apparatus"`
+	CommentaryEntries            []CommentaryEntry    `json:"commentary_entries"`
 	Letter                       string               `json:"letter"`
 	SortOrder                    int                  `json:"sort_order"`
 }

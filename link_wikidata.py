@@ -17,6 +17,7 @@ Usage:
 """
 import argparse
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -365,20 +366,45 @@ def get_sources_to_process(
     return cur.fetchall()
 
 
-def update_wikidata_link(cur, lemma_form: str, english: str, qid: str, confidence: str):
+def update_wikidata_link(
+    cur,
+    lemma_form: str,
+    english: str,
+    qid: str | None,
+    confidence: str,
+    *,
+    linked_by: str | None = None,
+    set_linked_by: bool = False,
+):
     """Update the Wikidata link for all matching proper nouns."""
-    cur.execute(
-        """
-        UPDATE proper_nouns
-        SET wikidata_qid = %s,
-            wikidata_confidence = %s,
-            wikidata_linked_at = %s
-        WHERE lemma_form = %s
-          AND (english_translation = %s OR (english_translation IS NULL AND %s IS NULL))
-          AND role = 'source'
-        """,
-        (qid, confidence, datetime.now(timezone.utc), lemma_form, english, english)
-    )
+    now = datetime.now(timezone.utc)
+    if set_linked_by:
+        cur.execute(
+            """
+            UPDATE proper_nouns
+            SET wikidata_qid = %s,
+                wikidata_confidence = %s,
+                wikidata_linked_at = %s,
+                wikidata_linked_by = %s
+            WHERE lemma_form = %s
+              AND (english_translation = %s OR (english_translation IS NULL AND %s IS NULL))
+              AND role = 'source'
+            """,
+            (qid, confidence, now, linked_by, lemma_form, english, english),
+        )
+    else:
+        cur.execute(
+            """
+            UPDATE proper_nouns
+            SET wikidata_qid = %s,
+                wikidata_confidence = %s,
+                wikidata_linked_at = %s
+            WHERE lemma_form = %s
+              AND (english_translation = %s OR (english_translation IS NULL AND %s IS NULL))
+              AND role = 'source'
+            """,
+            (qid, confidence, now, lemma_form, english, english),
+        )
     return cur.rowcount
 
 
@@ -398,6 +424,11 @@ def main():
         default=None,
         help="Retry sources previously marked ambiguous after N days (default: disabled)",
     )
+    parser.add_argument(
+        "--linked-by",
+        default=os.environ.get("WIKIDATA_LINKED_BY", "auto"),
+        help="Value for proper_nouns.wikidata_linked_by when updating links (default: auto)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
     parser.add_argument("--delay", type=float, default=1.0, help="Delay between API calls (default: 1.0)")
     args = parser.parse_args()
@@ -414,6 +445,19 @@ def main():
         print("Wikidata columns not found. Run migrate_wikidata_columns.py first.")
         conn.close()
         return
+
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'proper_nouns'
+          AND column_name = 'wikidata_linked_by'
+        """
+    )
+    has_linked_by_col = bool(cur.fetchone())
+    if not has_linked_by_col:
+        print("Note: proper_nouns.wikidata_linked_by missing; run migrations to enable attribution.")
 
     # Get sources to process
     sources = get_sources_to_process(
@@ -463,15 +507,39 @@ def main():
 
         # Update database
         if qid:
-            updated = update_wikidata_link(cur, greek_name, english_name, qid, confidence)
+            updated = update_wikidata_link(
+                cur,
+                greek_name,
+                english_name,
+                qid,
+                confidence,
+                linked_by=args.linked_by,
+                set_linked_by=has_linked_by_col,
+            )
             print(f"  Linked to {qid} (confidence: {confidence}, updated {updated} rows)")
             linked += 1
         elif confidence == "not_found":
-            update_wikidata_link(cur, greek_name, english_name, None, "not_found")
+            update_wikidata_link(
+                cur,
+                greek_name,
+                english_name,
+                None,
+                "not_found",
+                linked_by=args.linked_by,
+                set_linked_by=has_linked_by_col,
+            )
             print(f"  No match found")
             not_found += 1
         else:
-            update_wikidata_link(cur, greek_name, english_name, None, "ambiguous")
+            update_wikidata_link(
+                cur,
+                greek_name,
+                english_name,
+                None,
+                "ambiguous",
+                linked_by=args.linked_by,
+                set_linked_by=has_linked_by_col,
+            )
             print(f"  Ambiguous - manual review needed")
             ambiguous += 1
 

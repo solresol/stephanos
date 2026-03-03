@@ -260,22 +260,64 @@ def current_text_hash(cur, lemma_id):
     return row[0] if row else None
 
 
+def current_version_variant(cur, lemma_id: int) -> str | None:
+    cur.execute(
+        """
+        SELECT source_variant
+        FROM lemma_source_text_versions
+        WHERE lemma_id = %s
+          AND source_document = 'meineke'
+          AND is_current = TRUE
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (lemma_id,),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
+def existing_version_hash(cur, lemma_id: int, source_variant: str, text_hash: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM lemma_source_text_versions
+        WHERE lemma_id = %s
+          AND source_document = 'meineke'
+          AND source_variant = %s
+          AND text_hash = %s
+        LIMIT 1
+        """,
+        (lemma_id, source_variant, text_hash),
+    )
+    return bool(cur.fetchone())
+
+
 def insert_meineke_version(cur, lemma_id, text_body, source_variant, created_by, notes):
     text_hash = hashlib.sha256(text_body.encode("utf-8")).hexdigest()
+    if existing_version_hash(cur, lemma_id, source_variant, text_hash):
+        return None
+
     existing_hash = current_text_hash(cur, lemma_id)
     if existing_hash == text_hash:
         return None
 
-    cur.execute(
-        """
-        UPDATE lemma_source_text_versions
-        SET is_current = FALSE
-        WHERE lemma_id = %s
-          AND source_document = 'meineke'
-          AND is_current = TRUE
-        """,
-        (lemma_id,),
-    )
+    # If a non-OCR Meineke source is already current (e.g., CSV/Nodegoat), keep it
+    # current and store OCR as a non-current secondary artifact.
+    current_variant = current_version_variant(cur, lemma_id)
+    keep_existing_current = source_variant == "ocr" and current_variant in {"manual", "csv_fallback"}
+
+    if not keep_existing_current:
+        cur.execute(
+            """
+            UPDATE lemma_source_text_versions
+            SET is_current = FALSE
+            WHERE lemma_id = %s
+              AND source_document = 'meineke'
+              AND is_current = TRUE
+            """,
+            (lemma_id,),
+        )
 
     cur.execute(
         """
@@ -283,7 +325,7 @@ def insert_meineke_version(cur, lemma_id, text_body, source_variant, created_by,
             lemma_id, source_document, source_variant, text_body, text_hash,
             is_current, is_public_greek, created_by_type, created_by, created_at, notes
         )
-        VALUES (%s, 'meineke', %s, %s, %s, TRUE, FALSE, %s, %s, %s, %s)
+        VALUES (%s, 'meineke', %s, %s, %s, %s, FALSE, %s, %s, %s, %s)
         RETURNING id
         """,
         (
@@ -291,6 +333,7 @@ def insert_meineke_version(cur, lemma_id, text_body, source_variant, created_by,
             source_variant,
             text_body,
             text_hash,
+            (not keep_existing_current),
             "ocr" if source_variant == "ocr" else "import",
             created_by,
             datetime.now(timezone.utc).isoformat(),

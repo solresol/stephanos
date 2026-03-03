@@ -3,9 +3,11 @@
 Backfill/update source text versions from existing assembled_lemmas data.
 
 - Billerbeck source text: corrected_greek_scan -> human_greek_text -> greek_text
-- Meineke fallback text: meineke_headwords.greek_paragraph when no Meineke source exists
+- Meineke source text: meineke_headwords.greek_paragraph (prefers nodegoat/csv over OCR)
 """
 import hashlib
+import unicodedata
+from collections import defaultdict
 
 from db import get_connection
 
@@ -53,6 +55,23 @@ def set_current(cur, lemma_id, source_document, source_variant, text_body, creat
     if current_hash(cur, lemma_id, source_document) == text_hash:
         return False
 
+    # Avoid inserting duplicate non-current rows when other pipelines temporarily
+    # flip which version is marked current.
+    cur.execute(
+        """
+        SELECT id
+        FROM lemma_source_text_versions
+        WHERE lemma_id = %s
+          AND source_document = %s
+          AND source_variant = %s
+          AND text_hash = %s
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (lemma_id, source_document, source_variant, text_hash),
+    )
+    reuse_row = cur.fetchone()
+
     cur.execute(
         """
         UPDATE lemma_source_text_versions
@@ -63,6 +82,18 @@ def set_current(cur, lemma_id, source_document, source_variant, text_body, creat
         """,
         (lemma_id, source_document),
     )
+
+    if reuse_row:
+        cur.execute(
+            """
+            UPDATE lemma_source_text_versions
+            SET is_current = TRUE
+            WHERE id = %s
+            """,
+            (reuse_row[0],),
+        )
+        return True
+
     cur.execute(
         """
         INSERT INTO lemma_source_text_versions (
@@ -119,43 +150,155 @@ def backfill_billerbeck(cur):
     return inserted
 
 
+def strip_diacritics(text: str) -> str:
+    if not text:
+        return ""
+    decomposed = unicodedata.normalize("NFD", text)
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return unicodedata.normalize("NFC", stripped)
+
+
+def normalize_id(text: str) -> str:
+    """
+    Normalize identifier-like strings (e.g., Billerbeck IDs).
+
+    Example: "Ἑ3" -> "Ε3"
+    """
+    stripped = strip_diacritics(text or "").strip()
+    keep = []
+    for ch in stripped:
+        if ch.isalnum() or ch in {".", "-"}:
+            keep.append(ch)
+    return "".join(keep)
+
+
+def normalize_headword(text: str) -> str:
+    """
+    Normalize headwords for fuzzy matching:
+      - strip diacritics (tonos/oxia/breathings)
+      - lowercase
+      - final sigma -> sigma
+      - keep only letters
+    """
+    stripped = strip_diacritics(text or "").strip().lower().replace("ς", "σ")
+    return "".join(ch for ch in stripped if ch.isalpha())
+
+
+def pick_unique(candidates: list[str]) -> str | None:
+    if len(candidates) != 1:
+        return None
+    text = (candidates[0] or "").strip()
+    return text or None
+
+
+def build_headwords_index(cur):
+    cur.execute(
+        """
+        SELECT nodegoat_id, billerbeck_id, meineke_id, greek_headword, greek_paragraph
+        FROM meineke_headwords
+        """
+    )
+    rows = cur.fetchall()
+
+    by_nodegoat_id: dict[str, str] = {}
+    by_billerbeck_id: dict[str, list[str]] = defaultdict(list)
+    by_meineke_id: dict[str, list[str]] = defaultdict(list)
+    by_billerbeck_norm: dict[str, list[str]] = defaultdict(list)
+    by_meineke_norm: dict[str, list[str]] = defaultdict(list)
+    by_headword_exact: dict[str, list[str]] = defaultdict(list)
+    by_headword_norm: dict[str, list[str]] = defaultdict(list)
+
+    for nodegoat_id, billerbeck_id, meineke_id, greek_headword, greek_paragraph in rows:
+        paragraph = greek_paragraph or ""
+        ng = (nodegoat_id or "").strip()
+        bid = (billerbeck_id or "").strip()
+        mid = (meineke_id or "").strip()
+        gh = (greek_headword or "").strip()
+
+        if ng:
+            by_nodegoat_id[ng] = paragraph
+        if bid:
+            by_billerbeck_id[bid].append(paragraph)
+            by_billerbeck_norm[normalize_id(bid)].append(paragraph)
+        if mid:
+            by_meineke_id[mid].append(paragraph)
+            by_meineke_norm[normalize_id(mid)].append(paragraph)
+        if gh:
+            by_headword_exact[gh].append(paragraph)
+            by_headword_norm[normalize_headword(gh)].append(paragraph)
+
+    return {
+        "by_nodegoat_id": by_nodegoat_id,
+        "by_billerbeck_id": by_billerbeck_id,
+        "by_meineke_id": by_meineke_id,
+        "by_billerbeck_norm": by_billerbeck_norm,
+        "by_meineke_norm": by_meineke_norm,
+        "by_headword_exact": by_headword_exact,
+        "by_headword_norm": by_headword_norm,
+    }
+
+
 def backfill_meineke_fallback(cur):
     cur.execute("SELECT to_regclass('public.meineke_headwords') IS NOT NULL")
     if not bool(cur.fetchone()[0]):
         return 0
 
+    index = build_headwords_index(cur)
+
     cur.execute(
         """
-        SELECT
-            a.id,
-            COALESCE(mh_match.greek_paragraph, '') AS meineke_paragraph
-        FROM assembled_lemmas a
-        LEFT JOIN LATERAL (
-            SELECT mh.greek_paragraph
-            FROM meineke_headwords mh
-            WHERE (
-                (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
-                OR (a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id)
-                OR (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
-            )
-            ORDER BY
-                CASE
-                    WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 0
-                    WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 1
-                    WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 2
-                    ELSE 3
-                END,
-                mh.id
-            LIMIT 1
-        ) mh_match ON TRUE
-        ORDER BY a.id
+        SELECT lemma_id
+        FROM lemma_source_text_versions
+        WHERE source_document = 'meineke'
+          AND is_current = TRUE
+          AND source_variant = 'manual'
         """
     )
+    manual_current_ids = {int(row[0]) for row in cur.fetchall()}
+
+    cur.execute(
+        """
+        SELECT id, COALESCE(lemma, ''), COALESCE(nodegoat_id, ''), COALESCE(billerbeck_id, ''), COALESCE(meineke_id, '')
+        FROM assembled_lemmas
+        ORDER BY id
+        """
+    )
+    lemma_rows = cur.fetchall()
+
     inserted = 0
-    for lemma_id, paragraph in cur.fetchall():
+    for lemma_id, lemma, nodegoat_id, billerbeck_id, meineke_id in lemma_rows:
+        if int(lemma_id) in manual_current_ids:
+            continue
+
+        lemma_text = (lemma or "").strip()
+        nodegoat_id = (nodegoat_id or "").strip()
+        billerbeck_id = (billerbeck_id or "").strip()
+        meineke_id = (meineke_id or "").strip()
+
+        paragraph = None
+        if nodegoat_id:
+            paragraph = index["by_nodegoat_id"].get(nodegoat_id)
+
+        if paragraph is None and billerbeck_id:
+            paragraph = pick_unique(index["by_billerbeck_id"].get(billerbeck_id, []))
+            if paragraph is None:
+                paragraph = pick_unique(index["by_billerbeck_norm"].get(normalize_id(billerbeck_id), []))
+
+        if paragraph is None and meineke_id:
+            paragraph = pick_unique(index["by_meineke_id"].get(meineke_id, []))
+            if paragraph is None:
+                paragraph = pick_unique(index["by_meineke_norm"].get(normalize_id(meineke_id), []))
+
+        if paragraph is None and lemma_text:
+            paragraph = pick_unique(index["by_headword_exact"].get(lemma_text, []))
+
+        if paragraph is None and lemma_text:
+            paragraph = pick_unique(index["by_headword_norm"].get(normalize_headword(lemma_text), []))
+
         text = (paragraph or "").strip()
         if not text:
             continue
+
         if set_current(
             cur,
             lemma_id=lemma_id,

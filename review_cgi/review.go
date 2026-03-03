@@ -463,10 +463,7 @@ func main() {
 	showMeineke := strings.TrimSpace(currentLemma.MeinekeGreekParagraph) != "" ||
 		len(currentLemma.MeinekeMainTextLines) > 0 ||
 		len(currentLemma.Apparatus) > 0 ||
-		len(currentLemma.MeinekeScanFilenames) > 0 ||
-		strings.TrimSpace(currentLemma.MeinekeOCRText) != "" ||
-		len(currentLemma.MeinekeOCRMainTextLines) > 0 ||
-		len(currentLemma.MeinekeOCRApparatus) > 0
+		len(currentLemma.MeinekeScanFilenames) > 0
 
 	pageData := PageData{
 		Lemma:                 currentLemma,

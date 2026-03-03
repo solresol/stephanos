@@ -3,7 +3,7 @@
 Generate a daily report of "holes" in Meineke OCR coverage.
 
 A hole is an expected Meineke headword (up to the maximum processed Meineke page)
-that does not currently map to an OCR-backed meineke source text version.
+that does not currently map to any OCR-backed meineke source text version.
 """
 from __future__ import annotations
 
@@ -83,7 +83,6 @@ def fetch_holes(cur, max_page: int):
                 FROM lemma_source_text_versions stv
                 WHERE stv.lemma_id = m.lemma_id
                   AND stv.source_document = 'meineke'
-                  AND stv.is_current = TRUE
                   AND stv.source_variant = 'ocr'
                 ORDER BY stv.id DESC
                 LIMIT 1
@@ -100,7 +99,7 @@ def fetch_holes(cur, max_page: int):
             COALESCE(ocr_source_version_id, 0) AS ocr_source_version_id,
             CASE
                 WHEN lemma_id IS NULL THEN 'no_assembled_mapping'
-                WHEN ocr_source_version_id IS NULL THEN 'missing_current_ocr_source'
+                WHEN ocr_source_version_id IS NULL THEN 'missing_ocr_source'
                 ELSE 'covered'
             END AS coverage_status
         FROM coverage
@@ -144,14 +143,14 @@ def write_html(path: Path, payload: dict):
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Meineke OCR holes report</title>
-  <style>
+    <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; margin: 24px; color: #222; }}
     h1 {{ margin: 0 0 10px; }}
     .meta {{ margin-bottom: 16px; color: #444; }}
     table {{ border-collapse: collapse; width: 100%; font-size: 14px; }}
     th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }}
     th {{ background: #f7f7f7; }}
-    .status-missing_current_ocr_source {{ color: #8a4b00; }}
+    .status-missing_ocr_source {{ color: #8a4b00; }}
     .status-no_assembled_mapping {{ color: #8f1d1d; }}
   </style>
 </head>
@@ -161,7 +160,7 @@ def write_html(path: Path, payload: dict):
     Generated: {generated_at}<br>
     Max processed Meineke page: {max_page}<br>
     Expected headwords (<= max page): {expected_count}<br>
-    Covered by current OCR source: {covered_count}<br>
+    Covered by OCR source (any): {covered_count}<br>
     Holes: {hole_count}
   </div>
   <table>
@@ -245,7 +244,7 @@ def main():
 
     print(f"Max processed Meineke page: {max_page}")
     print(f"Expected headwords: {len(normalized_rows)}")
-    print(f"Covered by current OCR source: {covered_count}")
+    print(f"Covered by OCR source (any): {covered_count}")
     print(f"Holes: {len(holes)}")
     print(f"Wrote: {OUTPUT_JSON}")
     print(f"Wrote: {OUTPUT_HTML}")
