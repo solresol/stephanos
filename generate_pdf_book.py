@@ -513,14 +513,6 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
 \makeindex[name=deities,title=Index of Deities,intoc]
 \makeindex[name=sources,title=Index of Ancient Sources,intoc]
 
-% Dictionary-style headers showing first-last range
-% Uses extramarks for proper first/last entry tracking
-\usepackage{extramarks}
-\makepagestyle{dictionary}
-\makeevenhead{dictionary}{\thepage}{}{\itshape\firstxmark}
-\makeoddhead{dictionary}{\itshape\lastxmark}{}{\thepage}
-\makeheadrule{dictionary}{\textwidth}{\normalrulethickness}
-
 % Colors
 \usepackage{xcolor}
 \definecolor{darkgreen}{RGB}{0,100,0}
@@ -537,17 +529,15 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
 % Graphics for maps
 \usepackage{graphicx}
 
-% Entry formatting with dictionary marks
+% Entry formatting
 % Args: headword, annotations, translation
 \newcommand{\entry}[3]{%
-    \extramarks{#1}{#1}%
     \noindent\textcolor{headwordcolor}{\textbf{#1}}#2\enspace #3%
     \par\bigskip
 }
 
 % Args: headword, annotations, verse translation, trailing metadata
 \newcommand{\entryverse}[4]{%
-    \extramarks{#1}{#1}%
     \noindent\textcolor{headwordcolor}{\textbf{#1}}#2%
     \par\smallskip
     \begin{verse}
@@ -631,7 +621,7 @@ where available.
 \tableofcontents
 
 \mainmatter
-\pagestyle{dictionary}
+\pagestyle{plain}
 
 ''' + '\n'.join(entries_tex) + r'''
 
