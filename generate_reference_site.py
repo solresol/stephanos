@@ -759,6 +759,145 @@ def get_all_lemmas(cur):
     return all_lemmas
 
 
+def get_prompt_versions(cur):
+    """Fetch prompt versions plus usage metadata for the prompts page."""
+    cur.execute("SELECT to_regclass('public.translation_prompt_profiles') IS NOT NULL")
+    if not bool(cur.fetchone()[0]):
+        return []
+
+    cur.execute("SELECT to_regclass('public.translation_prompt_profile_versions') IS NOT NULL")
+    if not bool(cur.fetchone()[0]):
+        return []
+
+    cur.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'translation_prompt_profile_versions'
+              AND column_name = 'metadata_text'
+        )
+        """
+    )
+    has_metadata_text = bool(cur.fetchone()[0])
+
+    metadata_column = (
+        "COALESCE(pv.metadata_text, '') AS metadata_text,"
+        if has_metadata_text
+        else "'' AS metadata_text,"
+    )
+
+    cur.execute(
+        f"""
+        SELECT
+            p.id,
+            p.name,
+            COALESCE(p.style_kind, '') AS style_kind,
+            COALESCE(p.description, '') AS profile_description,
+            pv.id,
+            pv.version,
+            COALESCE(pv.prompt_text, '') AS prompt_text,
+            COALESCE(pv.notes, '') AS notes,
+            {metadata_column}
+            COALESCE(pv.active, FALSE) AS active,
+            pv.created_at,
+            COALESCE(req_stats.request_count, 0) AS request_count,
+            req_stats.last_requested_at,
+            COALESCE(run_stats.run_count, 0) AS run_count,
+            run_stats.last_run_at,
+            CASE
+                WHEN p.name = 'legacy_scholarly' THEN COALESCE(legacy_stats.legacy_count, 0)
+                ELSE 0
+            END AS legacy_count
+        FROM translation_prompt_profiles p
+        JOIN translation_prompt_profile_versions pv
+          ON pv.profile_id = p.id
+        LEFT JOIN (
+            SELECT
+                profile_version_id,
+                COUNT(*) AS request_count,
+                MAX(created_at) AS last_requested_at
+            FROM translation_run_requests
+            GROUP BY profile_version_id
+        ) req_stats
+          ON req_stats.profile_version_id = pv.id
+        LEFT JOIN (
+            SELECT
+                profile_version_id,
+                COUNT(*) AS run_count,
+                MAX(COALESCE(completed_at, created_at)) AS last_run_at
+            FROM translation_runs
+            GROUP BY profile_version_id
+        ) run_stats
+          ON run_stats.profile_version_id = pv.id
+        LEFT JOIN (
+            SELECT
+                translation_prompt_version AS version,
+                COUNT(*) AS legacy_count
+            FROM assembled_lemmas
+            WHERE COALESCE(translation, '') != ''
+              AND COALESCE(translation_prompt_version, 0) > 0
+            GROUP BY translation_prompt_version
+        ) legacy_stats
+          ON p.name = 'legacy_scholarly'
+         AND legacy_stats.version = pv.version
+        ORDER BY p.name, pv.version DESC
+        """
+    )
+
+    prompt_versions = []
+    for (
+        profile_id,
+        profile_name,
+        style_kind,
+        profile_description,
+        profile_version_id,
+        version,
+        prompt_text,
+        notes,
+        metadata_text,
+        active,
+        created_at,
+        request_count,
+        last_requested_at,
+        run_count,
+        last_run_at,
+        legacy_count,
+    ) in cur.fetchall():
+        total_usage = int(request_count or 0) + int(run_count or 0) + int(legacy_count or 0)
+        prompt_versions.append(
+            {
+                "profile_id": int(profile_id),
+                "profile_name": profile_name or "",
+                "style_kind": style_kind or "",
+                "profile_description": profile_description or "",
+                "profile_version_id": int(profile_version_id),
+                "version": int(version),
+                "prompt_text": prompt_text or "",
+                "notes": notes or "",
+                "metadata_text": metadata_text or "",
+                "active": bool(active),
+                "created_at": created_at,
+                "request_count": int(request_count or 0),
+                "last_requested_at": last_requested_at,
+                "run_count": int(run_count or 0),
+                "last_run_at": last_run_at,
+                "legacy_count": int(legacy_count or 0),
+                "total_usage": total_usage,
+            }
+        )
+
+    prompt_versions.sort(
+        key=lambda item: (
+            0 if item["active"] else 1,
+            item["profile_name"],
+            -item["version"],
+        )
+    )
+    return prompt_versions
+
+
 def highlight_proper_nouns_in_translation(translation, proper_nouns, aliases_by_name):
     """
     Wrap proper noun names in the translation with spans that show aliases on hover.
@@ -1573,6 +1712,88 @@ def common_styles():
         .breadcrumb a:hover {
             text-decoration: underline;
         }
+        .note {
+            color: #555;
+            margin: 12px 0;
+        }
+        .prompt-grid {
+            display: grid;
+            gap: 16px;
+            margin-top: 20px;
+        }
+        .prompt-card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+            padding: 20px;
+        }
+        .prompt-card.active {
+            border: 2px solid #2e7d32;
+        }
+        .prompt-head {
+            align-items: flex-start;
+            border-bottom: 2px solid #f0f0f0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+        }
+        .prompt-title {
+            color: #1a237e;
+            font-size: 1.25em;
+            font-weight: 700;
+        }
+        .prompt-subtitle {
+            color: #555;
+            margin-top: 4px;
+        }
+        .usage-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+        .usage-chip {
+            background: #eef3ff;
+            border-radius: 999px;
+            color: #1a237e;
+            font-size: 0.85em;
+            font-weight: 600;
+            padding: 4px 10px;
+        }
+        .usage-chip.active {
+            background: #e8f5e9;
+            color: #1b5e20;
+        }
+        .prompt-meta {
+            color: #555;
+            font-size: 0.95em;
+            line-height: 1.7;
+        }
+        .prompt-meta strong {
+            color: #333;
+        }
+        .prompt-block {
+            margin-top: 12px;
+        }
+        .prompt-block h3 {
+            color: #333;
+            font-size: 1em;
+            margin-bottom: 6px;
+        }
+        .prompt-text-box {
+            background: #fafafa;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.9em;
+            line-height: 1.55;
+            overflow-x: auto;
+            padding: 12px;
+            white-space: pre-wrap;
+        }
     """
 
 
@@ -1617,6 +1838,7 @@ def generate_index_html(letter_counts, stats):
 	            <a href="peoples.html">Ethnic Groups</a>
 	            <a href="aliases.html">Aliases</a>
 	            <a href="map.html">Places Map</a>
+                    <a href="prompts.html">Translation Prompts</a>
 		            <a href="statistics.html">Statistics</a>
 		            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
 		            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
@@ -1654,6 +1876,159 @@ def generate_index_html(letter_counts, stats):
         <div class="footer">
             <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
             <p>Select a letter to browse headwords, then open canonical pages for each entry.</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+    return html
+
+
+def generate_prompts_page(prompt_versions):
+    """Generate a page showing prompt versions, metadata, and usage."""
+    def format_timestamp(value):
+        if not value:
+            return "—"
+        if hasattr(value, "strftime"):
+            return value.strftime("%Y-%m-%d %H:%M:%S %Z")
+        return str(value)
+
+    visible_versions = [
+        item for item in prompt_versions
+        if item["active"] or item["total_usage"] > 0 or item["metadata_text"] or item["notes"]
+    ]
+    used_versions = [item for item in prompt_versions if item["total_usage"] > 0]
+    active_versions = [item for item in prompt_versions if item["active"]]
+
+    cards = []
+    for item in visible_versions:
+        created_text = format_timestamp(item["created_at"])
+        last_requested_text = format_timestamp(item["last_requested_at"])
+        last_run_text = format_timestamp(item["last_run_at"])
+        usage_bits = [
+            f"<span class='usage-chip{' active' if item['active'] else ''}'>{'Active' if item['active'] else 'Historical'}</span>",
+            f"<span class='usage-chip'>Runs: {item['run_count']}</span>",
+            f"<span class='usage-chip'>Requests: {item['request_count']}</span>",
+        ]
+        if item["legacy_count"]:
+            usage_bits.append(f"<span class='usage-chip'>Legacy rows: {item['legacy_count']}</span>")
+
+        blocks = []
+        if item["notes"]:
+            blocks.append(
+                f"""
+                <div class="prompt-block">
+                    <h3>Notes</h3>
+                    <div class="prompt-text-box">{html_module.escape(item['notes'])}</div>
+                </div>
+                """
+            )
+        if item["metadata_text"]:
+            blocks.append(
+                f"""
+                <div class="prompt-block">
+                    <h3>Metadata</h3>
+                    <div class="prompt-text-box">{html_module.escape(item['metadata_text'])}</div>
+                </div>
+                """
+            )
+        blocks.append(
+            f"""
+            <div class="prompt-block">
+                <h3>Prompt Text</h3>
+                <div class="prompt-text-box">{html_module.escape(item['prompt_text'])}</div>
+            </div>
+            """
+        )
+
+        cards.append(
+            f"""
+            <div class="prompt-card{' active' if item['active'] else ''}">
+                <div class="prompt-head">
+                    <div>
+                        <div class="prompt-title">{html_module.escape(item['profile_name'])} v{item['version']}</div>
+                        <div class="prompt-subtitle">{html_module.escape(item['style_kind'])} · {html_module.escape(item['profile_description'])}</div>
+                    </div>
+                    <div class="usage-chips">
+                        {''.join(usage_bits)}
+                    </div>
+                </div>
+                <div class="prompt-meta">
+                    <strong>Created:</strong> {html_module.escape(created_text)}<br>
+                    <strong>Profile version ID:</strong> {item['profile_version_id']}<br>
+                    <strong>Total recorded usage:</strong> {item['total_usage']}<br>
+                    <strong>Last requested:</strong> {html_module.escape(last_requested_text)}<br>
+                    <strong>Last run:</strong> {html_module.escape(last_run_text)}
+                </div>
+                {''.join(blocks)}
+            </div>
+            """
+        )
+
+    if not cards:
+        cards.append("<div class='no-results'>No prompt versions are available.</div>")
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Translation Prompts - Stephanos Ethnika</title>
+    <style>
+    {common_styles()}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Translation Prompts</h1>
+        <p>Prompt versions, provenance notes, and usage across the translation pipeline</p>
+    </div>
+
+    <div class="container">
+        <div class="nav-links">
+            <a href="index.html">All Letters</a>
+            <a href="sources.html">Ancient Sources</a>
+            <a href="works.html">Works Cited</a>
+            <a href="fgrhist.html">FGrHist Index</a>
+            <a href="entities.html">People &amp; Deities</a>
+            <a href="peoples.html">Ethnic Groups</a>
+            <a href="aliases.html">Aliases</a>
+            <a href="map.html">Places Map</a>
+            <a href="statistics.html">Statistics</a>
+            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
+            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
+            <a href="protected/clustering.html">Clustering</a>
+            <a href="progress.html">Processing Progress</a>
+            <a href="pipeline.html">Pipeline Status</a>
+            <a href="cgi-bin/review.cgi">Human Review</a>
+            <a href="downloads.html">Downloads</a>
+            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
+        </div>
+        <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
+            <div class="stat-card">
+                <div class="stat-value">{len(active_versions):,}</div>
+                <div class="stat-label">Active Versions</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{len(used_versions):,}</div>
+                <div class="stat-label">Used Versions</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{sum(item['run_count'] for item in prompt_versions):,}</div>
+                <div class="stat-label">Translation Runs</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{sum(item['legacy_count'] for item in prompt_versions):,}</div>
+                <div class="stat-label">Legacy Prompted Rows</div>
+            </div>
+        </div>
+        <p class="note">This page shows active prompt versions and any prompt version that has recorded usage, notes, or metadata.</p>
+        <div class="prompt-grid">
+            {''.join(cards)}
+        </div>
+
+        <div class="footer">
+            <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
         </div>
     </div>
 </body>
@@ -1755,6 +2130,7 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
 	            <a href="peoples.html">Ethnic Groups</a>
 	            <a href="aliases.html">Aliases</a>
 	            <a href="map.html">Places Map</a>
+		            <a href="prompts.html">Translation Prompts</a>
 		            <a href="statistics.html">Statistics</a>
 		            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
 		            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
@@ -1825,6 +2201,7 @@ def generate_headword_page(lemma: dict, overlaps: list[dict], overlap_run_id: in
 	            <a href="peoples.html">Ethnic Groups</a>
 	            <a href="aliases.html">Aliases</a>
 	            <a href="map.html">Places Map</a>
+	            <a href="prompts.html">Translation Prompts</a>
 	            <a href="statistics.html">Statistics</a>
 	            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
 	            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
@@ -2239,6 +2616,7 @@ def main():
 
     # Get all lemmas and bucket by letter
     lemmas = get_all_lemmas(cur)
+    prompt_versions = get_prompt_versions(cur)
     stats = {
         'total_lemmas': len(lemmas),
         'translated_lemmas': sum(1 for l in lemmas if l.get('translated')),
@@ -2319,6 +2697,7 @@ def main():
     <div class="container">
 	        <div class="nav-links">
 	            <a href="../index.html">All Letters</a>
+                    <a href="../prompts.html">Translation Prompts</a>
 	            <a href="../statistics.html">Statistics</a>
 	            <a href="meineke_difference_analysis.html">Difference Analysis</a>
 	            <a href="clustering.html">Clustering</a>
@@ -2355,6 +2734,8 @@ def main():
     letter_counts = {slug: len(items) for slug, items in buckets.items()}
     index_html = generate_index_html(letter_counts, stats)
     (output_dir / "index.html").write_text(index_html, encoding='utf-8')
+    prompts_html = generate_prompts_page(prompt_versions)
+    (output_dir / "prompts.html").write_text(prompts_html, encoding='utf-8')
 
     # Generate per-letter pages (list of links to canonical headword pages).
     for char, name, slug in GREEK_LETTERS:

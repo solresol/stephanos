@@ -943,6 +943,7 @@ CREATE TABLE public.translation_prompt_profile_versions (
     version integer NOT NULL,
     prompt_text text NOT NULL,
     notes text,
+    metadata_text text,
     active boolean DEFAULT true NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );

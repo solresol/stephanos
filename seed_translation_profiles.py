@@ -35,23 +35,41 @@ def main():
 
     cur.execute(
         """
-        SELECT version, prompt_text
+        SELECT version, prompt_text, COALESCE(notes, ''), created_at
         FROM translation_prompts
         ORDER BY version
         """
     )
     rows = cur.fetchall()
     inserted = 0
-    for version, prompt_text in rows:
+    for version, prompt_text, notes, created_at in rows:
         cur.execute(
             """
-            INSERT INTO translation_prompt_profile_versions (profile_id, version, prompt_text, active)
-            VALUES (%s, %s, %s, TRUE)
+            INSERT INTO translation_prompt_profile_versions (
+                profile_id, version, prompt_text, notes, active, created_at
+            )
+            VALUES (
+                %s,
+                %s,
+                %s,
+                %s,
+                NOT EXISTS (
+                    SELECT 1
+                    FROM translation_prompt_profile_versions existing
+                    WHERE existing.profile_id = %s
+                      AND existing.active = TRUE
+                ),
+                %s
+            )
             ON CONFLICT (profile_id, version) DO UPDATE
             SET prompt_text = EXCLUDED.prompt_text,
-                active = TRUE
+                notes = EXCLUDED.notes,
+                created_at = LEAST(
+                    translation_prompt_profile_versions.created_at,
+                    EXCLUDED.created_at
+                )
             """,
-            (profile_id, version, prompt_text),
+            (profile_id, version, prompt_text, notes, profile_id, created_at),
         )
         inserted += 1
 
@@ -63,4 +81,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
