@@ -246,6 +246,7 @@ def escape_latex(text):
         ('}', r'\}'),
         ('~', r'\textasciitilde{}'),
         ('^', r'\textasciicircum{}'),
+        ('→', '->'),
     ]
 
     for old, new in replacements:
@@ -668,8 +669,8 @@ def generate_pdf():
     tex_path.write_text(latex_content, encoding='utf-8')
     print(f"  LaTeX source saved: {tex_path}")
 
-    # Compile with XeLaTeX in temp directory
-    print("Compiling PDF with XeLaTeX (this may take a minute)...")
+    # Compile with LuaLaTeX in temp directory
+    print("Compiling PDF with LuaLaTeX (this may take a minute)...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_tex = Path(tmpdir) / "book.tex"
@@ -679,11 +680,11 @@ def generate_pdf():
         if map_result and map_path.exists():
             shutil.copy(map_path, Path(tmpdir) / "places_map.pdf")
 
-        # Run XeLaTeX three times for TOC and indices
+        # Run LuaLaTeX three times for TOC and indices
         for pass_num in [1, 2, 3]:
             print(f"  Pass {pass_num}/3...")
             result = subprocess.run(
-                ['xelatex', '-interaction=nonstopmode', 'book.tex'],
+                ['lualatex', '-interaction=nonstopmode', 'book.tex'],
                 cwd=tmpdir,
                 capture_output=True,
                 text=True
@@ -702,10 +703,10 @@ def generate_pdf():
                     capture_output=True
                 )
 
-        # Final XeLaTeX pass to include indices
+        # Final LuaLaTeX pass to include indices
         print("  Final pass...")
         result = subprocess.run(
-            ['xelatex', '-interaction=nonstopmode', 'book.tex'],
+            ['lualatex', '-interaction=nonstopmode', 'book.tex'],
             cwd=tmpdir,
             capture_output=True,
             text=True
