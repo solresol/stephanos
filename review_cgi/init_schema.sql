@@ -102,3 +102,22 @@ CREATE TABLE IF NOT EXISTS entity_resolution_actions (
 
 CREATE INDEX IF NOT EXISTS idx_entity_actions_lemma
 ON entity_resolution_actions(lemma_id, reviewed_at, id);
+
+-- Local phrase-level commentary queue.
+-- Public rendering is driven from PostgreSQL after nightly import.
+CREATE TABLE IF NOT EXISTS commentary_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_key TEXT NOT NULL UNIQUE,
+    lemma_id INTEGER NOT NULL,
+    source_text_version_id TEXT,
+    phrase_text TEXT NOT NULL,
+    commentary_text TEXT NOT NULL,
+    reviewer_username TEXT,
+    reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_commentary_entries_lemma
+ON commentary_entries(lemma_id, updated_at, id);

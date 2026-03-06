@@ -12,6 +12,8 @@ backups/
 logs/
 review_data/
 review_data.json
+.secrets/
+tmp/
 
 # Temporary migration/testing scripts
 add_parisinus_column.sql

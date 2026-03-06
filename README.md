@@ -232,3 +232,8 @@ When duplicates appear in `assembled_lemmas`, use these references and tools to 
 - If JSON is invalid, do not mark the image as processed
 - Log the raw output for debugging
 - Add a retry mechanism later
+
+### Protected-Page Bot Credentials
+- On `udara`, keep the protected/review bot password in `.secrets/review_bot_password.txt`.
+- This file is intentionally gitignored and should never be committed.
+- If the password changes, update the Apache `htpasswd` entry on `merah` first and then refresh the local file.

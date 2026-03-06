@@ -394,10 +394,17 @@ def export_lemmas():
                 lemma_id,
                 json_agg(json_build_object(
                     'id', id,
+                    'entry_key', CASE
+                        WHEN COALESCE(updated_by, '') LIKE 'merah_review:%'
+                        THEN SUBSTRING(updated_by FROM LENGTH('merah_review:') + 1)
+                        ELSE ''
+                    END,
+                    'source_text_version_id', COALESCE(source_text_version_id::text, ''),
                     'phrase_text', phrase_text,
                     'commentary_text', commentary_text,
                     'created_by', COALESCE(created_by, ''),
-                    'created_at', created_at
+                    'created_at', created_at,
+                    'updated_by', COALESCE(updated_by, '')
                 ) ORDER BY id) AS comments
             FROM lemma_commentary_entries
             GROUP BY lemma_id

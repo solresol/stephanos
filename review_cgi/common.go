@@ -34,58 +34,62 @@ type ApparatusEntry struct {
 }
 
 type CommentaryEntry struct {
-	ID             int    `json:"id"`
-	PhraseText     string `json:"phrase_text"`
-	CommentaryText string `json:"commentary_text"`
-	CreatedBy      string `json:"created_by"`
-	CreatedAt      string `json:"created_at"`
+	ID                  int    `json:"id"`
+	EntryKey            string `json:"entry_key,omitempty"`
+	SourceTextVersionID string `json:"source_text_version_id,omitempty"`
+	PhraseText          string `json:"phrase_text"`
+	CommentaryText      string `json:"commentary_text"`
+	CreatedBy           string `json:"created_by"`
+	CreatedAt           string `json:"created_at"`
+	UpdatedBy           string `json:"updated_by,omitempty"`
+	LocalOnly           bool   `json:"local_only,omitempty"`
 }
 
 // Lemma represents a single lemma entry from the JSON export
 type Lemma struct {
-	ID                           int                  `json:"id"`
-	Lemma                        string               `json:"lemma"`
-	EntryNumber                  int                  `json:"entry_number"`
-	Version                      string               `json:"version"`
-	GreekText                    string               `json:"greek_text"`
-	HumanGreekText               string               `json:"human_greek_text"`
-	MeinekeGreekParagraph        string               `json:"meineke_greek_paragraph"`
-	EnglishTranslation           string               `json:"english_translation"`
-	Type                         string               `json:"type"`
-	VolumeLabel                  string               `json:"volume_label"`
-	MeinekeID                    string               `json:"meineke_id"`
-	BillerbeckID                 string               `json:"billerbeck_id"`
-	NodegoatID                   string               `json:"nodegoat_id"`
-	WordCount                    int                  `json:"word_count"`
-	ImageFilenames               []string             `json:"image_filenames"`
-	Confidence                   string               `json:"confidence"`
-	MeinekeNormalizedClass       string               `json:"meineke_normalized_class"`
-	MeinekeLLMStatus             string               `json:"meineke_llm_status"`
-	MeinekeDifferenceLevel       string               `json:"meineke_difference_level"`
-	MeinekeTranslationImpact     string               `json:"meineke_translation_impact"`
-	MeinekeTranslationImpactNote string               `json:"meineke_translation_impact_note"`
-	MeinekeDifferenceSummary     string               `json:"meineke_difference_summary"`
-	MeinekeWordPairs             []DifferenceWordPair `json:"meineke_word_pairs"`
-	TranslationBlocked           bool                 `json:"translation_blocked"`
-	TranslationBlockReason       string               `json:"translation_block_reason"`
-	TranslationDifferenceEvidence string              `json:"translation_difference_evidence"`
-	TranslationVariants          []map[string]interface{} `json:"translation_variants"`
-	SourceTextVersions           []map[string]interface{} `json:"source_text_versions"`
-	CanonicalVariants            []map[string]interface{}   `json:"canonical_variants"`
-	CanonicalVariantRef          map[string]interface{}   `json:"canonical_variant_ref"`
-	BlockedReasons               []string                 `json:"blocked_reasons"`
-	MeinekeSourceVariant         string               `json:"meineke_source_variant"`
-	MeinekeSourceVersionID       string               `json:"meineke_source_version_id"`
-	MeinekeScanFilenames         []string             `json:"meineke_scan_filenames"`
-	MeinekeMainTextLines         []SourceLine         `json:"meineke_main_text_lines"`
-	Apparatus                    []ApparatusEntry     `json:"apparatus"`
-	MeinekeOCRSourceVersionID    string               `json:"meineke_ocr_source_version_id"`
-	MeinekeOCRText               string               `json:"meineke_ocr_text"`
-	MeinekeOCRMainTextLines      []SourceLine         `json:"meineke_ocr_main_text_lines"`
-	MeinekeOCRApparatus          []ApparatusEntry     `json:"meineke_ocr_apparatus"`
-	CommentaryEntries            []CommentaryEntry    `json:"commentary_entries"`
-	Letter                       string               `json:"letter"`
-	SortOrder                    int                  `json:"sort_order"`
+	ID                            int                      `json:"id"`
+	Lemma                         string                   `json:"lemma"`
+	EntryNumber                   int                      `json:"entry_number"`
+	Version                       string                   `json:"version"`
+	GreekText                     string                   `json:"greek_text"`
+	HumanGreekText                string                   `json:"human_greek_text"`
+	MeinekeGreekParagraph         string                   `json:"meineke_greek_paragraph"`
+	EnglishTranslation            string                   `json:"english_translation"`
+	Type                          string                   `json:"type"`
+	VolumeLabel                   string                   `json:"volume_label"`
+	MeinekeID                     string                   `json:"meineke_id"`
+	BillerbeckID                  string                   `json:"billerbeck_id"`
+	NodegoatID                    string                   `json:"nodegoat_id"`
+	WordCount                     int                      `json:"word_count"`
+	ImageFilenames                []string                 `json:"image_filenames"`
+	Confidence                    string                   `json:"confidence"`
+	MeinekeNormalizedClass        string                   `json:"meineke_normalized_class"`
+	MeinekeLLMStatus              string                   `json:"meineke_llm_status"`
+	MeinekeDifferenceLevel        string                   `json:"meineke_difference_level"`
+	MeinekeTranslationImpact      string                   `json:"meineke_translation_impact"`
+	MeinekeTranslationImpactNote  string                   `json:"meineke_translation_impact_note"`
+	MeinekeDifferenceSummary      string                   `json:"meineke_difference_summary"`
+	MeinekeWordPairs              []DifferenceWordPair     `json:"meineke_word_pairs"`
+	TranslationBlocked            bool                     `json:"translation_blocked"`
+	TranslationBlockReason        string                   `json:"translation_block_reason"`
+	TranslationDifferenceEvidence string                   `json:"translation_difference_evidence"`
+	TranslationVariants           []map[string]interface{} `json:"translation_variants"`
+	SourceTextVersions            []map[string]interface{} `json:"source_text_versions"`
+	CanonicalVariants             []map[string]interface{} `json:"canonical_variants"`
+	CanonicalVariantRef           map[string]interface{}   `json:"canonical_variant_ref"`
+	BlockedReasons                []string                 `json:"blocked_reasons"`
+	MeinekeSourceVariant          string                   `json:"meineke_source_variant"`
+	MeinekeSourceVersionID        string                   `json:"meineke_source_version_id"`
+	MeinekeScanFilenames          []string                 `json:"meineke_scan_filenames"`
+	MeinekeMainTextLines          []SourceLine             `json:"meineke_main_text_lines"`
+	Apparatus                     []ApparatusEntry         `json:"apparatus"`
+	MeinekeOCRSourceVersionID     string                   `json:"meineke_ocr_source_version_id"`
+	MeinekeOCRText                string                   `json:"meineke_ocr_text"`
+	MeinekeOCRMainTextLines       []SourceLine             `json:"meineke_ocr_main_text_lines"`
+	MeinekeOCRApparatus           []ApparatusEntry         `json:"meineke_ocr_apparatus"`
+	CommentaryEntries             []CommentaryEntry        `json:"commentary_entries"`
+	Letter                        string                   `json:"letter"`
+	SortOrder                     int                      `json:"sort_order"`
 }
 
 // LemmaData contains all lemmas from JSON export
@@ -119,6 +123,8 @@ type Config struct {
 	DBPath       string
 	ProtectedURL string
 }
+
+const commentaryImportPrefix = "merah_review:"
 
 // GetConfig returns the application configuration
 func GetConfig() Config {
@@ -200,6 +206,20 @@ func OpenDatabase(dbPath string) (*sql.DB, error) {
 			)
 		)`,
 		"CREATE INDEX IF NOT EXISTS idx_canonical_actions_lemma ON canonical_variant_actions(lemma_id, reviewed_at, id)",
+		`CREATE TABLE IF NOT EXISTS commentary_entries (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			entry_key TEXT NOT NULL UNIQUE,
+			lemma_id INTEGER NOT NULL,
+			source_text_version_id TEXT,
+			phrase_text TEXT NOT NULL,
+			commentary_text TEXT NOT NULL,
+			reviewer_username TEXT,
+			reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			deleted_at TIMESTAMP,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		"CREATE INDEX IF NOT EXISTS idx_commentary_entries_lemma ON commentary_entries(lemma_id, updated_at, id)",
 	}
 	for _, migration := range migrations {
 		db.Exec(migration) // Ignore errors (column may already exist)
@@ -355,10 +375,10 @@ func InsertCanonicalVariantAction(
 		return nil
 	}
 	valid := map[string]bool{
-		"add":          true,
-		"remove":       true,
-		"set_primary":  true,
-		"clear_all":    true,
+		"add":           true,
+		"remove":        true,
+		"set_primary":   true,
+		"clear_all":     true,
 		"clear_primary": true,
 	}
 	if !valid[action] {
@@ -371,19 +391,19 @@ func InsertCanonicalVariantAction(
 		return nil
 	}
 
-		_, err := db.Exec(
-			`
+	_, err := db.Exec(
+		`
 			INSERT INTO canonical_variant_actions (
 				lemma_id, action, variant_kind, variant_id, reviewer_username, notes
 			) VALUES (?, ?, ?, ?, ?, ?)
 			`,
-			lemmaID,
-			action,
-			variantKind,
-			variantID,
-			username,
-			notes,
-		)
+		lemmaID,
+		action,
+		variantKind,
+		variantID,
+		username,
+		notes,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to insert canonical action: %w", err)
 	}
@@ -509,6 +529,192 @@ func AnnotateTranslationVariants(lemma *Lemma, memberships []CanonicalMembership
 			v["primary"] = false
 		}
 	}
+}
+
+func commentaryMarker(entryKey string) string {
+	entryKey = strings.TrimSpace(entryKey)
+	if entryKey == "" {
+		return ""
+	}
+	return commentaryImportPrefix + entryKey
+}
+
+func commentaryEntryKeyFromMarker(marker string) string {
+	marker = strings.TrimSpace(marker)
+	if !strings.HasPrefix(marker, commentaryImportPrefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(marker, commentaryImportPrefix))
+}
+
+func normalizeCommentaryTextForCompare(text string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+}
+
+func commentarySignature(entry CommentaryEntry) string {
+	return normalizeCommentaryTextForCompare(entry.PhraseText) + "|" + normalizeCommentaryTextForCompare(entry.CommentaryText)
+}
+
+func LoadLocalCommentaryEntries(db *sql.DB, lemmaID int) ([]CommentaryEntry, error) {
+	rows, err := db.Query(
+		`
+		SELECT
+			id,
+			COALESCE(entry_key, ''),
+			COALESCE(source_text_version_id, ''),
+			COALESCE(phrase_text, ''),
+			COALESCE(commentary_text, ''),
+			COALESCE(reviewer_username, ''),
+			COALESCE(reviewed_at, '')
+		FROM commentary_entries
+		WHERE lemma_id = ?
+		  AND deleted_at IS NULL
+		ORDER BY reviewed_at ASC, id ASC
+		`,
+		lemmaID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load local commentary: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []CommentaryEntry
+	for rows.Next() {
+		var entry CommentaryEntry
+		if err := rows.Scan(
+			&entry.ID,
+			&entry.EntryKey,
+			&entry.SourceTextVersionID,
+			&entry.PhraseText,
+			&entry.CommentaryText,
+			&entry.CreatedBy,
+			&entry.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan local commentary: %w", err)
+		}
+		entry.UpdatedBy = commentaryMarker(entry.EntryKey)
+		entry.LocalOnly = true
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
+}
+
+func SaveLocalCommentaryEntry(
+	db *sql.DB,
+	lemmaID int,
+	entryKey string,
+	sourceTextVersionID string,
+	phraseText string,
+	commentaryText string,
+	username string,
+) (string, error) {
+	phraseText = strings.TrimSpace(phraseText)
+	commentaryText = strings.TrimSpace(commentaryText)
+	if lemmaID <= 0 || phraseText == "" || commentaryText == "" {
+		return "", nil
+	}
+	if strings.TrimSpace(entryKey) == "" {
+		entryKey = fmt.Sprintf("%d-%d", lemmaID, time.Now().UnixNano())
+	}
+
+	now := time.Now().UTC()
+	_, err := db.Exec(
+		`
+		INSERT INTO commentary_entries (
+			entry_key,
+			lemma_id,
+			source_text_version_id,
+			phrase_text,
+			commentary_text,
+			reviewer_username,
+			reviewed_at,
+			deleted_at,
+			created_at,
+			updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+		ON CONFLICT(entry_key) DO UPDATE SET
+			lemma_id = excluded.lemma_id,
+			source_text_version_id = excluded.source_text_version_id,
+			phrase_text = excluded.phrase_text,
+			commentary_text = excluded.commentary_text,
+			reviewer_username = excluded.reviewer_username,
+			reviewed_at = excluded.reviewed_at,
+			deleted_at = NULL,
+			updated_at = excluded.updated_at
+		`,
+		entryKey,
+		lemmaID,
+		strings.TrimSpace(sourceTextVersionID),
+		phraseText,
+		commentaryText,
+		username,
+		now,
+		now,
+		now,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to save commentary entry: %w", err)
+	}
+	return entryKey, nil
+}
+
+func DeleteLocalCommentaryEntry(db *sql.DB, lemmaID int, entryKey string) error {
+	if lemmaID <= 0 || strings.TrimSpace(entryKey) == "" {
+		return nil
+	}
+	_, err := db.Exec(
+		`
+		UPDATE commentary_entries
+		SET deleted_at = ?, updated_at = ?
+		WHERE lemma_id = ?
+		  AND entry_key = ?
+		`,
+		time.Now().UTC(),
+		time.Now().UTC(),
+		lemmaID,
+		strings.TrimSpace(entryKey),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete commentary entry: %w", err)
+	}
+	return nil
+}
+
+func MergeCommentaryEntries(remote []CommentaryEntry, local []CommentaryEntry) []CommentaryEntry {
+	if len(local) == 0 {
+		return remote
+	}
+
+	localByKey := map[string]CommentaryEntry{}
+	localSignatures := map[string]bool{}
+	for _, entry := range local {
+		if key := strings.TrimSpace(entry.EntryKey); key != "" {
+			localByKey[key] = entry
+		}
+		localSignatures[commentarySignature(entry)] = true
+	}
+
+	merged := make([]CommentaryEntry, 0, len(remote)+len(local))
+	for _, entry := range remote {
+		if key := commentaryEntryKeyFromMarker(entry.UpdatedBy); key != "" {
+			if _, exists := localByKey[key]; exists {
+				continue
+			}
+		}
+		if localSignatures[commentarySignature(entry)] {
+			continue
+		}
+		merged = append(merged, entry)
+	}
+
+	merged = append(merged, local...)
+	sort.SliceStable(merged, func(i, j int) bool {
+		if merged[i].CreatedAt == merged[j].CreatedAt {
+			return merged[i].ID < merged[j].ID
+		}
+		return merged[i].CreatedAt < merged[j].CreatedAt
+	})
+	return merged
 }
 
 // GetReview retrieves review data for a lemma

@@ -173,6 +173,35 @@ const reviewTemplate = `<!DOCTYPE html>
             margin: 10px 0;
             white-space: pre-wrap;
         }
+        .commentary-source {
+            cursor: text;
+            position: relative;
+            user-select: text;
+        }
+        .commentary-source:hover {
+            border-left-color: #8e44ad;
+            background: #f8f4fc;
+        }
+        .commentary-help {
+            color: #555;
+            font-size: 0.95em;
+            margin: 4px 0 10px;
+        }
+        .commentary-selection-status {
+            padding: 10px 12px;
+            border: 1px dashed #c9b7ef;
+            border-radius: 6px;
+            background: #faf7ff;
+            color: #5d4f7f;
+            margin-bottom: 12px;
+        }
+        .commentary-form {
+            background: #fcfbff;
+            border: 1px solid #e4dcf7;
+            border-radius: 8px;
+            padding: 14px;
+            margin: 12px 0 16px;
+        }
         .commentary-list {
             margin: 10px 0;
         }
@@ -197,6 +226,49 @@ const reviewTemplate = `<!DOCTYPE html>
             margin-top: 6px;
             font-size: 0.85em;
             color: #7f8c8d;
+        }
+        .commentary-entry-head {
+            align-items: start;
+            display: flex;
+            gap: 12px;
+            justify-content: space-between;
+        }
+        .commentary-entry-actions {
+            align-items: center;
+            display: flex;
+            gap: 8px;
+        }
+        .commentary-empty {
+            color: #7f8c8d;
+            font-style: italic;
+            margin-top: 8px;
+        }
+        .commentary-inline-form {
+            margin: 0;
+        }
+        .btn-subtle {
+            background: #f3f4f6;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            color: #374151;
+            cursor: pointer;
+            font-size: 0.85em;
+            padding: 6px 10px;
+        }
+        .btn-subtle:hover {
+            background: #e5e7eb;
+        }
+        .btn-danger {
+            background: #fff1f2;
+            border: 1px solid #fecdd3;
+            border-radius: 4px;
+            color: #b42318;
+            cursor: pointer;
+            font-size: 0.85em;
+            padding: 6px 10px;
+        }
+        .btn-danger:hover {
+            background: #ffe4e6;
         }
         .comparison-status {
             margin: 10px 0;
@@ -566,11 +638,11 @@ const reviewTemplate = `<!DOCTYPE html>
 
                 <div class="text-panel">
                     <div class="section-title">Raw OCR of Billerbeck</div>
-                    <div class="original-text">{{.Lemma.GreekText}}</div>
+                    <div class="original-text commentary-source" data-commentary-source="billerbeck" tabindex="0" title="Select text here to add commentary">{{.Lemma.GreekText}}</div>
 
                     {{if ne .BillerbeckCompareText .Lemma.GreekText}}
                     <div class="section-title">Billerbeck Greek Used For Comparison</div>
-                    <div class="original-text">{{.BillerbeckCompareText}}</div>
+                    <div class="original-text commentary-source" data-commentary-source="billerbeck-compare" tabindex="0" title="Select text here to add commentary">{{.BillerbeckCompareText}}</div>
                     {{end}}
                 </div>
             </div>
@@ -675,13 +747,68 @@ const reviewTemplate = `<!DOCTYPE html>
             </div>
             {{end}}
 
-            {{if .Lemma.CommentaryEntries}}
             <div class="section-title">Commentary (phrase-level)</div>
+            <div class="commentary-help">
+                Select text in the Billerbeck Greek or AI translation block, then save a note.
+                Notes stay local on merah until the nightly import/export cycle republishes them.
+            </div>
+            <div id="commentary_selection_status" class="commentary-selection-status">
+                Highlight a phrase to start a commentary note.
+            </div>
+            <form method="POST" action="/cgi-bin/save.cgi" class="commentary-form" id="commentary_form">
+                <input type="hidden" name="form_mode" value="commentary">
+                <input type="hidden" name="lemma_id" value="{{.Lemma.ID}}">
+                <input type="hidden" name="action" value="stay">
+                <input type="hidden" name="commentary_action" id="commentary_action" value="add">
+                <input type="hidden" name="commentary_entry_key" id="commentary_entry_key" value="">
+                <input type="hidden" name="commentary_source_text_version_id" id="commentary_source_text_version_id" value="">
+
+                <div class="form-group">
+                    <label for="commentary_phrase_text">Selected Phrase</label>
+                    <textarea name="commentary_phrase_text" id="commentary_phrase_text" readonly style="min-height: 70px;"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="commentary_text">Commentary Note</label>
+                    <textarea name="commentary_text" id="commentary_text" style="min-height: 90px;"></textarea>
+                </div>
+
+                <div class="button-group">
+                    <button type="submit" class="btn-save" id="commentary_submit_btn">Save Commentary</button>
+                    <button type="button" class="btn-subtle" onclick="clearCommentaryForm()">Clear</button>
+                </div>
+            </form>
+
             <div class="commentary-list">
                 {{range .Lemma.CommentaryEntries}}
                 <div class="commentary-entry">
-                    {{if .PhraseText}}<div class="commentary-phrase">{{.PhraseText}}</div>{{end}}
-                    <div class="commentary-text">{{.CommentaryText}}</div>
+                    <div class="commentary-entry-head">
+                        <div>
+                            {{if .PhraseText}}<div class="commentary-phrase">{{.PhraseText}}</div>{{end}}
+                            <div class="commentary-text">{{.CommentaryText}}</div>
+                        </div>
+                        {{if .EntryKey}}
+                        <div class="commentary-entry-actions">
+                            <button
+                                type="button"
+                                class="btn-subtle"
+                                data-entry-key="{{.EntryKey}}"
+                                data-source-text-version-id="{{.SourceTextVersionID}}"
+                                data-phrase="{{.PhraseText}}"
+                                data-commentary="{{.CommentaryText}}"
+                                onclick="startCommentaryEdit(this)"
+                            >Edit</button>
+                            <form method="POST" action="/cgi-bin/save.cgi" class="commentary-inline-form">
+                                <input type="hidden" name="form_mode" value="commentary">
+                                <input type="hidden" name="lemma_id" value="{{$.Lemma.ID}}">
+                                <input type="hidden" name="action" value="stay">
+                                <input type="hidden" name="commentary_action" value="delete">
+                                <input type="hidden" name="commentary_entry_key" value="{{.EntryKey}}">
+                                <button type="submit" class="btn-danger">Delete</button>
+                            </form>
+                        </div>
+                        {{end}}
+                    </div>
                     {{if or .CreatedBy .CreatedAt}}
                     <div class="commentary-meta">
                         {{if .CreatedBy}}by {{.CreatedBy}}{{end}}{{if and .CreatedBy .CreatedAt}} · {{end}}{{if .CreatedAt}}{{.CreatedAt}}{{end}}
@@ -690,10 +817,12 @@ const reviewTemplate = `<!DOCTYPE html>
                 </div>
                 {{end}}
             </div>
+            {{if not .Lemma.CommentaryEntries}}
+            <div class="commentary-empty">No commentary has been added for this lemma yet.</div>
             {{end}}
 
             <div class="section-title">AI-generated English Translation</div>
-            <div class="original-text">{{.Lemma.EnglishTranslation}}</div>
+            <div class="original-text commentary-source" data-commentary-source="translation" tabindex="0" title="Select text here to add commentary">{{.Lemma.EnglishTranslation}}</div>
 
             {{if .Lemma.TranslationVariants}}
             <div class="section-title">Translation Variants</div>
@@ -747,6 +876,7 @@ const reviewTemplate = `<!DOCTYPE html>
         <div class="card">
             <div class="section-title">Review</div>
             <form method="POST" action="/cgi-bin/save.cgi" class="review-form">
+                <input type="hidden" name="form_mode" value="review">
                 <input type="hidden" name="lemma_id" value="{{.Lemma.ID}}">
                 <input type="hidden" name="current_position" value="{{.Lemma.SortOrder}}">
                 <input type="hidden" id="ai_translation" value="{{.Lemma.EnglishTranslation}}">
@@ -876,6 +1006,82 @@ const reviewTemplate = `<!DOCTYPE html>
             var ai = document.getElementById('ai_translation').value;
             document.getElementById('corrected_english').value = ai;
         }
+        function setCommentaryStatus(message) {
+            var status = document.getElementById('commentary_selection_status');
+            if (status) {
+                status.textContent = message;
+            }
+        }
+        function updateCommentaryActionLabel() {
+            var action = document.getElementById('commentary_action');
+            var submit = document.getElementById('commentary_submit_btn');
+            if (!action || !submit) {
+                return;
+            }
+            submit.textContent = action.value === 'update' ? 'Update Commentary' : 'Save Commentary';
+        }
+        function normalizeCommentarySelection(text) {
+            return (text || '').replace(/\s+/g, ' ').trim();
+        }
+        function fillCommentaryForm(entryKey, phrase, commentary, sourceTextVersionID, action) {
+            document.getElementById('commentary_entry_key').value = entryKey || '';
+            document.getElementById('commentary_phrase_text').value = phrase || '';
+            document.getElementById('commentary_text').value = commentary || '';
+            document.getElementById('commentary_source_text_version_id').value = sourceTextVersionID || '';
+            document.getElementById('commentary_action').value = action || 'add';
+            updateCommentaryActionLabel();
+        }
+        function clearCommentaryForm() {
+            fillCommentaryForm('', '', '', '', 'add');
+            setCommentaryStatus('Highlight a phrase to start a commentary note.');
+        }
+        function startCommentaryEdit(button) {
+            if (!button) {
+                return;
+            }
+            fillCommentaryForm(
+                button.getAttribute('data-entry-key') || '',
+                button.getAttribute('data-phrase') || '',
+                button.getAttribute('data-commentary') || '',
+                button.getAttribute('data-source-text-version-id') || '',
+                'update'
+            );
+            setCommentaryStatus('Editing an existing commentary note.');
+            document.getElementById('commentary_text').focus();
+        }
+        var commentarySelectionTimer = null;
+        function scheduleCommentaryCapture() {
+            if (commentarySelectionTimer) {
+                window.clearTimeout(commentarySelectionTimer);
+            }
+            commentarySelectionTimer = window.setTimeout(captureCommentarySelection, 0);
+        }
+        function captureCommentarySelection() {
+            var selection = window.getSelection ? window.getSelection() : null;
+            if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+                return;
+            }
+            var range = selection.getRangeAt(0);
+            var anchorNode = selection.anchorNode || range.startContainer;
+            var focusNode = selection.focusNode || range.endContainer;
+            var anchorElement = anchorNode && anchorNode.nodeType === Node.ELEMENT_NODE ? anchorNode : anchorNode.parentElement;
+            var focusElement = focusNode && focusNode.nodeType === Node.ELEMENT_NODE ? focusNode : focusNode.parentElement;
+            if (!anchorElement || !focusElement) {
+                return;
+            }
+            var anchorSource = anchorElement.closest('[data-commentary-source]');
+            var focusSource = focusElement.closest('[data-commentary-source]');
+            if (!anchorSource || !focusSource || anchorSource !== focusSource) {
+                return;
+            }
+            var source = anchorSource;
+            var selected = normalizeCommentarySelection(selection.toString());
+            if (!selected) {
+                return;
+            }
+            fillCommentaryForm('', selected, document.getElementById('commentary_text').value, source.getAttribute('data-source-text-version-id') || '', 'add');
+            setCommentaryStatus('Selected phrase ready for commentary.');
+        }
         function setVariantSelection(kind, id, sourceTextVersionID, status, blockedLegacy) {
             var variantKindField = document.getElementById('variant_kind');
             if (variantKindField) {
@@ -939,8 +1145,26 @@ const reviewTemplate = `<!DOCTYPE html>
                 initial.click();
             }
         }
+        function initializeCommentarySelection() {
+            Array.prototype.slice.call(document.querySelectorAll('.commentary-source')).forEach(function (source) {
+                ['mouseup', 'keyup', 'touchend'].forEach(function (eventName) {
+                    source.addEventListener(eventName, scheduleCommentaryCapture);
+                });
+            });
+            document.addEventListener('selectionchange', function () {
+                var selection = window.getSelection ? window.getSelection() : null;
+                if (!selection || selection.isCollapsed) {
+                    return;
+                }
+                scheduleCommentaryCapture();
+            });
+            updateCommentaryActionLabel();
+        }
 
-        document.addEventListener('DOMContentLoaded', initializeVariantSelection);
+        document.addEventListener('DOMContentLoaded', function () {
+            initializeVariantSelection();
+            initializeCommentarySelection();
+        });
     </script>
 </body>
 </html>

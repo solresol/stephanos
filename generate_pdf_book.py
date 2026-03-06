@@ -267,6 +267,45 @@ def escape_index_term(text):
     return escape_latex(text)
 
 
+def format_translation_for_latex(text):
+    """Format prose and verse translations for LaTeX output."""
+    raw = text or ''
+    lines = raw.splitlines()
+    non_empty_lines = [line.strip() for line in lines if line.strip()]
+    if len(non_empty_lines) <= 1:
+        return escape_latex(raw.strip()), False
+
+    formatted_lines = []
+    stanza_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped:
+            stanza_lines.append(escape_latex(stripped))
+            continue
+        if stanza_lines:
+            formatted_lines.append(r" \\ ".join(stanza_lines))
+            stanza_lines = []
+        formatted_lines.append(r"\vspace{0.5\baselineskip}")
+
+    if stanza_lines:
+        formatted_lines.append(r" \\ ".join(stanza_lines))
+
+    return "\n".join(formatted_lines).strip(), True
+
+
+def pdf_looks_valid(path: Path) -> bool:
+    """Cheap sanity check for a generated PDF file."""
+    try:
+        if not path.exists() or path.stat().st_size < 1024:
+            return False
+        with path.open('rb') as f:
+            f.seek(max(path.stat().st_size - 65536, 0))
+            tail = f.read()
+        return b"startxref" in tail and b"%%EOF" in tail
+    except OSError:
+        return False
+
+
 def generate_overview_map(lemmas, output_path):
     """Generate a static overview map of geocoded places.
 
@@ -371,7 +410,7 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
 
         for lemma in letters[letter_code]:
             headword = escape_latex(lemma['lemma'])
-            translation = escape_latex(lemma['translation'])
+            translation, is_poetry = format_translation_for_latex(lemma['translation'])
             lemma_id = lemma['id']
 
             # Type annotation
@@ -435,7 +474,14 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
             if geodata_parts:
                 geodata_str = "\n\\par\\smallskip\\noindent\\textit{\\small " + " · ".join(geodata_parts) + "}"
 
-            entries_tex.append(f'''
+            if is_poetry:
+                entries_tex.append(f'''
+{index_str}\\entryverse{{{headword}}}{{{type_text}{parisinus_text}{source_text}}}{{%
+{translation}
+}}{{{geodata_str}}}
+''')
+            else:
+                entries_tex.append(f'''
 {index_str}\\entry{{{headword}}}{{{type_text}{parisinus_text}{source_text}}}{{%
 {translation}{geodata_str}}}
 ''')
@@ -450,9 +496,9 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
 \setdefaultlanguage{english}
 \setotherlanguage[variant=ancient]{greek}
 
-% Use good fonts for Greek
-\setmainfont{Linux Libertine O}
-\newfontfamily\greekfont{Linux Libertine O}[Script=Greek]
+% Use fonts available on both local macOS builds and raksasa.
+\setmainfont{Noto Serif}
+\newfontfamily\greekfont{Noto Serif}[Script=Greek]
 
 % Page layout
 \setlrmarginsandblock{2.5cm}{2cm}{*}
@@ -486,6 +532,7 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
 % Typography
 \usepackage{microtype}
 \usepackage{parskip}
+\usepackage{verse}
 
 % Graphics for maps
 \usepackage{graphicx}
@@ -495,6 +542,18 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
 \newcommand{\entry}[3]{%
     \extramarks{#1}{#1}%
     \noindent\textcolor{headwordcolor}{\textbf{#1}}#2\enspace #3%
+    \par\bigskip
+}
+
+% Args: headword, annotations, verse translation, trailing metadata
+\newcommand{\entryverse}[4]{%
+    \extramarks{#1}{#1}%
+    \noindent\textcolor{headwordcolor}{\textbf{#1}}#2%
+    \par\smallskip
+    \begin{verse}
+#3
+    \end{verse}
+    #4%
     \par\bigskip
 }
 
@@ -665,8 +724,15 @@ def generate_pdf():
         # Copy PDF to output
         tmp_pdf = Path(tmpdir) / "book.pdf"
         if tmp_pdf.exists():
+            if not pdf_looks_valid(tmp_pdf):
+                print("Error: generated PDF appears truncated or invalid; leaving existing output unchanged")
+                return
+
             output_path = OUTPUT_DIR / PDF_FILENAME
             shutil.copy(tmp_pdf, output_path)
+            if not pdf_looks_valid(output_path):
+                print("Error: copied PDF appears truncated or invalid")
+                return
 
             file_size = output_path.stat().st_size
             if file_size < 1024:

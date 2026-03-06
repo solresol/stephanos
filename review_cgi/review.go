@@ -425,6 +425,13 @@ func main() {
 		currentLemma.CanonicalVariantRef = map[string]interface{}{}
 	}
 
+	localCommentary, err := LoadLocalCommentaryEntries(db, currentLemma.ID)
+	if err != nil {
+		showError(fmt.Sprintf("Failed to read local commentary: %v", err))
+		return
+	}
+	currentLemma.CommentaryEntries = MergeCommentaryEntries(currentLemma.CommentaryEntries, localCommentary)
+
 	// Get review stats
 	total, reviewed, _, _, err := GetReviewStats(db)
 	if err != nil {
@@ -435,12 +442,12 @@ func main() {
 	// If total is 0, initialize all lemmas in reviews table
 	if total == 0 {
 		for _, lemma := range data.Lemmas {
-				defaultReview := &Review{
-					LemmaID:      lemma.ID,
-					ReviewStatus: "not_reviewed",
-				}
-				SaveReview(db, defaultReview, nil, "system")
+			defaultReview := &Review{
+				LemmaID:      lemma.ID,
+				ReviewStatus: "not_reviewed",
 			}
+			SaveReview(db, defaultReview, nil, "system")
+		}
 		total = len(data.Lemmas)
 		reviewed = 0
 	}

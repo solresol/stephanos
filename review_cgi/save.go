@@ -40,6 +40,7 @@ func main() {
 	}
 
 	// Extract form fields
+	formMode := strings.TrimSpace(formData.Get("form_mode"))
 	lemmaIDStr := formData.Get("lemma_id")
 	reviewStatus := formData.Get("review_status")
 	correctedGreek := strings.TrimSpace(formData.Get("corrected_greek"))
@@ -51,8 +52,13 @@ func main() {
 	variantStatus := strings.TrimSpace(formData.Get("variant_status"))
 	sourceTextVersionID := strings.TrimSpace(formData.Get("source_text_version_id"))
 	canonicalAction := strings.TrimSpace(formData.Get("canonical_action"))
-	setCanonicalRaw := strings.TrimSpace(formData.Get("set_canonical"))       // legacy (deprecated)
-	clearCanonicalRaw := strings.TrimSpace(formData.Get("clear_canonical"))   // legacy (deprecated)
+	setCanonicalRaw := strings.TrimSpace(formData.Get("set_canonical"))     // legacy (deprecated)
+	clearCanonicalRaw := strings.TrimSpace(formData.Get("clear_canonical")) // legacy (deprecated)
+	commentaryAction := strings.TrimSpace(strings.ToLower(formData.Get("commentary_action")))
+	commentaryEntryKey := strings.TrimSpace(formData.Get("commentary_entry_key"))
+	commentaryPhraseText := strings.TrimSpace(formData.Get("commentary_phrase_text"))
+	commentaryText := strings.TrimSpace(formData.Get("commentary_text"))
+	commentarySourceTextVersionID := strings.TrimSpace(formData.Get("commentary_source_text_version_id"))
 	action := formData.Get("action") // "stay" or "continue" (default)
 	remoteUser := os.Getenv("REMOTE_USER")
 	setCanonical := setCanonicalRaw == "1" || strings.EqualFold(setCanonicalRaw, "true") || strings.EqualFold(setCanonicalRaw, "on")
@@ -67,6 +73,40 @@ func main() {
 	lemmaID, err := strconv.Atoi(lemmaIDStr)
 	if err != nil {
 		showErrorAndExit("Invalid lemma ID")
+		return
+	}
+
+	if formMode == "commentary" {
+		config := GetConfig()
+		db, err := OpenDatabase(config.DBPath)
+		if err != nil {
+			showErrorAndExit(fmt.Sprintf("Failed to open database: %v", err))
+			return
+		}
+		defer db.Close()
+
+		switch commentaryAction {
+		case "delete":
+			err = DeleteLocalCommentaryEntry(db, lemmaID, commentaryEntryKey)
+		case "update", "add":
+			_, err = SaveLocalCommentaryEntry(
+				db,
+				lemmaID,
+				commentaryEntryKey,
+				commentarySourceTextVersionID,
+				commentaryPhraseText,
+				commentaryText,
+				remoteUser,
+			)
+		default:
+			err = nil
+		}
+		if err != nil {
+			showErrorAndExit(fmt.Sprintf("Failed to save commentary: %v", err))
+			return
+		}
+		writeRedirect(lemmaID)
+		log.Printf("Commentary saved: lemma_id=%d, action=%s, user=%s", lemmaID, commentaryAction, remoteUser)
 		return
 	}
 
@@ -130,16 +170,16 @@ func main() {
 
 	// Create review record with new values, preserving "by" fields from old review
 	review := &Review{
-		LemmaID:                      lemmaID,
-		ReviewStatus:                 reviewStatus,
-		CorrectedGreekText:           correctedGreek,
-		CorrectedEnglishTranslation:  correctedEnglish,
-		ReviewedEnglishTranslation:   reviewedEnglish,
-		ReviewerUsername:             remoteUser,
-		Notes:                        notes,
-		GreekCorrectedBy:             oldReview.GreekCorrectedBy,
-		InitialTranslationBy:         oldReview.InitialTranslationBy,
-		ReviewedTranslationBy:        oldReview.ReviewedTranslationBy,
+		LemmaID:                     lemmaID,
+		ReviewStatus:                reviewStatus,
+		CorrectedGreekText:          correctedGreek,
+		CorrectedEnglishTranslation: correctedEnglish,
+		ReviewedEnglishTranslation:  reviewedEnglish,
+		ReviewerUsername:            remoteUser,
+		Notes:                       notes,
+		GreekCorrectedBy:            oldReview.GreekCorrectedBy,
+		InitialTranslationBy:        oldReview.InitialTranslationBy,
+		ReviewedTranslationBy:       oldReview.ReviewedTranslationBy,
 	}
 
 	// Save to database
@@ -217,7 +257,7 @@ func main() {
 		redirectID = lemmaID
 	} else {
 		// Default: continue to next lemma
-			if currentLemma != nil {
+		if currentLemma != nil {
 			nextLemma := GetNextLemma(data, currentLemma)
 			if nextLemma != nil {
 				redirectID = nextLemma.ID
@@ -231,6 +271,13 @@ func main() {
 	}
 
 	// Redirect to target entry
+	writeRedirect(redirectID)
+
+	// Log successful save
+	log.Printf("Review saved: lemma_id=%d, status=%s, user=%s", lemmaID, reviewStatus, remoteUser)
+}
+
+func writeRedirect(redirectID int) {
 	fmt.Println("Status: 303 See Other")
 	fmt.Printf("Location: /cgi-bin/review.cgi?id=%d\n", redirectID)
 	fmt.Println("Content-Type: text/html; charset=utf-8")
@@ -246,9 +293,6 @@ func main() {
     <p><a href="/cgi-bin/review.cgi?id=%d">Click here if not redirected</a></p>
 </body>
 </html>`, redirectID, redirectID)
-
-	// Log successful save
-	log.Printf("Review saved: lemma_id=%d, status=%s, user=%s", lemmaID, reviewStatus, remoteUser)
 }
 
 func showErrorAndExit(message string) {

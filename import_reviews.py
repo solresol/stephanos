@@ -18,6 +18,7 @@ SQLITE_DB = Path.home() / "stephanos" / "review_data" / "reviews.db"
 LOG_FILE = Path.home() / "stephanos" / "logs" / "review_import.log"
 CANONICAL_ACTION_SOURCE = "merah_reviews"
 ENTITY_ACTION_SOURCE = "merah_entity_actions"
+COMMENTARY_UPDATED_BY_PREFIX = "merah_review:"
 
 
 def log(message):
@@ -380,6 +381,97 @@ def import_entity_resolution_actions(sqlite_cur, pg_cur) -> tuple[int, int, int]
 
     set_last_imported_entity_action_id(pg_cur, max_seen_id)
     return applied, skipped, errors
+
+
+def import_commentary_entries(sqlite_cur, pg_cur) -> tuple[int, int]:
+    """
+    Replace imported review-UI commentary rows in Postgres from the current SQLite state.
+
+    We tag imported rows via updated_by='merah_review:<entry_key>' so we can safely
+    clear and rebuild just this subset without touching commentary added elsewhere.
+    """
+    if not sqlite_table_exists(sqlite_cur, "commentary_entries"):
+        return 0, 0
+
+    pg_cur.execute("SELECT to_regclass('public.lemma_commentary_entries') IS NOT NULL")
+    has_commentary_table = bool(pg_cur.fetchone()[0])
+    if not has_commentary_table:
+        log("WARNING: lemma_commentary_entries missing; skipping commentary import.")
+        return 0, 0
+
+    sqlite_cur.execute(
+        """
+        SELECT
+            COALESCE(entry_key, '') AS entry_key,
+            lemma_id,
+            COALESCE(source_text_version_id, '') AS source_text_version_id,
+            COALESCE(phrase_text, '') AS phrase_text,
+            COALESCE(commentary_text, '') AS commentary_text,
+            COALESCE(reviewer_username, '') AS reviewer_username,
+            reviewed_at
+        FROM commentary_entries
+        WHERE deleted_at IS NULL
+        ORDER BY lemma_id, updated_at ASC, id ASC
+        """
+    )
+    rows = sqlite_cur.fetchall()
+
+    pg_cur.execute(
+        "DELETE FROM lemma_commentary_entries WHERE COALESCE(updated_by, '') LIKE %s",
+        (f"{COMMENTARY_UPDATED_BY_PREFIX}%",),
+    )
+    cleared = int(pg_cur.rowcount or 0)
+
+    inserted = 0
+    for row in rows:
+        entry_key = (row["entry_key"] or "").strip()
+        phrase_text = (row["phrase_text"] or "").strip()
+        commentary_text = (row["commentary_text"] or "").strip()
+        reviewer = (row["reviewer_username"] or "").strip() or "review"
+        reviewed_at = row["reviewed_at"] or None
+
+        try:
+            lemma_id = int(row["lemma_id"] or 0)
+        except Exception:
+            lemma_id = 0
+
+        source_text_version_id = (row["source_text_version_id"] or "").strip()
+        try:
+            source_text_version_id_int = int(source_text_version_id) if source_text_version_id else None
+        except Exception:
+            source_text_version_id_int = None
+
+        if lemma_id <= 0 or not entry_key or not phrase_text or not commentary_text:
+            continue
+
+        pg_cur.execute(
+            """
+            INSERT INTO lemma_commentary_entries (
+                lemma_id,
+                source_text_version_id,
+                phrase_text,
+                commentary_text,
+                created_by,
+                updated_by,
+                created_at,
+                updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, NOW()), COALESCE(%s, NOW()))
+            """,
+            (
+                lemma_id,
+                source_text_version_id_int,
+                phrase_text,
+                commentary_text,
+                reviewer,
+                f"{COMMENTARY_UPDATED_BY_PREFIX}{entry_key}",
+                reviewed_at,
+                reviewed_at,
+            ),
+        )
+        inserted += 1
+
+    return inserted, cleared
 
 
 def import_canonical_actions(sqlite_cur, pg_cur) -> tuple[int, int, int, int]:
@@ -1026,6 +1118,21 @@ def import_reviews():
         pg_conn.close()
         return 1
 
+    commentary_imported = commentary_cleared = 0
+    try:
+        commentary_imported, commentary_cleared = import_commentary_entries(sqlite_cur, pg_cur)
+        if commentary_imported or commentary_cleared:
+            log(
+                "Commentary import: "
+                f"imported={commentary_imported}, cleared_previous={commentary_cleared}"
+            )
+    except Exception as e:
+        log(f"ERROR: Commentary import failed: {e}")
+        pg_conn.rollback()
+        sqlite_conn.close()
+        pg_conn.close()
+        return 1
+
     pg_conn.commit()
 
     # Close connections
@@ -1053,6 +1160,9 @@ def import_reviews():
     if entity_applied or entity_errors:
         log(f"  Entity actions applied: {entity_applied}")
         log(f"  Entity action errors: {entity_errors}")
+    if commentary_imported or commentary_cleared:
+        log(f"  Commentary imported: {commentary_imported}")
+        log(f"  Commentary cleared previous: {commentary_cleared}")
 
     if error_count > 0 or variant_errors > 0 or human_sync_errors > 0 or entity_errors > 0:
         return 1

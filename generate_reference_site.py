@@ -75,6 +75,25 @@ def normalize_whitespace(text: str) -> str:
     return _WS_RE.sub(" ", text).strip()
 
 
+def normalize_line_preserving_whitespace(text: str) -> str:
+    """Normalize whitespace within lines while preserving intentional line breaks."""
+    if not text:
+        return ""
+
+    normalized_lines = []
+    for raw_line in text.splitlines():
+        line = raw_line.replace("\u00a0", " ")
+        line = re.sub(r"[ \t]+", " ", line)
+        line = re.sub(r"\s+([,.;:!?])", r"\1", line)
+        line = line.strip()
+        if line:
+            normalized_lines.append(line)
+        elif normalized_lines and normalized_lines[-1] != "":
+            normalized_lines.append("")
+
+    return "\n".join(normalized_lines).strip()
+
+
 def strip_diacritics(text: str) -> str:
     """Remove Greek tone-marks/diacritics (combining marks) for comparison."""
     if not text:
@@ -161,10 +180,8 @@ def strip_all_bracketed_spans(text: str) -> str:
     # If anything unmatched remains, strip the bracket characters themselves.
     current = current.replace("(", "").replace(")", "").replace("[", "").replace("]", "")
 
-    # Normalize spacing/punctuation after removals.
-    current = normalize_whitespace(current)
-    current = re.sub(r"\s+([,.;:!?])", r"\1", current)
-    return current.strip()
+    # Normalize spacing/punctuation after removals, but preserve verse/paragraphed line breaks.
+    return normalize_line_preserving_whitespace(current)
 
 
 def classify_text_difference(a: str, b: str) -> str:
@@ -944,6 +961,77 @@ def highlight_proper_nouns_in_translation(translation, proper_nouns, aliases_by_
     return result
 
 
+def safe_filename_part(text: str) -> str:
+    text = (text or "").strip().lower()
+    text = re.sub(r"[^0-9a-z]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip("-")
+    return text[:40]
+
+
+def author_detail_filename(author_lemma_form: str | None, author_english: str | None) -> str:
+    seed = f"{(author_lemma_form or '').strip()}|{(author_english or '').strip()}"
+    suffix = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:10]
+    label = safe_filename_part(author_english or "") or "author"
+    return f"author_{label}_{suffix}.html"
+
+
+def is_multiline_display_text(text: str) -> bool:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    return len(lines) > 1
+
+
+def wrap_translation_html(text_html: str, raw_text: str) -> str:
+    classes = ["translation-text"]
+    if is_multiline_display_text(raw_text):
+        classes.append("poetry-translation")
+    return f"<div class=\"{' '.join(classes)}\">{text_html}</div>"
+
+
+def render_key_value_metadata_table(title: str, rows: list[tuple[str, str]]) -> str:
+    clean_rows = [(label, value) for label, value in rows if label and value]
+    if not clean_rows:
+        return ""
+
+    body = "".join(
+        f"<tr><th>{html_module.escape(label)}</th><td>{value}</td></tr>"
+        for label, value in clean_rows
+    )
+    return (
+        f"<section class='lemma-meta-section'>"
+        f"<h3>{html_module.escape(title)}</h3>"
+        f"<table class='lemma-meta-table'><tbody>{body}</tbody></table>"
+        f"</section>"
+    )
+
+
+def render_matrix_metadata_table(
+    title: str,
+    headers: tuple[str, ...],
+    rows: list[tuple[str, ...]],
+    footer_html: str = "",
+) -> str:
+    clean_rows = [row for row in rows if row and any(cell for cell in row)]
+    if not clean_rows:
+        return ""
+
+    head_html = "".join(f"<th>{html_module.escape(header)}</th>" for header in headers)
+    body_html = "".join(
+        "<tr>" + "".join(f"<td>{cell}</td>" for cell in row) + "</tr>"
+        for row in clean_rows
+    )
+    footer = f"<div class='lemma-meta-footer'>{footer_html}</div>" if footer_html else ""
+    return (
+        f"<section class='lemma-meta-section'>"
+        f"<h3>{html_module.escape(title)}</h3>"
+        f"<table class='lemma-meta-table lemma-meta-matrix'>"
+        f"<thead><tr>{head_html}</tr></thead>"
+        f"<tbody>{body_html}</tbody>"
+        f"</table>"
+        f"{footer}"
+        f"</section>"
+    )
+
+
 def render_lemma_cards(lemmas):
     """Render HTML cards for a list of lemmas"""
     cards_html = []
@@ -970,17 +1058,27 @@ def render_lemma_cards(lemmas):
             raw = text or ""
             text = strip_all_bracketed_spans(raw)
             if raw.strip() and not text:
-                return '<span class="pending-translation">Translation pending</span>'
-            return highlight_proper_nouns_in_translation(
+                return wrap_translation_html(
+                    '<span class="pending-translation">Translation pending</span>',
+                    "",
+                )
+            highlighted = highlight_proper_nouns_in_translation(
                 text,
                 lemma.get("proper_nouns", []),
                 lemma.get("aliases_by_name", {}),
             )
+            return wrap_translation_html(highlighted, text)
 
         if is_blocked:
-            translation = '<span class="pending-translation">Translation pending</span>'
+            translation = wrap_translation_html(
+                '<span class="pending-translation">Translation pending</span>',
+                "",
+            )
         elif not presented:
-            translation = '<span class="pending-translation">Translation pending</span>'
+            translation = wrap_translation_html(
+                '<span class="pending-translation">Translation pending</span>',
+                "",
+            )
         else:
             primary_text = (presented[0].get("translation_text") if isinstance(presented[0], dict) else "") or ""
             translation = render_translation_text(primary_text)
@@ -1048,19 +1146,27 @@ def render_lemma_cards(lemmas):
                     f"{''.join(rows)}"
                     f"</details>"
                 )
-        meta_lines = []
+
+        metadata_sections = []
+        detail_rows = []
         if lemma.get("entry_number"):
-            meta_lines.append(f"Entry #{lemma['entry_number']}")
+            detail_rows.append(("Entry", html_module.escape(f"#{lemma['entry_number']}")))
         if lemma.get("greek_source"):
             greek_meta = f"{lemma.get('greek_source')}"
             if lemma.get("greek_source_origin") == "lemma_source_text_versions":
                 greek_meta += " (current)"
             if lemma.get("greek_source_variant"):
                 greek_meta += f" · {lemma.get('greek_source_variant')}"
-            meta_lines.append(f"Greek: {greek_meta}")
+            detail_rows.append(("Greek text", html_module.escape(greek_meta)))
         if lemma.get("meineke_id") or lemma.get("billerbeck_id"):
-            meta_lines.append(
-                f"Meineke: {lemma.get('meineke_id') or '-'} | Billerbeck: {lemma.get('billerbeck_id') or '-'}"
+            detail_rows.append(
+                (
+                    "Edition ids",
+                    (
+                        f"Meineke {html_module.escape(str(lemma.get('meineke_id') or '-'))}"
+                        f" · Billerbeck {html_module.escape(str(lemma.get('billerbeck_id') or '-'))}"
+                    ),
+                )
             )
         if lemma.get("ocr_generation_name") or lemma.get("ocr_processed_at"):
             when = ""
@@ -1075,10 +1181,10 @@ def render_lemma_cards(lemmas):
                 ocr_info += f" ({lemma['ocr_model']})"
             if when:
                 ocr_info += f" on {when}"
-            meta_lines.append(f"OCR: {ocr_info}")
+            detail_rows.append(("OCR", html_module.escape(ocr_info)))
         # Add word count
         if lemma.get("word_count") is not None:
-            meta_lines.append(f"Word count: {lemma['word_count']}")
+            detail_rows.append(("Word count", html_module.escape(str(lemma["word_count"]))))
 
         # Add translation prompt version (only for AI translations, not human)
         if (
@@ -1086,10 +1192,11 @@ def render_lemma_cards(lemmas):
             and lemma.get("translated")
             and lemma.get("selected_translation_variant_kind") == "legacy_assembled"
         ):
-            meta_lines.append(f"AI prompt: v{lemma['translation_prompt_version']}")
+            detail_rows.append(("AI prompt", html_module.escape(f"v{lemma['translation_prompt_version']}")))
         if is_blocked:
             block_reason = lemma.get("translation_block_reason") or "Likely translation-affecting Meineke/Billerbeck difference"
-            meta_lines.append(f"Translation blocked: {block_reason}")
+            detail_rows.append(("Translation status", html_module.escape(block_reason)))
+        metadata_sections.append(render_key_value_metadata_table("Text Details", detail_rows))
 
         # Add proper nouns (separated by role)
         if lemma.get("proper_nouns"):
@@ -1098,42 +1205,84 @@ def render_lemma_cards(lemmas):
 
             # Display sources (authors/citations)
             if sources:
-                source_list = []
+                source_rows = []
                 for noun in sources:
-                    noun_str = citation_format.format_source_reference(
-                        lemma_form=noun.get("lemma_form"),
-                        english=noun.get("english"),
-                        work_title=noun.get("work_title"),
-                        citation=noun.get("citation"),
+                    author_text = citation_format.format_author_display(
+                        noun.get("lemma_form"),
+                        noun.get("english"),
                     )
-                    source_list.append(noun_str)
-                meta_lines.append(f"Sources: {', '.join(source_list)}")
+                    author_html = "—"
+                    if author_text:
+                        author_href = html_module.escape(
+                            author_detail_filename(noun.get("lemma_form"), noun.get("english"))
+                        )
+                        author_html = f"<a href=\"{author_href}\">{html_module.escape(author_text)}</a>"
+
+                    details = []
+                    work_title = citation_format.normalize_work_title(noun.get("work_title"))
+                    if work_title:
+                        details.append(work_title)
+                    citation = citation_format.normalize_citation(noun.get("citation"))
+                    if citation:
+                        details.append(citation)
+                    detail_html = html_module.escape(" · ".join(details)) if details else "—"
+                    source_rows.append((author_html, detail_html))
+                metadata_sections.append(
+                    render_matrix_metadata_table(
+                        "Cited Authors",
+                        ("Author", "Work / Citation"),
+                        source_rows,
+                        footer_html='<a href="sources.html">Browse all cited authors and works</a>',
+                    )
+                )
 
             # Display entities (people/places in the story)
             if entities:
-                entity_list = []
+                entity_rows = []
                 for noun in entities:
-                    noun_str = f"{noun['lemma_form']}"
-                    if noun.get('english'):
-                        noun_str += f" ({noun['english']})"
-                    if noun.get('type'):
-                        noun_str += f" [{noun['type']}]"
-                    entity_list.append(noun_str)
-                meta_lines.append(f"Entities: {', '.join(entity_list)}")
+                    detail_bits = []
+                    english = (noun.get("english") or "").strip()
+                    if english:
+                        detail_bits.append(english)
+                    noun_type = (noun.get("type") or "").strip()
+                    if noun_type:
+                        detail_bits.append(noun_type.replace("_", " "))
+                    entity_rows.append(
+                        (
+                            html_module.escape(str(noun.get("lemma_form") or "—")),
+                            html_module.escape(" · ".join(detail_bits) or "—"),
+                        )
+                    )
+                metadata_sections.append(
+                    render_matrix_metadata_table(
+                        "Mentioned Entities",
+                        ("Entity", "Details"),
+                        entity_rows,
+                        footer_html='<a href="entities.html">Browse all people and deities</a>',
+                    )
+                )
 
         # Add etymologies
         if lemma.get("etymologies"):
-            etym_list = []
+            etym_rows = []
             for etym in lemma["etymologies"]:
                 cat = etym.get('category', '').replace('_', ' ').title()
-                etym_str = cat
-                if etym.get('english'):
-                    etym_str += f": {etym['english']}"
-                etym_list.append(etym_str)
-            if etym_list:
-                meta_lines.append(f"Etymologies: {'; '.join(etym_list)}")
+                etym_rows.append(
+                    (
+                        html_module.escape(cat or "Uncategorized"),
+                        html_module.escape((etym.get("english") or "").strip() or "—"),
+                    )
+                )
+            metadata_sections.append(
+                render_matrix_metadata_table(
+                    "Etymologies",
+                    ("Category", "Explanation"),
+                    etym_rows,
+                )
+            )
 
         # Add Wikidata place link and coordinates
+        link_rows = []
         if lemma.get("wikidata_place_qid"):
             place_parts = []
             qid = lemma["wikidata_place_qid"]
@@ -1144,7 +1293,7 @@ def render_lemma_cards(lemmas):
                 place_parts.append(f'📍 <a href="map.html" title="{lat:.4f}, {lon:.4f}">Map</a>')
             if lemma.get("pleiades_id"):
                 place_parts.append(f'<a href="https://pleiades.stoa.org/places/{lemma["pleiades_id"]}" target="_blank">Pleiades</a>')
-            meta_lines.append(f"Place: {' | '.join(place_parts)}")
+            link_rows.append(("Place links", " | ".join(place_parts)))
 
         # Add page image links (to HTML wrappers)
         if lemma.get("image_filenames"):
@@ -1153,10 +1302,12 @@ def render_lemma_cards(lemmas):
                 # Link to HTML wrapper page instead of raw image
                 html_page = img.replace('.jpg', '.html').replace('.png', '.html')
                 image_links.append(f'<a href="protected/{html_page}" target="_blank">{img}</a>')
-            meta_lines.append(f"Source: {', '.join(image_links)}")
+            link_rows.append(("Page scans", ", ".join(image_links)))
         # Add edit link to review system
-        meta_lines.append(f'<a href="/cgi-bin/review.cgi?id={lemma["lemma_id"]}">Edit</a>')
-        meta_html = "<br>".join(meta_lines)
+        link_rows.append(("Review", f'<a href="/cgi-bin/review.cgi?id={lemma["lemma_id"]}">Open review page</a>'))
+        metadata_sections.append(render_key_value_metadata_table("Links", link_rows))
+        metadata_html = "".join(section for section in metadata_sections if section)
+
         # Status badges (populated by JavaScript)
         status_badges = f'''<span class="status-badges" data-lemma-id="{lemma['lemma_id']}">
             <span class="status-badge status-ocr" title="OCR Checked">OCR ✓</span>
@@ -1172,13 +1323,11 @@ def render_lemma_cards(lemmas):
                         <div class="lemma-title">{lemma['lemma']}{confidence_badge}{version_badge}{status_badges}</div>
                         {f'<span class="lemma-type">{lemma["type"]}</span>' if lemma['type'] else ''}
                     </div>
-                    <div class="lemma-meta">
-                        {meta_html}
-                    </div>
                 </div>
                 {f'<div class="greek-text {confidence_class}">{lemma["greek_text"]}</div>' if lemma['greek_text'] else ''}
                 <div class="translation">{translation}</div>
                 {commentary_html}
+                {f'<div class="lemma-metadata">{metadata_html}</div>' if metadata_html else ''}
             </div>
             """
         )
@@ -1340,6 +1489,37 @@ def common_styles():
             gap: 12px;
             margin: 24px 0;
         }
+        .explore-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 14px;
+            margin: 24px 0 8px;
+        }
+        .explore-card {
+            display: block;
+            background: linear-gradient(180deg, #ffffff 0%, #f7f9ff 100%);
+            color: #1a237e;
+            border: 1px solid #dfe6ff;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            padding: 18px;
+            text-decoration: none;
+            transition: transform 0.15s, box-shadow 0.15s;
+        }
+        .explore-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+        }
+        .explore-card-title {
+            font-size: 1.05em;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+        .explore-card-copy {
+            color: #4a4f63;
+            font-size: 0.95em;
+            line-height: 1.5;
+        }
         .letter-card {
             background: white;
             padding: 16px;
@@ -1410,9 +1590,7 @@ def common_styles():
             box-shadow: 0 4px 16px rgba(0,0,0,0.12);
         }
         .lemma-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: start;
+            display: block;
             margin-bottom: 12px;
             border-bottom: 2px solid #f0f0f0;
             padding-bottom: 8px;
@@ -1430,11 +1608,6 @@ def common_styles():
             border-radius: 4px;
             font-size: 0.85em;
             margin-top: 4px;
-        }
-        .lemma-meta {
-            text-align: right;
-            font-size: 0.9em;
-            color: #666;
         }
         .greek-text {
             font-family: 'Times New Roman', serif;
@@ -1523,9 +1696,17 @@ def common_styles():
 	            color: #2c2c2c;
 	            line-height: 1.6;
 	            margin: 10px 0;
-                /* Preserve line breaks for verse translations. */
-                white-space: pre-wrap;
 	        }
+        .translation-text {
+            white-space: pre-wrap;
+        }
+        .poetry-translation {
+            background: #fcfbf7;
+            border-left: 4px solid #8d6e63;
+            border-radius: 6px;
+            line-height: 1.85;
+            padding: 14px 16px;
+        }
 	        .translation-variants {
 	            margin-top: 10px;
 	            padding: 10px 12px;
@@ -1581,6 +1762,65 @@ def common_styles():
         .commentary-text {
             color: #2c2c2c;
             line-height: 1.55;
+        }
+        .lemma-metadata {
+            display: grid;
+            gap: 14px;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            margin-top: 18px;
+        }
+        .lemma-meta-section {
+            background: #f9fbff;
+            border: 1px solid #e1e8f8;
+            border-radius: 8px;
+            padding: 14px 16px;
+        }
+        .lemma-meta-section h3 {
+            color: #23366f;
+            font-size: 0.98em;
+            margin-bottom: 10px;
+        }
+        .lemma-meta-table {
+            border-collapse: collapse;
+            width: 100%;
+            font-size: 0.93em;
+        }
+        .lemma-meta-table th,
+        .lemma-meta-table td {
+            border-top: 1px solid #e7ecf5;
+            padding: 8px 0;
+            text-align: left;
+            vertical-align: top;
+        }
+        .lemma-meta-table tbody tr:first-child th,
+        .lemma-meta-table tbody tr:first-child td,
+        .lemma-meta-table thead + tbody tr:first-child td {
+            border-top: none;
+        }
+        .lemma-meta-table th {
+            color: #4c5d77;
+            font-weight: 600;
+            padding-right: 14px;
+            width: 34%;
+        }
+        .lemma-meta-matrix thead th {
+            border-top: none;
+            color: #23366f;
+            font-size: 0.88em;
+            padding-bottom: 10px;
+            width: auto;
+        }
+        .lemma-meta-footer {
+            margin-top: 10px;
+            font-size: 0.9em;
+        }
+        .lemma-meta-footer a {
+            color: #0d47a1;
+            font-weight: 600;
+            text-decoration: none;
+        }
+        .lemma-meta-footer a:hover {
+            text-decoration: underline;
         }
         .overlap-section {
             margin-top: 26px;
@@ -1813,6 +2053,38 @@ def generate_index_html(letter_counts, stats):
             """
         )
 
+    explore_cards = [
+        (
+            "sources.html",
+            "Ancient Sources",
+            "Browse cited authors, then drill into works, books, and citation phrases.",
+        ),
+        (
+            "works.html",
+            "Works Cited",
+            "Jump straight to cited works across Stephanos, independently of headwords.",
+        ),
+        (
+            "stephanos_ethnika_translations.pdf",
+            "PDF Book",
+            "Open the generated translation volume, including verse-aware layout for poetic entries.",
+        ),
+        (
+            "protected/",
+            "Page Scans",
+            "Inspect the protected page-image wrappers and compare public text against the scans.",
+        ),
+    ]
+    explore_html = "".join(
+        f"""
+        <a class="explore-card" href="{href}">
+            <div class="explore-card-title">{title}</div>
+            <div class="explore-card-copy">{copy}</div>
+        </a>
+        """
+        for href, title, copy in explore_cards
+    )
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1867,6 +2139,10 @@ def generate_index_html(letter_counts, stats):
                 <div class="stat-value">{stats['total_images']}</div>
                 <div class="stat-label">Total Pages</div>
             </div>
+        </div>
+
+        <div class="explore-grid">
+            {explore_html}
         </div>
 
         <div class="letter-grid">
