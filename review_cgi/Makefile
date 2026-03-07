@@ -1,9 +1,5 @@
 .PHONY: all clean test
 
-VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
-BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-STATUS_LDFLAGS := -X main.buildVersion=$(VERSION) -X main.buildTime=$(BUILD_TIME)
-
 all: review.cgi save.cgi status.cgi
 
 review.cgi: review.go common.go template.go
@@ -13,7 +9,11 @@ save.cgi: save.go common.go
 	go build -o save.cgi save.go common.go
 
 status.cgi: status.go common.go
-	go build -ldflags "$(STATUS_LDFLAGS)" -o status.cgi status.go common.go
+	@version="${VERSION}"; \
+	if [ -z "$$version" ]; then version=$$(git rev-parse --short HEAD 2>/dev/null || echo dev); fi; \
+	build_time="${BUILD_TIME}"; \
+	if [ -z "$$build_time" ]; then build_time=$$(date -u +%Y-%m-%dT%H:%M:%SZ); fi; \
+	go build -ldflags "-X main.buildVersion=$$version -X main.buildTime=$$build_time" -o status.cgi status.go common.go
 
 clean:
 	rm -f review.cgi save.cgi status.cgi
