@@ -48,31 +48,17 @@ def resolve_profile_version(cur, profile_id: int, explicit_version: int | None):
     return row[0]
 
 
-def resolve_profile_version_number(cur, profile_version_id: int) -> int:
-    cur.execute(
-        """
-        SELECT version
-        FROM translation_prompt_profile_versions
-        WHERE id = %s
-        LIMIT 1
-        """,
-        (profile_version_id,),
-    )
-    row = cur.fetchone()
-    if not row:
-        raise RuntimeError(f"Profile version id not found: {profile_version_id}")
-    return int(row[0])
-
-
 def find_candidates(
     cur,
     source_document: str,
     lemma_id: int | None,
     limit: int | None,
     *,
+    target_profile_id: int,
+    target_profile_version_id: int,
     include_quarantined: bool,
     include_translated: bool,
-    target_prompt_version: int,
+    has_human_translations: bool,
 ):
     query = """
         SELECT a.id, stv.id
@@ -97,6 +83,17 @@ def find_candidates(
         AND COALESCE(a.corrected_english_translation, '') = ''
     """
 
+    if has_human_translations:
+        query += """
+            AND NOT EXISTS (
+                SELECT 1
+                FROM human_translations ht
+                WHERE ht.lemma_id = a.id
+                  AND ht.status IN ('draft', 'approved')
+                  AND COALESCE(ht.translation_text, '') != ''
+            )
+        """
+
     # Avoid piling up duplicate pending/running requests for the same lemma.
     query += """
         AND NOT EXISTS (
@@ -107,30 +104,43 @@ def find_candidates(
         )
     """
 
-    # Default selection policy: queue untranslated lemmas, plus retranslations when prompt versions are outdated.
+    # Queue only when the authoritative translation_run layer does not already
+    # have a successful run for the target profile/version + current source text.
     if not include_translated:
         query += """
-            AND (
-                a.translated = 0
-                OR COALESCE(a.translation_prompt_version, 0) < %s
+            AND NOT EXISTS (
+                SELECT 1
+                FROM translation_runs tr
+                WHERE tr.lemma_id = a.id
+                  AND tr.profile_id = %s
+                  AND tr.profile_version_id = %s
+                  AND tr.source_text_version_id = stv.id
+                  AND tr.status IN ('approved', 'completed', 'blocked', 'hidden')
+                  AND COALESCE(tr.translation_text, '') != ''
             )
         """
-        params.append(int(target_prompt_version))
+        params.extend([int(target_profile_id), int(target_profile_version_id)])
 
     # Avoid empty source text.
     query += " AND COALESCE(stv.text_body, '') != ''"
 
-    # Prioritize: (1) outdated prompt version, (2) untranslated.
+    # Prioritize retranslations of older successful runs before first-pass work.
     query += """
         ORDER BY
           CASE
-            WHEN a.translated = 1 AND COALESCE(a.translation_prompt_version, 0) < %s THEN 0
-            WHEN a.translated = 0 THEN 1
-            ELSE 2
+            WHEN EXISTS (
+                SELECT 1
+                FROM translation_runs tr
+                WHERE tr.lemma_id = a.id
+                  AND tr.profile_id = %s
+                  AND tr.status IN ('approved', 'completed', 'blocked', 'hidden')
+                  AND COALESCE(tr.translation_text, '') != ''
+            ) THEN 0
+            ELSE 1
           END,
           a.id
     """
-    params.append(int(target_prompt_version))
+    params.append(int(target_profile_id))
     if limit is not None:
         query += f" LIMIT {int(limit)}"
 
@@ -193,6 +203,7 @@ def main():
         "translation_prompt_profiles",
         "translation_prompt_profile_versions",
         "translation_run_requests",
+        "translation_runs",
         "lemma_source_text_versions",
     ]
     missing = []
@@ -210,15 +221,18 @@ def main():
 
     profile_id = resolve_profile(cur, args.profile)
     profile_version_id = resolve_profile_version(cur, profile_id, args.profile_version)
-    profile_version_number = resolve_profile_version_number(cur, profile_version_id)
+    cur.execute("SELECT to_regclass('public.human_translations') IS NOT NULL")
+    has_human_translations = bool(cur.fetchone()[0])
     candidates = find_candidates(
         cur,
         args.source_document,
         args.lemma_id,
         args.limit,
+        target_profile_id=profile_id,
+        target_profile_version_id=profile_version_id,
         include_quarantined=bool(args.include_quarantined),
         include_translated=bool(args.include_translated),
-        target_prompt_version=profile_version_number,
+        has_human_translations=has_human_translations,
     )
 
     if not candidates:

@@ -111,15 +111,23 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
             }
         cur.execute(
             """
-            SELECT id,
-                   COALESCE(translation_text, ''),
-                   COALESCE(status, ''),
-                   COALESCE(public_eligible, TRUE),
-                   COALESCE(public_block_reason, ''),
-                   source_text_version_id
-            FROM translation_runs
-            WHERE id = %s
-              AND lemma_id = %s
+            SELECT
+                tr.id,
+                COALESCE(tr.translation_text, ''),
+                COALESCE(tr.status, ''),
+                COALESCE(tr.public_eligible, TRUE),
+                COALESCE(tr.public_block_reason, ''),
+                tr.source_text_version_id,
+                COALESCE(tr.model, ''),
+                COALESCE(p.name, ''),
+                pv.version
+            FROM translation_runs tr
+            LEFT JOIN translation_prompt_profiles p
+              ON p.id = tr.profile_id
+            LEFT JOIN translation_prompt_profile_versions pv
+              ON pv.id = tr.profile_version_id
+            WHERE tr.id = %s
+              AND tr.lemma_id = %s
             LIMIT 1
             """,
             (variant_id, lemma_id),
@@ -166,6 +174,9 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
             "id": variant_id,
             "source_document": "billerbeck",
             "source_text_version_id": str(row[5] or ""),
+            "model": (row[6] or "").strip(),
+            "profile_name": (row[7] or "").strip(),
+            "profile_version": int(row[8]) if row[8] is not None else None,
         }
 
     if variant_kind == "human_translation":
@@ -215,6 +226,9 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
             "id": variant_id,
             "source_document": "billerbeck",
             "source_text_version_id": str(row[3] or ""),
+            "model": "",
+            "profile_name": "",
+            "profile_version": None,
         }
 
     # legacy_assembled
@@ -262,6 +276,9 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
         "id": "translation",
         "source_document": "billerbeck",
         "source_text_version_id": "",
+        "model": "",
+        "profile_name": "legacy_scholarly" if translation_text else "",
+        "profile_version": None,
     }
 
 
@@ -322,14 +339,24 @@ def resolve_fallback_variant(cur, *, lemma_id: int) -> dict[str, Any] | None:
     if table_exists(cur, "translation_runs"):
         cur.execute(
             """
-            SELECT id::text, COALESCE(reviewed_at, completed_at, created_at) AS sort_ts
-            FROM translation_runs
-            WHERE lemma_id = %s
+            SELECT
+                tr.id::text,
+                COALESCE(tr.reviewed_at, tr.completed_at, tr.created_at) AS sort_ts
+            FROM translation_runs tr
+            LEFT JOIN translation_prompt_profiles p
+              ON p.id = tr.profile_id
+            LEFT JOIN translation_prompt_profile_versions pv
+              ON pv.id = tr.profile_version_id
+            WHERE tr.lemma_id = %s
               AND status = 'approved'
               AND public_eligible = TRUE
               AND COALESCE(public_block_reason, '') = ''
               AND COALESCE(translation_text, '') != ''
-            ORDER BY COALESCE(reviewed_at, completed_at, created_at) DESC, id DESC
+            ORDER BY
+              CASE WHEN COALESCE(p.name, '') = 'legacy_scholarly' THEN 0 ELSE 1 END,
+              COALESCE(pv.version, 0) DESC,
+              COALESCE(tr.reviewed_at, tr.completed_at, tr.created_at) DESC,
+              tr.id DESC
             LIMIT 1
             """,
             (lemma_id,),
@@ -444,4 +471,7 @@ def select_pointer_variant(cur, *, lemma_id: int) -> dict[str, Any] | None:
         "status": choice.get("status", ""),
         "source_document": choice.get("source_document", ""),
         "source_text_version_id": choice.get("source_text_version_id", ""),
+        "model": choice.get("model", ""),
+        "profile_name": choice.get("profile_name", ""),
+        "profile_version": choice.get("profile_version"),
     }

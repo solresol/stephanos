@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import db
+from generate_spelling_variants import generate_variants
 
 
 def get_progress_stats(conn) -> dict:
@@ -75,7 +76,9 @@ def get_progress_stats(conn) -> dict:
             COUNT(*) as total,
             COUNT(CASE WHEN proper_nouns_analyzed = true THEN 1 END) as analyzed
         FROM assembled_lemmas
-        WHERE greek_text IS NOT NULL AND greek_text != ''
+        WHERE translated = 1
+          AND greek_text IS NOT NULL
+          AND greek_text != ''
     """)
     row = cur.fetchone()
     stats["proper_nouns"] = {
@@ -88,7 +91,8 @@ def get_progress_stats(conn) -> dict:
 
     cur.execute("""
         SELECT COUNT(*) FROM assembled_lemmas
-        WHERE proper_nouns_analyzed_at > NOW() - INTERVAL '7 days'
+        WHERE translated = 1
+          AND proper_nouns_analyzed_at > NOW() - INTERVAL '7 days'
     """)
     stats["proper_nouns"]["rate_7d"] = cur.fetchone()[0]
 
@@ -123,11 +127,25 @@ def get_progress_stats(conn) -> dict:
 
     # 4. Wikidata linking - sources
     cur.execute("""
+        WITH grouped AS (
+            SELECT
+                lemma_form,
+                english_translation,
+                MAX(wikidata_qid) AS wikidata_qid,
+                MAX(wikidata_confidence) AS wikidata_confidence,
+                MAX(COALESCE(human_resolution_status, '')) AS human_resolution_status
+            FROM proper_nouns
+            WHERE role = 'source'
+            GROUP BY lemma_form, english_translation
+        )
         SELECT
-            COUNT(DISTINCT proper_noun) as total,
-            COUNT(DISTINCT CASE WHEN effective_wikidata_qid IS NOT NULL THEN proper_noun END) as linked
-        FROM effective_proper_nouns
-        WHERE role = 'source'
+            COUNT(*) AS total,
+            COUNT(*) FILTER (
+                WHERE wikidata_qid IS NOT NULL
+                   OR wikidata_confidence IS NOT NULL
+                   OR human_resolution_status IN ('approved', 'corrected', 'not_alignable', 'added')
+            ) AS processed
+        FROM grouped
     """)
     row = cur.fetchone()
     stats["wikidata_sources"] = {
@@ -139,9 +157,26 @@ def get_progress_stats(conn) -> dict:
     }
 
     cur.execute("""
-        SELECT COUNT(DISTINCT proper_noun) FROM effective_proper_nouns
-        WHERE role = 'source'
-          AND effective_resolved_at > NOW() - INTERVAL '7 days'
+        WITH grouped AS (
+            SELECT
+                lemma_form,
+                english_translation,
+                MAX(COALESCE(human_resolved_at, wikidata_linked_at)) AS resolved_at,
+                MAX(wikidata_qid) AS wikidata_qid,
+                MAX(wikidata_confidence) AS wikidata_confidence,
+                MAX(COALESCE(human_resolution_status, '')) AS human_resolution_status
+            FROM proper_nouns
+            WHERE role = 'source'
+            GROUP BY lemma_form, english_translation
+        )
+        SELECT COUNT(*)
+        FROM grouped
+        WHERE resolved_at > NOW() - INTERVAL '7 days'
+          AND (
+              wikidata_qid IS NOT NULL
+              OR wikidata_confidence IS NOT NULL
+              OR human_resolution_status IN ('approved', 'corrected', 'not_alignable', 'added')
+          )
     """)
     stats["wikidata_sources"]["rate_7d"] = cur.fetchone()[0]
 
@@ -151,7 +186,9 @@ def get_progress_stats(conn) -> dict:
             COUNT(*) as total,
             COUNT(CASE WHEN etymologies_analyzed = true THEN 1 END) as analyzed
         FROM assembled_lemmas
-        WHERE greek_text IS NOT NULL AND greek_text != ''
+        WHERE translated = 1
+          AND greek_text IS NOT NULL
+          AND greek_text != ''
     """)
     row = cur.fetchone()
     stats["etymologies"] = {
@@ -164,7 +201,8 @@ def get_progress_stats(conn) -> dict:
 
     cur.execute("""
         SELECT COUNT(*) FROM assembled_lemmas
-        WHERE etymologies_analyzed_at > NOW() - INTERVAL '7 days'
+        WHERE translated = 1
+          AND etymologies_analyzed_at > NOW() - INTERVAL '7 days'
     """)
     stats["etymologies"]["rate_7d"] = cur.fetchone()[0]
 
@@ -174,7 +212,9 @@ def get_progress_stats(conn) -> dict:
             COUNT(*) as total,
             COUNT(CASE WHEN aliases_analyzed = true THEN 1 END) as analyzed
         FROM assembled_lemmas
-        WHERE greek_text IS NOT NULL AND greek_text != ''
+        WHERE proper_nouns_analyzed = TRUE
+          AND greek_text IS NOT NULL
+          AND greek_text != ''
     """)
     row = cur.fetchone()
     stats["aliases"] = {
@@ -187,24 +227,35 @@ def get_progress_stats(conn) -> dict:
 
     cur.execute("""
         SELECT COUNT(*) FROM assembled_lemmas
-        WHERE aliases_analyzed_at > NOW() - INTERVAL '7 days'
+        WHERE proper_nouns_analyzed = TRUE
+          AND aliases_analyzed_at > NOW() - INTERVAL '7 days'
     """)
     stats["aliases"]["rate_7d"] = cur.fetchone()[0]
 
     # 7. Spelling variant generation
     cur.execute("""
-        SELECT COUNT(DISTINCT id)
+        SELECT DISTINCT id, english_translation
         FROM effective_proper_nouns
         WHERE COALESCE(english_translation, '') != ''
+        ORDER BY id
     """)
-    spelling_total = cur.fetchone()[0]
+    spelling_variant_ids = [
+        proper_noun_id
+        for proper_noun_id, english_name in cur.fetchall()
+        if generate_variants(english_name)
+    ]
+    spelling_total = len(spelling_variant_ids)
 
-    cur.execute("""
-        SELECT COUNT(DISTINCT proper_noun_id)
-        FROM proper_noun_aliases
-        WHERE alias_type = 'spelling_variant'
-    """)
-    spelling_completed = cur.fetchone()[0]
+    if spelling_variant_ids:
+        cur.execute("""
+            SELECT COUNT(DISTINCT proper_noun_id)
+            FROM proper_noun_aliases
+            WHERE alias_type = 'spelling_variant'
+              AND proper_noun_id = ANY(%s)
+        """, (spelling_variant_ids,))
+        spelling_completed = cur.fetchone()[0]
+    else:
+        spelling_completed = 0
 
     stats["spelling_variants"] = {
         "name": "Spelling Variants",
@@ -214,13 +265,17 @@ def get_progress_stats(conn) -> dict:
         "unit": "entities",
     }
 
-    cur.execute("""
-        SELECT COUNT(DISTINCT proper_noun_id)
-        FROM proper_noun_aliases
-        WHERE alias_type = 'spelling_variant'
-          AND created_at > NOW() - INTERVAL '7 days'
-    """)
-    stats["spelling_variants"]["rate_7d"] = cur.fetchone()[0]
+    if spelling_variant_ids:
+        cur.execute("""
+            SELECT COUNT(DISTINCT proper_noun_id)
+            FROM proper_noun_aliases
+            WHERE alias_type = 'spelling_variant'
+              AND created_at > NOW() - INTERVAL '7 days'
+              AND proper_noun_id = ANY(%s)
+        """, (spelling_variant_ids,))
+        stats["spelling_variants"]["rate_7d"] = cur.fetchone()[0]
+    else:
+        stats["spelling_variants"]["rate_7d"] = 0
 
     # 8. Human review of named-entity resolutions
     cur.execute("""
@@ -248,7 +303,14 @@ def get_progress_stats(conn) -> dict:
     cur.execute("""
         SELECT
             COUNT(*) as total,
-            COUNT(CASE WHEN wikidata_place_qid IS NOT NULL THEN 1 END) as linked
+            COUNT(
+                CASE
+                    WHEN wikidata_place_qid IS NOT NULL
+                      OR wikidata_place_confidence IS NOT NULL
+                      OR wikidata_place_linked_at IS NOT NULL
+                    THEN 1
+                END
+            ) as processed
         FROM assembled_lemmas
         WHERE type IN ('place', 'city', 'region', 'island', 'country', 'village',
                        'mountain', 'river', 'lake', 'spring', 'promontory', 'fortress')
@@ -544,7 +606,10 @@ def generate_html(stats: dict) -> str:
 
     <div class="note">
         <strong>Note:</strong> ETA estimates are based on the processing rate over the past 7 days.
-        "Stalled" means no progress in the last week. Retired stages such as finished Billerbeck OCR are intentionally omitted.
+        "Stalled" means no progress in the last week. Proper-noun and etymology extraction
+        are measured over translated lemmas, matching the nightly jobs. Wikidata stages count
+        rows once they have a recorded outcome, including not-found, ambiguous, and
+        human-reviewed cases. Retired stages such as finished Billerbeck OCR are intentionally omitted.
     </div>
 
     <p style="margin-top: 20px;">

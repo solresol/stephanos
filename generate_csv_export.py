@@ -13,6 +13,7 @@ import argparse
 import csv
 from pathlib import Path
 
+import canonical_variants
 from db import get_connection
 
 
@@ -21,16 +22,11 @@ def fetch_translated_rows(cur):
     cur.execute(
         """
         SELECT
+            a.id,
             a.lemma,
             a.entry_number,
             a.type,
             COALESCE(a.human_greek_text, a.greek_text) AS greek_text,
-            COALESCE(a.translation, (
-                SELECT COALESCE(
-                    (a.translation_json::json)->>'translation',
-                    (a.translation_json::json)->>'english_translation'
-                ) WHERE a.translation_json IS NOT NULL
-            )) AS translation,
             a.confidence,
             a.ocr_processed_at,
             g.name AS ocr_generation,
@@ -42,11 +38,31 @@ def fetch_translated_rows(cur):
             a.billerbeck_id
         FROM assembled_lemmas a
         LEFT JOIN ocr_generations g ON a.ocr_generation_id = g.id
-        WHERE a.translated = 1
         ORDER BY a.id
         """
     )
-    return cur.fetchall()
+    rows = []
+    for lemma_id, lemma, entry_number, lemma_type, greek_text, confidence, ocr_processed_at, ocr_generation, ocr_model, meineke_id, billerbeck_id in cur.fetchall():
+        pointer = canonical_variants.select_pointer_variant(cur, lemma_id=lemma_id)
+        translation = (pointer or {}).get("translation_text", "").strip()
+        if not translation:
+            continue
+        rows.append(
+            (
+                lemma,
+                entry_number,
+                lemma_type,
+                greek_text,
+                translation,
+                confidence,
+                ocr_processed_at,
+                ocr_generation,
+                ocr_model,
+                meineke_id,
+                billerbeck_id,
+            )
+        )
+    return rows
 
 
 def main():

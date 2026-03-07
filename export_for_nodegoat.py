@@ -13,6 +13,7 @@ import unicodedata
 from datetime import datetime
 from collections import defaultdict
 
+import canonical_variants
 import db
 
 
@@ -153,7 +154,6 @@ def export_entries(conn, output_dir):
             id, lemma, entry_number, billerbeck_id, meineke_id,
             type, version, volume_label,
             COALESCE(human_greek_text, greek_text) as greek_text,
-            translation,
             word_count, confidence
         FROM assembled_lemmas
         ORDER BY volume_label, entry_number, id
@@ -170,6 +170,10 @@ def export_entries(conn, output_dir):
 
         count = 0
         for row in cur.fetchall():
+            pointer = canonical_variants.select_pointer_variant(cur, lemma_id=row[0])
+            translation = (pointer or {}).get("translation_text", "").strip()
+            if not translation:
+                continue
             writer.writerow([
                 row[0],  # id
                 row[1],  # headword
@@ -181,9 +185,9 @@ def export_entries(conn, output_dir):
                 row[6],  # version
                 row[7],  # volume_label
                 row[8],  # greek_text
-                row[9],  # translation
-                row[10], # word_count
-                row[11], # confidence
+                translation,
+                row[9],  # word_count
+                row[10], # confidence
             ])
             count += 1
 

@@ -14,9 +14,9 @@ from pathlib import Path
 from openai import OpenAI
 
 from db import get_connection
+from translation_run_utils import DEFAULT_TRANSLATION_MODEL, lookup_public_block
 
 DEFAULT_DAILY_TOKEN_LIMIT = 100_000
-DEFAULT_MODEL = "gpt-5.2"
 
 TRANSLATE_TOOL = {
     "type": "function",
@@ -147,6 +147,8 @@ def insert_run(
     translation_text: str,
     tokens_used: int,
     status: str,
+    public_eligible: bool = True,
+    public_block_reason: str | None = None,
     error_message: str | None = None,
 ):
     cur.execute(
@@ -155,9 +157,9 @@ def insert_run(
             request_id, lemma_id, profile_id, profile_version_id, source_text_version_id,
             run_index, model, temperature, top_p,
             translation_text, tokens_used, status,
-            public_eligible, created_at, completed_at, error_message
+            public_eligible, public_block_reason, created_at, completed_at, error_message
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW(), %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW(), %s)
         """,
         (
             request_id,
@@ -172,10 +174,12 @@ def insert_run(
             translation_text,
             tokens_used,
             status,
-            True,
+            bool(public_eligible),
+            (public_block_reason or "").strip() or None,
             error_message,
         ),
     )
+
 
 def project_legacy_translation(
     cur,
@@ -371,6 +375,11 @@ def main():
                 if not translation:
                     raise RuntimeError("Empty translation result")
 
+                public_eligible = True
+                public_block_reason = None
+                if int(requested_runs or 0) == 1:
+                    public_eligible, public_block_reason = lookup_public_block(cur, lemma_id=lemma_id)
+
                 insert_run(
                     cur,
                     request_id=request_id,
@@ -384,7 +393,9 @@ def main():
                     top_p=top_p,
                     translation_text=translation,
                     tokens_used=tokens_used,
-                    status="completed",
+                    status="approved" if int(requested_runs or 0) == 1 else "completed",
+                    public_eligible=public_eligible,
+                    public_block_reason=public_block_reason,
                 )
 
                 # Back-compat projection: only for single-run requests so we don't

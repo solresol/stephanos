@@ -113,6 +113,10 @@ uv run seed_translation_profiles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning:
 echo "Step 4d2: Seeding curated translation styles..." | tee -a "$LOGFILE"
 uv run seed_translation_styles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: style seed failed" | tee -a "$LOGFILE"
 
+# Step 4d3: Backfill authoritative translation runs from compatibility columns
+echo "Step 4d3: Backfilling authoritative translation runs..." | tee -a "$LOGFILE"
+uv run backfill_legacy_translation_runs.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation backfill failed" | tee -a "$LOGFILE"
+
 # Step 4e: Enqueue translation run requests (set TRANSLATION_ENQUEUE_LIMIT=0 to disable)
 TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-20}"
 if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
@@ -292,6 +296,8 @@ rsync -az exports/etymologies.csv stephanos@merah.cassia.ifost.org.au:/var/www/v
 rsync -az exports/nodegoat/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/nodegoat/ 2>&1 | tee -a "$LOGFILE"
 # Deploy review data JSON
 rsync -az review_data.json stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ 2>&1 | tee -a "$LOGFILE"
+# Deploy review CGI binaries from current source
+./review_cgi/deploy_review_cgi.sh 2>&1 | tee -a "$LOGFILE" || echo "  Warning: review CGI deploy failed" | tee -a "$LOGFILE"
 
 # Step 10: Backup databases with rolling history
 echo "Step 10: Backing up databases..." | tee -a "$LOGFILE"

@@ -15,6 +15,7 @@ import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
+import canonical_variants
 from db import get_connection
 
 OUTPUT_FILE = "review_data.json"
@@ -673,6 +674,16 @@ def export_lemmas():
         if not variants:
             variants = [default_variant]
 
+        pointer_variant = canonical_variants.select_pointer_variant(cur, lemma_id=lemma_id)
+        selected_translation = english_translation or ""
+        selected_variant_ref = {"kind": "legacy_assembled", "id": "translation"}
+        if pointer_variant and (pointer_variant.get("translation_text") or "").strip():
+            selected_translation = (pointer_variant.get("translation_text") or "").strip()
+            selected_variant_ref = {
+                "kind": pointer_variant.get("kind", ""),
+                "id": pointer_variant.get("id", ""),
+            }
+
         current_meineke = current_meineke_by_lemma.get(lemma_id, {})
         current_meineke_version_id = current_meineke.get("id")
         current_meineke_text = current_meineke.get("text_body") or meineke_greek_paragraph or ""
@@ -690,7 +701,7 @@ def export_lemmas():
             "greek_text": greek_text or "",
             "human_greek_text": human_greek_text or "",
             "meineke_greek_paragraph": _MEINEKE_OBJECT_TAG_RE.sub("", current_meineke_text),
-            "english_translation": english_translation,
+            "english_translation": selected_translation,
             "type": lemma_type or "",
             "volume_label": volume_label or "",
             "meineke_id": meineke_id or "",
@@ -714,7 +725,7 @@ def export_lemmas():
             "translation_variants": variants,
             "source_text_versions": source_versions_by_lemma.get(lemma_id, []),
             "canonical_variants": canonical_variants_by_lemma.get(lemma_id, []),
-            "canonical_variant_ref": {"kind": "legacy_assembled", "id": "translation"},
+            "canonical_variant_ref": selected_variant_ref,
             "commentary_entries": commentary_by_lemma.get(lemma_id, []),
             "proper_nouns": proper_nouns_by_lemma.get(lemma_id, []),
             "blocked_reasons": [risk_by_lemma.get(lemma_id, {}).get("translation_block_reason", "")]
@@ -726,12 +737,6 @@ def export_lemmas():
             "meineke_main_text_lines": meineke_lines_by_version.get(current_meineke_version_id, []),
             "apparatus": meineke_apparatus_by_version.get(current_meineke_version_id, []),
         }
-
-        canon_list = canonical_variants_by_lemma.get(lemma_id, [])
-        if canon_list:
-            primary = next((c for c in canon_list if c.get("is_primary")), None)
-            chosen = primary or canon_list[0]
-            lemma_data["canonical_variant_ref"] = {"kind": chosen.get("kind", ""), "id": chosen.get("id", "")}
 
         lemmas.append(lemma_data)
 

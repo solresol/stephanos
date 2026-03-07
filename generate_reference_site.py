@@ -687,16 +687,25 @@ def get_all_lemmas(cur):
                     "status": v.get("status", ""),
                     "source_text_version_id": str(v.get("source_text_version_id", "") or ""),
                     "translation_text": (v.get("translation_text", "") or "").strip(),
+                    "model": v.get("model", ""),
+                    "profile_name": v.get("profile_name", ""),
+                    "profile_version": v.get("profile_version"),
                 }
             )
 
         selected_kind = ""
         selected_id = ""
         selected_translation_text = ""
+        selected_model = ""
+        selected_profile_name = ""
+        selected_profile_version = None
         if presented_translations:
             selected_translation_text = presented_translations[0].get("translation_text", "")
             selected_kind = presented_translations[0].get("kind", "")
             selected_id = presented_translations[0].get("id", "")
+            selected_model = presented_translations[0].get("model", "") or ""
+            selected_profile_name = presented_translations[0].get("profile_name", "") or ""
+            selected_profile_version = presented_translations[0].get("profile_version")
             selected_translation_blocked = False
             selected_translation_block_reason = ""
         else:
@@ -729,6 +738,9 @@ def get_all_lemmas(cur):
             "presented_translations": presented_translations,
             "selected_translation_variant_kind": selected_kind,
             "selected_translation_variant_id": selected_id,
+            "selected_translation_model": selected_model,
+            "selected_translation_profile_name": selected_profile_name,
+            "selected_translation_profile_version": selected_profile_version,
             "confidence": confidence or "normal",
             "ocr_processed_at": ocr_processed_at,
             "ocr_generation_name": ocr_generation_name or "unknown",
@@ -811,11 +823,8 @@ def get_prompt_versions(cur):
             COALESCE(req_stats.request_count, 0) AS request_count,
             req_stats.last_requested_at,
             COALESCE(run_stats.run_count, 0) AS run_count,
-            run_stats.last_run_at,
-            CASE
-                WHEN p.name = 'legacy_scholarly' THEN COALESCE(legacy_stats.legacy_count, 0)
-                ELSE 0
-            END AS legacy_count
+            COALESCE(run_stats.approved_run_count, 0) AS approved_run_count,
+            run_stats.last_run_at
         FROM translation_prompt_profiles p
         JOIN translation_prompt_profile_versions pv
           ON pv.profile_id = p.id
@@ -832,22 +841,15 @@ def get_prompt_versions(cur):
             SELECT
                 profile_version_id,
                 COUNT(*) AS run_count,
+                COUNT(*) FILTER (
+                    WHERE status = 'approved'
+                      AND COALESCE(translation_text, '') != ''
+                ) AS approved_run_count,
                 MAX(COALESCE(completed_at, created_at)) AS last_run_at
             FROM translation_runs
             GROUP BY profile_version_id
         ) run_stats
           ON run_stats.profile_version_id = pv.id
-        LEFT JOIN (
-            SELECT
-                translation_prompt_version AS version,
-                COUNT(*) AS legacy_count
-            FROM assembled_lemmas
-            WHERE COALESCE(translation, '') != ''
-              AND COALESCE(translation_prompt_version, 0) > 0
-            GROUP BY translation_prompt_version
-        ) legacy_stats
-          ON p.name = 'legacy_scholarly'
-         AND legacy_stats.version = pv.version
         ORDER BY p.name, pv.version DESC
         """
     )
@@ -868,10 +870,10 @@ def get_prompt_versions(cur):
         request_count,
         last_requested_at,
         run_count,
+        approved_run_count,
         last_run_at,
-        legacy_count,
     ) in cur.fetchall():
-        total_usage = int(request_count or 0) + int(run_count or 0) + int(legacy_count or 0)
+        total_usage = int(request_count or 0) + int(run_count or 0)
         prompt_versions.append(
             {
                 "profile_id": int(profile_id),
@@ -888,8 +890,8 @@ def get_prompt_versions(cur):
                 "request_count": int(request_count or 0),
                 "last_requested_at": last_requested_at,
                 "run_count": int(run_count or 0),
+                "approved_run_count": int(approved_run_count or 0),
                 "last_run_at": last_run_at,
-                "legacy_count": int(legacy_count or 0),
                 "total_usage": total_usage,
             }
         )
@@ -1181,7 +1183,23 @@ def render_lemma_cards(lemmas):
         if lemma.get("word_count") is not None:
             detail_rows.append(("Word count", html_module.escape(str(lemma["word_count"]))))
 
-        # Add translation prompt version (only for AI translations, not human)
+        if lemma.get("selected_translation_variant_kind") == "translation_run":
+            ai_line_bits = []
+            profile_name = (lemma.get("selected_translation_profile_name") or "").strip()
+            profile_version = lemma.get("selected_translation_profile_version")
+            model_name = (lemma.get("selected_translation_model") or "").strip()
+            if profile_name:
+                label = profile_name
+                if profile_version is not None:
+                    label += f" v{profile_version}"
+                ai_line_bits.append(label)
+            if model_name:
+                ai_line_bits.append(model_name)
+            if ai_line_bits:
+                detail_rows.append(("AI translation", html_module.escape(" · ".join(ai_line_bits))))
+
+        # Add translation prompt version for compatibility when the selected
+        # translation still comes from the flattened legacy column.
         if (
             lemma.get("translation_prompt_version")
             and lemma.get("translated")
@@ -2192,9 +2210,8 @@ def generate_prompts_page(prompt_versions):
             f"<span class='usage-chip{' active' if item['active'] else ''}'>{'Active' if item['active'] else 'Historical'}</span>",
             f"<span class='usage-chip'>Runs: {item['run_count']}</span>",
             f"<span class='usage-chip'>Requests: {item['request_count']}</span>",
+            f"<span class='usage-chip'>Approved AI: {item['approved_run_count']}</span>",
         ]
-        if item["legacy_count"]:
-            usage_bits.append(f"<span class='usage-chip'>Legacy rows: {item['legacy_count']}</span>")
 
         blocks = []
         if item["notes"]:
@@ -2301,8 +2318,8 @@ def generate_prompts_page(prompt_versions):
                 <div class="stat-label">Translation Runs</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">{sum(item['legacy_count'] for item in prompt_versions):,}</div>
-                <div class="stat-label">Legacy Prompted Rows</div>
+                <div class="stat-value">{sum(item['approved_run_count'] for item in prompt_versions):,}</div>
+                <div class="stat-label">Approved AI Runs</div>
             </div>
         </div>
         <p class="note">This page shows active prompt versions and any prompt version that has recorded usage, notes, or metadata.</p>
