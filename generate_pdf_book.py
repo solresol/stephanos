@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from db import get_connection
+from translation_rendering import render_inline_markup, split_translation_blocks
 
 OUTPUT_DIR = Path("reference_site")
 PDF_FILENAME = "stephanos_ethnika_translations.pdf"
@@ -268,30 +269,52 @@ def escape_index_term(text):
     return escape_latex(text)
 
 
+def render_translation_inline_latex(text):
+    """Render lightweight markdown markers to LaTeX."""
+    return render_inline_markup(
+        text,
+        escape_latex,
+        lambda inner: rf"\textbf{{{inner}}}",
+        lambda inner: rf"\textit{{{inner}}}",
+    )
+
+
 def format_translation_for_latex(text):
-    """Format prose and verse translations for LaTeX output."""
-    raw = text or ''
-    lines = raw.splitlines()
-    non_empty_lines = [line.strip() for line in lines if line.strip()]
-    if len(non_empty_lines) <= 1:
-        return escape_latex(raw.strip()), False
+    """Format prose/verse translation blocks for LaTeX output."""
+    blocks = split_translation_blocks(text or '')
+    if not blocks:
+        return '', False
 
-    formatted_lines = []
-    stanza_lines = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped:
-            stanza_lines.append(escape_latex(stripped))
-            continue
-        if stanza_lines:
-            formatted_lines.append(r" \\ ".join(stanza_lines))
+    rendered_blocks = []
+    uses_block_layout = any(block.kind == 'verse' for block in blocks) or len(blocks) > 1
+
+    for block in blocks:
+        if block.kind == 'verse':
+            stanza_parts = []
             stanza_lines = []
-        formatted_lines.append(r"\vspace{0.5\baselineskip}")
+            for line in block.text.splitlines():
+                stripped = line.strip()
+                if stripped:
+                    stanza_lines.append(render_translation_inline_latex(stripped))
+                    continue
+                if stanza_lines:
+                    stanza_parts.append(r" \\ ".join(stanza_lines))
+                    stanza_lines = []
+                stanza_parts.append(r"\vspace{0.5\baselineskip}")
 
-    if stanza_lines:
-        formatted_lines.append(r" \\ ".join(stanza_lines))
+            if stanza_lines:
+                stanza_parts.append(r" \\ ".join(stanza_lines))
 
-    return "\n".join(formatted_lines).strip(), True
+            verse_body = "\n".join(stanza_parts).strip()
+            rendered_blocks.append(
+                "\\begin{translationverse}\n"
+                f"{verse_body}\n"
+                "\\end{translationverse}"
+            )
+        else:
+            rendered_blocks.append(render_translation_inline_latex(block.text))
+
+    return "\n\n".join(part for part in rendered_blocks if part).strip(), uses_block_layout
 
 
 def pdf_looks_valid(path: Path) -> bool:
@@ -411,7 +434,7 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
 
         for lemma in letters[letter_code]:
             headword = escape_latex(lemma['lemma'])
-            translation, is_poetry = format_translation_for_latex(lemma['translation'])
+            translation, use_block_layout = format_translation_for_latex(lemma['translation'])
             lemma_id = lemma['id']
 
             # Type annotation
@@ -475,9 +498,9 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
             if geodata_parts:
                 geodata_str = "\n\\par\\smallskip\\noindent\\textit{\\small " + " · ".join(geodata_parts) + "}"
 
-            if is_poetry:
+            if use_block_layout:
                 entries_tex.append(f'''
-{index_str}\\entryverse{{{headword}}}{{{type_text}{parisinus_text}{source_text}}}{{%
+{index_str}\\entryblock{{{headword}}}{{{type_text}{parisinus_text}{source_text}}}{{%
 {translation}
 }}{{{geodata_str}}}
 ''')
@@ -525,7 +548,6 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
 % Typography
 \usepackage{microtype}
 \usepackage{parskip}
-\usepackage{verse}
 
 % Graphics for maps
 \usepackage{graphicx}
@@ -537,15 +559,23 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
     \par\bigskip
 }
 
-% Args: headword, annotations, verse translation, trailing metadata
-\newcommand{\entryverse}[4]{%
+% Args: headword, annotations, translation blocks, trailing metadata
+\newcommand{\entryblock}[4]{%
     \noindent\textcolor{headwordcolor}{\textbf{#1}}#2%
     \par\smallskip
-    \begin{verse}
-#3
-    \end{verse}
+    #3
     #4%
     \par\bigskip
+}
+
+\newenvironment{translationverse}{%
+    \begin{quote}
+    \itshape
+    \leftskip 0.75em
+    \rightskip 0pt plus 1.5em
+    \parindent 0pt
+}{%
+    \end{quote}
 }
 
 % Chapter formatting for memoir

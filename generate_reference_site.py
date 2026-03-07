@@ -18,6 +18,7 @@ from db import DB_PORT as STEPHANOS_DB_PORT
 from db import DB_USER as STEPHANOS_DB_USER
 import canonical_variants
 import citation_format
+from translation_rendering import render_inline_markup, split_translation_blocks
 
 OUTPUT_DIR = "reference_site"
 
@@ -73,25 +74,6 @@ def normalize_whitespace(text: str) -> str:
     # Also normalize non-breaking spaces to regular spaces.
     text = text.replace("\u00a0", " ")
     return _WS_RE.sub(" ", text).strip()
-
-
-def normalize_line_preserving_whitespace(text: str) -> str:
-    """Normalize whitespace within lines while preserving intentional line breaks."""
-    if not text:
-        return ""
-
-    normalized_lines = []
-    for raw_line in text.splitlines():
-        line = raw_line.replace("\u00a0", " ")
-        line = re.sub(r"[ \t]+", " ", line)
-        line = re.sub(r"\s+([,.;:!?])", r"\1", line)
-        line = line.strip()
-        if line:
-            normalized_lines.append(line)
-        elif normalized_lines and normalized_lines[-1] != "":
-            normalized_lines.append("")
-
-    return "\n".join(normalized_lines).strip()
 
 
 def strip_diacritics(text: str) -> str:
@@ -155,33 +137,6 @@ def strip_citation_markers(text: str) -> str:
             break
 
     return current
-
-
-def strip_all_bracketed_spans(text: str) -> str:
-    """
-    Remove *all* (...) and [...] spans from text.
-
-    Used for public translation hygiene: bracketed/parenthetical material in our
-    translations is a strong indicator of Billerbeck leakage and must not be
-    visible on the public site.
-    """
-    if not text:
-        return ""
-
-    current = text
-    # Iteratively remove non-nested spans (enough passes to handle sequential spans).
-    for _ in range(8):
-        previous = current
-        current = _PAREN_SPAN_RE.sub("", current)
-        current = _BRACKET_SPAN_RE.sub("", current)
-        if current == previous:
-            break
-
-    # If anything unmatched remains, strip the bracket characters themselves.
-    current = current.replace("(", "").replace(")", "").replace("[", "").replace("]", "")
-
-    # Normalize spacing/punctuation after removals, but preserve verse/paragraphed line breaks.
-    return normalize_line_preserving_whitespace(current)
 
 
 def classify_text_difference(a: str, b: str) -> str:
@@ -566,21 +521,61 @@ def get_all_lemmas(cur):
     cur.execute("SELECT to_regclass('public.lemma_source_text_versions') IS NOT NULL")
     has_source_text_versions = bool(cur.fetchone()[0])
 
-    billerbeck_source_text_by_lemma = {}
-    billerbeck_source_variant_by_lemma = {}
+    public_meineke_text_by_lemma = {}
+    public_meineke_variant_by_lemma = {}
     if has_source_text_versions:
         cur.execute(
             """
             SELECT lemma_id, text_body, source_variant
             FROM lemma_source_text_versions
-            WHERE source_document = 'billerbeck'
+            WHERE source_document = 'meineke'
               AND is_current = TRUE
               AND is_public_greek = TRUE
             """
         )
         for lemma_id, text_body, source_variant in cur.fetchall():
-            billerbeck_source_text_by_lemma[lemma_id] = (text_body or "")
-            billerbeck_source_variant_by_lemma[lemma_id] = (source_variant or "")
+            text_body = _MEINEKE_OBJECT_TAG_RE.sub("", text_body or "").strip()
+            if text_body:
+                public_meineke_text_by_lemma[lemma_id] = text_body
+                public_meineke_variant_by_lemma[lemma_id] = (source_variant or "").strip()
+
+    cur.execute("SELECT to_regclass('public.meineke_headwords') IS NOT NULL")
+    has_meineke_headwords = bool(cur.fetchone()[0])
+    if has_meineke_headwords:
+        cur.execute(
+            """
+            SELECT
+                a.id,
+                COALESCE(mh_match.greek_paragraph, '') AS greek_paragraph
+            FROM assembled_lemmas a
+            LEFT JOIN LATERAL (
+                SELECT mh.greek_paragraph
+                FROM meineke_headwords mh
+                WHERE (
+                    (a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id)
+                    OR (a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id)
+                    OR (a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id)
+                )
+                ORDER BY
+                    CASE
+                        WHEN a.nodegoat_id IS NOT NULL AND a.nodegoat_id != '' AND mh.nodegoat_id = a.nodegoat_id THEN 0
+                        WHEN a.billerbeck_id IS NOT NULL AND a.billerbeck_id != '' AND mh.billerbeck_id = a.billerbeck_id THEN 1
+                        WHEN a.meineke_id IS NOT NULL AND a.meineke_id != '' AND mh.meineke_id = a.meineke_id THEN 2
+                        ELSE 3
+                    END,
+                    mh.id
+                LIMIT 1
+            ) mh_match ON TRUE
+            WHERE COALESCE(a.quarantined, FALSE) = FALSE
+            """
+        )
+        for lemma_id, greek_paragraph in cur.fetchall():
+            if lemma_id in public_meineke_text_by_lemma:
+                continue
+            greek_paragraph = _MEINEKE_OBJECT_TAG_RE.sub("", greek_paragraph or "").strip()
+            if greek_paragraph:
+                public_meineke_text_by_lemma[lemma_id] = greek_paragraph
+                public_meineke_variant_by_lemma[lemma_id] = ""
 
     # Fetch proper nouns for all lemmas
     cur.execute("""
@@ -647,25 +642,18 @@ def get_all_lemmas(cur):
 
     all_lemmas = []
     for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at, wikidata_place_qid, wikidata_place_label, latitude, longitude, pleiades_id, translation_prompt_version, translation_blocked, translation_block_reason in rows:
-        # Public Greek preference: current public Billerbeck source-text version (if available) -> assembled_lemmas lane.
+        # Public Greek preference: current public Meineke source text (or Meineke headword paragraph).
         greek_source_variant = ""
         greek_source_origin = ""
-        billerbeck_candidate = (billerbeck_source_text_by_lemma.get(lemma_id) or "").strip()
-        if billerbeck_candidate:
-            greek = billerbeck_candidate
-            greek_source = "billerbeck"
-            greek_source_variant = (billerbeck_source_variant_by_lemma.get(lemma_id) or "").strip()
-            greek_source_origin = "lemma_source_text_versions"
+        meineke_candidate = (public_meineke_text_by_lemma.get(lemma_id) or "").strip()
+        if meineke_candidate:
+            greek = meineke_candidate
+            greek_source = "meineke"
+            greek_source_variant = (public_meineke_variant_by_lemma.get(lemma_id) or "").strip()
+            greek_source_origin = "lemma_source_text_versions" if greek_source_variant else "meineke_headwords"
         else:
-            greek = (corrected_greek_scan or human_greek_text or greek_text or "").strip()
-            greek_source = "billerbeck"
-            if (corrected_greek_scan or "").strip() or (human_greek_text or "").strip():
-                greek_source_variant = "manual"
-            elif (greek_text or "").strip():
-                greek_source_variant = "ocr"
-            else:
-                greek_source_variant = ""
-            greek_source_origin = "assembled_lemmas"
+            greek = ""
+            greek_source = ""
 
         # Use normalized translation column, fall back to parsing translation_json for legacy data
         translation = translation_col or ""
@@ -975,18 +963,6 @@ def author_detail_filename(author_lemma_form: str | None, author_english: str | 
     return f"author_{label}_{suffix}.html"
 
 
-def is_multiline_display_text(text: str) -> bool:
-    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-    return len(lines) > 1
-
-
-def wrap_translation_html(text_html: str, raw_text: str) -> str:
-    classes = ["translation-text"]
-    if is_multiline_display_text(raw_text):
-        classes.append("poetry-translation")
-    return f"<div class=\"{' '.join(classes)}\">{text_html}</div>"
-
-
 def render_key_value_metadata_table(title: str, rows: list[tuple[str, str]]) -> str:
     clean_rows = [(label, value) for label, value in rows if label and value]
     if not clean_rows:
@@ -1054,31 +1030,49 @@ def render_lemma_cards(lemmas):
         if not isinstance(presented, list):
             presented = []
 
-        def render_translation_text(text: str) -> str:
-            raw = text or ""
-            text = strip_all_bracketed_spans(raw)
-            if raw.strip() and not text:
-                return wrap_translation_html(
-                    '<span class="pending-translation">Translation pending</span>',
-                    "",
-                )
-            highlighted = highlight_proper_nouns_in_translation(
-                text,
+        def render_text_fragment_html(text_fragment: str) -> str:
+            escaped = html_module.escape(text_fragment, quote=False)
+            return highlight_proper_nouns_in_translation(
+                escaped,
                 lemma.get("proper_nouns", []),
                 lemma.get("aliases_by_name", {}),
             )
-            return wrap_translation_html(highlighted, text)
+
+        def render_inline_translation_html(text_fragment: str) -> str:
+            return render_inline_markup(
+                text_fragment,
+                render_text_fragment_html,
+                lambda inner: f"<strong>{inner}</strong>",
+                lambda inner: f"<em>{inner}</em>",
+            )
+
+        def render_translation_text(text: str) -> str:
+            raw = text or ""
+            blocks = split_translation_blocks(raw)
+            if raw.strip() and not blocks:
+                return '<div class="translation-text"><p><span class="pending-translation">Translation pending</span></p></div>'
+
+            block_html = []
+            for block in blocks:
+                if block.kind == "verse":
+                    line_html = []
+                    for line in block.text.splitlines():
+                        if line.strip():
+                            line_html.append(
+                                f"<div class='translation-verse-line'>{render_inline_translation_html(line)}</div>"
+                            )
+                        else:
+                            line_html.append("<div class='translation-verse-break'></div>")
+                    block_html.append(f"<blockquote class='translation-verse'>{''.join(line_html)}</blockquote>")
+                else:
+                    block_html.append(f"<p>{render_inline_translation_html(block.text)}</p>")
+
+            return f"<div class=\"translation-text\">{''.join(block_html)}</div>"
 
         if is_blocked:
-            translation = wrap_translation_html(
-                '<span class="pending-translation">Translation pending</span>',
-                "",
-            )
+            translation = '<div class="translation-text"><p><span class="pending-translation">Translation pending</span></p></div>'
         elif not presented:
-            translation = wrap_translation_html(
-                '<span class="pending-translation">Translation pending</span>',
-                "",
-            )
+            translation = '<div class="translation-text"><p><span class="pending-translation">Translation pending</span></p></div>'
         else:
             primary_text = (presented[0].get("translation_text") if isinstance(presented[0], dict) else "") or ""
             translation = render_translation_text(primary_text)
@@ -1324,7 +1318,7 @@ def render_lemma_cards(lemmas):
                         {f'<span class="lemma-type">{lemma["type"]}</span>' if lemma['type'] else ''}
                     </div>
                 </div>
-                {f'<div class="greek-text {confidence_class}">{lemma["greek_text"]}</div>' if lemma['greek_text'] else ''}
+                {f'<div class="greek-text {confidence_class}">{html_module.escape(lemma["greek_text"], quote=False)}</div>' if lemma['greek_text'] else ''}
                 <div class="translation">{translation}</div>
                 {commentary_html}
                 {f'<div class="lemma-metadata">{metadata_html}</div>' if metadata_html else ''}
@@ -1698,14 +1692,26 @@ def common_styles():
 	            margin: 10px 0;
 	        }
         .translation-text {
-            white-space: pre-wrap;
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
         }
-        .poetry-translation {
+        .translation-text p {
+            margin: 0;
+        }
+        .translation-verse {
+            margin: 0;
+            padding: 14px 16px;
             background: #fcfbf7;
             border-left: 4px solid #8d6e63;
             border-radius: 6px;
+        }
+        .translation-verse-line {
             line-height: 1.85;
-            padding: 14px 16px;
+            white-space: pre-wrap;
+        }
+        .translation-verse-break {
+            height: 0.75rem;
         }
 	        .translation-variants {
 	            margin-top: 10px;

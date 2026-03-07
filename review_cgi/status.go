@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/cgi"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -43,6 +44,17 @@ type StatusResponse struct {
 	Error       string                 `json:"error,omitempty"`
 }
 
+type VersionResponse struct {
+	Program     string `json:"program"`
+	Module      string `json:"module,omitempty"`
+	Version     string `json:"version,omitempty"`
+	GoVersion   string `json:"go_version,omitempty"`
+	BuildTime   string `json:"build_time,omitempty"`
+	VCSRevision string `json:"vcs_revision,omitempty"`
+	VCSTime     string `json:"vcs_time,omitempty"`
+	VCSModified string `json:"vcs_modified,omitempty"`
+}
+
 func main() {
 	cgi.Serve(http.HandlerFunc(handleStatus))
 }
@@ -52,6 +64,11 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.URL.Query().Has("version") {
+		json.NewEncoder(w).Encode(buildVersionResponse())
+		return
+	}
 
 	// Get letter parameter
 	letter := r.URL.Query().Get("letter")
@@ -157,4 +174,51 @@ func writeError(w http.ResponseWriter, message string, startTime time.Time) {
 	}
 	w.WriteHeader(http.StatusBadRequest)
 	json.NewEncoder(w).Encode(response)
+}
+
+func buildVersionResponse() VersionResponse {
+	response := VersionResponse{
+		Program: "status.cgi",
+	}
+
+	if buildVersion != "" {
+		response.Version = buildVersion
+		response.VCSRevision = buildVersion
+	}
+	if buildTime != "" {
+		response.BuildTime = buildTime
+	}
+
+	buildInfo, ok := debug.ReadBuildInfo()
+	if !ok {
+		return response
+	}
+
+	response.GoVersion = buildInfo.GoVersion
+	if buildInfo.Main.Path != "" {
+		response.Module = buildInfo.Main.Path
+	}
+	if buildInfo.Main.Version != "" && buildInfo.Main.Version != "(devel)" {
+		response.Version = buildInfo.Main.Version
+	}
+
+	for _, setting := range buildInfo.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			if response.VCSRevision == "" {
+				response.VCSRevision = setting.Value
+			}
+			if response.Version == "" {
+				response.Version = setting.Value
+			}
+		case "vcs.time":
+			if response.VCSTime == "" {
+				response.VCSTime = setting.Value
+			}
+		case "vcs.modified":
+			response.VCSModified = setting.Value
+		}
+	}
+
+	return response
 }

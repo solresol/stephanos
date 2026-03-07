@@ -126,6 +126,9 @@ type Config struct {
 
 const commentaryImportPrefix = "merah_review:"
 
+var buildVersion = ""
+var buildTime = ""
+
 // GetConfig returns the application configuration
 func GetConfig() Config {
 	return Config{
