@@ -246,6 +246,147 @@ const reviewTemplate = `<!DOCTYPE html>
         .commentary-inline-form {
             margin: 0;
         }
+        .entity-help {
+            color: #555;
+            font-size: 0.95em;
+            margin: 4px 0 10px;
+        }
+        .entity-list {
+            margin: 12px 0;
+        }
+        .entity-card {
+            background: #fbfcff;
+            border: 1px solid #dbe7f3;
+            border-radius: 8px;
+            margin: 12px 0;
+            padding: 14px;
+        }
+        .entity-card.entity-card-pending {
+            border-color: #cfe0f3;
+            box-shadow: inset 0 0 0 1px #eef5fb;
+        }
+        .entity-card.entity-card-removed {
+            border-color: #f1d0d0;
+            background: #fff9f9;
+        }
+        .entity-card-header {
+            align-items: start;
+            display: flex;
+            gap: 12px;
+            justify-content: space-between;
+        }
+        .entity-main-line {
+            align-items: baseline;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .entity-name {
+            color: #1f2937;
+            font-size: 1.05em;
+            font-weight: 700;
+        }
+        .entity-greek {
+            color: #5b6470;
+            font-family: 'Times New Roman', serif;
+            font-style: italic;
+        }
+        .entity-subline {
+            color: #5f6b76;
+            font-size: 0.9em;
+            margin-top: 4px;
+        }
+        .entity-status-block {
+            text-align: right;
+        }
+        .entity-status {
+            background: #eef4fb;
+            border: 1px solid #d5e3f1;
+            border-radius: 999px;
+            color: #31577a;
+            display: inline-block;
+            font-size: 0.82em;
+            font-weight: 600;
+            padding: 3px 10px;
+            text-transform: lowercase;
+        }
+        .entity-status-unresolved {
+            background: #f4f4f5;
+            border-color: #e5e7eb;
+            color: #6b7280;
+        }
+        .entity-pending-label {
+            color: #64748b;
+            font-size: 0.82em;
+            margin-top: 6px;
+        }
+        .entity-resolution-grid {
+            display: grid;
+            gap: 10px;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            margin-top: 12px;
+        }
+        .entity-resolution-cell {
+            background: white;
+            border: 1px solid #edf2f7;
+            border-radius: 6px;
+            padding: 10px 12px;
+        }
+        .entity-resolution-cell a {
+            color: #2563eb;
+            text-decoration: none;
+        }
+        .entity-resolution-cell a:hover {
+            text-decoration: underline;
+        }
+        .entity-notes {
+            color: #374151;
+            font-size: 0.92em;
+            margin-top: 10px;
+        }
+        .entity-form {
+            background: #ffffff;
+            border: 1px solid #e5ecf3;
+            border-radius: 8px;
+            margin-top: 12px;
+            padding: 12px;
+        }
+        .entity-form-grid {
+            display: grid;
+            gap: 12px;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        }
+        .entity-add-grid {
+            display: grid;
+            gap: 12px;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        }
+        .entity-button-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .entity-add-card {
+            background: #f8fbff;
+            border: 1px dashed #bfd5ea;
+            border-radius: 8px;
+            margin-top: 14px;
+            padding: 14px;
+        }
+        .text-input,
+        .entity-form select {
+            border: 2px solid #bdc3c7;
+            border-radius: 4px;
+            font-size: 0.95em;
+            padding: 8px 10px;
+            width: 100%;
+        }
+        .text-input:focus,
+        .entity-form select:focus {
+            border-color: #3498db;
+            outline: none;
+        }
         .btn-subtle {
             background: #f3f4f6;
             border: 1px solid #d1d5db;
@@ -522,6 +663,14 @@ const reviewTemplate = `<!DOCTYPE html>
         }
         .variant-select-btn.active {
             background: #2c3e50;
+        }
+        @media (max-width: 720px) {
+            .entity-card-header {
+                flex-direction: column;
+            }
+            .entity-status-block {
+                text-align: left;
+            }
         }
     </style>
 </head>
@@ -820,6 +969,159 @@ const reviewTemplate = `<!DOCTYPE html>
             {{if not .Lemma.CommentaryEntries}}
             <div class="commentary-empty">No commentary has been added for this lemma yet.</div>
             {{end}}
+
+            <div class="section-title">Named Entities &amp; Resolution</div>
+            <div class="entity-help">
+                These resolutions save immediately in the local SQLite review database on merah and are merged into PostgreSQL during the nightly sync.
+            </div>
+            {{if .Lemma.ProperNouns}}
+            <div class="entity-list">
+                {{range .Lemma.ProperNouns}}
+                <div class="entity-card {{if .PendingImport}}entity-card-pending{{end}} {{if eq .HumanResolutionStatus "removed"}}entity-card-removed{{end}}">
+                    <div class="entity-card-header">
+                        <div>
+                            <div class="entity-main-line">
+                                <span class="entity-name">{{if .English}}{{.English}}{{else if .LemmaForm}}{{.LemmaForm}}{{else}}{{.TextForm}}{{end}}</span>
+                                {{if .LemmaForm}}<span class="entity-greek">{{.LemmaForm}}</span>{{end}}
+                            </div>
+                            <div class="entity-subline">
+                                {{if .TextForm}}text: {{.TextForm}} · {{end}}
+                                {{if .Type}}type: {{.Type}} · {{end}}
+                                role: {{.Role}}
+                                {{if .Citation}} · citation: {{.Citation}}{{end}}
+                                {{if .WorkTitle}} · work: {{.WorkTitle}}{{end}}
+                            </div>
+                        </div>
+                        <div class="entity-status-block">
+                            {{if .EffectiveResolutionStatus}}
+                            <span class="entity-status">{{.EffectiveResolutionStatus}}</span>
+                            {{else}}
+                            <span class="entity-status entity-status-unresolved">unresolved</span>
+                            {{end}}
+                            {{if .PendingImport}}<div class="entity-pending-label">pending nightly import</div>{{end}}
+                            {{if .LocalOnly}}<div class="entity-pending-label">local addition</div>{{end}}
+                        </div>
+                    </div>
+
+                    <div class="entity-resolution-grid">
+                        <div class="entity-resolution-cell">
+                            <strong>Machine</strong><br>
+                            {{if .WikidataQID}}<a href="https://www.wikidata.org/wiki/{{.WikidataQID}}" target="_blank">{{.WikidataQID}}</a>{{else}}&mdash;{{end}}
+                            {{if .WikidataConfidence}}<div>{{.WikidataConfidence}}</div>{{end}}
+                        </div>
+                        <div class="entity-resolution-cell">
+                            <strong>Current</strong><br>
+                            {{if .EffectiveWikidataQID}}<a href="https://www.wikidata.org/wiki/{{.EffectiveWikidataQID}}" target="_blank">{{.EffectiveWikidataQID}}</a>{{else}}&mdash;{{end}}
+                            {{if .EffectiveResolutionSource}}<div>{{.EffectiveResolutionSource}}</div>{{end}}
+                        </div>
+                        <div class="entity-resolution-cell">
+                            <strong>Reviewer</strong><br>
+                            {{if .HumanResolvedBy}}{{.HumanResolvedBy}}{{else}}&mdash;{{end}}
+                            {{if .HumanResolvedAt}}<div>{{.HumanResolvedAt}}</div>{{end}}
+                        </div>
+                    </div>
+
+                    {{if .HumanResolutionNotes}}
+                    <div class="entity-notes"><strong>Notes:</strong> {{.HumanResolutionNotes}}</div>
+                    {{end}}
+
+                    {{if .LocalOnly}}
+                    <div class="entity-help" style="margin-top: 10px;">
+                        This local addition becomes a normal PostgreSQL-backed row after the nightly import.
+                    </div>
+                    {{else}}
+                    <form method="POST" action="/cgi-bin/save.cgi" class="entity-form">
+                        <input type="hidden" name="form_mode" value="entity">
+                        <input type="hidden" name="lemma_id" value="{{$.Lemma.ID}}">
+                        <input type="hidden" name="action" value="stay">
+                        <input type="hidden" name="proper_noun_id" value="{{.ID}}">
+
+                        <div class="entity-form-grid">
+                            <div class="form-group">
+                                <label for="entity_qid_{{.ID}}">Wikidata QID</label>
+                                <input class="text-input" type="text" name="entity_qid" id="entity_qid_{{.ID}}" value="{{if .HumanWikidataQID}}{{.HumanWikidataQID}}{{else}}{{.EffectiveWikidataQID}}{{end}}" placeholder="Q12345">
+                            </div>
+
+                            <div class="form-group">
+                                <label for="entity_notes_{{.ID}}">Notes</label>
+                                <input class="text-input" type="text" name="notes" id="entity_notes_{{.ID}}" value="{{.HumanResolutionNotes}}" placeholder="Optional note for the nightly import">
+                            </div>
+                        </div>
+
+                        <div class="entity-button-row">
+                            <button type="submit" name="entity_action" value="set_qid" class="btn-save-stay">Save corrected QID</button>
+                            {{if or .EffectiveWikidataQID .WikidataQID}}
+                            <button type="submit" name="entity_action" value="approved" class="btn-subtle">Mark current link OK</button>
+                            {{end}}
+                            <button type="submit" name="entity_action" value="not_alignable" class="btn-subtle">Does not need alignment</button>
+                            <button type="submit" name="entity_action" value="removed" class="btn-danger">Remove mention</button>
+                            {{if .HumanResolutionStatus}}
+                            <button type="submit" name="entity_action" value="clear_override" class="btn-subtle">Clear override</button>
+                            {{end}}
+                        </div>
+                    </form>
+                    {{end}}
+                </div>
+                {{end}}
+            </div>
+            {{else}}
+            <div class="commentary-empty">No named entities extracted for this lemma yet.</div>
+            {{end}}
+
+            <div class="entity-add-card">
+                <div class="entity-help">
+                    Use this when the extractor missed a person, place, people, deity, or cited source that belongs with this lemma.
+                </div>
+                <form method="POST" action="/cgi-bin/save.cgi" class="entity-form">
+                    <input type="hidden" name="form_mode" value="entity">
+                    <input type="hidden" name="lemma_id" value="{{.Lemma.ID}}">
+                    <input type="hidden" name="action" value="stay">
+
+                    <div class="entity-add-grid">
+                        <div class="form-group">
+                            <label for="entity_text_form_add">Text Form</label>
+                            <input class="text-input" type="text" name="entity_text_form" id="entity_text_form_add" placeholder="As it appears in the text">
+                        </div>
+                        <div class="form-group">
+                            <label for="entity_lemma_form_add">Lemma Form</label>
+                            <input class="text-input" type="text" name="entity_lemma_form" id="entity_lemma_form_add" placeholder="Canonical form">
+                        </div>
+                        <div class="form-group">
+                            <label for="entity_english_add">English</label>
+                            <input class="text-input" type="text" name="entity_english" id="entity_english_add" placeholder="English gloss">
+                        </div>
+                        <div class="form-group">
+                            <label for="entity_type_add">Type</label>
+                            <select name="entity_type" id="entity_type_add">
+                                <option value="person">person</option>
+                                <option value="place">place</option>
+                                <option value="people">people</option>
+                                <option value="deity">deity</option>
+                                <option value="other">other</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="entity_role_add">Role</label>
+                            <select name="entity_role" id="entity_role_add">
+                                <option value="entity">entity</option>
+                                <option value="source">source</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="entity_qid_add">Wikidata QID</label>
+                            <input class="text-input" type="text" name="entity_qid" id="entity_qid_add" placeholder="Optional Q12345">
+                        </div>
+                        <div class="form-group" style="grid-column: 1 / -1;">
+                            <label for="entity_notes_add">Notes</label>
+                            <input class="text-input" type="text" name="notes" id="entity_notes_add" placeholder="Why this entity should be added">
+                        </div>
+                    </div>
+
+                    <div class="entity-button-row">
+                        <button type="submit" name="entity_action" value="add_entity" class="btn-save">Add missed entity</button>
+                    </div>
+                </form>
+            </div>
 
             <div class="section-title">AI-generated English Translation</div>
             <div class="original-text commentary-source" data-commentary-source="translation" tabindex="0" title="Select text here to add commentary">{{.Lemma.EnglishTranslation}}</div>

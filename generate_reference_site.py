@@ -587,9 +587,10 @@ def get_all_lemmas(cur):
                    'type', noun_type,
                    'role', role,
                    'citation', citation,
-                   'work_title', work_title
+                   'work_title', work_title,
+                   'wikidata_qid', effective_wikidata_qid
                ) ORDER BY id) as nouns
-        FROM proper_nouns
+        FROM effective_proper_nouns
         GROUP BY lemma_id
     """)
     proper_nouns_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
@@ -611,7 +612,7 @@ def get_all_lemmas(cur):
     cur.execute("""
         SELECT pn.english_translation,
                json_agg(DISTINCT pna.alias ORDER BY pna.alias) as aliases
-        FROM proper_nouns pn
+        FROM effective_proper_nouns pn
         JOIN proper_noun_aliases pna ON pna.proper_noun_id = pn.id
         WHERE pn.english_translation IS NOT NULL
         GROUP BY pn.english_translation

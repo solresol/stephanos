@@ -130,13 +130,27 @@ def generate_aliases_page():
     cur = conn.cursor()
 
     # Get statistics
-    cur.execute("SELECT COUNT(*) FROM proper_noun_aliases WHERE alias_type = 'stephanos'")
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM proper_noun_aliases pna
+        JOIN effective_proper_nouns pn ON pn.id = pna.proper_noun_id
+        WHERE pna.alias_type = 'stephanos'
+    """)
     stephanos_count = cur.fetchone()[0]
 
-    cur.execute("SELECT COUNT(*) FROM proper_noun_aliases WHERE alias_type = 'spelling_variant'")
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM proper_noun_aliases pna
+        JOIN effective_proper_nouns pn ON pn.id = pna.proper_noun_id
+        WHERE pna.alias_type = 'spelling_variant'
+    """)
     spelling_count = cur.fetchone()[0]
 
-    cur.execute("SELECT COUNT(DISTINCT proper_noun_id) FROM proper_noun_aliases")
+    cur.execute("""
+        SELECT COUNT(DISTINCT pna.proper_noun_id)
+        FROM proper_noun_aliases pna
+        JOIN effective_proper_nouns pn ON pn.id = pna.proper_noun_id
+    """)
     nouns_with_aliases = cur.fetchone()[0]
 
     # Get Stephanos-stated aliases
@@ -144,7 +158,7 @@ def generate_aliases_page():
         SELECT pn.lemma_form, pn.english_translation, pna.alias,
                pna.source_pattern, al.lemma as source_lemma
         FROM proper_noun_aliases pna
-        JOIN proper_nouns pn ON pna.proper_noun_id = pn.id
+        JOIN effective_proper_nouns pn ON pna.proper_noun_id = pn.id
         LEFT JOIN assembled_lemmas al ON pna.source_lemma_id = al.id
         WHERE pna.alias_type = 'stephanos'
         ORDER BY pn.lemma_form, pna.alias
@@ -156,7 +170,7 @@ def generate_aliases_page():
         SELECT pn.english_translation, pna.alias, pna.rule_applied,
                COUNT(*) OVER (PARTITION BY pn.english_translation) as variant_count
         FROM proper_noun_aliases pna
-        JOIN proper_nouns pn ON pna.proper_noun_id = pn.id
+        JOIN effective_proper_nouns pn ON pna.proper_noun_id = pn.id
         WHERE pna.alias_type = 'spelling_variant'
         ORDER BY pn.english_translation, pna.alias
     """)

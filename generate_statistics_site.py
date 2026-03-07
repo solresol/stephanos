@@ -47,7 +47,7 @@ def get_word_count_data(cur):
             COUNT(DISTINCT p.id) as proper_noun_count,
             CASE WHEN a.version = 'parisinus' THEN TRUE ELSE FALSE END as is_parisinus
         FROM assembled_lemmas a
-        LEFT JOIN proper_nouns p ON p.lemma_id = a.id
+        LEFT JOIN effective_proper_nouns p ON p.lemma_id = a.id
         WHERE a.word_count IS NOT NULL AND a.version IN ('epitome', 'parisinus')
         GROUP BY a.id, a.lemma, a.word_count, a.type, a.version
     """)
@@ -65,7 +65,7 @@ def get_proper_noun_features(cur):
     # Get proper noun lemmas that appear in at least 2 entries
     cur.execute("""
         SELECT lemma_form, COUNT(DISTINCT lemma_id) as entry_count
-        FROM proper_nouns
+        FROM effective_proper_nouns
         GROUP BY lemma_form
         HAVING COUNT(DISTINCT lemma_id) >= 2
         ORDER BY lemma_form
@@ -83,7 +83,7 @@ def get_proper_noun_features(cur):
             CASE WHEN a.version = 'parisinus' THEN TRUE ELSE FALSE END as is_parisinus,
             COALESCE(json_agg(p.lemma_form) FILTER (WHERE p.lemma_form IS NOT NULL), '[]') as nouns
         FROM assembled_lemmas a
-        LEFT JOIN proper_nouns p ON p.lemma_id = a.id
+        LEFT JOIN effective_proper_nouns p ON p.lemma_id = a.id
         WHERE a.word_count IS NOT NULL AND a.version IN ('epitome', 'parisinus')
         GROUP BY a.id, a.lemma, a.word_count, a.version
     """)
@@ -134,7 +134,7 @@ def get_proper_noun_type_features(cur):
             COALESCE(SUM(CASE WHEN p.noun_type = 'deity' THEN 1 ELSE 0 END), 0) as deity_count,
             COALESCE(SUM(CASE WHEN p.noun_type = 'other' THEN 1 ELSE 0 END), 0) as other_count
         FROM assembled_lemmas a
-        LEFT JOIN proper_nouns p ON p.lemma_id = a.id
+        LEFT JOIN effective_proper_nouns p ON p.lemma_id = a.id
         WHERE a.word_count IS NOT NULL AND a.version IN ('epitome', 'parisinus')
         GROUP BY a.id, a.lemma, a.word_count, a.version
     """)
@@ -193,7 +193,7 @@ def get_category_specific_features(cur, role=None, noun_type=None, min_occurrenc
     # Get proper noun lemmas in this category that appear in at least min_occurrences entries
     cur.execute(f"""
         SELECT lemma_form, COUNT(DISTINCT lemma_id) as entry_count
-        FROM proper_nouns p
+        FROM effective_proper_nouns p
         WHERE {where_clause}
         GROUP BY lemma_form
         HAVING COUNT(DISTINCT lemma_id) >= {min_occurrences}
@@ -213,7 +213,7 @@ def get_category_specific_features(cur, role=None, noun_type=None, min_occurrenc
             CASE WHEN a.version = 'parisinus' THEN TRUE ELSE FALSE END as is_parisinus,
             COALESCE(json_agg(p.lemma_form) FILTER (WHERE p.lemma_form IS NOT NULL AND {where_clause}), '[]') as nouns
         FROM assembled_lemmas a
-        LEFT JOIN proper_nouns p ON p.lemma_id = a.id
+        LEFT JOIN effective_proper_nouns p ON p.lemma_id = a.id
         WHERE a.word_count IS NOT NULL AND a.version IN ('epitome', 'parisinus')
         GROUP BY a.id, a.lemma, a.word_count, a.version
     """)
@@ -888,7 +888,7 @@ def get_proper_noun_details(cur, noun_lemmas):
                 json_agg(json_build_object('lemma', distinct_entries.lemma, 'id', distinct_entries.id)) as lemma_data
             FROM (
                 SELECT DISTINCT ON (a.id) p.english_translation, a.lemma, a.id
-                FROM proper_nouns p
+                FROM effective_proper_nouns p
                 JOIN assembled_lemmas a ON a.id = p.lemma_id
                 WHERE p.lemma_form = %s
             ) AS distinct_entries

@@ -89,7 +89,7 @@ def main():
             p.work_title,
             a.lemma as entry_lemma,
             a.id as lemma_id
-        FROM proper_nouns p
+        FROM effective_proper_nouns p
         JOIN assembled_lemmas a ON a.id = p.lemma_id
         WHERE p.role = 'source'
           AND p.citation IS NOT NULL

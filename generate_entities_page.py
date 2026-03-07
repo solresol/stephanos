@@ -39,7 +39,7 @@ def main():
             p.english_translation,
             COUNT(DISTINCT p.lemma_id) as mention_count,
             json_agg(DISTINCT a.lemma ORDER BY a.lemma) as lemmas
-        FROM proper_nouns p
+        FROM effective_proper_nouns p
         JOIN assembled_lemmas a ON a.id = p.lemma_id
         WHERE p.role = 'entity' AND p.noun_type = 'deity'
         GROUP BY p.lemma_form, p.english_translation
@@ -54,7 +54,7 @@ def main():
             p.english_translation,
             COUNT(DISTINCT p.lemma_id) as mention_count,
             json_agg(DISTINCT a.lemma ORDER BY a.lemma) as lemmas
-        FROM proper_nouns p
+        FROM effective_proper_nouns p
         JOIN assembled_lemmas a ON a.id = p.lemma_id
         WHERE p.role = 'entity' AND p.noun_type = 'person'
         GROUP BY p.lemma_form, p.english_translation

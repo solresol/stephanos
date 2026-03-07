@@ -112,6 +112,49 @@ def report_places(cur, *, filter_by: str | None) -> None:
         )
 
 
+def report_human_entity_resolutions(cur, *, filter_by: str | None) -> None:
+    if not _has_column(cur, table="proper_nouns", column="human_resolved_by"):
+        print("proper_nouns.human_resolved_by missing; apply migrations to enable attribution.")
+        return
+
+    where_extra = ""
+    params: list[object] = []
+    if filter_by:
+        where_extra = " AND COALESCE(NULLIF(human_resolved_by, ''), '(unset)') = %s"
+        params.append(filter_by)
+
+    cur.execute(
+        f"""
+        SELECT
+            COALESCE(NULLIF(human_resolved_by, ''), '(unset)') AS resolved_by,
+            COUNT(*) AS rows,
+            COUNT(*) FILTER (WHERE human_resolution_status = 'corrected') AS corrected_rows,
+            COUNT(*) FILTER (WHERE human_resolution_status = 'approved') AS approved_rows,
+            COUNT(*) FILTER (WHERE human_resolution_status = 'not_alignable') AS not_alignable_rows,
+            COUNT(*) FILTER (WHERE human_resolution_status = 'removed') AS removed_rows,
+            COUNT(*) FILTER (WHERE human_resolution_status = 'added') AS added_rows
+        FROM proper_nouns
+        WHERE human_resolution_status IS NOT NULL
+        {where_extra}
+        GROUP BY resolved_by
+        ORDER BY rows DESC, resolved_by
+        """,
+        params,
+    )
+    rows = cur.fetchall()
+
+    print("\nHuman entity resolutions (proper_nouns) by human_resolved_by")
+    if not rows:
+        print("  (no rows)")
+        return
+    for resolved_by, total_rows, corrected_rows, approved_rows, not_alignable_rows, removed_rows, added_rows in rows:
+        print(
+            f"  - {resolved_by}: rows={int(total_rows)} corrected={int(corrected_rows)} "
+            f"approved={int(approved_rows)} not_alignable={int(not_alignable_rows)} "
+            f"removed={int(removed_rows)} added={int(added_rows)}"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Report Wikidata linking attribution stats.")
     parser.add_argument("--by", help="Filter to a single linked_by value (e.g., 'Brady')")
@@ -122,6 +165,7 @@ def main() -> int:
 
     report_sources(cur, filter_by=args.by)
     report_places(cur, filter_by=args.by)
+    report_human_entity_resolutions(cur, filter_by=args.by)
 
     conn.close()
     return 0
@@ -129,4 +173,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

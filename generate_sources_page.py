@@ -112,15 +112,32 @@ def main():
         source_mode = "source_units"
         cur.execute(
             """
+            WITH author_links AS (
+                SELECT
+                    lemma_form,
+                    MAX(CASE
+                        WHEN human_resolution_status IS NOT NULL
+                        THEN effective_wikidata_qid
+                    END) AS human_wikidata_qid,
+                    MAX(effective_wikidata_qid) AS effective_wikidata_qid
+                FROM effective_proper_nouns
+                WHERE role = 'source'
+                GROUP BY lemma_form
+            )
             SELECT
                 u.author_lemma_form,
                 MAX(NULLIF(u.author_english, '')) AS author_english,
                 COUNT(DISTINCT m.lemma_id) AS entry_count,
                 COUNT(DISTINCT u.id) AS unit_count,
                 json_agg(DISTINCT u.work_title) FILTER (WHERE u.work_title IS NOT NULL AND u.work_title != '') AS works,
-                MAX(u.author_wikidata_qid) AS wikidata_qid
+                COALESCE(
+                    MAX(author_links.human_wikidata_qid),
+                    MAX(NULLIF(u.author_wikidata_qid, '')),
+                    MAX(author_links.effective_wikidata_qid)
+                ) AS wikidata_qid
             FROM source_citation_units u
             JOIN lemma_source_citation_mentions m ON m.unit_id = u.id
+            LEFT JOIN author_links ON author_links.lemma_form = u.author_lemma_form
             GROUP BY u.author_lemma_form
             ORDER BY entry_count DESC, author_english, u.author_lemma_form
             """
@@ -139,8 +156,11 @@ def main():
                 json_agg(DISTINCT p.work_title) FILTER (WHERE p.work_title IS NOT NULL AND p.work_title != '') as works,
                 json_agg(DISTINCT p.citation) FILTER (WHERE p.citation IS NOT NULL AND p.citation != '') as citations,
                 json_agg(DISTINCT a.lemma ORDER BY a.lemma) as lemmas,
-                MAX(p.wikidata_qid) as wikidata_qid
-            FROM proper_nouns p
+                COALESCE(
+                    MAX(CASE WHEN p.human_resolution_status IS NOT NULL THEN p.effective_wikidata_qid END),
+                    MAX(p.effective_wikidata_qid)
+                ) as wikidata_qid
+            FROM effective_proper_nouns p
             JOIN assembled_lemmas a ON a.id = p.lemma_id
             WHERE p.role = 'source'
             GROUP BY p.lemma_form, p.english_translation
@@ -148,7 +168,7 @@ def main():
             """
         )
         sources = cur.fetchall()
-        cur.execute("SELECT COUNT(*) FROM proper_nouns WHERE role = 'source'")
+        cur.execute("SELECT COUNT(*) FROM effective_proper_nouns WHERE role = 'source'")
         total_citations = int(cur.fetchone()[0] or 0)
 
     conn.close()

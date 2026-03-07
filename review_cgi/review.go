@@ -432,6 +432,13 @@ func main() {
 	}
 	currentLemma.CommentaryEntries = MergeCommentaryEntries(currentLemma.CommentaryEntries, localCommentary)
 
+	entityActions, err := FetchEntityResolutionActions(db, currentLemma.ID)
+	if err != nil {
+		showError(fmt.Sprintf("Failed to read entity actions: %v", err))
+		return
+	}
+	currentLemma.ProperNouns = ApplyEntityResolutionActions(currentLemma.ProperNouns, entityActions)
+
 	// Get review stats
 	total, reviewed, _, _, err := GetReviewStats(db)
 	if err != nil {

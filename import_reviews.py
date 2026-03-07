@@ -310,7 +310,7 @@ def import_entity_resolution_actions(sqlite_cur, pg_cur) -> tuple[int, int, int]
                 pg_cur.execute(
                     """
                     UPDATE proper_nouns
-                    SET human_wikidata_qid = NULL,
+                    SET human_wikidata_qid = %s,
                         human_resolution_status = 'approved',
                         human_resolution_notes = %s,
                         human_resolved_by = %s,
@@ -318,7 +318,7 @@ def import_entity_resolution_actions(sqlite_cur, pg_cur) -> tuple[int, int, int]
                     WHERE id = %s
                       AND lemma_id = %s
                     """,
-                    (notes, reviewer, reviewed_at, proper_noun_id, lemma_id),
+                    (qid, notes, reviewer, reviewed_at, proper_noun_id, lemma_id),
                 )
                 applied += 1
                 continue

@@ -147,23 +147,21 @@ def lookup_author_from_proper_nouns(
     cur.execute(
         """
         SELECT
-            COALESCE(wikidata_qid, '') AS qid,
-            COALESCE(wikidata_confidence, '') AS confidence,
-            COALESCE(wikidata_linked_by, '') AS linked_by
-        FROM proper_nouns
+            COALESCE(effective_wikidata_qid, '') AS qid,
+            COALESCE(effective_wikidata_confidence, '') AS confidence,
+            COALESCE(effective_resolved_by, '') AS linked_by
+        FROM effective_proper_nouns
         WHERE role = 'source'
           AND lemma_form = %s
           AND (%s = '' OR english_translation = %s OR english_translation IS NULL)
-          AND wikidata_qid IS NOT NULL
-          AND wikidata_qid != ''
+          AND effective_wikidata_qid IS NOT NULL
+          AND effective_wikidata_qid != ''
         ORDER BY
-            CASE wikidata_confidence
-                WHEN 'high' THEN 0
-                WHEN 'medium' THEN 1
-                WHEN 'low' THEN 2
+            CASE effective_resolution_source
+                WHEN 'human' THEN 0
                 ELSE 3
             END,
-            wikidata_linked_at DESC NULLS LAST,
+            effective_resolved_at DESC NULLS LAST,
             id DESC
         LIMIT 1
         """,

@@ -119,8 +119,8 @@ def get_progress_stats(conn) -> dict:
     cur.execute("""
         SELECT
             COUNT(DISTINCT proper_noun) as total,
-            COUNT(DISTINCT CASE WHEN wikidata_qid IS NOT NULL THEN proper_noun END) as linked
-        FROM proper_nouns
+            COUNT(DISTINCT CASE WHEN effective_wikidata_qid IS NOT NULL THEN proper_noun END) as linked
+        FROM effective_proper_nouns
         WHERE role = 'source'
     """)
     row = cur.fetchone()
@@ -133,11 +133,33 @@ def get_progress_stats(conn) -> dict:
     }
 
     cur.execute("""
-        SELECT COUNT(DISTINCT proper_noun) FROM proper_nouns
+        SELECT COUNT(DISTINCT proper_noun) FROM effective_proper_nouns
         WHERE role = 'source'
-          AND wikidata_linked_at > NOW() - INTERVAL '7 days'
+          AND effective_resolved_at > NOW() - INTERVAL '7 days'
     """)
     stats["wikidata_sources"]["rate_7d"] = cur.fetchone()[0]
+
+    # 4b. Human review of named-entity resolutions
+    cur.execute("""
+        SELECT
+            COUNT(*) as total,
+            COUNT(CASE WHEN human_resolution_status IS NOT NULL THEN 1 END) as reviewed
+        FROM proper_nouns
+    """)
+    row = cur.fetchone()
+    stats["entity_resolution_human"] = {
+        "name": "Human Entity Review",
+        "total": row[0],
+        "completed": row[1],
+        "pending": row[0] - row[1],
+        "unit": "mentions",
+    }
+
+    cur.execute("""
+        SELECT COUNT(*) FROM proper_nouns
+        WHERE human_resolved_at > NOW() - INTERVAL '7 days'
+    """)
+    stats["entity_resolution_human"]["rate_7d"] = cur.fetchone()[0]
 
     # 5. Wikidata linking - places
     cur.execute("""

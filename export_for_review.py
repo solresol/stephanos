@@ -412,6 +412,92 @@ def export_lemmas():
         )
         commentary_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
 
+    proper_nouns_by_lemma = {}
+    cur.execute("SELECT to_regclass('public.proper_nouns') IS NOT NULL")
+    has_proper_nouns = bool(cur.fetchone()[0])
+    if has_proper_nouns:
+        cur.execute(
+            """
+            SELECT
+                lemma_id,
+                json_agg(json_build_object(
+                    'id', id,
+                    'text_form', proper_noun,
+                    'lemma_form', lemma_form,
+                    'english', COALESCE(english_translation, ''),
+                    'type', COALESCE(noun_type, ''),
+                    'role', COALESCE(role, 'entity'),
+                    'citation', COALESCE(citation, ''),
+                    'work_title', COALESCE(work_title, ''),
+                    'wikidata_qid', COALESCE(wikidata_qid, ''),
+                    'wikidata_confidence', COALESCE(wikidata_confidence, ''),
+                    'human_wikidata_qid', COALESCE(human_wikidata_qid, ''),
+                    'human_resolution_status', COALESCE(human_resolution_status, ''),
+                    'human_resolution_notes', COALESCE(human_resolution_notes, ''),
+                    'human_resolved_by', COALESCE(human_resolved_by, ''),
+                    'human_resolved_at', COALESCE(human_resolved_at::text, ''),
+                    'effective_wikidata_qid', COALESCE(
+                        CASE
+                            WHEN human_resolution_status IN ('corrected', 'added')
+                                THEN NULLIF(BTRIM(human_wikidata_qid), '')
+                            WHEN human_resolution_status = 'approved'
+                                THEN COALESCE(NULLIF(BTRIM(human_wikidata_qid), ''), NULLIF(BTRIM(wikidata_qid), ''))
+                            WHEN human_resolution_status = 'not_alignable'
+                                THEN NULL
+                            ELSE NULLIF(BTRIM(wikidata_qid), '')
+                        END,
+                        ''
+                    ),
+                    'effective_wikidata_confidence', COALESCE(
+                        CASE
+                            WHEN human_resolution_status IN ('corrected', 'approved', 'added')
+                                THEN 'human'
+                            WHEN human_resolution_status = 'not_alignable'
+                                THEN 'not_alignable'
+                            WHEN NULLIF(BTRIM(wikidata_confidence), '') IS NOT NULL
+                                THEN wikidata_confidence
+                            WHEN NULLIF(BTRIM(wikidata_qid), '') IS NOT NULL
+                                THEN 'linked'
+                            ELSE NULL
+                        END,
+                        ''
+                    ),
+                    'effective_resolution_status', COALESCE(
+                        CASE
+                            WHEN human_resolution_status IN ('corrected', 'approved', 'added', 'not_alignable', 'removed')
+                                THEN human_resolution_status
+                            WHEN NULLIF(BTRIM(wikidata_confidence), '') IS NOT NULL
+                                THEN wikidata_confidence
+                            WHEN NULLIF(BTRIM(wikidata_qid), '') IS NOT NULL
+                                THEN 'linked'
+                            ELSE NULL
+                        END,
+                        ''
+                    ),
+                    'effective_resolution_source', COALESCE(
+                        CASE
+                            WHEN NULLIF(BTRIM(human_resolution_status), '') IS NOT NULL
+                                THEN 'human'
+                            WHEN NULLIF(BTRIM(wikidata_qid), '') IS NOT NULL
+                                 OR NULLIF(BTRIM(wikidata_confidence), '') IS NOT NULL
+                                THEN 'machine'
+                            ELSE NULL
+                        END,
+                        ''
+                    )
+                )
+                ORDER BY
+                    CASE WHEN COALESCE(role, 'entity') = 'source' THEN 0 ELSE 1 END,
+                    COALESCE(noun_type, ''),
+                    lemma_form,
+                    id
+                ) AS proper_nouns
+            FROM proper_nouns
+            GROUP BY lemma_id
+            """
+        )
+        proper_nouns_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
+
     translation_variants_by_lemma = {}
     cur.execute("SELECT to_regclass('public.translation_runs') IS NOT NULL")
     has_translation_runs = bool(cur.fetchone()[0])
@@ -630,6 +716,7 @@ def export_lemmas():
             "canonical_variants": canonical_variants_by_lemma.get(lemma_id, []),
             "canonical_variant_ref": {"kind": "legacy_assembled", "id": "translation"},
             "commentary_entries": commentary_by_lemma.get(lemma_id, []),
+            "proper_nouns": proper_nouns_by_lemma.get(lemma_id, []),
             "blocked_reasons": [risk_by_lemma.get(lemma_id, {}).get("translation_block_reason", "")]
             if risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False)
             else [],

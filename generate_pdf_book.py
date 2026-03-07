@@ -187,7 +187,7 @@ def fetch_index_data(lemma_ids):
     # Fetch proper nouns grouped by type
     cur.execute("""
         SELECT lemma_id, proper_noun, noun_type, role, english_translation
-        FROM proper_nouns
+        FROM effective_proper_nouns
         WHERE lemma_id = ANY(%s)
     """, (lemma_ids,))
 

@@ -43,7 +43,7 @@ def main():
             COUNT(DISTINCT p.lemma_id) as mention_count,
             json_agg(DISTINCT p.citation) FILTER (WHERE p.citation IS NOT NULL AND p.citation != '') as citations,
             json_agg(DISTINCT a.lemma ORDER BY a.lemma) as lemmas
-        FROM proper_nouns p
+        FROM effective_proper_nouns p
         JOIN assembled_lemmas a ON a.id = p.lemma_id
         WHERE p.role = 'source'
           AND p.work_title IS NOT NULL
@@ -57,7 +57,7 @@ def main():
     # Get total count
     cur.execute("""
         SELECT COUNT(DISTINCT work_title)
-        FROM proper_nouns
+        FROM effective_proper_nouns
         WHERE role = 'source' AND work_title IS NOT NULL AND work_title != ''
     """)
     total_works = cur.fetchone()[0]

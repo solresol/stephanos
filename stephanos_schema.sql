@@ -868,6 +868,65 @@ CREATE TABLE public.proper_nouns (
 
 
 --
+-- Name: effective_proper_nouns; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.effective_proper_nouns AS
+ SELECT pn.id,
+    pn.lemma_id,
+    pn.proper_noun,
+    pn.lemma_form,
+    pn.english_translation,
+    pn.created_at,
+    pn.noun_type,
+    pn.role,
+    pn.citation,
+    pn.work_title,
+    pn.wikidata_qid,
+    pn.wikidata_confidence,
+    pn.wikidata_linked_at,
+    pn.wikidata_linked_by,
+    pn.human_wikidata_qid,
+    pn.human_resolution_status,
+    pn.human_resolution_notes,
+    pn.human_resolved_by,
+    pn.human_resolved_at,
+        CASE
+            WHEN (pn.human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(pn.human_wikidata_qid), ''::text)
+            WHEN (pn.human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(pn.human_wikidata_qid), ''::text), NULLIF(btrim(pn.wikidata_qid), ''::text))
+            WHEN (pn.human_resolution_status = 'not_alignable'::text) THEN NULL::text
+            ELSE NULLIF(btrim(pn.wikidata_qid), ''::text)
+        END AS effective_wikidata_qid,
+        CASE
+            WHEN (pn.human_resolution_status = ANY (ARRAY['corrected'::text, 'approved'::text, 'added'::text])) THEN 'human'::text
+            WHEN (pn.human_resolution_status = 'not_alignable'::text) THEN 'not_alignable'::text
+            WHEN (NULLIF(btrim(pn.wikidata_confidence), ''::text) IS NOT NULL) THEN pn.wikidata_confidence
+            WHEN (NULLIF(btrim(pn.wikidata_qid), ''::text) IS NOT NULL) THEN 'linked'::text
+            ELSE NULL::text
+        END AS effective_wikidata_confidence,
+        CASE
+            WHEN (pn.human_resolution_status = ANY (ARRAY['corrected'::text, 'approved'::text, 'added'::text, 'not_alignable'::text])) THEN pn.human_resolution_status
+            WHEN (NULLIF(btrim(pn.wikidata_confidence), ''::text) IS NOT NULL) THEN pn.wikidata_confidence
+            WHEN (NULLIF(btrim(pn.wikidata_qid), ''::text) IS NOT NULL) THEN 'linked'::text
+            ELSE NULL::text
+        END AS effective_resolution_status,
+        CASE
+            WHEN (NULLIF(btrim(pn.human_resolution_status), ''::text) IS NOT NULL) THEN 'human'::text
+            WHEN ((NULLIF(btrim(pn.wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(pn.wikidata_confidence), ''::text) IS NOT NULL)) THEN 'machine'::text
+            ELSE NULL::text
+        END AS effective_resolution_source,
+    COALESCE(NULLIF(btrim(pn.human_resolution_notes), ''::text), NULL::text) AS effective_resolution_notes,
+    COALESCE(NULLIF(btrim(pn.human_resolved_by), ''::text), NULLIF(btrim(pn.wikidata_linked_by), ''::text)) AS effective_resolved_by,
+    COALESCE(pn.human_resolved_at, pn.wikidata_linked_at) AS effective_resolved_at,
+        CASE
+            WHEN (pn.human_resolution_status = 'not_alignable'::text) THEN false
+            ELSE true
+        END AS needs_alignment
+   FROM public.proper_nouns pn
+  WHERE (COALESCE(pn.human_resolution_status, ''::text) <> 'removed'::text);
+
+
+--
 -- Name: proper_nouns_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 

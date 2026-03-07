@@ -59,6 +59,14 @@ func main() {
 	commentaryPhraseText := strings.TrimSpace(formData.Get("commentary_phrase_text"))
 	commentaryText := strings.TrimSpace(formData.Get("commentary_text"))
 	commentarySourceTextVersionID := strings.TrimSpace(formData.Get("commentary_source_text_version_id"))
+	entityAction := strings.TrimSpace(strings.ToLower(formData.Get("entity_action")))
+	properNounIDStr := strings.TrimSpace(formData.Get("proper_noun_id"))
+	entityQID := strings.TrimSpace(formData.Get("entity_qid"))
+	entityTextForm := strings.TrimSpace(formData.Get("entity_text_form"))
+	entityLemmaForm := strings.TrimSpace(formData.Get("entity_lemma_form"))
+	entityEnglish := strings.TrimSpace(formData.Get("entity_english"))
+	entityType := strings.TrimSpace(formData.Get("entity_type"))
+	entityRole := strings.TrimSpace(formData.Get("entity_role"))
 	action := formData.Get("action") // "stay" or "continue" (default)
 	remoteUser := os.Getenv("REMOTE_USER")
 	setCanonical := setCanonicalRaw == "1" || strings.EqualFold(setCanonicalRaw, "true") || strings.EqualFold(setCanonicalRaw, "on")
@@ -73,6 +81,56 @@ func main() {
 	lemmaID, err := strconv.Atoi(lemmaIDStr)
 	if err != nil {
 		showErrorAndExit("Invalid lemma ID")
+		return
+	}
+
+	if formMode == "entity" {
+		config := GetConfig()
+		db, err := OpenDatabase(config.DBPath)
+		if err != nil {
+			showErrorAndExit(fmt.Sprintf("Failed to open database: %v", err))
+			return
+		}
+		defer db.Close()
+
+		properNounID := 0
+		if properNounIDStr != "" {
+			properNounID, err = strconv.Atoi(properNounIDStr)
+			if err != nil {
+				showErrorAndExit("Invalid proper noun ID")
+				return
+			}
+		}
+
+		if entityAction != "" {
+			err = InsertEntityResolutionAction(
+				db,
+				lemmaID,
+				properNounID,
+				entityAction,
+				entityQID,
+				entityTextForm,
+				entityLemmaForm,
+				entityEnglish,
+				entityType,
+				entityRole,
+				notes,
+				remoteUser,
+			)
+			if err != nil {
+				showErrorAndExit(fmt.Sprintf("Failed to save entity action: %v", err))
+				return
+			}
+		}
+
+		writeRedirect(lemmaID)
+		log.Printf(
+			"Entity action saved: lemma_id=%d, proper_noun_id=%d, action=%s, user=%s",
+			lemmaID,
+			properNounID,
+			entityAction,
+			remoteUser,
+		)
 		return
 	}
 

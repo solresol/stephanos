@@ -208,11 +208,12 @@ def export_entities(conn, output_dir):
             pn.noun_type,
             pn.role,
             pn.lemma_id,
-            pn.wikidata_qid,
+            pn.effective_wikidata_qid,
+            pn.effective_resolution_source,
             pn.english_translation,
             al.billerbeck_id,
             al.lemma as source_lemma
-        FROM proper_nouns pn
+        FROM effective_proper_nouns pn
         JOIN assembled_lemmas al ON pn.lemma_id = al.id
         WHERE pn.role = 'entity'  -- Exclude sources (authors) for now
         ORDER BY pn.noun_type, pn.proper_noun
@@ -221,7 +222,7 @@ def export_entities(conn, output_dir):
     # Group by (proper_noun, noun_type, billerbeck_id) for deduplication
     entity_groups = defaultdict(list)
     for row in cur.fetchall():
-        pn_id, proper_noun, noun_type, role, lemma_id, wikidata, english, billerbeck_id, source_lemma = row
+        pn_id, proper_noun, noun_type, role, lemma_id, wikidata, resolution_source, english, billerbeck_id, source_lemma = row
         # Key includes billerbeck_id to keep entries distinct
         key = (proper_noun, noun_type, billerbeck_id or f"lemma_{lemma_id}")
         entity_groups[key].append({
@@ -230,6 +231,7 @@ def export_entities(conn, output_dir):
             'noun_type': noun_type,
             'lemma_id': lemma_id,
             'wikidata_qid': wikidata,
+            'resolution_source': resolution_source,
             'english': english,
             'billerbeck_id': billerbeck_id,
             'source_lemma': source_lemma,
@@ -251,7 +253,12 @@ def export_entities(conn, output_dir):
             first = mentions[0]
 
             # Collect all wikidata QIDs (take first non-null)
-            wikidata = next((m['wikidata_qid'] for m in mentions if m['wikidata_qid']), None)
+            wikidata = next(
+                (m['wikidata_qid'] for m in mentions if m['resolution_source'] == 'human' and m['wikidata_qid']),
+                None,
+            )
+            if not wikidata:
+                wikidata = next((m['wikidata_qid'] for m in mentions if m['wikidata_qid']), None)
 
             # Collect all proper_noun IDs for this entity
             pn_ids = [str(m['pn_id']) for m in mentions]
@@ -285,15 +292,16 @@ def export_authors(conn, output_dir):
             pn.proper_noun,
             pn.citation,
             pn.work_title,
-            pn.wikidata_qid,
+            pn.effective_wikidata_qid,
+            pn.effective_resolution_source,
             pn.lemma_id,
             al.billerbeck_id,
             COUNT(*) as citation_count
-        FROM proper_nouns pn
+        FROM effective_proper_nouns pn
         JOIN assembled_lemmas al ON pn.lemma_id = al.id
         WHERE pn.role = 'source'
-        GROUP BY pn.proper_noun, pn.citation, pn.work_title, pn.wikidata_qid,
-                 pn.lemma_id, al.billerbeck_id
+        GROUP BY pn.proper_noun, pn.citation, pn.work_title, pn.effective_wikidata_qid,
+                 pn.effective_resolution_source, pn.lemma_id, al.billerbeck_id
         ORDER BY pn.proper_noun
     """)
 
@@ -305,7 +313,7 @@ def export_authors(conn, output_dir):
     })
 
     for row in cur.fetchall():
-        author_name, citation, work_title, wikidata, lemma_id, billerbeck_id, count = row
+        author_name, citation, work_title, wikidata, resolution_source, lemma_id, billerbeck_id, count = row
         authors[author_name]['citations'].append({
             'citation': citation,
             'work_title': work_title,
@@ -313,7 +321,9 @@ def export_authors(conn, output_dir):
             'billerbeck_id': billerbeck_id,
             'count': count,
         })
-        if wikidata:
+        if resolution_source == 'human' and wikidata:
+            authors[author_name]['wikidata'] = wikidata
+        elif wikidata and not authors[author_name]['wikidata']:
             authors[author_name]['wikidata'] = wikidata
         if work_title:
             authors[author_name]['works'].add(work_title)
@@ -356,7 +366,7 @@ def export_works(conn, output_dir, authors_data):
             pn.proper_noun as author,
             pn.work_title,
             pn.citation
-        FROM proper_nouns pn
+        FROM effective_proper_nouns pn
         WHERE pn.role = 'source'
         AND (pn.work_title IS NOT NULL OR pn.citation IS NOT NULL)
         ORDER BY pn.proper_noun, pn.work_title
@@ -428,7 +438,7 @@ def export_entry_entity_mentions(conn, output_dir):
             pn.role,
             pn.lemma_form,
             pn.english_translation
-        FROM proper_nouns pn
+        FROM effective_proper_nouns pn
         JOIN assembled_lemmas al ON pn.lemma_id = al.id
         WHERE pn.role = 'entity'
         ORDER BY al.billerbeck_id, pn.proper_noun
@@ -463,7 +473,7 @@ def export_entry_citations(conn, output_dir):
             pn.proper_noun as author,
             pn.work_title,
             pn.citation
-        FROM proper_nouns pn
+        FROM effective_proper_nouns pn
         JOIN assembled_lemmas al ON pn.lemma_id = al.id
         WHERE pn.role = 'source'
         ORDER BY al.billerbeck_id, pn.proper_noun
@@ -521,7 +531,7 @@ def export_aliases(conn, output_dir):
             pn.noun_type as entity_type,
             al.billerbeck_id
         FROM proper_noun_aliases pa
-        JOIN proper_nouns pn ON pa.proper_noun_id = pn.id
+        JOIN effective_proper_nouns pn ON pa.proper_noun_id = pn.id
         LEFT JOIN assembled_lemmas al ON pa.source_lemma_id = al.id
         ORDER BY pn.proper_noun, pa.alias
     """)

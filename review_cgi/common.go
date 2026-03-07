@@ -45,6 +45,30 @@ type CommentaryEntry struct {
 	LocalOnly           bool   `json:"local_only,omitempty"`
 }
 
+type ProperNoun struct {
+	ID                          int    `json:"id"`
+	TextForm                    string `json:"text_form"`
+	LemmaForm                   string `json:"lemma_form"`
+	English                     string `json:"english"`
+	Type                        string `json:"type"`
+	Role                        string `json:"role"`
+	Citation                    string `json:"citation"`
+	WorkTitle                   string `json:"work_title"`
+	WikidataQID                 string `json:"wikidata_qid"`
+	WikidataConfidence          string `json:"wikidata_confidence"`
+	HumanWikidataQID            string `json:"human_wikidata_qid"`
+	HumanResolutionStatus       string `json:"human_resolution_status"`
+	HumanResolutionNotes        string `json:"human_resolution_notes"`
+	HumanResolvedBy             string `json:"human_resolved_by"`
+	HumanResolvedAt             string `json:"human_resolved_at"`
+	EffectiveWikidataQID        string `json:"effective_wikidata_qid"`
+	EffectiveWikidataConfidence string `json:"effective_wikidata_confidence"`
+	EffectiveResolutionStatus   string `json:"effective_resolution_status"`
+	EffectiveResolutionSource   string `json:"effective_resolution_source"`
+	LocalOnly                   bool   `json:"local_only,omitempty"`
+	PendingImport               bool   `json:"pending_import,omitempty"`
+}
+
 // Lemma represents a single lemma entry from the JSON export
 type Lemma struct {
 	ID                            int                      `json:"id"`
@@ -88,6 +112,7 @@ type Lemma struct {
 	MeinekeOCRMainTextLines       []SourceLine             `json:"meineke_ocr_main_text_lines"`
 	MeinekeOCRApparatus           []ApparatusEntry         `json:"meineke_ocr_apparatus"`
 	CommentaryEntries             []CommentaryEntry        `json:"commentary_entries"`
+	ProperNouns                   []ProperNoun             `json:"proper_nouns"`
 	Letter                        string                   `json:"letter"`
 	SortOrder                     int                      `json:"sort_order"`
 }
@@ -223,6 +248,22 @@ func OpenDatabase(dbPath string) (*sql.DB, error) {
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
 		"CREATE INDEX IF NOT EXISTS idx_commentary_entries_lemma ON commentary_entries(lemma_id, updated_at, id)",
+		`CREATE TABLE IF NOT EXISTS entity_resolution_actions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			lemma_id INTEGER NOT NULL,
+			proper_noun_id INTEGER,
+			action TEXT NOT NULL CHECK (action IN ('set_qid', 'not_alignable', 'removed', 'approved', 'clear_override', 'add_entity')),
+			qid TEXT,
+			text_form TEXT,
+			lemma_form TEXT,
+			english TEXT,
+			noun_type TEXT,
+			role TEXT DEFAULT 'entity',
+			notes TEXT,
+			reviewer_username TEXT,
+			reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		"CREATE INDEX IF NOT EXISTS idx_entity_actions_lemma ON entity_resolution_actions(lemma_id, reviewed_at, id)",
 	}
 	for _, migration := range migrations {
 		db.Exec(migration) // Ignore errors (column may already exist)
@@ -245,6 +286,21 @@ type CanonicalAction struct {
 	Reviewer    string
 	ReviewedAt  string
 	Notes       string
+}
+
+type EntityResolutionAction struct {
+	ID           int
+	ProperNounID int
+	Action       string
+	QID          string
+	TextForm     string
+	LemmaForm    string
+	English      string
+	NounType     string
+	Role         string
+	Notes        string
+	Reviewer     string
+	ReviewedAt   string
 }
 
 func mapStringValue(m map[string]interface{}, key string) string {
@@ -532,6 +588,355 @@ func AnnotateTranslationVariants(lemma *Lemma, memberships []CanonicalMembership
 			v["primary"] = false
 		}
 	}
+}
+
+func normalizeEntityRole(role string) string {
+	role = strings.TrimSpace(strings.ToLower(role))
+	if role == "source" {
+		return "source"
+	}
+	return "entity"
+}
+
+func normalizeHumanResolutionStatus(status string) string {
+	status = strings.TrimSpace(strings.ToLower(status))
+	switch status {
+	case "approved", "corrected", "not_alignable", "removed", "added":
+		return status
+	default:
+		return ""
+	}
+}
+
+func recomputeProperNounResolution(pn *ProperNoun) {
+	if pn == nil {
+		return
+	}
+
+	pn.TextForm = strings.TrimSpace(pn.TextForm)
+	pn.LemmaForm = strings.TrimSpace(pn.LemmaForm)
+	pn.English = strings.TrimSpace(pn.English)
+	pn.Type = strings.TrimSpace(pn.Type)
+	pn.Role = normalizeEntityRole(pn.Role)
+	pn.Citation = strings.TrimSpace(pn.Citation)
+	pn.WorkTitle = strings.TrimSpace(pn.WorkTitle)
+	pn.WikidataQID = strings.TrimSpace(pn.WikidataQID)
+	pn.WikidataConfidence = strings.TrimSpace(pn.WikidataConfidence)
+	pn.HumanWikidataQID = strings.TrimSpace(pn.HumanWikidataQID)
+	pn.HumanResolutionStatus = normalizeHumanResolutionStatus(pn.HumanResolutionStatus)
+	pn.HumanResolutionNotes = strings.TrimSpace(pn.HumanResolutionNotes)
+	pn.HumanResolvedBy = strings.TrimSpace(pn.HumanResolvedBy)
+	pn.HumanResolvedAt = strings.TrimSpace(pn.HumanResolvedAt)
+
+	pn.EffectiveWikidataQID = ""
+	pn.EffectiveWikidataConfidence = ""
+	pn.EffectiveResolutionStatus = ""
+	pn.EffectiveResolutionSource = ""
+
+	switch pn.HumanResolutionStatus {
+	case "corrected", "added":
+		pn.EffectiveWikidataQID = pn.HumanWikidataQID
+		pn.EffectiveWikidataConfidence = "human"
+		pn.EffectiveResolutionStatus = pn.HumanResolutionStatus
+		pn.EffectiveResolutionSource = "human"
+	case "approved":
+		if pn.HumanWikidataQID != "" {
+			pn.EffectiveWikidataQID = pn.HumanWikidataQID
+		} else {
+			pn.EffectiveWikidataQID = pn.WikidataQID
+		}
+		pn.EffectiveWikidataConfidence = "human"
+		pn.EffectiveResolutionStatus = "approved"
+		pn.EffectiveResolutionSource = "human"
+	case "not_alignable":
+		pn.EffectiveWikidataConfidence = "not_alignable"
+		pn.EffectiveResolutionStatus = "not_alignable"
+		pn.EffectiveResolutionSource = "human"
+	case "removed":
+		pn.EffectiveWikidataConfidence = "removed"
+		pn.EffectiveResolutionStatus = "removed"
+		pn.EffectiveResolutionSource = "human"
+	default:
+		pn.EffectiveWikidataQID = pn.WikidataQID
+		if pn.WikidataConfidence != "" {
+			pn.EffectiveWikidataConfidence = pn.WikidataConfidence
+			pn.EffectiveResolutionStatus = pn.WikidataConfidence
+		} else if pn.WikidataQID != "" {
+			pn.EffectiveWikidataConfidence = "linked"
+			pn.EffectiveResolutionStatus = "linked"
+		}
+		if pn.WikidataQID != "" || pn.WikidataConfidence != "" {
+			pn.EffectiveResolutionSource = "machine"
+		}
+	}
+}
+
+func importedAddMatchesAction(pn ProperNoun, action EntityResolutionAction) bool {
+	if normalizeHumanResolutionStatus(pn.HumanResolutionStatus) != "added" {
+		return false
+	}
+	if strings.TrimSpace(pn.TextForm) != strings.TrimSpace(action.TextForm) {
+		return false
+	}
+	if strings.TrimSpace(pn.LemmaForm) != strings.TrimSpace(action.LemmaForm) {
+		return false
+	}
+	if strings.TrimSpace(pn.English) != strings.TrimSpace(action.English) {
+		return false
+	}
+	if strings.TrimSpace(pn.Type) != strings.TrimSpace(action.NounType) {
+		return false
+	}
+	if normalizeEntityRole(pn.Role) != normalizeEntityRole(action.Role) {
+		return false
+	}
+	return strings.TrimSpace(pn.HumanWikidataQID) == strings.TrimSpace(action.QID)
+}
+
+func FetchEntityResolutionActions(db *sql.DB, lemmaID int) ([]EntityResolutionAction, error) {
+	if db == nil || lemmaID <= 0 {
+		return nil, nil
+	}
+	rows, err := db.Query(
+		`
+		SELECT
+			id,
+			proper_noun_id,
+			COALESCE(action, ''),
+			COALESCE(qid, ''),
+			COALESCE(text_form, ''),
+			COALESCE(lemma_form, ''),
+			COALESCE(english, ''),
+			COALESCE(noun_type, ''),
+			COALESCE(role, 'entity'),
+			COALESCE(notes, ''),
+			COALESCE(reviewer_username, ''),
+			COALESCE(reviewed_at, '')
+		FROM entity_resolution_actions
+		WHERE lemma_id = ?
+		ORDER BY reviewed_at ASC, id ASC
+		`,
+		lemmaID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load entity actions: %w", err)
+	}
+	defer rows.Close()
+
+	var actions []EntityResolutionAction
+	for rows.Next() {
+		var action EntityResolutionAction
+		var properNounID sql.NullInt64
+		if err := rows.Scan(
+			&action.ID,
+			&properNounID,
+			&action.Action,
+			&action.QID,
+			&action.TextForm,
+			&action.LemmaForm,
+			&action.English,
+			&action.NounType,
+			&action.Role,
+			&action.Notes,
+			&action.Reviewer,
+			&action.ReviewedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan entity action: %w", err)
+		}
+		if properNounID.Valid {
+			action.ProperNounID = int(properNounID.Int64)
+		}
+		action.Action = strings.TrimSpace(strings.ToLower(action.Action))
+		action.Role = normalizeEntityRole(action.Role)
+		actions = append(actions, action)
+	}
+	return actions, rows.Err()
+}
+
+func InsertEntityResolutionAction(
+	db *sql.DB,
+	lemmaID int,
+	properNounID int,
+	action string,
+	qid string,
+	textForm string,
+	lemmaForm string,
+	english string,
+	nounType string,
+	role string,
+	notes string,
+	username string,
+) error {
+	if db == nil || lemmaID <= 0 {
+		return nil
+	}
+
+	action = strings.TrimSpace(strings.ToLower(action))
+	qid = strings.TrimSpace(qid)
+	textForm = strings.TrimSpace(textForm)
+	lemmaForm = strings.TrimSpace(lemmaForm)
+	english = strings.TrimSpace(english)
+	nounType = strings.TrimSpace(nounType)
+	role = normalizeEntityRole(role)
+	notes = strings.TrimSpace(notes)
+
+	valid := map[string]bool{
+		"set_qid":        true,
+		"approved":       true,
+		"not_alignable":  true,
+		"removed":        true,
+		"clear_override": true,
+		"add_entity":     true,
+	}
+	if !valid[action] {
+		return nil
+	}
+	if action == "set_qid" && qid == "" {
+		return nil
+	}
+	if action == "add_entity" {
+		if textForm == "" || lemmaForm == "" {
+			return nil
+		}
+		if nounType == "" {
+			nounType = "other"
+		}
+		properNounID = 0
+	} else if properNounID <= 0 {
+		return nil
+	}
+
+	var properNounValue interface{}
+	if properNounID > 0 {
+		properNounValue = properNounID
+	}
+
+	_, err := db.Exec(
+		`
+		INSERT INTO entity_resolution_actions (
+			lemma_id,
+			proper_noun_id,
+			action,
+			qid,
+			text_form,
+			lemma_form,
+			english,
+			noun_type,
+			role,
+			notes,
+			reviewer_username
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+		lemmaID,
+		properNounValue,
+		action,
+		qid,
+		textForm,
+		lemmaForm,
+		english,
+		nounType,
+		role,
+		notes,
+		username,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to insert entity action: %w", err)
+	}
+	return nil
+}
+
+func ApplyEntityResolutionActions(baseline []ProperNoun, actions []EntityResolutionAction) []ProperNoun {
+	resolved := make([]ProperNoun, len(baseline))
+	copy(resolved, baseline)
+
+	indexByID := map[int]int{}
+	for i := range resolved {
+		resolved[i].LocalOnly = false
+		resolved[i].PendingImport = false
+		recomputeProperNounResolution(&resolved[i])
+		if resolved[i].ID > 0 {
+			indexByID[resolved[i].ID] = i
+		}
+	}
+
+	for _, action := range actions {
+		switch action.Action {
+		case "add_entity":
+			alreadyImported := false
+			for _, existing := range resolved {
+				if importedAddMatchesAction(existing, action) {
+					alreadyImported = true
+					break
+				}
+			}
+			if alreadyImported {
+				continue
+			}
+			pn := ProperNoun{
+				ID:                    -action.ID,
+				TextForm:              action.TextForm,
+				LemmaForm:             action.LemmaForm,
+				English:               action.English,
+				Type:                  action.NounType,
+				Role:                  action.Role,
+				HumanWikidataQID:      action.QID,
+				HumanResolutionStatus: "added",
+				HumanResolutionNotes:  action.Notes,
+				HumanResolvedBy:       action.Reviewer,
+				HumanResolvedAt:       action.ReviewedAt,
+				LocalOnly:             true,
+				PendingImport:         true,
+			}
+			recomputeProperNounResolution(&pn)
+			resolved = append(resolved, pn)
+		case "set_qid", "approved", "not_alignable", "removed", "clear_override":
+			idx, ok := indexByID[action.ProperNounID]
+			if !ok {
+				continue
+			}
+			pn := &resolved[idx]
+			pn.PendingImport = true
+			switch action.Action {
+			case "set_qid":
+				pn.HumanWikidataQID = action.QID
+				pn.HumanResolutionStatus = "corrected"
+				pn.HumanResolutionNotes = action.Notes
+				pn.HumanResolvedBy = action.Reviewer
+				pn.HumanResolvedAt = action.ReviewedAt
+			case "approved":
+				if action.QID != "" {
+					pn.HumanWikidataQID = action.QID
+				} else if pn.HumanWikidataQID == "" {
+					pn.HumanWikidataQID = pn.EffectiveWikidataQID
+				}
+				pn.HumanResolutionStatus = "approved"
+				pn.HumanResolutionNotes = action.Notes
+				pn.HumanResolvedBy = action.Reviewer
+				pn.HumanResolvedAt = action.ReviewedAt
+			case "not_alignable":
+				pn.HumanWikidataQID = ""
+				pn.HumanResolutionStatus = "not_alignable"
+				pn.HumanResolutionNotes = action.Notes
+				pn.HumanResolvedBy = action.Reviewer
+				pn.HumanResolvedAt = action.ReviewedAt
+			case "removed":
+				pn.HumanWikidataQID = ""
+				pn.HumanResolutionStatus = "removed"
+				pn.HumanResolutionNotes = action.Notes
+				pn.HumanResolvedBy = action.Reviewer
+				pn.HumanResolvedAt = action.ReviewedAt
+			case "clear_override":
+				pn.HumanWikidataQID = ""
+				pn.HumanResolutionStatus = ""
+				pn.HumanResolutionNotes = ""
+				pn.HumanResolvedBy = ""
+				pn.HumanResolvedAt = ""
+			}
+			recomputeProperNounResolution(pn)
+		}
+	}
+
+	return resolved
 }
 
 func commentaryMarker(entryKey string) string {

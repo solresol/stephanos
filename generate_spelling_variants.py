@@ -151,7 +151,7 @@ def main():
     # Get all proper nouns with English translations
     cur.execute("""
         SELECT DISTINCT id, english_translation
-        FROM proper_nouns
+        FROM effective_proper_nouns
         WHERE english_translation IS NOT NULL
         AND english_translation != ''
         ORDER BY id

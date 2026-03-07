@@ -346,6 +346,7 @@ def get_sources_to_process(
                 MAX(p.wikidata_linked_at) as wikidata_linked_at
             FROM proper_nouns p
             WHERE p.role = 'source'
+              AND COALESCE(p.human_resolution_status, '') = ''
             GROUP BY p.lemma_form, p.english_translation
         )
         SELECT
@@ -389,6 +390,7 @@ def update_wikidata_link(
             WHERE lemma_form = %s
               AND (english_translation = %s OR (english_translation IS NULL AND %s IS NULL))
               AND role = 'source'
+              AND COALESCE(human_resolution_status, '') = ''
             """,
             (qid, confidence, now, linked_by, lemma_form, english, english),
         )
@@ -402,6 +404,7 @@ def update_wikidata_link(
             WHERE lemma_form = %s
               AND (english_translation = %s OR (english_translation IS NULL AND %s IS NULL))
               AND role = 'source'
+              AND COALESCE(human_resolution_status, '') = ''
             """,
             (qid, confidence, now, lemma_form, english, english),
         )
