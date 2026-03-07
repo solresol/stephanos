@@ -20,55 +20,7 @@ def get_progress_stats(conn) -> dict:
     cur = conn.cursor()
     stats = {}
 
-    # 1. Image OCR processing
-    cur.execute("""
-        SELECT
-            COUNT(*) as total,
-            COUNT(CASE WHEN processed = 1 THEN 1 END) as processed,
-            COUNT(CASE WHEN processed = 0 THEN 1 END) as pending
-        FROM images
-    """)
-    row = cur.fetchone()
-    stats["ocr"] = {
-        "name": "Image OCR",
-        "total": row[0],
-        "completed": row[1],
-        "pending": row[2],
-        "unit": "images",
-    }
-
-    # OCR processing rate (last 7 days)
-    cur.execute("""
-        SELECT COUNT(*) FROM images
-        WHERE processed = 1
-          AND processed_at > NOW() - INTERVAL '7 days'
-    """)
-    stats["ocr"]["rate_7d"] = cur.fetchone()[0]
-
-    # 2. Lemma assembly
-    cur.execute("""
-        SELECT
-            COUNT(*) as total,
-            COUNT(CASE WHEN greek_text IS NOT NULL AND greek_text != '' THEN 1 END) as with_text
-        FROM assembled_lemmas
-    """)
-    row = cur.fetchone()
-    stats["assembly"] = {
-        "name": "Lemma Assembly",
-        "total": row[0],
-        "completed": row[1],
-        "pending": row[0] - row[1],
-        "unit": "lemmas",
-    }
-
-    # Assembly rate (new/inserted rows in last 7 days).
-    cur.execute("""
-        SELECT COUNT(*) FROM assembled_lemmas
-        WHERE created_at > NOW() - INTERVAL '7 days'
-    """)
-    stats["assembly"]["rate_7d"] = cur.fetchone()[0]
-
-    # 3. Translation
+    # 1. Translation
     cur.execute("""
         SELECT
             COUNT(*) as total,
@@ -80,18 +32,20 @@ def get_progress_stats(conn) -> dict:
     """)
     row = cur.fetchone()
     total_with_billerbeck = row[0]
+    translated_total = row[1]
     stats["translation_ai"] = {
         "name": "AI Translation",
         "total": total_with_billerbeck,
-        "completed": row[1],
-        "pending": total_with_billerbeck - row[1],
+        "completed": translated_total,
+        "pending": total_with_billerbeck - translated_total,
         "unit": "entries",
     }
+    human_reviewed_total = row[2] + row[3]
     stats["translation_human"] = {
         "name": "Human Review",
-        "total": total_with_billerbeck,
-        "completed": row[2] + row[3],  # reviewed or edited
-        "pending": total_with_billerbeck - row[2] - row[3],
+        "total": translated_total,
+        "completed": min(human_reviewed_total, translated_total),  # reviewed or edited
+        "pending": max(translated_total - human_reviewed_total, 0),
         "unit": "entries",
     }
 
@@ -114,6 +68,58 @@ def get_progress_stats(conn) -> dict:
           )
     """)
     stats["translation_human"]["rate_7d"] = cur.fetchone()[0]
+
+    # 2. Proper noun extraction
+    cur.execute("""
+        SELECT
+            COUNT(*) as total,
+            COUNT(CASE WHEN proper_nouns_analyzed = true THEN 1 END) as analyzed
+        FROM assembled_lemmas
+        WHERE greek_text IS NOT NULL AND greek_text != ''
+    """)
+    row = cur.fetchone()
+    stats["proper_nouns"] = {
+        "name": "Proper Noun Extraction",
+        "total": row[0],
+        "completed": row[1],
+        "pending": row[0] - row[1],
+        "unit": "lemmas",
+    }
+
+    cur.execute("""
+        SELECT COUNT(*) FROM assembled_lemmas
+        WHERE proper_nouns_analyzed_at > NOW() - INTERVAL '7 days'
+    """)
+    stats["proper_nouns"]["rate_7d"] = cur.fetchone()[0]
+
+    # 3. Structured source-citation extraction
+    cur.execute("""
+        SELECT COUNT(DISTINCT lemma_id)
+        FROM effective_proper_nouns
+        WHERE role = 'source'
+    """)
+    source_lemma_total = cur.fetchone()[0]
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT lemma_id)
+        FROM lemma_source_citation_mentions
+    """)
+    source_lemma_completed = cur.fetchone()[0]
+
+    stats["source_citations"] = {
+        "name": "Structured Source Citations",
+        "total": source_lemma_total,
+        "completed": min(source_lemma_completed, source_lemma_total),
+        "pending": max(source_lemma_total - source_lemma_completed, 0),
+        "unit": "lemmas",
+    }
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT lemma_id)
+        FROM lemma_source_citation_mentions
+        WHERE created_at > NOW() - INTERVAL '7 days'
+    """)
+    stats["source_citations"]["rate_7d"] = cur.fetchone()[0]
 
     # 4. Wikidata linking - sources
     cur.execute("""
@@ -139,51 +145,28 @@ def get_progress_stats(conn) -> dict:
     """)
     stats["wikidata_sources"]["rate_7d"] = cur.fetchone()[0]
 
-    # 4b. Human review of named-entity resolutions
+    # 5. Etymology extraction
     cur.execute("""
         SELECT
             COUNT(*) as total,
-            COUNT(CASE WHEN human_resolution_status IS NOT NULL THEN 1 END) as reviewed
-        FROM proper_nouns
-    """)
-    row = cur.fetchone()
-    stats["entity_resolution_human"] = {
-        "name": "Human Entity Review",
-        "total": row[0],
-        "completed": row[1],
-        "pending": row[0] - row[1],
-        "unit": "mentions",
-    }
-
-    cur.execute("""
-        SELECT COUNT(*) FROM proper_nouns
-        WHERE human_resolved_at > NOW() - INTERVAL '7 days'
-    """)
-    stats["entity_resolution_human"]["rate_7d"] = cur.fetchone()[0]
-
-    # 5. Wikidata linking - places
-    cur.execute("""
-        SELECT
-            COUNT(*) as total,
-            COUNT(CASE WHEN wikidata_place_qid IS NOT NULL THEN 1 END) as linked
+            COUNT(CASE WHEN etymologies_analyzed = true THEN 1 END) as analyzed
         FROM assembled_lemmas
-        WHERE type IN ('place', 'city', 'region', 'island', 'country', 'village',
-                       'mountain', 'river', 'lake', 'spring', 'promontory', 'fortress')
+        WHERE greek_text IS NOT NULL AND greek_text != ''
     """)
     row = cur.fetchone()
-    stats["wikidata_places"] = {
-        "name": "Wikidata Places",
+    stats["etymologies"] = {
+        "name": "Etymology Extraction",
         "total": row[0],
         "completed": row[1],
         "pending": row[0] - row[1],
-        "unit": "places",
+        "unit": "lemmas",
     }
 
     cur.execute("""
         SELECT COUNT(*) FROM assembled_lemmas
-        WHERE wikidata_place_linked_at > NOW() - INTERVAL '7 days'
+        WHERE etymologies_analyzed_at > NOW() - INTERVAL '7 days'
     """)
-    stats["wikidata_places"]["rate_7d"] = cur.fetchone()[0]
+    stats["etymologies"]["rate_7d"] = cur.fetchone()[0]
 
     # 6. Alias extraction
     cur.execute("""
@@ -208,53 +191,192 @@ def get_progress_stats(conn) -> dict:
     """)
     stats["aliases"]["rate_7d"] = cur.fetchone()[0]
 
-    # 7. Etymology extraction
+    # 7. Spelling variant generation
+    cur.execute("""
+        SELECT COUNT(DISTINCT id)
+        FROM effective_proper_nouns
+        WHERE COALESCE(english_translation, '') != ''
+    """)
+    spelling_total = cur.fetchone()[0]
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT proper_noun_id)
+        FROM proper_noun_aliases
+        WHERE alias_type = 'spelling_variant'
+    """)
+    spelling_completed = cur.fetchone()[0]
+
+    stats["spelling_variants"] = {
+        "name": "Spelling Variants",
+        "total": spelling_total,
+        "completed": min(spelling_completed, spelling_total),
+        "pending": max(spelling_total - spelling_completed, 0),
+        "unit": "entities",
+    }
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT proper_noun_id)
+        FROM proper_noun_aliases
+        WHERE alias_type = 'spelling_variant'
+          AND created_at > NOW() - INTERVAL '7 days'
+    """)
+    stats["spelling_variants"]["rate_7d"] = cur.fetchone()[0]
+
+    # 8. Human review of named-entity resolutions
     cur.execute("""
         SELECT
             COUNT(*) as total,
-            COUNT(CASE WHEN etymologies_analyzed = true THEN 1 END) as analyzed
-        FROM assembled_lemmas
-        WHERE greek_text IS NOT NULL AND greek_text != ''
+            COUNT(CASE WHEN human_resolution_status IS NOT NULL THEN 1 END) as reviewed
+        FROM proper_nouns
     """)
     row = cur.fetchone()
-    stats["etymologies"] = {
-        "name": "Etymology Extraction",
+    stats["entity_resolution_human"] = {
+        "name": "Human Entity Review",
         "total": row[0],
         "completed": row[1],
         "pending": row[0] - row[1],
-        "unit": "lemmas",
+        "unit": "mentions",
+    }
+
+    cur.execute("""
+        SELECT COUNT(*) FROM proper_nouns
+        WHERE human_resolved_at > NOW() - INTERVAL '7 days'
+    """)
+    stats["entity_resolution_human"]["rate_7d"] = cur.fetchone()[0]
+
+    # 9. Wikidata linking - places
+    cur.execute("""
+        SELECT
+            COUNT(*) as total,
+            COUNT(CASE WHEN wikidata_place_qid IS NOT NULL THEN 1 END) as linked
+        FROM assembled_lemmas
+        WHERE type IN ('place', 'city', 'region', 'island', 'country', 'village',
+                       'mountain', 'river', 'lake', 'spring', 'promontory', 'fortress')
+    """)
+    row = cur.fetchone()
+    stats["wikidata_places"] = {
+        "name": "Wikidata Places",
+        "total": row[0],
+        "completed": row[1],
+        "pending": row[0] - row[1],
+        "unit": "places",
     }
 
     cur.execute("""
         SELECT COUNT(*) FROM assembled_lemmas
-        WHERE etymologies_analyzed_at > NOW() - INTERVAL '7 days'
+        WHERE wikidata_place_linked_at > NOW() - INTERVAL '7 days'
     """)
-    stats["etymologies"]["rate_7d"] = cur.fetchone()[0]
+    stats["wikidata_places"]["rate_7d"] = cur.fetchone()[0]
 
-    # 8. Proper noun extraction
+    # 10. Meineke difference analysis
     cur.execute("""
         SELECT
             COUNT(*) as total,
-            COUNT(CASE WHEN proper_nouns_analyzed = true THEN 1 END) as analyzed
-        FROM assembled_lemmas
-        WHERE greek_text IS NOT NULL AND greek_text != ''
+            COUNT(CASE WHEN analyzed_at IS NOT NULL THEN 1 END) as analyzed
+        FROM meineke_text_differences
+        WHERE normalized_class = 'different'
     """)
     row = cur.fetchone()
-    stats["proper_nouns"] = {
-        "name": "Proper Noun Extraction",
+    stats["meineke_differences"] = {
+        "name": "Meineke Difference Analysis",
         "total": row[0],
         "completed": row[1],
         "pending": row[0] - row[1],
-        "unit": "lemmas",
+        "unit": "pairs",
     }
 
     cur.execute("""
-        SELECT COUNT(*) FROM assembled_lemmas
-        WHERE proper_nouns_analyzed_at > NOW() - INTERVAL '7 days'
+        SELECT COUNT(*) FROM meineke_text_differences
+        WHERE normalized_class = 'different'
+          AND analyzed_at > NOW() - INTERVAL '7 days'
     """)
-    stats["proper_nouns"]["rate_7d"] = cur.fetchone()[0]
+    stats["meineke_differences"]["rate_7d"] = cur.fetchone()[0]
 
-    # 9. nodegoat sync
+    # 11. Text-pair sync
+    cur.execute("""
+        WITH current_pairs AS (
+            SELECT b.id AS billerbeck_text_version_id, m.id AS meineke_text_version_id
+            FROM assembled_lemmas a
+            JOIN lemma_source_text_versions b
+              ON b.lemma_id = a.id
+             AND b.source_document = 'billerbeck'
+             AND b.is_current = TRUE
+            JOIN lemma_source_text_versions m
+              ON m.lemma_id = a.id
+             AND m.source_document = 'meineke'
+             AND m.is_current = TRUE
+        )
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM text_pair_differences t
+                    WHERE t.billerbeck_text_version_id = current_pairs.billerbeck_text_version_id
+                      AND t.meineke_text_version_id = current_pairs.meineke_text_version_id
+                )
+            ) AS synced
+        FROM current_pairs
+    """)
+    row = cur.fetchone()
+    stats["text_pair_sync"] = {
+        "name": "Text Pair Sync",
+        "total": row[0],
+        "completed": row[1],
+        "pending": row[0] - row[1],
+        "unit": "pairs",
+    }
+
+    cur.execute("""
+        WITH current_pairs AS (
+            SELECT b.id AS billerbeck_text_version_id, m.id AS meineke_text_version_id
+            FROM assembled_lemmas a
+            JOIN lemma_source_text_versions b
+              ON b.lemma_id = a.id
+             AND b.source_document = 'billerbeck'
+             AND b.is_current = TRUE
+            JOIN lemma_source_text_versions m
+              ON m.lemma_id = a.id
+             AND m.source_document = 'meineke'
+             AND m.is_current = TRUE
+        )
+        SELECT COUNT(*)
+        FROM current_pairs
+        JOIN text_pair_differences t
+          ON t.billerbeck_text_version_id = current_pairs.billerbeck_text_version_id
+         AND t.meineke_text_version_id = current_pairs.meineke_text_version_id
+        WHERE t.updated_at > NOW() - INTERVAL '7 days'
+    """)
+    stats["text_pair_sync"]["rate_7d"] = cur.fetchone()[0]
+
+    # 12. Translation risk sync
+    cur.execute("""
+        SELECT COUNT(DISTINCT lemma_id)
+        FROM translation_risk_flags
+        WHERE risk_code = 'billerbeck_likely_translation_change'
+          AND variant_kind = 'legacy_assembled'
+          AND variant_id = 'translation'
+    """)
+    translation_risk_completed = cur.fetchone()[0]
+    stats["translation_risk"] = {
+        "name": "Translation Risk Sync",
+        "total": translated_total,
+        "completed": min(translation_risk_completed, translated_total),
+        "pending": max(translated_total - translation_risk_completed, 0),
+        "unit": "entries",
+    }
+
+    cur.execute("""
+        SELECT COUNT(DISTINCT lemma_id)
+        FROM translation_risk_flags
+        WHERE risk_code = 'billerbeck_likely_translation_change'
+          AND variant_kind = 'legacy_assembled'
+          AND variant_id = 'translation'
+          AND updated_at > NOW() - INTERVAL '7 days'
+    """)
+    stats["translation_risk"]["rate_7d"] = cur.fetchone()[0]
+
+    # 13. nodegoat sync
     cur.execute("""
         SELECT
             COUNT(*) as total,
@@ -422,13 +544,13 @@ def generate_html(stats: dict) -> str:
 
     <div class="note">
         <strong>Note:</strong> ETA estimates are based on the processing rate over the past 7 days.
-        "Stalled" means no progress in the last week. Some stages run with daily limits to control costs.
+        "Stalled" means no progress in the last week. Retired stages such as finished Billerbeck OCR are intentionally omitted.
     </div>
 
     <p style="margin-top: 20px;">
         <a href="index.html">&larr; Back to main site</a> |
-        <a href="progress.html">OCR Progress</a> |
-        <a href="statistics.html">Statistics</a>
+        <a href="statistics.html">Statistics</a> |
+        <a href="downloads.html">Downloads</a>
     </p>
 </body>
 </html>

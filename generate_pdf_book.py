@@ -27,6 +27,50 @@ OUTPUT_DIR = Path("reference_site")
 PDF_FILENAME = "stephanos_ethnika_translations.pdf"
 TEX_FILENAME = "stephanos_ethnika_translations.tex"
 
+# Temporary manual cleanup for the PDF-only ancient-source index.
+# These labels are either obvious transliteration duplicates or modern editors
+# that should not appear in an index of ancient sources.
+PDF_SOURCE_INDEX_RENAMES = {
+    "Anonymous (author)": "Anonymous author",
+    "Apollonius Rhodius": "Apollonius of Rhodes",
+    "Apollonius (of Rhodes)": "Apollonius of Rhodes",
+    "Arcadios (Arcadius)": "Arkadios",
+    "Artemidoros": "Artemidorus",
+    "Capiton (author)": "Capito / Kapiton",
+    "Capiton (Capito)": "Capito / Kapiton",
+    "Charax (Harax)": "Charax",
+    "Kapiton (Capito)": "Capito / Kapiton",
+}
+
+PDF_SOURCE_INDEX_SUPPRESS = {
+    "Amato",
+    "Amato (editor)",
+    "Barigazzi",
+    "Barigazzi (editor)",
+    "Dyck (editor)",
+    "Gigon (editor)",
+    "Heitsch",
+    "Heitsch (editor)",
+    "Jacoby",
+    "Jacoby (editor)",
+    "Lasserre",
+    "Lasserre (editor)",
+    "Lightfoot",
+    "Livrea",
+    "Livrea (editor)",
+    "Matthews (editor)",
+    "Most (editor)",
+    "Page (editor)",
+    "Pfeiffer (editor)",
+    "Powell (editor)",
+    "Preger (editor)",
+    "Reitzenstein",
+    "Rose (editor)",
+    "Schmidt (editor)",
+    "Stiehle (editor)",
+    "Wyss (editor)",
+}
+
 
 def get_greek_letter_name(letter_code):
     """Convert letter code to display name."""
@@ -76,6 +120,16 @@ def get_letter_from_headword(headword):
         'ω': 'omega', 'ώ': 'omega', 'ὠ': 'omega', 'ὡ': 'omega', 'ᾠ': 'omega', 'ᾡ': 'omega',
     }
     return letter_map.get(first_char, 'unknown')
+
+
+def normalize_pdf_source_index_label(label: str) -> str | None:
+    """Apply a small manual cleanup layer for the PDF source index."""
+    label = (label or "").strip()
+    if not label:
+        return None
+    if label in PDF_SOURCE_INDEX_SUPPRESS:
+        return None
+    return PDF_SOURCE_INDEX_RENAMES.get(label, label)
 
 
 def fetch_lemmas():
@@ -206,9 +260,12 @@ def fetch_index_data(lemma_ids):
             continue
 
         if role == 'source':
-            if display_name not in sources:
-                sources[display_name] = set()
-            sources[display_name].add(lemma_id)
+            normalized_name = normalize_pdf_source_index_label(display_name)
+            if not normalized_name:
+                continue
+            if normalized_name not in sources:
+                sources[normalized_name] = set()
+            sources[normalized_name].add(lemma_id)
         elif noun_type == 'person':
             if display_name not in persons:
                 persons[display_name] = set()

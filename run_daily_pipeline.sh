@@ -72,26 +72,18 @@ else
     echo "Step 0a: Schema preflight skipped (SCHEMA_PREFLIGHT=0)" | tee -a "$LOGFILE"
 fi
 
-# Step 1: Process any new EPUB files in home directory
-echo "Step 1: Extracting new EPUB files..." | tee -a "$LOGFILE"
-for epub in ~/*.epub; do
-    if [ -f "$epub" ]; then
-        echo "  Processing: $epub" | tee -a "$LOGFILE"
-        uv run extract_epub.py "$epub" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to process $epub" | tee -a "$LOGFILE"
-    fi
-done
+# Step 1: Retire finished Billerbeck OCR ingestion steps
+echo "Step 1: Skipping Billerbeck EPUB ingestion (OCR corpus complete)." | tee -a "$LOGFILE"
 
-# Step 2: Extract images from unprocessed HTML files
-echo "Step 2: Extracting images from HTML files..." | tee -a "$LOGFILE"
-uv run extract_images_to_postgres.py --from-db 2>&1 | tee -a "$LOGFILE"
+# Step 2: Retire finished Billerbeck image extraction steps
+echo "Step 2: Skipping Billerbeck image extraction (OCR corpus complete)." | tee -a "$LOGFILE"
 
 # Step 2b: Queue missing Meineke page scans based on headword hole detection
 echo "Step 2b: Queueing missing Meineke hole pages..." | tee -a "$LOGFILE"
 uv run enqueue_meineke_holes.py --image-dir pdf_pages_meineke 2>&1 | tee -a "$LOGFILE"
 
-# Step 3: Process images with gpt-5 (no limit, will stop at daily token limit)
-echo "Step 3: Processing images with gpt-5..." | tee -a "$LOGFILE"
-uv run batch_process.py --delay 1 2>&1 | tee -a "$LOGFILE"
+# Step 3: Retire finished Billerbeck OCR step
+echo "Step 3: Skipping Billerbeck OCR (OCR corpus complete)." | tee -a "$LOGFILE"
 
 # Step 3b: Process queued Meineke images with line/apparatus OCR
 echo "Step 3b: Processing Meineke images..." | tee -a "$LOGFILE"
@@ -200,6 +192,18 @@ uv run sync_translation_risk_flags.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 5i: Refreshing legacy canonical fields..." | tee -a "$LOGFILE"
 uv run refresh_legacy_canonical_fields.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: legacy canonical refresh failed" | tee -a "$LOGFILE"
 
+# Step 5j: Sync review database from merah before site generation
+echo "Step 5j: Syncing review database from merah..." | tee -a "$LOGFILE"
+./sync_review_db.sh 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to sync review database" | tee -a "$LOGFILE"
+
+# Step 5k: Import reviews into PostgreSQL before site generation
+echo "Step 5k: Importing reviews into PostgreSQL..." | tee -a "$LOGFILE"
+uv run import_reviews.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 5l: Sync with nodegoat before progress/site generation
+echo "Step 5l: Syncing with nodegoat..." | tee -a "$LOGFILE"
+uv run sync_nodegoat.py --push --catch-up --limit 20 2>&1 | tee -a "$LOGFILE" || echo "  Warning: nodegoat sync failed" | tee -a "$LOGFILE"
+
 # Step 6: Generate progress website
 echo "Step 6: Generating progress website..." | tee -a "$LOGFILE"
 uv run generate_progress_site.py 2>&1 | tee -a "$LOGFILE"
@@ -273,18 +277,6 @@ uv run generate_downloads_page.py 2>&1 | tee -a "$LOGFILE"
 # Step 8b: Export lemma data for review interface
 echo "Step 8b: Exporting lemma data for review interface..." | tee -a "$LOGFILE"
 uv run export_for_review.py 2>&1 | tee -a "$LOGFILE"
-
-# Step 8c: Sync review database from merah
-echo "Step 8c: Syncing review database from merah..." | tee -a "$LOGFILE"
-./sync_review_db.sh 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to sync review database" | tee -a "$LOGFILE"
-
-# Step 8d: Import reviews into PostgreSQL
-echo "Step 8d: Importing reviews into PostgreSQL..." | tee -a "$LOGFILE"
-uv run import_reviews.py 2>&1 | tee -a "$LOGFILE"
-
-# Step 8e: Sync with nodegoat (push changes, limit to 20 per day for safety)
-echo "Step 8e: Syncing with nodegoat..." | tee -a "$LOGFILE"
-uv run sync_nodegoat.py --push --catch-up --limit 20 2>&1 | tee -a "$LOGFILE" || echo "  Warning: nodegoat sync failed" | tee -a "$LOGFILE"
 
 # Step 9: Deploy to merah
 echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
