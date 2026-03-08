@@ -211,12 +211,9 @@ def headword_page_filename(lemma_id: int) -> str:
     return f"headword_{lemma_num}.html"
 
 
-def prompt_version_page_filename(profile_name: str, version: int) -> str:
+def prompt_version_page_filename(profile_version_id: int) -> str:
     """Stable filename for a prompt-version detail page."""
-    slug = _SAFE_REF_RE.sub("_", (profile_name or "").strip().lower()).strip("._-")
-    if not slug:
-        slug = "prompt"
-    return f"prompt_{slug}_v{int(version or 0)}.html"
+    return f"prompts/{int(profile_version_id or 0)}.html"
 
 
 def ref_to_slug(ref: str) -> str:
@@ -914,7 +911,7 @@ def get_prompt_versions(cur):
                 "models_used": models_used or "",
                 "last_run_at": last_run_at,
                 "total_usage": total_usage,
-                "detail_href": prompt_version_page_filename(profile_name or "", int(version or 0)),
+                "detail_href": prompt_version_page_filename(int(profile_version_id or 0)),
             }
         )
 
@@ -2297,7 +2294,7 @@ def generate_prompt_detail_page(item: dict):
             f"""
             <tr>
                 <td>
-                    <a class="headword-link" href="{html_module.escape(headword['href'])}">{html_module.escape(headword['lemma'])}</a>
+                    <a class="headword-link" href="../{html_module.escape(headword['href'])}">{html_module.escape(headword['lemma'])}</a>
                 </td>
                 <td>{html_module.escape(str(headword.get('entry_number') or ''))}</td>
                 <td>{html_module.escape(headword.get('version') or '')}</td>
@@ -2378,15 +2375,15 @@ def generate_prompt_detail_page(item: dict):
 
     <div class="container">
         <div class="nav-links">
-            <a href="index.html">All Letters</a>
-            <a href="prompts.html">Translation Prompts</a>
-            <a href="statistics.html">Statistics</a>
-            <a href="pipeline.html">Pipeline Status</a>
-            <a href="cgi-bin/review.cgi">Human Review</a>
+            <a href="../index.html">All Letters</a>
+            <a href="../prompts.html">Translation Prompts</a>
+            <a href="../statistics.html">Statistics</a>
+            <a href="../pipeline.html">Pipeline Status</a>
+            <a href="../cgi-bin/review.cgi">Human Review</a>
         </div>
         <div class="breadcrumb">
-            <a href="index.html">All Letters</a>
-            / <a href="prompts.html">Translation Prompts</a>
+            <a href="../index.html">All Letters</a>
+            / <a href="../prompts.html">Translation Prompts</a>
             / {html_module.escape(title)}
         </div>
         <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
@@ -3196,6 +3193,7 @@ def main():
     # Create output directory
     output_dir = Path(OUTPUT_DIR)
     output_dir.mkdir(exist_ok=True)
+    (output_dir / "prompts").mkdir(exist_ok=True)
 
     # Extract images from database to protected directory
     images_extracted = extract_images_from_database(cur, output_dir)
