@@ -84,7 +84,7 @@ def fetch_requests(cur, request_limit: int | None):
         WHERE r.status IN ('pending', 'running')
         ORDER BY r.created_at, r.id
     """
-    params = [DEFAULT_MODEL]
+    params = [DEFAULT_TRANSLATION_MODEL]
     if request_limit is not None:
         query += f" LIMIT {int(request_limit)}"
     cur.execute(query, params)
