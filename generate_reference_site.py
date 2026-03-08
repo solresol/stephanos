@@ -211,6 +211,14 @@ def headword_page_filename(lemma_id: int) -> str:
     return f"headword_{lemma_num}.html"
 
 
+def prompt_version_page_filename(profile_name: str, version: int) -> str:
+    """Stable filename for a prompt-version detail page."""
+    slug = _SAFE_REF_RE.sub("_", (profile_name or "").strip().lower()).strip("._-")
+    if not slug:
+        slug = "prompt"
+    return f"prompt_{slug}_v{int(version or 0)}.html"
+
+
 def ref_to_slug(ref: str) -> str:
     """Convert a textual reference (for example '1.17') into a safe filename slug."""
     slug = (ref or "").strip()
@@ -824,6 +832,8 @@ def get_prompt_versions(cur):
             req_stats.last_requested_at,
             COALESCE(run_stats.run_count, 0) AS run_count,
             COALESCE(run_stats.approved_run_count, 0) AS approved_run_count,
+            COALESCE(run_stats.headword_count, 0) AS headword_count,
+            COALESCE(run_stats.models_used, '') AS models_used,
             run_stats.last_run_at
         FROM translation_prompt_profiles p
         JOIN translation_prompt_profile_versions pv
@@ -845,6 +855,13 @@ def get_prompt_versions(cur):
                     WHERE status = 'approved'
                       AND COALESCE(translation_text, '') != ''
                 ) AS approved_run_count,
+                COUNT(DISTINCT lemma_id) FILTER (
+                    WHERE COALESCE(translation_text, '') != ''
+                ) AS headword_count,
+                COALESCE(
+                    STRING_AGG(DISTINCT NULLIF(BTRIM(model), ''), ', ' ORDER BY NULLIF(BTRIM(model), '')),
+                    ''
+                ) AS models_used,
                 MAX(COALESCE(completed_at, created_at)) AS last_run_at
             FROM translation_runs
             GROUP BY profile_version_id
@@ -871,6 +888,8 @@ def get_prompt_versions(cur):
         last_requested_at,
         run_count,
         approved_run_count,
+        headword_count,
+        models_used,
         last_run_at,
     ) in cur.fetchall():
         total_usage = int(request_count or 0) + int(run_count or 0)
@@ -891,8 +910,11 @@ def get_prompt_versions(cur):
                 "last_requested_at": last_requested_at,
                 "run_count": int(run_count or 0),
                 "approved_run_count": int(approved_run_count or 0),
+                "headword_count": int(headword_count or 0),
+                "models_used": models_used or "",
                 "last_run_at": last_run_at,
                 "total_usage": total_usage,
+                "detail_href": prompt_version_page_filename(profile_name or "", int(version or 0)),
             }
         )
 
@@ -904,6 +926,76 @@ def get_prompt_versions(cur):
         )
     )
     return prompt_versions
+
+
+def get_prompt_version_headwords(cur):
+    """Fetch the latest non-empty translation run per headword for each prompt version."""
+    cur.execute("SELECT to_regclass('public.translation_runs') IS NOT NULL")
+    if not bool(cur.fetchone()[0]):
+        return {}
+
+    cur.execute(
+        """
+        SELECT
+            latest.profile_version_id,
+            latest.lemma_id,
+            COALESCE(a.lemma, '') AS lemma,
+            COALESCE(a.entry_number, 0) AS entry_number,
+            COALESCE(a.version, '') AS version,
+            COALESCE(a.billerbeck_id, '') AS billerbeck_id,
+            COALESCE(a.meineke_id, '') AS meineke_id,
+            COALESCE(latest.status, '') AS status,
+            COALESCE(latest.model, '') AS model,
+            latest.sort_ts
+        FROM (
+            SELECT DISTINCT ON (tr.profile_version_id, tr.lemma_id)
+                tr.profile_version_id,
+                tr.lemma_id,
+                tr.status,
+                tr.model,
+                COALESCE(tr.reviewed_at, tr.completed_at, tr.created_at) AS sort_ts,
+                tr.id
+            FROM translation_runs tr
+            WHERE COALESCE(tr.translation_text, '') != ''
+            ORDER BY
+                tr.profile_version_id,
+                tr.lemma_id,
+                COALESCE(tr.reviewed_at, tr.completed_at, tr.created_at) DESC,
+                tr.id DESC
+        ) latest
+        JOIN assembled_lemmas a ON a.id = latest.lemma_id
+        ORDER BY latest.profile_version_id, a.lemma, a.entry_number, a.id
+        """
+    )
+
+    by_profile_version: dict[int, list[dict]] = {}
+    for (
+        profile_version_id,
+        lemma_id,
+        lemma,
+        entry_number,
+        version,
+        billerbeck_id,
+        meineke_id,
+        status,
+        model,
+        sort_ts,
+    ) in cur.fetchall():
+        by_profile_version.setdefault(int(profile_version_id), []).append(
+            {
+                "lemma_id": int(lemma_id),
+                "lemma": normalize_headword_for_display(lemma or ""),
+                "entry_number": int(entry_number or 0),
+                "version": version or "",
+                "billerbeck_id": billerbeck_id or "",
+                "meineke_id": meineke_id or "",
+                "status": status or "",
+                "model": model or "",
+                "sort_ts": sort_ts,
+                "href": headword_page_filename(int(lemma_id or 0)),
+            }
+        )
+    return by_profile_version
 
 
 def highlight_proper_nouns_in_translation(translation, proper_nouns, aliases_by_name):
@@ -2185,15 +2277,177 @@ def generate_index_html(letter_counts, stats):
     return html
 
 
-def generate_prompts_page(prompt_versions):
-    """Generate a page showing prompt versions, metadata, and usage."""
-    def format_timestamp(value):
-        if not value:
-            return "—"
-        if hasattr(value, "strftime"):
-            return value.strftime("%Y-%m-%d %H:%M:%S %Z")
-        return str(value)
+def format_site_timestamp(value):
+    if not value:
+        return "—"
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d %H:%M:%S %Z")
+    return str(value)
 
+
+def generate_prompt_detail_page(item: dict):
+    """Generate a detail page for one prompt version."""
+    title = f"{item['profile_name']} v{item['version']}"
+    headwords = item.get("headwords", [])
+    models_used = (item.get("models_used") or "").strip() or "—"
+
+    headword_rows = []
+    for headword in headwords:
+        headword_rows.append(
+            f"""
+            <tr>
+                <td>
+                    <a class="headword-link" href="{html_module.escape(headword['href'])}">{html_module.escape(headword['lemma'])}</a>
+                </td>
+                <td>{html_module.escape(str(headword.get('entry_number') or ''))}</td>
+                <td>{html_module.escape(headword.get('version') or '')}</td>
+                <td>{html_module.escape(headword.get('billerbeck_id') or '')}</td>
+                <td>{html_module.escape(headword.get('status') or '')}</td>
+                <td>{html_module.escape(headword.get('model') or '')}</td>
+                <td>{html_module.escape(format_site_timestamp(headword.get('sort_ts')))}</td>
+            </tr>
+            """
+        )
+
+    headword_table = (
+        f"""
+        <table class="lemma-meta-table lemma-meta-matrix prompt-table">
+            <thead>
+                <tr>
+                    <th>Headword</th>
+                    <th>Entry</th>
+                    <th>Version</th>
+                    <th>Billerbeck</th>
+                    <th>Status</th>
+                    <th>Model</th>
+                    <th>Latest Run</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(headword_rows)}
+            </tbody>
+        </table>
+        """
+        if headword_rows
+        else "<div class='no-results'>No translated headwords are recorded for this prompt version yet.</div>"
+    )
+
+    blocks = []
+    if item.get("notes"):
+        blocks.append(
+            f"""
+            <div class="prompt-block">
+                <h3>Notes</h3>
+                <div class="prompt-text-box">{html_module.escape(item['notes'])}</div>
+            </div>
+            """
+        )
+    if item.get("metadata_text"):
+        blocks.append(
+            f"""
+            <div class="prompt-block">
+                <h3>Metadata</h3>
+                <div class="prompt-text-box">{html_module.escape(item['metadata_text'])}</div>
+            </div>
+            """
+        )
+    blocks.append(
+        f"""
+        <div class="prompt-block">
+            <h3>Prompt Text</h3>
+            <div class="prompt-text-box">{html_module.escape(item['prompt_text'])}</div>
+        </div>
+        """
+    )
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{html_module.escape(title)} - Translation Prompt</title>
+    <style>
+    {common_styles()}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{html_module.escape(title)}</h1>
+        <p>Prompt details, provenance, and translated headwords</p>
+    </div>
+
+    <div class="container">
+        <div class="nav-links">
+            <a href="index.html">All Letters</a>
+            <a href="prompts.html">Translation Prompts</a>
+            <a href="statistics.html">Statistics</a>
+            <a href="pipeline.html">Pipeline Status</a>
+            <a href="cgi-bin/review.cgi">Human Review</a>
+        </div>
+        <div class="breadcrumb">
+            <a href="index.html">All Letters</a>
+            / <a href="prompts.html">Translation Prompts</a>
+            / {html_module.escape(title)}
+        </div>
+        <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
+            <div class="stat-card">
+                <div class="stat-value">{item['headword_count']:,}</div>
+                <div class="stat-label">Translated Headwords</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{item['run_count']:,}</div>
+                <div class="stat-label">Translation Runs</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{item['approved_run_count']:,}</div>
+                <div class="stat-label">Approved AI Runs</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{html_module.escape(models_used)}</div>
+                <div class="stat-label">Models Used</div>
+            </div>
+        </div>
+        <div class="prompt-card{' active' if item['active'] else ''}">
+            <div class="prompt-head">
+                <div>
+                    <div class="prompt-title">{html_module.escape(title)}</div>
+                    <div class="prompt-subtitle">{html_module.escape(item['style_kind'])} · {html_module.escape(item['profile_description'])}</div>
+                </div>
+                <div class="usage-chips">
+                    <span class="usage-chip{' active' if item['active'] else ''}">{'Active' if item['active'] else 'Historical'}</span>
+                    <span class="usage-chip">Profile version ID: {item['profile_version_id']}</span>
+                </div>
+            </div>
+            <div class="prompt-meta">
+                <strong>Created:</strong> {html_module.escape(format_site_timestamp(item['created_at']))}<br>
+                <strong>Last requested:</strong> {html_module.escape(format_site_timestamp(item['last_requested_at']))}<br>
+                <strong>Last run:</strong> {html_module.escape(format_site_timestamp(item['last_run_at']))}<br>
+                <strong>Models used:</strong> {html_module.escape(models_used)}
+            </div>
+            {''.join(blocks)}
+        </div>
+        <div class="prompt-card" style="margin-top: 18px;">
+            <div class="prompt-head">
+                <div>
+                    <div class="prompt-title">Translated Headwords</div>
+                    <div class="prompt-subtitle">Latest non-empty run recorded for each headword under this prompt version</div>
+                </div>
+            </div>
+            {headword_table}
+        </div>
+
+        <div class="footer">
+            <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+    return html
+
+
+def generate_prompts_page(prompt_versions):
+    """Generate a compact summary page linking to prompt-version detail pages."""
     visible_versions = [
         item for item in prompt_versions
         if item["active"] or item["total_usage"] > 0 or item["metadata_text"] or item["notes"]
@@ -2201,72 +2455,54 @@ def generate_prompts_page(prompt_versions):
     used_versions = [item for item in prompt_versions if item["total_usage"] > 0]
     active_versions = [item for item in prompt_versions if item["active"]]
 
-    cards = []
+    rows = []
     for item in visible_versions:
-        created_text = format_timestamp(item["created_at"])
-        last_requested_text = format_timestamp(item["last_requested_at"])
-        last_run_text = format_timestamp(item["last_run_at"])
-        usage_bits = [
-            f"<span class='usage-chip{' active' if item['active'] else ''}'>{'Active' if item['active'] else 'Historical'}</span>",
-            f"<span class='usage-chip'>Runs: {item['run_count']}</span>",
-            f"<span class='usage-chip'>Requests: {item['request_count']}</span>",
-            f"<span class='usage-chip'>Approved AI: {item['approved_run_count']}</span>",
-        ]
-
-        blocks = []
-        if item["notes"]:
-            blocks.append(
-                f"""
-                <div class="prompt-block">
-                    <h3>Notes</h3>
-                    <div class="prompt-text-box">{html_module.escape(item['notes'])}</div>
-                </div>
-                """
-            )
-        if item["metadata_text"]:
-            blocks.append(
-                f"""
-                <div class="prompt-block">
-                    <h3>Metadata</h3>
-                    <div class="prompt-text-box">{html_module.escape(item['metadata_text'])}</div>
-                </div>
-                """
-            )
-        blocks.append(
+        prompt_label = f"{item['profile_name']} v{item['version']}"
+        rows.append(
             f"""
-            <div class="prompt-block">
-                <h3>Prompt Text</h3>
-                <div class="prompt-text-box">{html_module.escape(item['prompt_text'])}</div>
-            </div>
+            <tr>
+                <td>
+                    <a class="headword-link" href="{html_module.escape(item['detail_href'])}">{html_module.escape(prompt_label)}</a>
+                    <div class="headword-meta">Profile version ID {item['profile_version_id']}</div>
+                </td>
+                <td><span class="usage-chip{' active' if item['active'] else ''}">{'Active' if item['active'] else 'Historical'}</span></td>
+                <td>{html_module.escape(item['style_kind'] or '—')}</td>
+                <td>{html_module.escape(item['profile_description'] or '—')}</td>
+                <td>{html_module.escape(item['models_used'] or '—')}</td>
+                <td>{item['headword_count']:,}</td>
+                <td>{item['run_count']:,}</td>
+                <td>{item['approved_run_count']:,}</td>
+                <td>{html_module.escape(format_site_timestamp(item['last_run_at']))}</td>
+                <td><a class="headword-link" href="{html_module.escape(item['detail_href'])}">Open</a></td>
+            </tr>
             """
         )
 
-        cards.append(
-            f"""
-            <div class="prompt-card{' active' if item['active'] else ''}">
-                <div class="prompt-head">
-                    <div>
-                        <div class="prompt-title">{html_module.escape(item['profile_name'])} v{item['version']}</div>
-                        <div class="prompt-subtitle">{html_module.escape(item['style_kind'])} · {html_module.escape(item['profile_description'])}</div>
-                    </div>
-                    <div class="usage-chips">
-                        {''.join(usage_bits)}
-                    </div>
-                </div>
-                <div class="prompt-meta">
-                    <strong>Created:</strong> {html_module.escape(created_text)}<br>
-                    <strong>Profile version ID:</strong> {item['profile_version_id']}<br>
-                    <strong>Total recorded usage:</strong> {item['total_usage']}<br>
-                    <strong>Last requested:</strong> {html_module.escape(last_requested_text)}<br>
-                    <strong>Last run:</strong> {html_module.escape(last_run_text)}
-                </div>
-                {''.join(blocks)}
-            </div>
-            """
-        )
-
-    if not cards:
-        cards.append("<div class='no-results'>No prompt versions are available.</div>")
+    table_html = (
+        f"""
+        <table class="lemma-meta-table lemma-meta-matrix prompt-table">
+            <thead>
+                <tr>
+                    <th>Prompt</th>
+                    <th>Status</th>
+                    <th>Style</th>
+                    <th>Description</th>
+                    <th>Models</th>
+                    <th>Headwords</th>
+                    <th>Runs</th>
+                    <th>Approved AI</th>
+                    <th>Last Run</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(rows)}
+            </tbody>
+        </table>
+        """
+        if rows
+        else "<div class='no-results'>No prompt versions are available.</div>"
+    )
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -2281,7 +2517,7 @@ def generate_prompts_page(prompt_versions):
 <body>
     <div class="header">
         <h1>Translation Prompts</h1>
-        <p>Prompt versions, provenance notes, and usage across the translation pipeline</p>
+        <p>Prompt registry, usage metadata, and links to per-prompt detail pages</p>
     </div>
 
     <div class="container">
@@ -2322,10 +2558,8 @@ def generate_prompts_page(prompt_versions):
                 <div class="stat-label">Approved AI Runs</div>
             </div>
         </div>
-        <p class="note">This page shows active prompt versions and any prompt version that has recorded usage, notes, or metadata.</p>
-        <div class="prompt-grid">
-            {''.join(cards)}
-        </div>
+        <p class="note">Open a prompt to see its full text, notes, metadata, and the linked headwords translated under that prompt version.</p>
+        {table_html}
 
         <div class="footer">
             <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
@@ -2917,6 +3151,11 @@ def main():
     # Get all lemmas and bucket by letter
     lemmas = get_all_lemmas(cur)
     prompt_versions = get_prompt_versions(cur)
+    prompt_headwords = get_prompt_version_headwords(cur)
+    for item in prompt_versions:
+        item["headwords"] = prompt_headwords.get(item["profile_version_id"], [])
+        if not item.get("headword_count"):
+            item["headword_count"] = len(item["headwords"])
     stats = {
         'total_lemmas': len(lemmas),
         'translated_lemmas': sum(1 for l in lemmas if l.get('translated')),
@@ -3036,6 +3275,9 @@ def main():
     (output_dir / "index.html").write_text(index_html, encoding='utf-8')
     prompts_html = generate_prompts_page(prompt_versions)
     (output_dir / "prompts.html").write_text(prompts_html, encoding='utf-8')
+    for item in prompt_versions:
+        prompt_detail_html = generate_prompt_detail_page(item)
+        (output_dir / item["detail_href"]).write_text(prompt_detail_html, encoding='utf-8')
 
     # Generate per-letter pages (list of links to canonical headword pages).
     for char, name, slug in GREEK_LETTERS:
