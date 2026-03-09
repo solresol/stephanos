@@ -8,7 +8,7 @@ This document was rebuilt from scratch on 2026-03-09 from:
 
 Current status:
 
-- `stephanos_schema.sql` matched the live `stephanos` database exactly at the 2026-03-09 audit point; migration `20260309_drop_phase1_legacy_json_columns.sql` now intentionally advances the canonical schema past that snapshot until it is applied.
+- `stephanos_schema.sql` matches the live `stephanos` database exactly under `check_db_schema.py --fail-on-extra`.
 - The diagrams below reflect the current canonical schema, not the older historical shape.
 - Where the code still relies on convention, fallbacks, or cross-database imports, those are called out explicitly as soft or transitional links.
 

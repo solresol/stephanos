@@ -2,10 +2,10 @@
 -- PostgreSQL database dump
 --
 
-\restrict EzdjPvp1XRoyZp5E2g5PDbFQXDhrpldUR5NDw3cg4CeG8sWa8EVQ58vXpJ4bCz2
+\restrict TOtldbFevheFmlW47NYZIuPdo5h8YV0dMcPn8RNg3q7f2fWGTAxaiu0PuJ4JhvF
 
--- Dumped from database version 16.11 (Ubuntu 16.11-0ubuntu0.24.04.1)
--- Dumped by pg_dump version 16.11 (Ubuntu 16.11-0ubuntu0.24.04.1)
+-- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
+-- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -70,7 +70,6 @@ CREATE TABLE public.assembled_lemmas (
     wikidata_place_label text,
     wikidata_place_confidence text,
     wikidata_place_linked_at timestamp with time zone,
-    wikidata_place_linked_by text,
     latitude double precision,
     longitude double precision,
     pleiades_id text,
@@ -83,6 +82,7 @@ CREATE TABLE public.assembled_lemmas (
     quarantined boolean DEFAULT false NOT NULL,
     quarantine_reason text,
     quarantined_at timestamp with time zone,
+    wikidata_place_linked_by text,
     CONSTRAINT assembled_lemmas_wikidata_place_confidence_check CHECK ((wikidata_place_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text]))),
     CONSTRAINT check_review_status CHECK ((review_status = ANY (ARRAY['not_reviewed'::text, 'reviewed_ok'::text, 'reviewed_corrections'::text])))
 );
@@ -194,6 +194,95 @@ CREATE TABLE public.canonical_action_import_state (
     last_action_id bigint DEFAULT 0 NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
+
+
+--
+-- Name: proper_nouns; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.proper_nouns (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    proper_noun text NOT NULL,
+    lemma_form text NOT NULL,
+    english_translation text,
+    created_at timestamp with time zone DEFAULT now(),
+    noun_type text,
+    role text DEFAULT 'entity'::text NOT NULL,
+    citation text,
+    work_title text,
+    wikidata_qid text,
+    wikidata_confidence text,
+    wikidata_linked_at timestamp with time zone,
+    wikidata_linked_by text,
+    human_wikidata_qid text,
+    human_resolution_status text,
+    human_resolution_notes text,
+    human_resolved_by text,
+    human_resolved_at timestamp with time zone,
+    CONSTRAINT proper_nouns_human_resolution_status_check CHECK (((human_resolution_status IS NULL) OR (human_resolution_status = ANY (ARRAY['approved'::text, 'corrected'::text, 'not_alignable'::text, 'removed'::text, 'added'::text])))),
+    CONSTRAINT proper_nouns_role_check CHECK ((role = ANY (ARRAY['entity'::text, 'source'::text]))),
+    CONSTRAINT proper_nouns_wikidata_confidence_check CHECK ((wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text])))
+);
+
+
+--
+-- Name: effective_proper_nouns; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.effective_proper_nouns AS
+ SELECT id,
+    lemma_id,
+    proper_noun,
+    lemma_form,
+    english_translation,
+    created_at,
+    noun_type,
+    role,
+    citation,
+    work_title,
+    wikidata_qid,
+    wikidata_confidence,
+    wikidata_linked_at,
+    wikidata_linked_by,
+    human_wikidata_qid,
+    human_resolution_status,
+    human_resolution_notes,
+    human_resolved_by,
+    human_resolved_at,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(human_wikidata_qid), ''::text)
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_wikidata_qid), ''::text), NULLIF(btrim(wikidata_qid), ''::text))
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
+            ELSE NULLIF(btrim(wikidata_qid), ''::text)
+        END AS effective_wikidata_qid,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'approved'::text, 'added'::text])) THEN 'human'::text
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN 'not_alignable'::text
+            WHEN (NULLIF(btrim(wikidata_confidence), ''::text) IS NOT NULL) THEN wikidata_confidence
+            WHEN (NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) THEN 'linked'::text
+            ELSE NULL::text
+        END AS effective_wikidata_confidence,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'approved'::text, 'added'::text, 'not_alignable'::text])) THEN human_resolution_status
+            WHEN (NULLIF(btrim(wikidata_confidence), ''::text) IS NOT NULL) THEN wikidata_confidence
+            WHEN (NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) THEN 'linked'::text
+            ELSE NULL::text
+        END AS effective_resolution_status,
+        CASE
+            WHEN (NULLIF(btrim(human_resolution_status), ''::text) IS NOT NULL) THEN 'human'::text
+            WHEN ((NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(wikidata_confidence), ''::text) IS NOT NULL)) THEN 'machine'::text
+            ELSE NULL::text
+        END AS effective_resolution_source,
+    COALESCE(NULLIF(btrim(human_resolution_notes), ''::text), NULL::text) AS effective_resolution_notes,
+    COALESCE(NULLIF(btrim(human_resolved_by), ''::text), NULLIF(btrim(wikidata_linked_by), ''::text)) AS effective_resolved_by,
+    COALESCE(human_resolved_at, wikidata_linked_at) AS effective_resolved_at,
+        CASE
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN false
+            ELSE true
+        END AS needs_alignment
+   FROM public.proper_nouns pn
+  WHERE (COALESCE(human_resolution_status, ''::text) <> 'removed'::text);
 
 
 --
@@ -438,6 +527,23 @@ ALTER SEQUENCE public.lemma_apparatus_entries_id_seq OWNED BY public.lemma_appar
 
 
 --
+-- Name: lemma_canonical_variants; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_canonical_variants (
+    lemma_id integer NOT NULL,
+    variant_kind text NOT NULL,
+    variant_id text NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    is_primary boolean DEFAULT false NOT NULL,
+    updated_by text,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT lemma_canonical_variants_check CHECK (((NOT is_primary) OR is_active)),
+    CONSTRAINT lemma_canonical_variants_variant_kind_check CHECK ((variant_kind = ANY (ARRAY['translation_run'::text, 'human_translation'::text, 'legacy_assembled'::text])))
+);
+
+
+--
 -- Name: lemma_commentary_entries; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -472,23 +578,6 @@ CREATE SEQUENCE public.lemma_commentary_entries_id_seq
 --
 
 ALTER SEQUENCE public.lemma_commentary_entries_id_seq OWNED BY public.lemma_commentary_entries.id;
-
-
---
--- Name: lemma_canonical_variants; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.lemma_canonical_variants (
-    lemma_id integer NOT NULL,
-    variant_kind text NOT NULL,
-    variant_id text NOT NULL,
-    is_active boolean DEFAULT true NOT NULL,
-    is_primary boolean DEFAULT false NOT NULL,
-    updated_by text,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT lemma_canonical_variants_check CHECK (((NOT is_primary) OR is_active)),
-    CONSTRAINT lemma_canonical_variants_variant_kind_check CHECK ((variant_kind = ANY (ARRAY['translation_run'::text, 'human_translation'::text, 'legacy_assembled'::text])))
-);
 
 
 --
@@ -551,6 +640,43 @@ CREATE TABLE public.lemma_images (
     image_id integer NOT NULL,
     "position" integer DEFAULT 0 NOT NULL
 );
+
+
+--
+-- Name: lemma_source_citation_mentions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_source_citation_mentions (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    unit_id integer NOT NULL,
+    raw_citation_text text DEFAULT ''::text NOT NULL,
+    extracted_confidence text,
+    extracted_by_model text,
+    extracted_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT lemma_source_citation_mentions_extracted_confidence_check CHECK (((extracted_confidence IS NULL) OR (extracted_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))))
+);
+
+
+--
+-- Name: lemma_source_citation_mentions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.lemma_source_citation_mentions_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: lemma_source_citation_mentions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.lemma_source_citation_mentions_id_seq OWNED BY public.lemma_source_citation_mentions.id;
 
 
 --
@@ -829,95 +955,6 @@ ALTER SEQUENCE public.proper_noun_aliases_id_seq OWNED BY public.proper_noun_ali
 
 
 --
--- Name: proper_nouns; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.proper_nouns (
-    id integer NOT NULL,
-    lemma_id integer NOT NULL,
-    proper_noun text NOT NULL,
-    lemma_form text NOT NULL,
-    english_translation text,
-    created_at timestamp with time zone DEFAULT now(),
-    noun_type text,
-    role text DEFAULT 'entity'::text NOT NULL,
-    citation text,
-    work_title text,
-    wikidata_qid text,
-    wikidata_confidence text,
-    wikidata_linked_at timestamp with time zone,
-    wikidata_linked_by text,
-    human_wikidata_qid text,
-    human_resolution_status text,
-    human_resolution_notes text,
-    human_resolved_by text,
-    human_resolved_at timestamp with time zone,
-    CONSTRAINT proper_nouns_role_check CHECK ((role = ANY (ARRAY['entity'::text, 'source'::text]))),
-    CONSTRAINT proper_nouns_human_resolution_status_check CHECK ((human_resolution_status IS NULL) OR (human_resolution_status = ANY (ARRAY['approved'::text, 'corrected'::text, 'not_alignable'::text, 'removed'::text, 'added'::text]))),
-    CONSTRAINT proper_nouns_wikidata_confidence_check CHECK ((wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text])))
-);
-
-
---
--- Name: effective_proper_nouns; Type: VIEW; Schema: public; Owner: -
---
-
-CREATE VIEW public.effective_proper_nouns AS
- SELECT pn.id,
-    pn.lemma_id,
-    pn.proper_noun,
-    pn.lemma_form,
-    pn.english_translation,
-    pn.created_at,
-    pn.noun_type,
-    pn.role,
-    pn.citation,
-    pn.work_title,
-    pn.wikidata_qid,
-    pn.wikidata_confidence,
-    pn.wikidata_linked_at,
-    pn.wikidata_linked_by,
-    pn.human_wikidata_qid,
-    pn.human_resolution_status,
-    pn.human_resolution_notes,
-    pn.human_resolved_by,
-    pn.human_resolved_at,
-        CASE
-            WHEN (pn.human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(pn.human_wikidata_qid), ''::text)
-            WHEN (pn.human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(pn.human_wikidata_qid), ''::text), NULLIF(btrim(pn.wikidata_qid), ''::text))
-            WHEN (pn.human_resolution_status = 'not_alignable'::text) THEN NULL::text
-            ELSE NULLIF(btrim(pn.wikidata_qid), ''::text)
-        END AS effective_wikidata_qid,
-        CASE
-            WHEN (pn.human_resolution_status = ANY (ARRAY['corrected'::text, 'approved'::text, 'added'::text])) THEN 'human'::text
-            WHEN (pn.human_resolution_status = 'not_alignable'::text) THEN 'not_alignable'::text
-            WHEN (NULLIF(btrim(pn.wikidata_confidence), ''::text) IS NOT NULL) THEN pn.wikidata_confidence
-            WHEN (NULLIF(btrim(pn.wikidata_qid), ''::text) IS NOT NULL) THEN 'linked'::text
-            ELSE NULL::text
-        END AS effective_wikidata_confidence,
-        CASE
-            WHEN (pn.human_resolution_status = ANY (ARRAY['corrected'::text, 'approved'::text, 'added'::text, 'not_alignable'::text])) THEN pn.human_resolution_status
-            WHEN (NULLIF(btrim(pn.wikidata_confidence), ''::text) IS NOT NULL) THEN pn.wikidata_confidence
-            WHEN (NULLIF(btrim(pn.wikidata_qid), ''::text) IS NOT NULL) THEN 'linked'::text
-            ELSE NULL::text
-        END AS effective_resolution_status,
-        CASE
-            WHEN (NULLIF(btrim(pn.human_resolution_status), ''::text) IS NOT NULL) THEN 'human'::text
-            WHEN ((NULLIF(btrim(pn.wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(pn.wikidata_confidence), ''::text) IS NOT NULL)) THEN 'machine'::text
-            ELSE NULL::text
-        END AS effective_resolution_source,
-    COALESCE(NULLIF(btrim(pn.human_resolution_notes), ''::text), NULL::text) AS effective_resolution_notes,
-    COALESCE(NULLIF(btrim(pn.human_resolved_by), ''::text), NULLIF(btrim(pn.wikidata_linked_by), ''::text)) AS effective_resolved_by,
-    COALESCE(pn.human_resolved_at, pn.wikidata_linked_at) AS effective_resolved_at,
-        CASE
-            WHEN (pn.human_resolution_status = 'not_alignable'::text) THEN false
-            ELSE true
-        END AS needs_alignment
-   FROM public.proper_nouns pn
-  WHERE (COALESCE(pn.human_resolution_status, ''::text) <> 'removed'::text);
-
-
---
 -- Name: proper_nouns_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -935,6 +972,54 @@ CREATE SEQUENCE public.proper_nouns_id_seq
 --
 
 ALTER SEQUENCE public.proper_nouns_id_seq OWNED BY public.proper_nouns.id;
+
+
+--
+-- Name: source_citation_units; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.source_citation_units (
+    id integer NOT NULL,
+    unit_key text NOT NULL,
+    author_lemma_form text NOT NULL,
+    author_english text,
+    work_title text,
+    book_label text,
+    identifiers_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    raw_unit_text text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    author_wikidata_qid text,
+    author_wikidata_confidence text,
+    author_wikidata_linked_at timestamp with time zone,
+    author_wikidata_linked_by text,
+    work_wikidata_qid text,
+    work_wikidata_confidence text,
+    work_wikidata_linked_at timestamp with time zone,
+    work_wikidata_linked_by text,
+    CONSTRAINT source_citation_units_author_wikidata_confidence_check CHECK (((author_wikidata_confidence IS NULL) OR (author_wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text])))),
+    CONSTRAINT source_citation_units_work_wikidata_confidence_check CHECK (((work_wikidata_confidence IS NULL) OR (work_wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text]))))
+);
+
+
+--
+-- Name: source_citation_units_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.source_citation_units_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: source_citation_units_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.source_citation_units_id_seq OWNED BY public.source_citation_units.id;
 
 
 --
@@ -993,9 +1078,9 @@ CREATE TABLE public.translation_prompt_profile_versions (
     version integer NOT NULL,
     prompt_text text NOT NULL,
     notes text,
-    metadata_text text,
     active boolean DEFAULT true NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    metadata_text text
 );
 
 
@@ -1281,6 +1366,13 @@ ALTER TABLE ONLY public.lemma_commentary_entries ALTER COLUMN id SET DEFAULT nex
 
 
 --
+-- Name: lemma_source_citation_mentions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_source_citation_mentions ALTER COLUMN id SET DEFAULT nextval('public.lemma_source_citation_mentions_id_seq'::regclass);
+
+
+--
 -- Name: lemma_source_lines id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1334,6 +1426,13 @@ ALTER TABLE ONLY public.proper_noun_aliases ALTER COLUMN id SET DEFAULT nextval(
 --
 
 ALTER TABLE ONLY public.proper_nouns ALTER COLUMN id SET DEFAULT nextval('public.proper_nouns_id_seq'::regclass);
+
+
+--
+-- Name: source_citation_units id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_citation_units ALTER COLUMN id SET DEFAULT nextval('public.source_citation_units_id_seq'::regclass);
 
 
 --
@@ -1482,19 +1581,19 @@ ALTER TABLE ONLY public.lemma_apparatus_entries
 
 
 --
--- Name: lemma_commentary_entries lemma_commentary_entries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_commentary_entries
-    ADD CONSTRAINT lemma_commentary_entries_pkey PRIMARY KEY (id);
-
-
---
 -- Name: lemma_canonical_variants lemma_canonical_variants_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.lemma_canonical_variants
     ADD CONSTRAINT lemma_canonical_variants_pkey PRIMARY KEY (lemma_id, variant_kind, variant_id);
+
+
+--
+-- Name: lemma_commentary_entries lemma_commentary_entries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_commentary_entries
+    ADD CONSTRAINT lemma_commentary_entries_pkey PRIMARY KEY (id);
 
 
 --
@@ -1527,6 +1626,14 @@ ALTER TABLE ONLY public.lemma_headword_distances
 
 ALTER TABLE ONLY public.lemma_images
     ADD CONSTRAINT lemma_images_pkey PRIMARY KEY (lemma_id, image_id);
+
+
+--
+-- Name: lemma_source_citation_mentions lemma_source_citation_mentions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_source_citation_mentions
+    ADD CONSTRAINT lemma_source_citation_mentions_pkey PRIMARY KEY (id);
 
 
 --
@@ -1631,6 +1738,22 @@ ALTER TABLE ONLY public.proper_noun_aliases
 
 ALTER TABLE ONLY public.proper_nouns
     ADD CONSTRAINT proper_nouns_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: source_citation_units source_citation_units_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_citation_units
+    ADD CONSTRAINT source_citation_units_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: source_citation_units source_citation_units_unit_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_citation_units
+    ADD CONSTRAINT source_citation_units_unit_key_key UNIQUE (unit_key);
 
 
 --
@@ -1866,20 +1989,6 @@ CREATE INDEX lemma_apparatus_entries_source_idx ON public.lemma_apparatus_entrie
 
 
 --
--- Name: lemma_commentary_entries_lemma_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX lemma_commentary_entries_lemma_idx ON public.lemma_commentary_entries USING btree (lemma_id);
-
-
---
--- Name: lemma_commentary_entries_source_text_version_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX lemma_commentary_entries_source_text_version_idx ON public.lemma_commentary_entries USING btree (source_text_version_id) WHERE (source_text_version_id IS NOT NULL);
-
-
---
 -- Name: lemma_canonical_variants_active_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1891,6 +2000,20 @@ CREATE INDEX lemma_canonical_variants_active_idx ON public.lemma_canonical_varia
 --
 
 CREATE UNIQUE INDEX lemma_canonical_variants_primary_unique_idx ON public.lemma_canonical_variants USING btree (lemma_id) WHERE ((is_primary = true) AND (is_active = true));
+
+
+--
+-- Name: lemma_commentary_entries_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_commentary_entries_lemma_idx ON public.lemma_commentary_entries USING btree (lemma_id);
+
+
+--
+-- Name: lemma_commentary_entries_source_text_version_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_commentary_entries_source_text_version_idx ON public.lemma_commentary_entries USING btree (source_text_version_id) WHERE (source_text_version_id IS NOT NULL);
 
 
 --
@@ -1926,6 +2049,27 @@ CREATE INDEX lemma_headword_distances_a_idx ON public.lemma_headword_distances U
 --
 
 CREATE INDEX lemma_headword_distances_b_idx ON public.lemma_headword_distances USING btree (lemma_id_b, distance);
+
+
+--
+-- Name: lemma_source_citation_mentions_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_source_citation_mentions_lemma_idx ON public.lemma_source_citation_mentions USING btree (lemma_id);
+
+
+--
+-- Name: lemma_source_citation_mentions_unique_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX lemma_source_citation_mentions_unique_idx ON public.lemma_source_citation_mentions USING btree (lemma_id, unit_id, raw_citation_text);
+
+
+--
+-- Name: lemma_source_citation_mentions_unit_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_source_citation_mentions_unit_idx ON public.lemma_source_citation_mentions USING btree (unit_id);
 
 
 --
@@ -1982,6 +2126,27 @@ CREATE INDEX meineke_text_differences_analyzed_idx ON public.meineke_text_differ
 --
 
 CREATE INDEX meineke_text_differences_status_idx ON public.meineke_text_differences USING btree (normalized_class, llm_status);
+
+
+--
+-- Name: source_citation_units_author_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_citation_units_author_idx ON public.source_citation_units USING btree (author_lemma_form);
+
+
+--
+-- Name: source_citation_units_author_work_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_citation_units_author_work_idx ON public.source_citation_units USING btree (author_lemma_form, work_title);
+
+
+--
+-- Name: source_citation_units_work_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_citation_units_work_idx ON public.source_citation_units USING btree (work_title) WHERE (work_title IS NOT NULL);
 
 
 --
@@ -2137,6 +2302,14 @@ ALTER TABLE ONLY public.lemma_apparatus_entries
 
 
 --
+-- Name: lemma_canonical_variants lemma_canonical_variants_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_canonical_variants
+    ADD CONSTRAINT lemma_canonical_variants_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
 -- Name: lemma_commentary_entries lemma_commentary_entries_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2150,14 +2323,6 @@ ALTER TABLE ONLY public.lemma_commentary_entries
 
 ALTER TABLE ONLY public.lemma_commentary_entries
     ADD CONSTRAINT lemma_commentary_entries_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE SET NULL;
-
-
---
--- Name: lemma_canonical_variants lemma_canonical_variants_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_canonical_variants
-    ADD CONSTRAINT lemma_canonical_variants_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
 
 
 --
@@ -2222,6 +2387,22 @@ ALTER TABLE ONLY public.lemma_images
 
 ALTER TABLE ONLY public.lemma_images
     ADD CONSTRAINT lemma_images_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: lemma_source_citation_mentions lemma_source_citation_mentions_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_source_citation_mentions
+    ADD CONSTRAINT lemma_source_citation_mentions_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: lemma_source_citation_mentions lemma_source_citation_mentions_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_source_citation_mentions
+    ADD CONSTRAINT lemma_source_citation_mentions_unit_id_fkey FOREIGN KEY (unit_id) REFERENCES public.source_citation_units(id) ON DELETE CASCADE;
 
 
 --
@@ -2393,188 +2574,7 @@ ALTER TABLE ONLY public.translation_runs
 
 
 --
--- Name: source_citation_units; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.source_citation_units (
-    id integer NOT NULL,
-    unit_key text NOT NULL,
-    author_lemma_form text NOT NULL,
-    author_english text,
-    work_title text,
-    book_label text,
-    identifiers_json jsonb DEFAULT '[]'::jsonb NOT NULL,
-    raw_unit_text text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    author_wikidata_qid text,
-    author_wikidata_confidence text,
-    author_wikidata_linked_at timestamp with time zone,
-    author_wikidata_linked_by text,
-    work_wikidata_qid text,
-    work_wikidata_confidence text,
-    work_wikidata_linked_at timestamp with time zone,
-    work_wikidata_linked_by text,
-    CONSTRAINT source_citation_units_author_wikidata_confidence_check CHECK ((author_wikidata_confidence IS NULL) OR (author_wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text]))),
-    CONSTRAINT source_citation_units_work_wikidata_confidence_check CHECK ((work_wikidata_confidence IS NULL) OR (work_wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text])))
-);
-
-
---
--- Name: source_citation_units_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.source_citation_units_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: source_citation_units_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.source_citation_units_id_seq OWNED BY public.source_citation_units.id;
-
-
---
--- Name: lemma_source_citation_mentions; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.lemma_source_citation_mentions (
-    id integer NOT NULL,
-    lemma_id integer NOT NULL,
-    unit_id integer NOT NULL,
-    raw_citation_text text DEFAULT ''::text NOT NULL,
-    extracted_confidence text,
-    extracted_by_model text,
-    extracted_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT lemma_source_citation_mentions_extracted_confidence_check CHECK ((extracted_confidence IS NULL) OR (extracted_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])))
-);
-
-
---
--- Name: lemma_source_citation_mentions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.lemma_source_citation_mentions_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: lemma_source_citation_mentions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.lemma_source_citation_mentions_id_seq OWNED BY public.lemma_source_citation_mentions.id;
-
-
---
--- Name: source_citation_units id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.source_citation_units ALTER COLUMN id SET DEFAULT nextval('public.source_citation_units_id_seq'::regclass);
-
-
---
--- Name: lemma_source_citation_mentions id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_source_citation_mentions ALTER COLUMN id SET DEFAULT nextval('public.lemma_source_citation_mentions_id_seq'::regclass);
-
-
---
--- Name: source_citation_units source_citation_units_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.source_citation_units
-    ADD CONSTRAINT source_citation_units_pkey PRIMARY KEY (id);
-
-
---
--- Name: source_citation_units source_citation_units_unit_key_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.source_citation_units
-    ADD CONSTRAINT source_citation_units_unit_key_key UNIQUE (unit_key);
-
-
---
--- Name: lemma_source_citation_mentions lemma_source_citation_mentions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_source_citation_mentions
-    ADD CONSTRAINT lemma_source_citation_mentions_pkey PRIMARY KEY (id);
-
-
---
--- Name: lemma_source_citation_mentions_lemma_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX lemma_source_citation_mentions_lemma_idx ON public.lemma_source_citation_mentions USING btree (lemma_id);
-
-
---
--- Name: lemma_source_citation_mentions_unit_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX lemma_source_citation_mentions_unit_idx ON public.lemma_source_citation_mentions USING btree (unit_id);
-
-
---
--- Name: lemma_source_citation_mentions_unique_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX lemma_source_citation_mentions_unique_idx ON public.lemma_source_citation_mentions USING btree (lemma_id, unit_id, raw_citation_text);
-
-
---
--- Name: source_citation_units_author_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX source_citation_units_author_idx ON public.source_citation_units USING btree (author_lemma_form);
-
-
---
--- Name: source_citation_units_author_work_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX source_citation_units_author_work_idx ON public.source_citation_units USING btree (author_lemma_form, work_title);
-
-
---
--- Name: source_citation_units_work_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX source_citation_units_work_idx ON public.source_citation_units USING btree (work_title) WHERE (work_title IS NOT NULL);
-
-
---
--- Name: lemma_source_citation_mentions lemma_source_citation_mentions_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_source_citation_mentions
-    ADD CONSTRAINT lemma_source_citation_mentions_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
-
-
---
--- Name: lemma_source_citation_mentions lemma_source_citation_mentions_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_source_citation_mentions
-    ADD CONSTRAINT lemma_source_citation_mentions_unit_id_fkey FOREIGN KEY (unit_id) REFERENCES public.source_citation_units(id) ON DELETE CASCADE;
-
-
---
 -- PostgreSQL database dump complete
 --
 
-\unrestrict EzdjPvp1XRoyZp5E2g5PDbFQXDhrpldUR5NDw3cg4CeG8sWa8EVQ58vXpJ4bCz2
+\unrestrict TOtldbFevheFmlW47NYZIuPdo5h8YV0dMcPn8RNg3q7f2fWGTAxaiu0PuJ4JhvF
