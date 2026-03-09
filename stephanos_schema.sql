@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict TOtldbFevheFmlW47NYZIuPdo5h8YV0dMcPn8RNg3q7f2fWGTAxaiu0PuJ4JhvF
+\restrict VPrWvAgdGMwsDccec0JRv8x9qbODYaOcPxSsb1mH8kGGDgrDUFBpqh6i1StUnFz
 
 -- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
@@ -37,7 +37,6 @@ CREATE TABLE public.assembled_lemmas (
     human_greek_text text,
     human_notes text,
     translated integer DEFAULT 0 NOT NULL,
-    translation_json text,
     translation_tokens integer DEFAULT 0,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -93,13 +92,6 @@ CREATE TABLE public.assembled_lemmas (
 --
 
 COMMENT ON COLUMN public.assembled_lemmas.source_image_ids IS 'DEPRECATED: Use lemma_images junction table instead. Will be removed in future migration.';
-
-
---
--- Name: COLUMN assembled_lemmas.translation_json; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.assembled_lemmas.translation_json IS 'DEPRECATED: Use translation column instead. Will be removed in future migration.';
 
 
 --
@@ -2577,4 +2569,4 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict TOtldbFevheFmlW47NYZIuPdo5h8YV0dMcPn8RNg3q7f2fWGTAxaiu0PuJ4JhvF
+\unrestrict VPrWvAgdGMwsDccec0JRv8x9qbODYaOcPxSsb1mH8kGGDgrDUFBpqh6i1StUnFz

@@ -138,7 +138,6 @@ Key columns in `assembled_lemmas`:
 
 **Deprecated columns** (remaining compatibility fields):
 - `source_image_ids` (JSON) → use `lemma_images` junction table instead
-- `translation_json` (JSON) → use `translation` column instead
 
 Key columns in `lemma_images` (junction table):
 - `lemma_id` (foreign key to assembled_lemmas)

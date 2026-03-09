@@ -37,7 +37,6 @@ CREATE TABLE public.assembled_lemmas (
     human_greek_text text,
     human_notes text,
     translated integer DEFAULT 0 NOT NULL,
-    translation_json text,
     translation_tokens integer DEFAULT 0,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -94,17 +93,6 @@ CREATE TABLE public.assembled_lemmas (
 
 COMMENT ON COLUMN public.assembled_lemmas.source_image_ids IS 'DEPRECATED: Use lemma_images junction table instead. Will be removed in future migration.';
 
-
---
--- Name: COLUMN assembled_lemmas.translation_json; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.assembled_lemmas.translation_json IS 'DEPRECATED: Use translation column instead. Will be removed in future migration.';
-
-
---
--- Name: COLUMN assembled_lemmas.corrected_greek_scan; Type: COMMENT; Schema: public; Owner: -
---
 
 COMMENT ON COLUMN public.assembled_lemmas.corrected_greek_scan IS 'Human-corrected Greek text from review system, overrides OCR greek_text';
 

@@ -49,28 +49,18 @@ def fetch_candidates(cur, *, source_document: str, limit: int | None):
     query = """
         SELECT
             a.id,
-            COALESCE(a.translation, (
-                SELECT COALESCE(
-                    (a.translation_json::json)->>'translation',
-                    (a.translation_json::json)->>'english_translation'
-                ) WHERE a.translation_json IS NOT NULL
-            ), '') AS legacy_translation,
+            COALESCE(a.translation, '') AS legacy_translation,
             COALESCE(a.translation_prompt_version, 0) AS prompt_version,
             stv.id AS source_text_version_id,
             COALESCE(a.translation_tokens, 0) AS translation_tokens,
             COALESCE(a.translated_at, a.updated_at, NOW()) AS translated_at
         FROM assembled_lemmas a
         JOIN lemma_source_text_versions stv
-          ON stv.lemma_id = a.id
+         ON stv.lemma_id = a.id
          AND stv.source_document = %s
          AND stv.is_current = TRUE
         WHERE COALESCE(a.translation_prompt_version, 0) > 0
-          AND COALESCE(a.translation, (
-                SELECT COALESCE(
-                    (a.translation_json::json)->>'translation',
-                    (a.translation_json::json)->>'english_translation'
-                ) WHERE a.translation_json IS NOT NULL
-            ), '') != ''
+          AND COALESCE(a.translation, '') != ''
         ORDER BY a.id
     """
     params = [source_document]

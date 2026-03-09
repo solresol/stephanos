@@ -479,7 +479,7 @@ def get_all_lemmas(cur):
     cur.execute(
         """
         SELECT a.id, a.lemma, a.entry_number, a.type, a.greek_text, a.human_greek_text, a.confidence,
-               a.translation, a.translation_json, a.translated, a.ocr_processed_at, g.name as ocr_generation_name,
+               a.translation, a.translated, a.ocr_processed_at, g.name as ocr_generation_name,
                (SELECT i.ocr_model FROM images i
                 JOIN lemma_images li ON li.image_id = i.id
                 WHERE li.lemma_id = a.id
@@ -647,7 +647,7 @@ def get_all_lemmas(cur):
         commentary_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
 
     all_lemmas = []
-    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translation_json, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at, wikidata_place_qid, wikidata_place_label, latitude, longitude, pleiades_id, translation_prompt_version, translation_blocked, translation_block_reason in rows:
+    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at, wikidata_place_qid, wikidata_place_label, latitude, longitude, pleiades_id, translation_prompt_version, translation_blocked, translation_block_reason in rows:
         # Public Greek preference: current public Meineke source text (or Meineke headword paragraph).
         greek_source_variant = ""
         greek_source_origin = ""
@@ -661,17 +661,9 @@ def get_all_lemmas(cur):
             greek = ""
             greek_source = ""
 
-        # Use normalized translation column, fall back to parsing translation_json for legacy data
+        # Use normalized translation column.
         translation = translation_col or ""
         english_translation = translation_col or ""
-        if not translation and translation_json:
-            try:
-                data = json.loads(translation_json)
-                if isinstance(data, dict):
-                    translation = data.get("translation", "")
-                    english_translation = data.get("english_translation", translation)
-            except json.JSONDecodeError:
-                pass
 
         # Prefer corrected English translation
         if corrected_english_translation:

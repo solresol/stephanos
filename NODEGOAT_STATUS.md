@@ -149,7 +149,8 @@ The `assembled_lemmas` table already has columns for nodegoat integration:
    | lemma | ? | ? | text |
    | entry_number | ? | ? | int |
    | greek_text | ? | ? | text |
-   | translation_json | ? | ? | text |
+   | translation | ? | ? | text |
+   | reviewed_english_translation | ? | ? | text |
    | meineke_id | ? | ? | text |
    | billerbeck_id | ? | ? | text |
    | confidence | ? | ? | text |
@@ -251,7 +252,8 @@ uv run sync_to_nodegoat.py --force-update
      UPDATE assembled_lemmas SET
        human_greek_text = ?,
        human_notes = ?,
-       translation_json = ? (if changed),
+       translation = ? (if imported AI text),
+       reviewed_english_translation = ? (if curator edited text),
        last_synced_from_nodegoat_at = NOW()
      WHERE nodegoat_id = ?
      ```
@@ -282,7 +284,8 @@ uv run sync_from_nodegoat.py --full-resync
 **Data Mapping:**
 - `human_greek_text` ← corrected Greek text field from nodegoat
 - `human_notes` ← notes/comments field from nodegoat
-- `translation_json` ← only update if curator changed it
+- `translation` ← nodegoat AI translation field
+- `reviewed_english_translation` ← nodegoat human-edited translation field
 - Preserve OCR versions (`greek_text`) - never overwrite
 
 **Website Generation Impact:**

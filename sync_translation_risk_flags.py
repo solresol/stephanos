@@ -82,12 +82,7 @@ def fetch_legacy_translations(cur):
             SELECT
                 a.id,
                 a.billerbeck_id,
-                COALESCE(a.translation, (
-                    SELECT COALESCE(
-                        (a.translation_json::json)->>'translation',
-                        (a.translation_json::json)->>'english_translation'
-                    ) WHERE a.translation_json IS NOT NULL
-                )) AS translation_text,
+                COALESCE(a.translation, '') AS translation_text,
                 COALESCE(md.id, NULL) AS diff_id,
                 COALESCE(md.likely_translation_change, FALSE) AS likely_translation_change,
                 COALESCE(md.translation_impact, '') AS translation_impact,
@@ -106,12 +101,7 @@ def fetch_legacy_translations(cur):
             SELECT
                 a.id,
                 a.billerbeck_id,
-                COALESCE(a.translation, (
-                    SELECT COALESCE(
-                        (a.translation_json::json)->>'translation',
-                        (a.translation_json::json)->>'english_translation'
-                    ) WHERE a.translation_json IS NOT NULL
-                )) AS translation_text,
+                COALESCE(a.translation, '') AS translation_text,
                 NULL AS diff_id,
                 FALSE AS likely_translation_change,
                 '' AS translation_impact,

@@ -83,7 +83,6 @@ erDiagram
         text greek_text
         text human_greek_text
         text translation
-        text translation_json
         int ocr_generation_id FK
         text nodegoat_id
         text meineke_id
@@ -446,12 +445,12 @@ flowchart LR
 ## Notes on strange / unexpected parts
 
 - `assembled_lemmas` is still a very wide table.
-  - It mixes source text, OCR provenance, review state, legacy translation cache, nodegoat sync metadata, geodata, and analytics flags.
+  - It mixes source text, OCR provenance, review state, nodegoat sync metadata, geodata, and analytics flags.
   - Even after newer normalized tables were added, many operational scripts still read or refresh its flattened fields.
 
 - Deprecated JSON/text payloads still matter.
-  - `images.lemma_json`, `assembled_lemmas.translation_json`, and `assembled_lemmas.source_image_ids` still have real read/write paths in the current codebase.
-  - `images.translation_json` and `assembled_lemmas.assembled_json` have now been retired in the canonical schema by `20260309_drop_phase1_legacy_json_columns.sql`.
+  - `images.lemma_json` and `assembled_lemmas.source_image_ids` still have real read/write paths in the current codebase.
+  - `images.translation_json`, `assembled_lemmas.assembled_json`, and `assembled_lemmas.translation_json` have now been retired in the canonical schema by the Phase 1 and Phase 2 cleanup migrations.
   - `source_image_ids` is marked deprecated in schema comments, but `assemble_lemmas.py` still uses it for upserts and uniqueness, with `lemma_images` acting as the normalized mirror rather than a complete replacement.
 
 - Canonical/public selection is now membership-based, not pointer-table-based.
@@ -511,7 +510,6 @@ Counts below are from the live `raksasa` database on 2026-03-09.
 
 | Object | Non-null rows | Current role | Cleanup difficulty |
 | --- | ---: | --- | --- |
-| `assembled_lemmas.translation_json` | 835 | legacy fallback for translation readers | low-medium |
 | `source_citation_units.identifiers_json` | 57 | list of citation identifiers | medium |
 | `translation_risk_flags.details_json` | 1035 | structured rule evidence for one current risk rule | medium |
 | `assembled_lemmas.source_image_ids` | 3575 | legacy provenance array and current dedupe key | medium-high |
@@ -524,35 +522,14 @@ Phase 1 completed in `20260309_drop_phase1_legacy_json_columns.sql`:
 - dropped `images.translation_json`
 - stopped writing `assembled_lemmas.assembled_json` in `assemble_lemmas.py` and dropped the column
 
-The next active cleanup is therefore Phase 2.
+Phase 2 completed in `20260309_drop_phase2_translation_json.sql`:
 
-### Phase 2: Finish the old `translation_json` -> `translation` migration
+- verified there were zero rows on the live `raksasa` DB where `translation_json IS NOT NULL` and `COALESCE(translation, '') = ''`
+- removed all runtime fallback SQL / `json.loads()` readers for `assembled_lemmas.translation_json`
+- updated `assemble_lemmas.py` so Greek-text changes clear only normalized translation fields
+- dropped `assembled_lemmas.translation_json`
 
-Target: `assembled_lemmas.translation_json`
-
-Current readers to remove first:
-
-- `generate_reference_site.py`
-- `export_for_review.py`
-- `generate_protected_pages.py`
-- `sync_translation_risk_flags.py`
-- `generate_translation_risk_report.py`
-- `canonical_variants.py`
-- `backfill_legacy_translation_runs.py`
-- `generate_pipeline_progress.py`
-
-Plan:
-
-1. Backfill any remaining rows where `translation_json` is present but `translation` is empty.
-2. Remove all fallback SQL and `json.loads()` logic that reads `translation_json`.
-3. Update `assemble_lemmas.py` so Greek-text changes clear only the normalized translation fields, not the legacy JSON cache.
-4. Add a migration to drop `assembled_lemmas.translation_json`.
-
-Exit criteria:
-
-- zero rows where `translation_json IS NOT NULL` and `COALESCE(translation, '') = ''`
-- zero runtime references outside historical docs/scripts
-- reference site and review export still render identical translations
+The next substantive cleanup is now provenance normalization (`source_image_ids`) or, for the best payoff/risk ratio, the smaller `identifiers_json` / `details_json` cleanups listed below.
 
 ### Phase 3: Replace `source_image_ids` with a real normalized provenance key
 
@@ -693,13 +670,12 @@ Why not normalize both tables in parallel:
 
 ### Recommended implementation order
 
-If we want the best ratio of payoff to risk after Phase 1, this is the order I would use:
+If we want the best ratio of payoff to risk after Phase 2, this is the order I would use:
 
-1. `assembled_lemmas.translation_json`
-2. `source_citation_units.identifiers_json`
-3. `translation_risk_flags.details_json`
-4. `assembled_lemmas.source_image_ids`
-5. `images.lemma_json`
-6. pair-based diff normalization, then retirement of `meineke_text_differences`
+1. `source_citation_units.identifiers_json`
+2. `translation_risk_flags.details_json`
+3. `assembled_lemmas.source_image_ids`
+4. `images.lemma_json`
+5. pair-based diff normalization, then retirement of `meineke_text_differences`
 
 That sequence removes the easy dead weight first, then clears the low-risk legacy fallbacks, then tackles the two architectural jobs: OCR normalization and dedupe/provenance normalization.

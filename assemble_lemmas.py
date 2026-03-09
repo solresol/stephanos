@@ -37,7 +37,6 @@ def ensure_table(cur):
             quarantine_reason TEXT,
             quarantined_at TIMESTAMPTZ,
             translated INTEGER NOT NULL DEFAULT 0,
-            translation_json TEXT,
             translation_tokens INTEGER DEFAULT 0,
             created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -492,12 +491,6 @@ def upsert_assembled(cur, assembled_entries):
                          AND (assembled_lemmas.human_greek_text IS NULL OR assembled_lemmas.human_greek_text = '')
                     THEN NULL
                     ELSE assembled_lemmas.translation
-                END,
-                translation_json = CASE
-                    WHEN assembled_lemmas.greek_text IS DISTINCT FROM EXCLUDED.greek_text
-                         AND (assembled_lemmas.human_greek_text IS NULL OR assembled_lemmas.human_greek_text = '')
-                    THEN NULL
-                    ELSE assembled_lemmas.translation_json
                 END,
                 translation_tokens = CASE
                     WHEN assembled_lemmas.greek_text IS DISTINCT FROM EXCLUDED.greek_text

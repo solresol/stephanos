@@ -113,7 +113,8 @@ After exploring the structure, we'll build:
 - Updates your database:
   - `human_greek_text` ← corrected Greek from nodegoat
   - `human_notes` ← notes from nodegoat
-  - `translation_json` ← updated translation (if corrected)
+  - `translation` ← imported AI translation
+  - `reviewed_english_translation` ← imported human-edited translation
 
 ### 3. Integration with Pipeline
 - Add to `run_daily_pipeline.sh`:
@@ -135,7 +136,8 @@ Create a mapping document like this:
 | entry_number        | ???               | ???                 | Entry # |
 | greek_text          | ???               | ???                 | OCR Greek |
 | human_greek_text    | ???               | ???                 | Corrected Greek |
-| translation_json    | ???               | ???                 | English |
+| translation         | ???               | ???                 | AI English |
+| reviewed_english_translation | ???      | ???                 | Curated English |
 | meineke_id          | ???               | ???                 | Meineke ref |
 | billerbeck_id       | ???               | ???                 | Billerbeck ref |
 

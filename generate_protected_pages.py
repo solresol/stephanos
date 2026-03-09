@@ -99,12 +99,7 @@ def get_lemmas_for_image(cur, image_id):
             a.greek_text,
             a.confidence,
             a.translated,
-            COALESCE(a.translation, (
-                SELECT COALESCE(
-                    (a.translation_json::json)->>'translation',
-                    (a.translation_json::json)->>'english_translation'
-                ) WHERE a.translation_json IS NOT NULL
-            )) as translation
+            COALESCE(a.translation, '') as translation
         FROM assembled_lemmas a
         JOIN lemma_images li ON li.lemma_id = a.id
         WHERE li.image_id = %s

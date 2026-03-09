@@ -237,12 +237,7 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
         SELECT
             COALESCE(reviewed_english_translation, '') AS reviewed,
             COALESCE(corrected_english_translation, '') AS corrected,
-            COALESCE(translation, (
-                SELECT COALESCE(
-                    (translation_json::json)->>'translation',
-                    (translation_json::json)->>'english_translation'
-                ) WHERE translation_json IS NOT NULL
-            ), '') AS legacy_translation
+            COALESCE(translation, '') AS legacy_translation
         FROM assembled_lemmas
         WHERE id = %s
         LIMIT 1

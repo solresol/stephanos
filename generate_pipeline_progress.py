@@ -25,7 +25,7 @@ def get_progress_stats(conn) -> dict:
     cur.execute("""
         SELECT
             COUNT(*) as total,
-            COUNT(CASE WHEN COALESCE(translation, '') != '' OR translation_json IS NOT NULL THEN 1 END) as translated,
+            COUNT(CASE WHEN COALESCE(translation, '') != '' THEN 1 END) as translated,
             COUNT(CASE WHEN reviewed_english_translation IS NOT NULL THEN 1 END) as human_reviewed,
             COUNT(CASE WHEN corrected_english_translation IS NOT NULL THEN 1 END) as human_edited
         FROM assembled_lemmas

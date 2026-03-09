@@ -24,12 +24,7 @@ def fetch_rows(cur):
             a.id,
             a.lemma,
             a.billerbeck_id,
-            COALESCE(a.translation, (
-                SELECT COALESCE(
-                    (a.translation_json::json)->>'translation',
-                    (a.translation_json::json)->>'english_translation'
-                ) WHERE a.translation_json IS NOT NULL
-            )) AS translation_text,
+            COALESCE(a.translation, '') AS translation_text,
             COALESCE(md.translation_impact, '') AS translation_impact,
             COALESCE(md.translation_impact_note, '') AS translation_impact_note,
             COALESCE(md.summary, '') AS difference_summary,

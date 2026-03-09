@@ -103,12 +103,7 @@ def export_lemmas():
                 a.version,
                 COALESCE(a.greek_text, '') as greek_text,
                 COALESCE(a.human_greek_text, '') as human_greek_text,
-                COALESCE(a.translation, (
-                    SELECT COALESCE(
-                        (a.translation_json::json)->>'translation',
-                        (a.translation_json::json)->>'english_translation'
-                    ) WHERE a.translation_json IS NOT NULL
-                )) as english_translation,
+                COALESCE(a.translation, '') as english_translation,
                 a.type,
                 a.volume_label,
                 a.meineke_id,
@@ -169,12 +164,7 @@ def export_lemmas():
                 a.version,
                 COALESCE(a.greek_text, '') as greek_text,
                 COALESCE(a.human_greek_text, '') as human_greek_text,
-                COALESCE(a.translation, (
-                    SELECT COALESCE(
-                        (a.translation_json::json)->>'translation',
-                        (a.translation_json::json)->>'english_translation'
-                    ) WHERE a.translation_json IS NOT NULL
-                )) as english_translation,
+                COALESCE(a.translation, '') as english_translation,
                 a.type,
                 a.volume_label,
                 a.meineke_id,

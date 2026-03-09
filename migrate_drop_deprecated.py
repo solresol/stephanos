@@ -3,8 +3,7 @@
 Drop deprecated JSON columns after verifying migration is complete.
 
 This migration removes:
-1. assembled_lemmas.translation_json (replaced by translation column)
-2. assembled_lemmas.source_image_ids (replaced by lemma_images junction table)
+1. assembled_lemmas.source_image_ids (replaced by lemma_images junction table)
 
 IMPORTANT: Only run this after verifying all scripts work with the new schema!
 """
@@ -14,22 +13,6 @@ from db import get_connection
 def verify_migration(cur):
     """Verify the migration is complete before dropping columns."""
     print("Verifying migration completeness...")
-
-    # Check translation column has data
-    cur.execute("""
-        SELECT
-            COUNT(*) as total,
-            COUNT(translation) as with_translation,
-            COUNT(translation_json) as with_json
-        FROM assembled_lemmas
-        WHERE translated = 1
-    """)
-    row = cur.fetchone()
-    print(f"  Translated lemmas: {row[0]} total, {row[1]} with translation column, {row[2]} with translation_json")
-
-    if row[1] < row[2]:
-        print(f"  WARNING: {row[2] - row[1]} lemmas have translation_json but no translation column!")
-        return False
 
     # Check junction table has all entries
     cur.execute("SELECT COUNT(*) FROM lemma_images")
@@ -53,10 +36,6 @@ def verify_migration(cur):
 def drop_deprecated_columns(cur):
     """Drop the deprecated columns."""
     print("\nDropping deprecated columns...")
-
-    # Drop translation_json
-    print("  Dropping translation_json...")
-    cur.execute("ALTER TABLE assembled_lemmas DROP COLUMN IF EXISTS translation_json")
 
     # Drop source_image_ids
     print("  Dropping source_image_ids...")
@@ -95,7 +74,6 @@ def main():
     # Confirm before proceeding
     print("\n" + "=" * 60)
     print("WARNING: This will permanently drop the following columns:")
-    print("  - assembled_lemmas.translation_json")
     print("  - assembled_lemmas.source_image_ids")
     print("=" * 60)
 
