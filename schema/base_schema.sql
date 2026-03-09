@@ -34,7 +34,6 @@ CREATE TABLE public.assembled_lemmas (
     greek_text text,
     confidence text,
     source_image_ids text NOT NULL,
-    assembled_json text,
     human_greek_text text,
     human_notes text,
     translated integer DEFAULT 0 NOT NULL,
@@ -94,13 +93,6 @@ CREATE TABLE public.assembled_lemmas (
 --
 
 COMMENT ON COLUMN public.assembled_lemmas.source_image_ids IS 'DEPRECATED: Use lemma_images junction table instead. Will be removed in future migration.';
-
-
---
--- Name: COLUMN assembled_lemmas.assembled_json; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.assembled_lemmas.assembled_json IS 'DEPRECATED: All fields are available as columns. Will be removed in future migration.';
 
 
 --
@@ -370,7 +362,6 @@ CREATE TABLE public.images (
     tokens_used integer DEFAULT 0,
     ocr_model text,
     translated integer DEFAULT 0 NOT NULL,
-    translation_json text,
     translated_at timestamp without time zone,
     translation_tokens integer DEFAULT 0,
     pdf_file_id integer,

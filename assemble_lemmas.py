@@ -31,7 +31,6 @@ def ensure_table(cur):
             confidence TEXT,
             version TEXT NOT NULL DEFAULT 'epitome',
             source_image_ids TEXT NOT NULL,
-            assembled_json TEXT,
             human_greek_text TEXT,
             human_notes TEXT,
             quarantined BOOLEAN NOT NULL DEFAULT FALSE,
@@ -443,18 +442,6 @@ def upsert_assembled(cur, assembled_entries):
     skipped_duplicates = 0
     for entry in assembled_entries:
         source_ids_json = json.dumps(entry["source_image_ids"])
-        # assembled_json is deprecated but kept for backward compatibility
-        assembled_json = json.dumps(
-            {
-                "lemma": entry["lemma"],
-                "entry_number": entry["entry_number"],
-                "type": entry["type"],
-                "greek_text": entry["greek_text"],
-                "confidence": entry["confidence"],
-                "source_image_ids": entry["source_image_ids"],
-            },
-            ensure_ascii=False,
-        )
         ocr_processed_at = entry.get("ocr_processed_at")
         if isinstance(ocr_processed_at, datetime):
             ocr_processed_at = ocr_processed_at.isoformat()
@@ -467,7 +454,6 @@ def upsert_assembled(cur, assembled_entries):
             entry["confidence"],
             entry.get("version"),
             source_ids_json,
-            assembled_json,
             entry.get("volume_number"),
             entry.get("volume_label"),
             entry.get("letter_range"),
@@ -481,10 +467,10 @@ def upsert_assembled(cur, assembled_entries):
             sql = cur.mogrify(
                 """
             INSERT INTO assembled_lemmas
-            (lemma, entry_number, type, greek_text, confidence, version, source_image_ids, assembled_json, updated_at,
+            (lemma, entry_number, type, greek_text, confidence, version, source_image_ids, updated_at,
              volume_number, volume_label, letter_range, ocr_generation_id, ocr_processed_at,
              nodegoat_id, meineke_id, billerbeck_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (source_image_ids, entry_number, version) DO UPDATE SET
                 lemma = EXCLUDED.lemma,
                 entry_number = EXCLUDED.entry_number,
@@ -492,7 +478,6 @@ def upsert_assembled(cur, assembled_entries):
                 greek_text = EXCLUDED.greek_text,
                 confidence = EXCLUDED.confidence,
                 version = EXCLUDED.version,
-                assembled_json = EXCLUDED.assembled_json,
                 updated_at = CURRENT_TIMESTAMP,
                 -- Preserve existing translations unless the underlying Greek text changed.
                 -- This prevents daily `assemble_lemmas.py` runs from forcing retranslation.

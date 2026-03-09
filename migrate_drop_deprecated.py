@@ -4,8 +4,7 @@ Drop deprecated JSON columns after verifying migration is complete.
 
 This migration removes:
 1. assembled_lemmas.translation_json (replaced by translation column)
-2. assembled_lemmas.assembled_json (completely redundant)
-3. assembled_lemmas.source_image_ids (replaced by lemma_images junction table)
+2. assembled_lemmas.source_image_ids (replaced by lemma_images junction table)
 
 IMPORTANT: Only run this after verifying all scripts work with the new schema!
 """
@@ -59,10 +58,6 @@ def drop_deprecated_columns(cur):
     print("  Dropping translation_json...")
     cur.execute("ALTER TABLE assembled_lemmas DROP COLUMN IF EXISTS translation_json")
 
-    # Drop assembled_json
-    print("  Dropping assembled_json...")
-    cur.execute("ALTER TABLE assembled_lemmas DROP COLUMN IF EXISTS assembled_json")
-
     # Drop source_image_ids
     print("  Dropping source_image_ids...")
     cur.execute("ALTER TABLE assembled_lemmas DROP COLUMN IF EXISTS source_image_ids")
@@ -101,7 +96,6 @@ def main():
     print("\n" + "=" * 60)
     print("WARNING: This will permanently drop the following columns:")
     print("  - assembled_lemmas.translation_json")
-    print("  - assembled_lemmas.assembled_json")
     print("  - assembled_lemmas.source_image_ids")
     print("=" * 60)
 

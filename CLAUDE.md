@@ -136,10 +136,9 @@ Key columns in `assembled_lemmas`:
 - `latitude`, `longitude`, `pleiades_id`, `wikidata_place_qid`, `wikidata_place_label` (geocoding)
 - Other metadata and nodegoat integration fields
 
-**Deprecated columns** (kept for backward compatibility, will be removed):
+**Deprecated columns** (remaining compatibility fields):
 - `source_image_ids` (JSON) → use `lemma_images` junction table instead
 - `translation_json` (JSON) → use `translation` column instead
-- `assembled_json` (JSON) → redundant, all fields available as columns
 
 Key columns in `lemma_images` (junction table):
 - `lemma_id` (foreign key to assembled_lemmas)

@@ -170,10 +170,6 @@ def migrate():
         'DEPRECATED: Use translation column instead. Will be removed in future migration.'
     """)
     cur.execute("""
-        COMMENT ON COLUMN assembled_lemmas.assembled_json IS
-        'DEPRECATED: All fields are available as columns. Will be removed in future migration.'
-    """)
-    cur.execute("""
         COMMENT ON COLUMN assembled_lemmas.source_image_ids IS
         'DEPRECATED: Use lemma_images junction table instead. Will be removed in future migration.'
     """)

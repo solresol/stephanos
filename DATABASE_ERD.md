@@ -8,7 +8,7 @@ This document was rebuilt from scratch on 2026-03-09 from:
 
 Current status:
 
-- `stephanos_schema.sql` matches the live `stephanos` database exactly under `check_db_schema.py --fail-on-extra`.
+- `stephanos_schema.sql` matched the live `stephanos` database exactly at the 2026-03-09 audit point; migration `20260309_drop_phase1_legacy_json_columns.sql` now intentionally advances the canonical schema past that snapshot until it is applied.
 - The diagrams below reflect the current canonical schema, not the older historical shape.
 - Where the code still relies on convention, fallbacks, or cross-database imports, those are called out explicitly as soft or transitional links.
 
@@ -80,7 +80,6 @@ erDiagram
         int entry_number
         text version
         text source_image_ids
-        text assembled_json
         text greek_text
         text human_greek_text
         text translation
@@ -452,8 +451,7 @@ flowchart LR
 
 - Deprecated JSON/text payloads still matter.
   - `images.lemma_json`, `assembled_lemmas.translation_json`, and `assembled_lemmas.source_image_ids` still have real read/write paths in the current codebase.
-  - `assembled_lemmas.assembled_json` still gets written by `assemble_lemmas.py`, but the current repo no longer appears to rely on it as a read-side source of truth.
-  - `images.translation_json` still exists and still has non-null data in the live DB, but the current repo does not appear to read it.
+  - `images.translation_json` and `assembled_lemmas.assembled_json` have now been retired in the canonical schema by `20260309_drop_phase1_legacy_json_columns.sql`.
   - `source_image_ids` is marked deprecated in schema comments, but `assemble_lemmas.py` still uses it for upserts and uniqueness, with `lemma_images` acting as the normalized mirror rather than a complete replacement.
 
 - Canonical/public selection is now membership-based, not pointer-table-based.
@@ -513,8 +511,6 @@ Counts below are from the live `raksasa` database on 2026-03-09.
 
 | Object | Non-null rows | Current role | Cleanup difficulty |
 | --- | ---: | --- | --- |
-| `images.translation_json` | 197 | legacy residue; no current read path found | low |
-| `assembled_lemmas.assembled_json` | 3554 | write-only compatibility payload from `assemble_lemmas.py` | low |
 | `assembled_lemmas.translation_json` | 835 | legacy fallback for translation readers | low-medium |
 | `source_citation_units.identifiers_json` | 57 | list of citation identifiers | medium |
 | `translation_risk_flags.details_json` | 1035 | structured rule evidence for one current risk rule | medium |
@@ -523,19 +519,12 @@ Counts below are from the live `raksasa` database on 2026-03-09.
 | `meineke_text_differences.llm_result_json` | 598 | legacy detailed diff payload | high |
 | `text_pair_differences.llm_result_json` | 2495 | current detailed diff payload | high |
 
-### Phase 1: Remove dead or nearly-dead legacy caches
+Phase 1 completed in `20260309_drop_phase1_legacy_json_columns.sql`:
 
-1. Drop `images.translation_json`.
-   - I could not find a live code path that reads it.
-   - Before dropping: verify those 197 rows are not needed for any manual recovery workflow.
-   - Then add a migration to drop the column and remove it from any old docs that still mention it.
+- dropped `images.translation_json`
+- stopped writing `assembled_lemmas.assembled_json` in `assemble_lemmas.py` and dropped the column
 
-2. Stop writing `assembled_lemmas.assembled_json`, then drop it.
-   - Code to change first: `assemble_lemmas.py`.
-   - Verification gate: `rg assembled_json` should only find migration/history docs, not runtime readers.
-   - Then add a migration to drop the column.
-
-These are the safest wins and reduce clutter without touching application behavior.
+The next active cleanup is therefore Phase 2.
 
 ### Phase 2: Finish the old `translation_json` -> `translation` migration
 
@@ -704,15 +693,13 @@ Why not normalize both tables in parallel:
 
 ### Recommended implementation order
 
-If we want the best ratio of payoff to risk, this is the order I would use:
+If we want the best ratio of payoff to risk after Phase 1, this is the order I would use:
 
-1. `images.translation_json`
-2. `assembled_lemmas.assembled_json`
-3. `assembled_lemmas.translation_json`
-4. `source_citation_units.identifiers_json`
-5. `translation_risk_flags.details_json`
-6. `assembled_lemmas.source_image_ids`
-7. `images.lemma_json`
-8. pair-based diff normalization, then retirement of `meineke_text_differences`
+1. `assembled_lemmas.translation_json`
+2. `source_citation_units.identifiers_json`
+3. `translation_risk_flags.details_json`
+4. `assembled_lemmas.source_image_ids`
+5. `images.lemma_json`
+6. pair-based diff normalization, then retirement of `meineke_text_differences`
 
 That sequence removes the easy dead weight first, then clears the low-risk legacy fallbacks, then tackles the two architectural jobs: OCR normalization and dedupe/provenance normalization.
