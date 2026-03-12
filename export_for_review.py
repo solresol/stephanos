@@ -17,6 +17,7 @@ from pathlib import Path
 
 import canonical_variants
 from db import get_connection
+import wikidata_entity_cache
 
 OUTPUT_FILE = "review_data.json"
 _MEINEKE_OBJECT_TAG_RE = re.compile(r"\[/?object[^\]]*\]")
@@ -90,6 +91,56 @@ def preview_text(text: str, limit: int = 180) -> str:
     if len(preview) > limit:
         return preview[: limit - 3].rstrip() + "..."
     return preview
+
+
+def enrich_proper_nouns_with_wikidata_metadata(proper_nouns_by_lemma: dict[int, list[dict]]) -> None:
+    """Attach cached Wikidata labels/descriptions to exported proper-noun rows."""
+    qids: list[str] = []
+    for nouns in proper_nouns_by_lemma.values():
+        for noun in nouns or []:
+            qids.extend(
+                [
+                    noun.get("wikidata_qid", ""),
+                    noun.get("human_wikidata_qid", ""),
+                    noun.get("effective_wikidata_qid", ""),
+                ]
+            )
+
+    try:
+        metadata = wikidata_entity_cache.get_entity_metadata(qids)
+    except Exception as exc:
+        print(f"Warning: failed to enrich Wikidata labels for review export: {exc}")
+        return
+    if not metadata:
+        return
+
+    for nouns in proper_nouns_by_lemma.values():
+        for noun in nouns or []:
+            machine = metadata.get(noun.get("wikidata_qid", ""), {})
+            human = metadata.get(noun.get("human_wikidata_qid", ""), {})
+            effective = metadata.get(noun.get("effective_wikidata_qid", ""), {})
+            noun["wikidata_label"] = machine.get("label", "")
+            noun["wikidata_description"] = machine.get("description", "")
+            noun["human_wikidata_label"] = human.get("label", "")
+            noun["human_wikidata_description"] = human.get("description", "")
+            noun["effective_wikidata_label"] = effective.get("label", "")
+            noun["effective_wikidata_description"] = effective.get("description", "")
+
+
+def sort_translation_variants(variants: list[dict]) -> list[dict]:
+    """Keep authorative variants first and push legacy baselines to the end."""
+    kind_priority = {
+        "human_translation": 0,
+        "translation_run": 1,
+        "legacy_assembled": 2,
+    }
+    return sorted(
+        variants,
+        key=lambda item: (
+            kind_priority.get(item.get("kind", ""), 99),
+            1 if item.get("deprecated") else 0,
+        ),
+    )
 
 
 def export_lemmas():
@@ -496,6 +547,7 @@ def export_lemmas():
             """
         )
         proper_nouns_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
+        enrich_proper_nouns_with_wikidata_metadata(proper_nouns_by_lemma)
 
     translation_variants_by_lemma = {}
     cur.execute("SELECT to_regclass('public.translation_runs') IS NOT NULL")
@@ -555,6 +607,7 @@ def export_lemmas():
                     "public_eligible": bool(public_eligible),
                     "public_block_reason": public_block_reason or "",
                     "preview": preview_text(translation_text),
+                    "deprecated": False,
                 }
             )
 
@@ -599,6 +652,7 @@ def export_lemmas():
                     "updated_at": str(updated_at) if updated_at else "",
                     "text": translation_text or "",
                     "preview": preview_text(translation_text),
+                    "deprecated": False,
                 }
             )
 
@@ -674,12 +728,15 @@ def export_lemmas():
             "source_text_version_id": "",
             "text": legacy_translation,
             "preview": preview_text(legacy_translation),
+            "deprecated": True,
+            "deprecation_note": "Legacy assembled Billerbeck baseline kept for review context only.",
         }
         variants = list(translation_variants_by_lemma.get(lemma_id, []))
         if legacy_translation.strip() or risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False):
-            variants.insert(0, default_variant)
+            variants.append(default_variant)
         elif not variants:
             variants = [default_variant]
+        variants = sort_translation_variants(variants)
 
         pointer_variant = canonical_variants.select_pointer_variant(cur, lemma_id=lemma_id)
         selected_translation = english_translation or ""

@@ -5,10 +5,10 @@ Generate a page listing entities (people and deities) mentioned in Stephanos ent
 These are mythological or historical figures mentioned in the place entries,
 NOT the ancient authors who are cited as sources.
 """
-import json
 from pathlib import Path
 from datetime import datetime, timezone
 from db import get_connection
+from manual_entity_canonicalization import canonicalize_entity
 
 
 LETTER_MAP = {
@@ -26,41 +26,72 @@ def get_letter_name(char):
     return LETTER_MAP.get(char.upper() if char else '', 'alpha')
 
 
+def group_entity_mentions(rows, noun_type: str) -> list[dict]:
+    grouped = {}
+    for lemma_form, english, lemma_id, headword in rows:
+        canonical = canonicalize_entity("entity", noun_type, lemma_form, english)
+        key = (canonical["lemma_form"], canonical["english_translation"])
+        if key not in grouped:
+            grouped[key] = {
+                "lemma_form": canonical["lemma_form"],
+                "english": canonical["english_translation"],
+                "lemma_mentions": {},
+            }
+        grouped[key]["lemma_mentions"][int(lemma_id)] = headword
+
+    results = []
+    for item in grouped.values():
+        mentions = sorted(item["lemma_mentions"].items(), key=lambda pair: pair[1])
+        results.append(
+            {
+                "lemma_form": item["lemma_form"],
+                "english": item["english"],
+                "mention_count": len(mentions),
+                "lemmas": [headword for _, headword in mentions],
+            }
+        )
+
+    results.sort(key=lambda item: (-item["mention_count"], item["english"], item["lemma_form"]))
+    return results
+
+
 def main():
     print("Generating entities page...")
 
     conn = get_connection()
     cur = conn.cursor()
 
-    # Get deities
-    cur.execute("""
+    # Get deities as raw mentions so we can apply a few manual canonical merges.
+    cur.execute(
+        """
         SELECT
-            p.lemma_form,
-            p.english_translation,
-            COUNT(DISTINCT p.lemma_id) as mention_count,
-            json_agg(DISTINCT a.lemma ORDER BY a.lemma) as lemmas
+            COALESCE(p.lemma_form, ''),
+            COALESCE(p.english_translation, ''),
+            p.lemma_id,
+            COALESCE(a.lemma, '')
         FROM effective_proper_nouns p
         JOIN assembled_lemmas a ON a.id = p.lemma_id
         WHERE p.role = 'entity' AND p.noun_type = 'deity'
-        GROUP BY p.lemma_form, p.english_translation
-        ORDER BY mention_count DESC, p.english_translation, p.lemma_form
-    """)
-    deities = cur.fetchall()
+        ORDER BY a.lemma, p.id
+        """
+    )
+    deities = group_entity_mentions(cur.fetchall(), "deity")
 
-    # Get persons (mythological/historical figures, not authors)
-    cur.execute("""
+    # Get persons (mythological/historical figures, not authors).
+    cur.execute(
+        """
         SELECT
-            p.lemma_form,
-            p.english_translation,
-            COUNT(DISTINCT p.lemma_id) as mention_count,
-            json_agg(DISTINCT a.lemma ORDER BY a.lemma) as lemmas
+            COALESCE(p.lemma_form, ''),
+            COALESCE(p.english_translation, ''),
+            p.lemma_id,
+            COALESCE(a.lemma, '')
         FROM effective_proper_nouns p
         JOIN assembled_lemmas a ON a.id = p.lemma_id
         WHERE p.role = 'entity' AND p.noun_type = 'person'
-        GROUP BY p.lemma_form, p.english_translation
-        ORDER BY mention_count DESC, p.english_translation, p.lemma_form
-    """)
-    persons = cur.fetchall()
+        ORDER BY a.lemma, p.id
+        """
+    )
+    persons = group_entity_mentions(cur.fetchall(), "person")
 
     conn.close()
 
@@ -221,8 +252,11 @@ def main():
 """
 
     # Add deities
-    for lemma_form, english, mention_count, lemmas_json in deities:
-        lemmas = lemmas_json if isinstance(lemmas_json, list) else (json.loads(lemmas_json) if lemmas_json else [])
+    for item in deities:
+        lemma_form = item["lemma_form"]
+        english = item["english"]
+        mention_count = item["mention_count"]
+        lemmas = item["lemmas"]
 
         entry_links = []
         for lemma in lemmas:
@@ -253,8 +287,11 @@ def main():
 """
 
     # Add persons
-    for lemma_form, english, mention_count, lemmas_json in persons:
-        lemmas = lemmas_json if isinstance(lemmas_json, list) else (json.loads(lemmas_json) if lemmas_json else [])
+    for item in persons:
+        lemma_form = item["lemma_form"]
+        english = item["english"]
+        mention_count = item["mention_count"]
+        lemmas = item["lemmas"]
 
         entry_links = []
         for lemma in lemmas:

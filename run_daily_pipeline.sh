@@ -144,10 +144,15 @@ echo "Step 5b: Extracting proper nouns..." | tee -a "$LOGFILE"
 uv run extract_proper_nouns.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 5b2: Extract structured source-citation units (author+work+book)
-SOURCE_CITATION_EXTRACT_LIMIT="${SOURCE_CITATION_EXTRACT_LIMIT:-20}"
+SOURCE_CITATION_EXTRACT_MODEL="${SOURCE_CITATION_EXTRACT_MODEL:-gpt-5-mini}"
+SOURCE_CITATION_EXTRACT_LIMIT="${SOURCE_CITATION_EXTRACT_LIMIT:-300}"
+SOURCE_CITATION_EXTRACT_DELAY="${SOURCE_CITATION_EXTRACT_DELAY:-0.1}"
 if [ "$SOURCE_CITATION_EXTRACT_LIMIT" -gt 0 ]; then
     echo "Step 5b2: Extracting source-citation units..." | tee -a "$LOGFILE"
-    uv run extract_source_citation_units.py --limit "$SOURCE_CITATION_EXTRACT_LIMIT" --delay 1 \
+    uv run extract_source_citation_units.py \
+        --model "$SOURCE_CITATION_EXTRACT_MODEL" \
+        --limit "$SOURCE_CITATION_EXTRACT_LIMIT" \
+        --delay "$SOURCE_CITATION_EXTRACT_DELAY" \
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: source-citation extraction step failed" | tee -a "$LOGFILE"
 fi
 
@@ -254,6 +259,14 @@ uv run generate_headword_clustering_page.py 2>&1 | tee -a "$LOGFILE" || echo "  
 echo "Step 7c2: Generating translation risk report..." | tee -a "$LOGFILE"
 uv run generate_translation_risk_report.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 7c3: Generate entity resolution review page
+echo "Step 7c3: Generating entity resolution review page..." | tee -a "$LOGFILE"
+uv run generate_entity_resolution_review_page.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: entity resolution review page step failed" | tee -a "$LOGFILE"
+
+# Step 7c4: Generate Brady vs AI entity review page
+echo "Step 7c4: Generating Brady vs AI entity review page..." | tee -a "$LOGFILE"
+uv run generate_brady_entity_review_page.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Brady entity review page step failed" | tee -a "$LOGFILE"
+
 # Step 8: Export lemmas CSV
 echo "Step 8: Exporting lemmas CSV..." | tee -a "$LOGFILE"
 uv run generate_csv_export.py --output exports/lemmas.csv 2>&1 | tee -a "$LOGFILE"
@@ -265,6 +278,10 @@ uv run export_proper_nouns_csv.py 2>&1 | tee -a "$LOGFILE"
 # Step 8a2: Export etymologies CSV
 echo "Step 8a2: Exporting etymologies CSV..." | tee -a "$LOGFILE"
 uv run export_etymologies_csv.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 8a2b: Export structured source-citation CSVs
+echo "Step 8a2b: Exporting structured source-citation CSVs..." | tee -a "$LOGFILE"
+uv run export_source_citation_csv.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 8a3: Export for nodegoat
 echo "Step 8a3: Exporting for nodegoat..." | tee -a "$LOGFILE"
@@ -292,6 +309,8 @@ rsync -az progress.html stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/step
 rsync -az exports/lemmas.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 rsync -az exports/proper_nouns.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 rsync -az exports/etymologies.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+rsync -az exports/source_citation_units.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+rsync -az exports/source_citation_mentions.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 # Deploy nodegoat exports
 rsync -az exports/nodegoat/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/nodegoat/ 2>&1 | tee -a "$LOGFILE"
 # Deploy review data JSON

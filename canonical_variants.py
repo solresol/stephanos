@@ -21,6 +21,7 @@ VARIANT_KIND_PRIORITY = {
     "translation_run": 1,
     "legacy_assembled": 2,
 }
+PUBLICLY_DEPRECATED_KINDS = {"legacy_assembled"}
 
 
 def table_exists(cur, table_name: str) -> bool:
@@ -368,10 +369,6 @@ def resolve_fallback_variant(cur, *, lemma_id: int) -> dict[str, Any] | None:
                     if run_ts is not None and (best_ts is None or run_ts > best_ts):
                         best = {**candidate, "sort_ts": run_ts}
 
-    legacy = resolve_variant(cur, lemma_id=lemma_id, variant_kind="legacy_assembled", variant_id="translation")
-    if legacy.get("publishable") and best is None:
-        best = {**legacy, "sort_ts": None}
-
     if not best:
         return None
     best.pop("sort_ts", None)
@@ -407,6 +404,8 @@ def select_presented_variants(
             variant_id=membership["id"],
         )
         if not candidate.get("publishable"):
+            continue
+        if candidate.get("kind") in PUBLICLY_DEPRECATED_KINDS:
             continue
         canonical_candidates.append(
             {

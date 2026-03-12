@@ -2221,6 +2221,8 @@ def generate_index_html(letter_counts, stats):
 		            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
 		            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
 		            <a href="protected/clustering.html">Clustering</a>
+		            <a href="protected/entity_resolution_review.html">Entity Review</a>
+		            <a href="protected/brady_entity_review.html">Brady Review</a>
 		            <a href="progress.html">Processing Progress</a>
 		            <a href="pipeline.html">Pipeline Status</a>
 		            <a href="protected/">Page Scans</a>
@@ -2523,6 +2525,8 @@ def generate_prompts_page(prompt_versions):
             <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
             <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
             <a href="protected/clustering.html">Clustering</a>
+            <a href="protected/entity_resolution_review.html">Entity Review</a>
+            <a href="protected/brady_entity_review.html">Brady Review</a>
             <a href="progress.html">Processing Progress</a>
             <a href="pipeline.html">Pipeline Status</a>
             <a href="cgi-bin/review.cgi">Human Review</a>
@@ -2658,6 +2662,8 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
 		            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
 		            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
 		            <a href="protected/clustering.html">Clustering</a>
+		            <a href="protected/entity_resolution_review.html">Entity Review</a>
+		            <a href="protected/brady_entity_review.html">Brady Review</a>
 		            <a href="cgi-bin/review.cgi">Human Review</a>
 		            <a href="downloads.html">Downloads</a>
 		            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
@@ -2729,6 +2735,8 @@ def generate_headword_page(lemma: dict, overlaps: list[dict], overlap_run_id: in
 	            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
 	            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
 	            <a href="protected/clustering.html">Clustering</a>
+	            <a href="protected/entity_resolution_review.html">Entity Review</a>
+	            <a href="protected/brady_entity_review.html">Brady Review</a>
 	            <a href="cgi-bin/review.cgi">Human Review</a>
 	            <a href="downloads.html">Downloads</a>
 	            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
@@ -2988,6 +2996,8 @@ def generate_meineke_comparison_page(stats: dict) -> str:
 	            <a href="../statistics.html">Statistics</a>
 	            <a href="meineke_difference_analysis.html">Difference Analysis</a>
 	            <a href="clustering.html">Clustering</a>
+	            <a href="entity_resolution_review.html">Entity Review</a>
+	            <a href="brady_entity_review.html">Brady Review</a>
 	            <a href="../progress.html">Processing Progress</a>
 	            <a href="../pipeline.html">Pipeline Status</a>
 	            <a href="../protected/">Page Scans</a>
@@ -3230,6 +3240,8 @@ def main():
 	            <a href="../statistics.html">Statistics</a>
 	            <a href="meineke_difference_analysis.html">Difference Analysis</a>
 	            <a href="clustering.html">Clustering</a>
+	            <a href="entity_resolution_review.html">Entity Review</a>
+	            <a href="brady_entity_review.html">Brady Review</a>
 	            <a href="../pipeline.html">Pipeline Status</a>
 	            <a href="../cgi-bin/review.cgi">Human Review</a>
 	        </div>

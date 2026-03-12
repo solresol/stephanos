@@ -339,6 +339,18 @@ const reviewTemplate = `<!DOCTYPE html>
         .entity-resolution-cell a:hover {
             text-decoration: underline;
         }
+        .entity-qid {
+            color: #64748b;
+            font-family: ui-monospace, SFMono-Regular, 'SF Mono', Consolas, monospace;
+            font-size: 0.82em;
+            margin-top: 4px;
+        }
+        .entity-description {
+            color: #475569;
+            font-size: 0.9em;
+            line-height: 1.45;
+            margin-top: 6px;
+        }
         .entity-notes {
             color: #374151;
             font-size: 0.92em;
@@ -548,6 +560,17 @@ const reviewTemplate = `<!DOCTYPE html>
             color: #7f8c8d;
             font-size: 0.85em;
             margin-top: 3px;
+        }
+        .scan-note {
+            color: #475569;
+            font-size: 0.92em;
+            line-height: 1.5;
+            margin: 8px 0 10px;
+        }
+        .variant-note {
+            color: #92400e;
+            font-size: 0.84em;
+            margin-top: 4px;
         }
         @media (min-width: 1100px) {
             .ocr-meineke-wrap {
@@ -769,22 +792,6 @@ const reviewTemplate = `<!DOCTYPE html>
                 </div>
                 {{end}}
 
-                {{if .Lemma.MeinekeScanFilenames}}
-                <div class="ocr-panel">
-                    <div class="section-title">Meineke Scan Images</div>
-                    <div class="images">
-                        {{range $filename := .Lemma.MeinekeScanFilenames}}
-                        <div>
-                            <img src="/protected/{{$filename}}" alt="{{$filename}}">
-                            <div style="text-align: center; font-size: 0.85em; color: #7f8c8d; margin-top: 5px;">
-                                {{$filename}}
-                            </div>
-                        </div>
-                        {{end}}
-                    </div>
-                </div>
-                {{end}}
-
                 <div class="text-panel">
                     <div class="section-title">Raw OCR of Billerbeck</div>
                     <div class="original-text commentary-source" data-commentary-source="billerbeck" tabindex="0" title="Select text here to add commentary">{{.Lemma.GreekText}}</div>
@@ -804,6 +811,23 @@ const reviewTemplate = `<!DOCTYPE html>
                 Comparison uses the current Billerbeck text for this review (corrected Greek if present, otherwise raw OCR),
                 and ignores citation wrappers and punctuation.
             </div>
+
+            {{if .Lemma.MeinekeScanFilenames}}
+            <div class="section-title">Current Meineke Page Scan</div>
+            <div class="scan-note">
+                These are the page images backing the current Meineke text shown below, so the scan stays visible while you compare editions.
+            </div>
+            <div class="images">
+                {{range $filename := .Lemma.MeinekeScanFilenames}}
+                <div>
+                    <img src="/protected/{{$filename}}" alt="{{$filename}}">
+                    <div style="text-align: center; font-size: 0.85em; color: #7f8c8d; margin-top: 5px;">
+                        {{$filename}}
+                    </div>
+                </div>
+                {{end}}
+            </div>
+            {{end}}
 
             {{if .Lemma.TranslationBlocked}}
             <div class="comparison-box" style="border-left-color:#c0392b; background:#fdecea;">
@@ -1006,12 +1030,20 @@ const reviewTemplate = `<!DOCTYPE html>
                     <div class="entity-resolution-grid">
                         <div class="entity-resolution-cell">
                             <strong>Machine</strong><br>
-                            {{if .WikidataQID}}<a href="https://www.wikidata.org/wiki/{{.WikidataQID}}" target="_blank">{{.WikidataQID}}</a>{{else}}&mdash;{{end}}
+                            {{if .WikidataQID}}
+                            <a href="https://www.wikidata.org/wiki/{{.WikidataQID}}" target="_blank">{{if .WikidataLabel}}{{.WikidataLabel}}{{else}}{{.WikidataQID}}{{end}}</a>
+                            <div class="entity-qid">{{.WikidataQID}}</div>
+                            {{if .WikidataDescription}}<div class="entity-description">{{.WikidataDescription}}</div>{{end}}
+                            {{else}}&mdash;{{end}}
                             {{if .WikidataConfidence}}<div>{{.WikidataConfidence}}</div>{{end}}
                         </div>
                         <div class="entity-resolution-cell">
                             <strong>Current</strong><br>
-                            {{if .EffectiveWikidataQID}}<a href="https://www.wikidata.org/wiki/{{.EffectiveWikidataQID}}" target="_blank">{{.EffectiveWikidataQID}}</a>{{else}}&mdash;{{end}}
+                            {{if .EffectiveWikidataQID}}
+                            <a href="https://www.wikidata.org/wiki/{{.EffectiveWikidataQID}}" target="_blank">{{if .EffectiveWikidataLabel}}{{.EffectiveWikidataLabel}}{{else}}{{.EffectiveWikidataQID}}{{end}}</a>
+                            <div class="entity-qid">{{.EffectiveWikidataQID}}</div>
+                            {{if .EffectiveWikidataDescription}}<div class="entity-description">{{.EffectiveWikidataDescription}}</div>{{end}}
+                            {{else}}&mdash;{{end}}
                             {{if .EffectiveResolutionSource}}<div>{{.EffectiveResolutionSource}}</div>{{end}}
                         </div>
                         <div class="entity-resolution-cell">
@@ -1153,7 +1185,12 @@ const reviewTemplate = `<!DOCTYPE html>
                             data-blocked-legacy="{{if and (eq (index . "kind") "legacy_assembled") $.Lemma.TranslationBlocked}}1{{else}}0{{end}}"
                         >Select</button>
                     </td>
-                    <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "kind"}}</td>
+                    <td style="padding: 8px; border-top: 1px solid #eee;">
+                        <div>{{index . "kind"}}</div>
+                        {{if index . "deprecated"}}
+                        <div class="variant-note">{{if index . "deprecation_note"}}{{index . "deprecation_note"}}{{else}}Deprecated baseline kept only for review context.{{end}}</div>
+                        {{end}}
+                    </td>
                     <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "id"}}</td>
                     <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "status"}}</td>
                     <td style="padding: 8px; border-top: 1px solid #eee;">

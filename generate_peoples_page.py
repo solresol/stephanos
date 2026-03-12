@@ -2,10 +2,10 @@
 """
 Generate a page listing ethnic groups and peoples mentioned in Stephanos.
 """
-import json
 from pathlib import Path
 from datetime import datetime, timezone
 from db import get_connection
+from manual_entity_canonicalization import canonicalize_entity
 
 
 LETTER_MAP = {
@@ -23,26 +23,57 @@ def get_letter_name(char):
     return LETTER_MAP.get(char.upper() if char else '', 'alpha')
 
 
+def group_people_mentions(rows) -> list[dict]:
+    grouped = {}
+    for lemma_form, english, lemma_id, headword in rows:
+        canonical = canonicalize_entity("entity", "people", lemma_form, english)
+        key = (canonical["lemma_form"], canonical["english_translation"])
+        if key not in grouped:
+            grouped[key] = {
+                "lemma_form": canonical["lemma_form"],
+                "english": canonical["english_translation"],
+                "lemma_mentions": {},
+            }
+        grouped[key]["lemma_mentions"][int(lemma_id)] = headword
+
+    results = []
+    for item in grouped.values():
+        mentions = sorted(item["lemma_mentions"].items(), key=lambda pair: pair[1])
+        results.append(
+            {
+                "lemma_form": item["lemma_form"],
+                "english": item["english"],
+                "mention_count": len(mentions),
+                "lemmas": [headword for _, headword in mentions],
+            }
+        )
+
+    results.sort(key=lambda item: (-item["mention_count"], item["english"], item["lemma_form"]))
+    return results
+
+
 def main():
     print("Generating peoples page...")
 
     conn = get_connection()
     cur = conn.cursor()
 
-    # Get all peoples/ethnic groups
-    cur.execute("""
+    # Get all peoples/ethnic groups as raw mentions so we can merge a few
+    # curated duplicate buckets for display.
+    cur.execute(
+        """
         SELECT
-            p.lemma_form,
-            p.english_translation,
-            COUNT(DISTINCT p.lemma_id) as mention_count,
-            json_agg(DISTINCT a.lemma ORDER BY a.lemma) as lemmas
+            COALESCE(p.lemma_form, ''),
+            COALESCE(p.english_translation, ''),
+            p.lemma_id,
+            COALESCE(a.lemma, '')
         FROM effective_proper_nouns p
         JOIN assembled_lemmas a ON a.id = p.lemma_id
         WHERE p.noun_type = 'people'
-        GROUP BY p.lemma_form, p.english_translation
-        ORDER BY mention_count DESC, p.english_translation, p.lemma_form
-    """)
-    peoples = cur.fetchall()
+        ORDER BY a.lemma, p.id
+        """
+    )
+    peoples = group_people_mentions(cur.fetchall())
 
     conn.close()
 
@@ -169,8 +200,11 @@ def main():
 """
 
     # Add each people
-    for lemma_form, english, mention_count, lemmas_json in peoples:
-        lemmas = lemmas_json if isinstance(lemmas_json, list) else (json.loads(lemmas_json) if lemmas_json else [])
+    for item in peoples:
+        lemma_form = item["lemma_form"]
+        english = item["english"]
+        mention_count = item["mention_count"]
+        lemmas = item["lemmas"]
 
         entry_links = []
         for lemma in lemmas:

@@ -69,6 +69,18 @@ def generate_downloads_page():
                     'name': 'Etymologies',
                     'description': 'Etymology annotations extracted from entries',
                 },
+                {
+                    'path': 'exports/source_citation_units.csv',
+                    'url': 'source_citation_units.csv',
+                    'name': 'Source Citation Units',
+                    'description': 'Structured author/work/book citation units extracted from Greek entries',
+                },
+                {
+                    'path': 'exports/source_citation_mentions.csv',
+                    'url': 'source_citation_mentions.csv',
+                    'name': 'Source Citation Mentions',
+                    'description': 'Per-entry mentions of structured citation units, with raw citation strings and extraction metadata',
+                },
             ]
         },
         {

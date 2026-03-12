@@ -55,13 +55,19 @@ type ProperNoun struct {
 	Citation                    string `json:"citation"`
 	WorkTitle                   string `json:"work_title"`
 	WikidataQID                 string `json:"wikidata_qid"`
+	WikidataLabel               string `json:"wikidata_label"`
+	WikidataDescription         string `json:"wikidata_description"`
 	WikidataConfidence          string `json:"wikidata_confidence"`
 	HumanWikidataQID            string `json:"human_wikidata_qid"`
+	HumanWikidataLabel          string `json:"human_wikidata_label"`
+	HumanWikidataDescription    string `json:"human_wikidata_description"`
 	HumanResolutionStatus       string `json:"human_resolution_status"`
 	HumanResolutionNotes        string `json:"human_resolution_notes"`
 	HumanResolvedBy             string `json:"human_resolved_by"`
 	HumanResolvedAt             string `json:"human_resolved_at"`
 	EffectiveWikidataQID        string `json:"effective_wikidata_qid"`
+	EffectiveWikidataLabel      string `json:"effective_wikidata_label"`
+	EffectiveWikidataDescription string `json:"effective_wikidata_description"`
 	EffectiveWikidataConfidence string `json:"effective_wikidata_confidence"`
 	EffectiveResolutionStatus   string `json:"effective_resolution_status"`
 	EffectiveResolutionSource   string `json:"effective_resolution_source"`
