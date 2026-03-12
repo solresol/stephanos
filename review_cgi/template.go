@@ -1136,7 +1136,7 @@ const reviewTemplate = `<!DOCTYPE html>
                     <th style="text-align: left; padding: 8px;">ID</th>
                     <th style="text-align: left; padding: 8px;">Status</th>
                     <th style="text-align: left; padding: 8px;">Source</th>
-                    <th style="text-align: left; padding: 8px;">Snippet</th>
+                    <th style="text-align: left; padding: 8px;">Text</th>
                     <th style="text-align: left; padding: 8px;">Canonical</th>
                     <th style="text-align: left; padding: 8px;">Primary</th>
                 </tr>
@@ -1157,10 +1157,21 @@ const reviewTemplate = `<!DOCTYPE html>
                     <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "id"}}</td>
                     <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "status"}}</td>
                     <td style="padding: 8px; border-top: 1px solid #eee;">
+                        {{if index . "profile_name"}}
+                        <div>{{index . "profile_name"}}{{if index . "profile_version"}} v{{index . "profile_version"}}{{end}}</div>
+                        {{end}}
                         {{if index . "source_document"}}{{index . "source_document"}}{{else}}unknown{{end}}
                         {{if index . "source_text_version_id"}} / {{index . "source_text_version_id"}}{{end}}
                     </td>
-                    <td style="padding: 8px; border-top: 1px solid #eee;">{{index . "preview"}}</td>
+                    <td style="padding: 8px; border-top: 1px solid #eee;">
+                        <div>{{index . "preview"}}</div>
+                        {{if and (index . "text") (ne (index . "text") (index . "preview"))}}
+                        <details style="margin-top: 6px;">
+                            <summary>Full text</summary>
+                            <div style="margin-top: 6px; white-space: pre-wrap;">{{index . "text"}}</div>
+                        </details>
+                        {{end}}
+                    </td>
                     <td style="padding: 8px; border-top: 1px solid #eee;">
                         {{if index . "canonical"}}yes{{else}}–{{end}}
                     </td>

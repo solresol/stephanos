@@ -84,6 +84,14 @@ def greek_sort_key(lemma: str, version: str) -> tuple:
     return (letter_idx, lemma_normalized, version_order)
 
 
+def preview_text(text: str, limit: int = 180) -> str:
+    """Build a short preview for longer translation text."""
+    preview = (text or "").strip()
+    if len(preview) > limit:
+        return preview[: limit - 3].rstrip() + "..."
+    return preview
+
+
 def export_lemmas():
     """Export all lemmas to JSON for review system."""
     conn = get_connection()
@@ -500,6 +508,8 @@ def export_lemmas():
                 tr.id,
                 tr.status,
                 tr.source_text_version_id,
+                COALESCE(p.name, '') AS profile_name,
+                pv.version AS profile_version,
                 tr.model,
                 tr.created_at,
                 COALESCE(tr.translation_text, '') AS translation_text,
@@ -507,6 +517,10 @@ def export_lemmas():
                 COALESCE(tr.public_block_reason, '') AS public_block_reason,
                 COALESCE(stv.source_document, '') AS source_document
             FROM translation_runs tr
+            LEFT JOIN translation_prompt_profiles p
+              ON p.id = tr.profile_id
+            LEFT JOIN translation_prompt_profile_versions pv
+              ON pv.id = tr.profile_version_id
             LEFT JOIN lemma_source_text_versions stv
               ON stv.id = tr.source_text_version_id
             ORDER BY tr.lemma_id, tr.created_at DESC, tr.id DESC
@@ -517,6 +531,8 @@ def export_lemmas():
             run_id,
             status,
             source_text_version_id,
+            profile_name,
+            profile_version,
             model,
             created_at,
             translation_text,
@@ -524,21 +540,21 @@ def export_lemmas():
             public_block_reason,
             source_document,
         ) in cur.fetchall():
-            preview = (translation_text or "").strip()
-            if len(preview) > 180:
-                preview = preview[:177].rstrip() + "..."
             translation_variants_by_lemma.setdefault(lemma_id, []).append(
                 {
                     "kind": "translation_run",
                     "id": str(run_id),
                     "status": status or "draft",
                     "source_text_version_id": str(source_text_version_id or ""),
+                    "profile_name": profile_name or "",
+                    "profile_version": int(profile_version) if profile_version is not None else None,
                     "source_document": source_document or "",
                     "model": model or "",
                     "created_at": str(created_at) if created_at else "",
+                    "text": translation_text or "",
                     "public_eligible": bool(public_eligible),
                     "public_block_reason": public_block_reason or "",
-                    "preview": preview,
+                    "preview": preview_text(translation_text),
                 }
             )
 
@@ -572,9 +588,6 @@ def export_lemmas():
             translation_text,
             source_document,
         ) in cur.fetchall():
-            preview = (translation_text or "").strip()
-            if len(preview) > 180:
-                preview = preview[:177].rstrip() + "..."
             translation_variants_by_lemma.setdefault(lemma_id, []).append(
                 {
                     "kind": "human_translation",
@@ -584,7 +597,8 @@ def export_lemmas():
                     "source_text_version_id": str(source_text_version_id or ""),
                     "source_document": source_document or "",
                     "updated_at": str(updated_at) if updated_at else "",
-                    "preview": preview,
+                    "text": translation_text or "",
+                    "preview": preview_text(translation_text),
                 }
             )
 
@@ -651,17 +665,20 @@ def export_lemmas():
         elif meineke_word_pairs is None:
             meineke_word_pairs = []
 
+        legacy_translation = english_translation or ""
         default_variant = {
             "kind": "legacy_assembled",
             "id": "translation",
             "status": "blocked" if risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False) else "approved",
             "source_document": "billerbeck",
             "source_text_version_id": "",
-            "text": english_translation or "",
-            "preview": (english_translation or "").strip()[:180],
+            "text": legacy_translation,
+            "preview": preview_text(legacy_translation),
         }
-        variants = translation_variants_by_lemma.get(lemma_id, [])
-        if not variants:
+        variants = list(translation_variants_by_lemma.get(lemma_id, []))
+        if legacy_translation.strip() or risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False):
+            variants.insert(0, default_variant)
+        elif not variants:
             variants = [default_variant]
 
         pointer_variant = canonical_variants.select_pointer_variant(cur, lemma_id=lemma_id)
