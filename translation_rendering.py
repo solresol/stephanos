@@ -23,6 +23,13 @@ class TranslationBlock:
     text: str
 
 
+@dataclass(frozen=True)
+class QuotedSpan:
+    start: int
+    end: int
+    text: str
+
+
 def normalize_line_preserving_whitespace(text: str) -> str:
     if not text:
         return ""
@@ -110,21 +117,65 @@ def _split_fenced_segments(text: str) -> list[tuple[str, str]]:
     return segments
 
 
-def _find_multiline_quote(text: str):
-    best_match = None
-    best_start = None
+def _is_wordish_char(char: str) -> bool:
+    return bool(char and _WORDISH_RE.search(char))
+
+
+def _looks_like_same_char_quote_open(text: str, index: int) -> bool:
+    prev_char = text[index - 1] if index > 0 else ""
+    next_char = text[index + 1] if index + 1 < len(text) else ""
+    return not _is_wordish_char(prev_char) and bool(next_char) and not next_char.isspace()
+
+
+def _looks_like_same_char_quote_close(text: str, index: int) -> bool:
+    prev_char = text[index - 1] if index > 0 else ""
+    next_char = text[index + 1] if index + 1 < len(text) else ""
+    return bool(prev_char) and not prev_char.isspace() and not _is_wordish_char(next_char)
+
+
+def _find_quoted_spans(text: str, open_quote: str, close_quote: str) -> list[QuotedSpan]:
+    spans: list[QuotedSpan] = []
+    cursor = 0
+
+    while cursor < len(text):
+        start = text.find(open_quote, cursor)
+        if start < 0:
+            break
+
+        if open_quote == close_quote and not _looks_like_same_char_quote_open(text, start):
+            cursor = start + len(open_quote)
+            continue
+
+        search_from = start + len(open_quote)
+        while True:
+            end = text.find(close_quote, search_from)
+            if end < 0:
+                cursor = start + len(open_quote)
+                break
+
+            if open_quote == close_quote and not _looks_like_same_char_quote_close(text, end):
+                search_from = end + len(close_quote)
+                continue
+
+            spans.append(QuotedSpan(start, end + len(close_quote), text[start + len(open_quote):end]))
+            cursor = end + len(close_quote)
+            break
+
+    return spans
+
+
+def _find_multiline_quote(text: str) -> QuotedSpan | None:
+    best_match: QuotedSpan | None = None
 
     for open_quote, close_quote in _QUOTE_PAIRS:
-        pattern = re.compile(
-            re.escape(open_quote) + r"(.+?\n.+?)" + re.escape(close_quote),
-            re.DOTALL,
-        )
-        match = pattern.search(text)
-        if not match:
-            continue
-        if best_start is None or match.start() < best_start:
-            best_match = match
-            best_start = match.start()
+        for span in _find_quoted_spans(text, open_quote, close_quote):
+            if "\n" not in span.text:
+                continue
+            if not normalize_verse_text(span.text):
+                continue
+            if best_match is None or span.start < best_match.start:
+                best_match = span
+            break
 
     return best_match
 
@@ -141,15 +192,15 @@ def _split_paragraph_blocks(text: str) -> list[TranslationBlock]:
                 blocks.append(TranslationBlock("paragraph", prose))
             break
 
-        prose_before = normalize_prose_text(remainder[:quote_match.start()])
+        prose_before = normalize_prose_text(remainder[:quote_match.start])
         if prose_before:
             blocks.append(TranslationBlock("paragraph", prose_before))
 
-        verse_text = normalize_verse_text(quote_match.group(1))
+        verse_text = normalize_verse_text(quote_match.text)
         if verse_text:
             blocks.append(TranslationBlock("verse", verse_text))
 
-        remainder = remainder[quote_match.end():].strip()
+        remainder = remainder[quote_match.end:].strip()
 
     return blocks
 
