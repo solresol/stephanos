@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict VPrWvAgdGMwsDccec0JRv8x9qbODYaOcPxSsb1mH8kGGDgrDUFBpqh6i1StUnFz
+\restrict 4GgVPVTGxsm3uR8PZfLWuggnTEHPzxypKC7bei5Sr0e9CBFheiDhhDyB0ceA31R
 
 -- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
@@ -175,6 +175,58 @@ CREATE SEQUENCE public.assembled_lemmas_id_seq
 --
 
 ALTER SEQUENCE public.assembled_lemmas_id_seq OWNED BY public.assembled_lemmas.id;
+
+
+--
+-- Name: brady_entity_tags; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.brady_entity_tags (
+    id integer NOT NULL,
+    row_fingerprint text NOT NULL,
+    source_serial text,
+    billerbeck_id text NOT NULL,
+    meineke_id text,
+    headword text,
+    word text DEFAULT ''::text NOT NULL,
+    title text,
+    tt_tag text,
+    word_in_context text,
+    entity_type text,
+    wikidata_qid text,
+    pleiades_id text,
+    latitude double precision,
+    longitude double precision,
+    latlong text,
+    edate text,
+    is_headword boolean DEFAULT false NOT NULL,
+    authority_kind text,
+    topostext_id text,
+    re_identifier text,
+    placeholder_status text,
+    source_file text,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: brady_entity_tags_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.brady_entity_tags_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: brady_entity_tags_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.brady_entity_tags_id_seq OWNED BY public.brady_entity_tags.id;
 
 
 --
@@ -1309,6 +1361,13 @@ ALTER TABLE ONLY public.assembled_lemmas ALTER COLUMN id SET DEFAULT nextval('pu
 
 
 --
+-- Name: brady_entity_tags id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brady_entity_tags ALTER COLUMN id SET DEFAULT nextval('public.brady_entity_tags_id_seq'::regclass);
+
+
+--
 -- Name: epubs id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1490,6 +1549,14 @@ ALTER TABLE ONLY public.assembled_lemmas
 
 ALTER TABLE ONLY public.assembled_lemmas
     ADD CONSTRAINT assembled_lemmas_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: brady_entity_tags brady_entity_tags_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brady_entity_tags
+    ADD CONSTRAINT brady_entity_tags_pkey PRIMARY KEY (id);
 
 
 --
@@ -1817,6 +1884,41 @@ ALTER TABLE ONLY public.translation_runs
 --
 
 CREATE UNIQUE INDEX assembled_lemmas_billerbeck_version_idx ON public.assembled_lemmas USING btree (billerbeck_id, version) WHERE (billerbeck_id IS NOT NULL);
+
+
+--
+-- Name: brady_entity_tags_billerbeck_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX brady_entity_tags_billerbeck_idx ON public.brady_entity_tags USING btree (billerbeck_id);
+
+
+--
+-- Name: brady_entity_tags_re_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX brady_entity_tags_re_idx ON public.brady_entity_tags USING btree (re_identifier) WHERE (re_identifier IS NOT NULL);
+
+
+--
+-- Name: brady_entity_tags_row_fingerprint_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX brady_entity_tags_row_fingerprint_idx ON public.brady_entity_tags USING btree (row_fingerprint);
+
+
+--
+-- Name: brady_entity_tags_topostext_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX brady_entity_tags_topostext_idx ON public.brady_entity_tags USING btree (topostext_id) WHERE (topostext_id IS NOT NULL);
+
+
+--
+-- Name: brady_entity_tags_wikidata_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX brady_entity_tags_wikidata_idx ON public.brady_entity_tags USING btree (wikidata_qid) WHERE (wikidata_qid IS NOT NULL);
 
 
 --
@@ -2569,4 +2671,5 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict VPrWvAgdGMwsDccec0JRv8x9qbODYaOcPxSsb1mH8kGGDgrDUFBpqh6i1StUnFz
+\unrestrict 4GgVPVTGxsm3uR8PZfLWuggnTEHPzxypKC7bei5Sr0e9CBFheiDhhDyB0ceA31R
+
