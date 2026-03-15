@@ -47,6 +47,11 @@ fi
 	    SCHEMA_DB_NAME="${SCHEMA_DB_NAME:-${DB_NAME:-stephanos}}"
 	    SCHEMA_DB_PORT="${SCHEMA_DB_PORT:-${DB_PORT:-5432}}"
 	    SCHEMA_SSH_HOST="${SCHEMA_SSH_HOST:-stephanos@raksasa}"
+	    SCHEMA_PREFLIGHT_DIR="${SCHEMA_PREFLIGHT_DIR:-tmp/schema_preflight}"
+	    SCHEMA_LIVE_SQL="${SCHEMA_PREFLIGHT_DIR}/stephanos_schema.live.sql"
+	    SCHEMA_REPORT_MD="${SCHEMA_PREFLIGHT_DIR}/schema_drift_report.md"
+	    SCHEMA_REPORT_JSON="${SCHEMA_PREFLIGHT_DIR}/schema_drift_report.json"
+	    mkdir -p "$SCHEMA_PREFLIGHT_DIR"
 
     # Keep a live snapshot for audit/debugging each pipeline run.
     ./dump_schema.sh \
@@ -54,7 +59,7 @@ fi
         --port "$SCHEMA_DB_PORT" \
         --user "$SCHEMA_DB_USER" \
         --db-name "$SCHEMA_DB_NAME" \
-        --output "stephanos_schema.live.sql" \
+        --output "$SCHEMA_LIVE_SQL" \
         --ssh-host "$SCHEMA_SSH_HOST" \
         2>&1 | tee -a "$LOGFILE"
 
@@ -64,8 +69,8 @@ fi
     DB_USER="$SCHEMA_DB_USER" \
     uv run check_db_schema.py \
         --schema-file "stephanos_schema.sql" \
-        --report-file "schema_drift_report.md" \
-        --json-report-file "schema_drift_report.json" \
+        --report-file "$SCHEMA_REPORT_MD" \
+        --json-report-file "$SCHEMA_REPORT_JSON" \
         --fail-on-extra \
         2>&1 | tee -a "$LOGFILE"
 else
