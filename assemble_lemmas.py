@@ -137,6 +137,15 @@ def normalize_headword(text: str) -> str:
     return "".join(ch for ch in stripped if ch.isalpha())
 
 
+def extract_billerbeck_entry_number(billerbeck_id: str | None) -> int | None:
+    if not billerbeck_id:
+        return None
+    match = re.search(r"(\d+)", billerbeck_id)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
 def infer_billerbeck_prefix(text: str) -> str | None:
     if not text:
         return None
@@ -222,11 +231,26 @@ def select_headword_meta(meta_list, entry_number):
         return None
     entry_str = str(entry_number)
     for meta in meta_list:
-        billerbeck_id = meta.get("billerbeck_id") or ""
-        match = re.search(r"(\d+)", billerbeck_id)
-        if match and match.group(1) == entry_str:
+        billerbeck_entry_number = extract_billerbeck_entry_number(meta.get("billerbeck_id"))
+        if billerbeck_entry_number is not None and str(billerbeck_entry_number) == entry_str:
             return meta
     return None
+
+
+def page_duplicate_preference(entry: dict) -> tuple[int, int, int, int]:
+    """Rank same-page duplicate candidates so exact-number matches win."""
+    billerbeck_entry_number = extract_billerbeck_entry_number(entry.get("billerbeck_id"))
+    entry_number = entry.get("entry_number")
+    if billerbeck_entry_number is None or entry_number is None:
+        number_distance = 999999
+    else:
+        number_distance = abs(int(entry_number) - int(billerbeck_entry_number))
+    return (
+        1 if number_distance == 0 else 0,
+        -number_distance,
+        len(entry.get("source_image_ids") or []),
+        len((entry.get("greek_text") or "").strip()),
+    )
 
 
 def extract_headword_from_greek_text(greek_text: str) -> str | None:
@@ -255,6 +279,58 @@ def extract_headword_from_greek_text(greek_text: str) -> str | None:
     return headword
 
 
+def count_greek_letters(text: str) -> int:
+    count = 0
+    for ch in text or "":
+        codepoint = ord(ch)
+        if (0x0370 <= codepoint <= 0x03FF) or (0x1F00 <= codepoint <= 0x1FFF):
+            if ch.isalpha():
+                count += 1
+    return count
+
+
+def count_latin_letters(text: str) -> int:
+    return sum(1 for ch in (text or "") if ("A" <= ch <= "Z") or ("a" <= ch <= "z"))
+
+
+def continuation_text_looks_safe(notes: str) -> bool:
+    text = (notes or "").strip()
+    if not text:
+        return False
+    lowered = text.casefold()
+    if "the page contains" in lowered or "fragmentary greek text" in lowered:
+        return False
+    greek_letters = count_greek_letters(text)
+    latin_letters = count_latin_letters(text)
+    if greek_letters < 40:
+        return False
+    if latin_letters >= 12 and latin_letters * 2 >= greek_letters:
+        return False
+    return True
+
+
+def entry_looks_like_continuation_fragment(entry: dict, lemma_norm: str) -> bool:
+    greek_text = (entry.get("greek_text") or "").strip()
+    if not greek_text:
+        return False
+    headword_from_text = extract_headword_from_greek_text(greek_text)
+    if not headword_from_text:
+        return True
+    return normalize_headword(headword_from_text) != lemma_norm
+
+
+def append_text_fragment(base_text: str, fragment_text: str) -> str:
+    base = (base_text or "").strip()
+    fragment = (fragment_text or "").strip()
+    if not fragment:
+        return base
+    if not base:
+        return fragment
+    if fragment in base:
+        return base
+    return f"{base} {fragment}".strip()
+
+
 def load_processed_images(cur):
     cur.execute(
         """
@@ -280,6 +356,10 @@ def build_assembled_entries(rows, headword_lookup, *, verbose=False):
         "apparatus_only": 0,
         "continuation_attached": 0,
         "continuation_orphan": 0,
+        "continuation_rejected": 0,
+        "same_page_duplicate_skipped": 0,
+        "same_page_duplicate_merged": 0,
+        "same_page_duplicate_replaced": 0,
     }
 
     for image_id, filename, lemma_json, volume_number, volume_label, letter_range, ocr_generation_id, processed_at in rows:
@@ -332,20 +412,25 @@ def build_assembled_entries(rows, headword_lookup, *, verbose=False):
             continue
         if status == "continuation_only":
             if last_entry_by_version:
-                stats["continuation_attached"] += 1
-                for last_entry in last_entry_by_version.values():
-                    last_entry["source_image_ids"].append(image_id)
-                    last_entry.setdefault("source_image_filenames", []).append(filename)
-                    if notes:
-                        last_entry["greek_text"] = (last_entry["greek_text"] + " " + notes).strip()
-                    if volume_number and not last_entry.get("volume_number"):
-                        last_entry["volume_number"] = volume_number
-                        last_entry["volume_label"] = volume_label
-                        last_entry["letter_range"] = letter_range
-                    if ocr_generation_id and not last_entry.get("ocr_generation_id"):
-                        last_entry["ocr_generation_id"] = ocr_generation_id
-                    if processed_at and (not last_entry.get("ocr_processed_at") or processed_at > last_entry["ocr_processed_at"]):
-                        last_entry["ocr_processed_at"] = processed_at
+                if continuation_text_looks_safe(notes):
+                    stats["continuation_attached"] += 1
+                    for last_entry in last_entry_by_version.values():
+                        last_entry["source_image_ids"].append(image_id)
+                        last_entry.setdefault("source_image_filenames", []).append(filename)
+                        if notes:
+                            last_entry["greek_text"] = append_text_fragment(last_entry["greek_text"], notes)
+                        if volume_number and not last_entry.get("volume_number"):
+                            last_entry["volume_number"] = volume_number
+                            last_entry["volume_label"] = volume_label
+                            last_entry["letter_range"] = letter_range
+                        if ocr_generation_id and not last_entry.get("ocr_generation_id"):
+                            last_entry["ocr_generation_id"] = ocr_generation_id
+                        if processed_at and (not last_entry.get("ocr_processed_at") or processed_at > last_entry["ocr_processed_at"]):
+                            last_entry["ocr_processed_at"] = processed_at
+                else:
+                    stats["continuation_rejected"] += 1
+                    if verbose:
+                        print(f"Skipping {filename}: continuation notes look non-Greek")
             else:
                 stats["continuation_orphan"] += 1
                 if verbose:
@@ -355,6 +440,7 @@ def build_assembled_entries(rows, headword_lookup, *, verbose=False):
         if not page_entries:
             continue
 
+        page_duplicate_entries = {}
         for entry in page_entries:
             greek_text = (entry.get("greek_text", "") or "").strip()
             greek_text = re.sub(r"^\d+\s+", "", greek_text)
@@ -395,7 +481,7 @@ def build_assembled_entries(rows, headword_lookup, *, verbose=False):
                     lemma_norm = normalize_headword(assembled["lemma"])
                     best = None
                     best_score = 0.0
-                    for delta in (0, -1, 1, -2, 2):
+                    for delta in (0, -1, 1):
                         candidate_num = entry_number + delta
                         if candidate_num <= 0:
                             continue
@@ -424,7 +510,38 @@ def build_assembled_entries(rows, headword_lookup, *, verbose=False):
                 assembled["nodegoat_id"] = meta["nodegoat_id"]
                 assembled["meineke_id"] = meta["meineke_id"]
                 assembled["billerbeck_id"] = meta["billerbeck_id"]
+            dedupe_lemma_norm = normalize_headword(assembled["lemma"])
+            dedupe_key = None
+            if assembled.get("billerbeck_id") and dedupe_lemma_norm:
+                dedupe_key = (assembled["version"], dedupe_lemma_norm, assembled["billerbeck_id"])
+                existing_page_entry = page_duplicate_entries.get(dedupe_key)
+                if existing_page_entry is not None:
+                    assembled_is_fragment = entry_looks_like_continuation_fragment(assembled, dedupe_lemma_norm)
+                    existing_is_fragment = entry_looks_like_continuation_fragment(existing_page_entry, dedupe_lemma_norm)
+                    if assembled_is_fragment and not existing_is_fragment:
+                        existing_page_entry["greek_text"] = append_text_fragment(
+                            existing_page_entry["greek_text"],
+                            assembled["greek_text"],
+                        )
+                        stats["same_page_duplicate_merged"] += 1
+                    elif existing_is_fragment and not assembled_is_fragment:
+                        assembled["greek_text"] = append_text_fragment(
+                            assembled["greek_text"],
+                            existing_page_entry["greek_text"],
+                        )
+                        existing_page_entry.update(assembled)
+                        last_entry_by_version[assembled["version"]] = existing_page_entry
+                        stats["same_page_duplicate_merged"] += 1
+                    elif page_duplicate_preference(assembled) > page_duplicate_preference(existing_page_entry):
+                        existing_page_entry.update(assembled)
+                        last_entry_by_version[assembled["version"]] = existing_page_entry
+                        stats["same_page_duplicate_replaced"] += 1
+                    else:
+                        stats["same_page_duplicate_skipped"] += 1
+                    continue
             entries.append(assembled)
+            if dedupe_key is not None:
+                page_duplicate_entries[dedupe_key] = assembled
             last_entry_by_version[assembled["version"]] = assembled
 
     return entries, stats
@@ -644,8 +761,23 @@ def main():
         continuation_parts = []
         if stats["continuation_attached"]:
             continuation_parts.append(f"{stats['continuation_attached']} attached")
+        if stats["continuation_rejected"]:
+            continuation_parts.append(f"{stats['continuation_rejected']} rejected")
         if stats["continuation_orphan"]:
             continuation_parts.append(f"{stats['continuation_orphan']} orphaned")
+        if (
+            stats["same_page_duplicate_skipped"]
+            or stats["same_page_duplicate_merged"]
+            or stats["same_page_duplicate_replaced"]
+        ):
+            duplicate_parts = []
+            if stats["same_page_duplicate_skipped"]:
+                duplicate_parts.append(f"{stats['same_page_duplicate_skipped']} skipped")
+            if stats["same_page_duplicate_merged"]:
+                duplicate_parts.append(f"{stats['same_page_duplicate_merged']} merged")
+            if stats["same_page_duplicate_replaced"]:
+                duplicate_parts.append(f"{stats['same_page_duplicate_replaced']} replaced")
+            print("Same-page duplicate OCR entries: " + ", ".join(duplicate_parts) + ".")
 
         if skip_parts:
             print("Skipped pages: " + ", ".join(skip_parts) + ".")
