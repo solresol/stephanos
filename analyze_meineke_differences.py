@@ -21,7 +21,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 
 from db import get_connection
 from generate_reference_site import classify_text_difference
@@ -143,6 +143,18 @@ Rules:
    - probably_same_translation: if differences are notation/mechanical or unlikely to change translation.
    - uncertain: if insufficient context.
 7. Return only strict function-call JSON."""
+
+JSON_FALLBACK_PROMPT = """
+Return ONLY a single JSON object with exactly these keys:
+- difference_level
+- minor_equivalent_to_tone
+- mechanical_patterns
+- word_pairs
+- summary
+- translation_impact
+- translation_impact_note
+Do not wrap the JSON in markdown.
+""".strip()
 
 USER_PROMPT = """Compare these two Greek texts.
 
@@ -613,7 +625,16 @@ def get_tokens_used_today(cur) -> int:
     return int(row[0] or 0)
 
 
-def analyze_pair(client: OpenAI, *, model: str, lemma: str, entry_number: int | None, billerbeck_id: str, meineke_id: str, source_kind: str, billerbeck_text: str, meineke_text: str):
+def build_analysis_messages(
+    *,
+    lemma: str,
+    entry_number: int | None,
+    billerbeck_id: str,
+    meineke_id: str,
+    source_kind: str,
+    billerbeck_text: str,
+    meineke_text: str,
+) -> list[dict[str, str]]:
     billerbeck_for_llm = strip_leading_entry_number(billerbeck_text, entry_number)
     billerbeck_for_llm = strip_parenthetical_content(billerbeck_for_llm)
     meineke_for_llm = strip_parenthetical_content(meineke_text)
@@ -621,24 +642,41 @@ def analyze_pair(client: OpenAI, *, model: str, lemma: str, entry_number: int | 
     meineke_excerpt = clean_prompt_text(meineke_for_llm)
     difference_windows = build_difference_windows(billerbeck_for_llm, meineke_for_llm)
 
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": USER_PROMPT.format(
+                lemma=lemma or "",
+                entry_number=entry_number if entry_number is not None else "",
+                billerbeck_id=billerbeck_id or "",
+                meineke_id=meineke_id or "",
+                source_kind=source_kind or "ocr",
+                billerbeck_excerpt=billerbeck_excerpt,
+                meineke_excerpt=meineke_excerpt,
+                difference_windows=difference_windows,
+            ),
+        },
+    ]
+
+
+def should_fallback_to_json_mode(exc: Exception) -> bool:
+    if isinstance(exc, BadRequestError):
+        return "parse the json body" in str(exc).casefold()
+    if isinstance(exc, ValueError):
+        return "missing tool call" in str(exc).casefold()
+    return False
+
+
+def analyze_pair_with_tool_call(
+    client: OpenAI,
+    *,
+    model: str,
+    messages: list[dict[str, str]],
+) -> tuple[dict, int]:
     response = client.chat.completions.create(
         model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": USER_PROMPT.format(
-                    lemma=lemma or "",
-                    entry_number=entry_number if entry_number is not None else "",
-                    billerbeck_id=billerbeck_id or "",
-                    meineke_id=meineke_id or "",
-                    source_kind=source_kind or "ocr",
-                    billerbeck_excerpt=billerbeck_excerpt,
-                    meineke_excerpt=meineke_excerpt,
-                    difference_windows=difference_windows,
-                ),
-            },
-        ],
+        messages=messages,
         tools=[DIFF_TOOL],
         tool_choice={"type": "function", "function": {"name": "submit_difference_report"}},
     )
@@ -651,6 +689,49 @@ def analyze_pair(client: OpenAI, *, model: str, lemma: str, entry_number: int | 
     raw_arguments = tool_calls[0].function.arguments
     result = json.loads(raw_arguments)
     return result, tokens_used
+
+
+def analyze_pair_with_json_fallback(
+    client: OpenAI,
+    *,
+    model: str,
+    messages: list[dict[str, str]],
+) -> tuple[dict, int]:
+    fallback_messages = list(messages)
+    if fallback_messages and fallback_messages[0].get("role") == "system":
+        fallback_messages[0] = {
+            "role": "system",
+            "content": fallback_messages[0]["content"] + "\n\n" + JSON_FALLBACK_PROMPT,
+        }
+    else:
+        fallback_messages.insert(0, {"role": "system", "content": JSON_FALLBACK_PROMPT})
+    response = client.chat.completions.create(
+        model=model,
+        messages=fallback_messages,
+        response_format={"type": "json_object"},
+    )
+
+    tokens_used = response.usage.total_tokens if response.usage else 0
+    content = response.choices[0].message.content or ""
+    return json.loads(content), tokens_used
+
+
+def analyze_pair(client: OpenAI, *, model: str, lemma: str, entry_number: int | None, billerbeck_id: str, meineke_id: str, source_kind: str, billerbeck_text: str, meineke_text: str):
+    messages = build_analysis_messages(
+        lemma=lemma,
+        entry_number=entry_number,
+        billerbeck_id=billerbeck_id,
+        meineke_id=meineke_id,
+        source_kind=source_kind,
+        billerbeck_text=billerbeck_text,
+        meineke_text=meineke_text,
+    )
+    try:
+        return analyze_pair_with_tool_call(client, model=model, messages=messages)
+    except Exception as exc:
+        if not should_fallback_to_json_mode(exc):
+            raise
+        return analyze_pair_with_json_fallback(client, model=model, messages=messages)
 
 
 def normalize_llm_result(result: dict) -> dict:

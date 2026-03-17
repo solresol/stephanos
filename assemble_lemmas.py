@@ -547,7 +547,7 @@ def build_assembled_entries(rows, headword_lookup, *, verbose=False):
     return entries, stats
 
 
-def upsert_assembled(cur, assembled_entries):
+def upsert_assembled(cur, assembled_entries, *, verbose: bool = False):
     """
     Upsert assembled lemma entries into the database.
 
@@ -556,6 +556,8 @@ def upsert_assembled(cur, assembled_entries):
     """
     upserts = 0
     skipped_duplicates = 0
+    duplicate_pairs = []
+    duplicate_details = []
     for entry in assembled_entries:
         source_ids_json = json.dumps(entry["source_image_ids"])
         ocr_processed_at = entry.get("ocr_processed_at")
@@ -658,6 +660,7 @@ def upsert_assembled(cur, assembled_entries):
                 skipped_duplicates += 1
                 billerbeck_id = entry.get("billerbeck_id")
                 version = entry.get("version") or "epitome"
+                duplicate_pairs.append((billerbeck_id, version))
 
                 existing = None
                 try:
@@ -679,16 +682,16 @@ def upsert_assembled(cur, assembled_entries):
                 src_files = entry.get("source_image_filenames") or []
                 if existing:
                     existing_id, existing_lemma, existing_entry_number, existing_source_image_ids = existing
-                    print(
-                        f"Warning: duplicate billerbeck_id {billerbeck_id} (version={version}). "
+                    duplicate_details.append(
+                        f"duplicate billerbeck_id {billerbeck_id} (version={version}). "
                         f"Existing lemma id={existing_id} lemma='{existing_lemma}' entry_number={existing_entry_number} "
                         f"source_image_ids={existing_source_image_ids}; "
                         f"skipping new lemma='{entry.get('lemma')}' entry_number={entry.get('entry_number')} "
                         f"images={src_ids} files={src_files}"
                     )
                 else:
-                    print(
-                        f"Warning: duplicate billerbeck_id {billerbeck_id} (version={version}); "
+                    duplicate_details.append(
+                        f"duplicate billerbeck_id {billerbeck_id} (version={version}); "
                         f"skipping lemma='{entry.get('lemma')}' entry_number={entry.get('entry_number')} "
                         f"images={src_ids} files={src_files}"
                     )
@@ -714,7 +717,25 @@ def upsert_assembled(cur, assembled_entries):
 
         upserts += 1
     if skipped_duplicates:
-        print(f"Skipped {skipped_duplicates} entries due to duplicate (billerbeck_id, version).")
+        if verbose:
+            for detail in duplicate_details:
+                print(f"Warning: {detail}")
+        else:
+            seen_pairs = []
+            seen_set = set()
+            for pair in duplicate_pairs:
+                if pair in seen_set:
+                    continue
+                seen_set.add(pair)
+                seen_pairs.append(pair)
+            sample = ", ".join(f"{billerbeck_id} ({version})" for billerbeck_id, version in seen_pairs[:5])
+            if len(seen_pairs) > 5:
+                sample += ", ..."
+            summary = f"Skipped {skipped_duplicates} entries due to duplicate (billerbeck_id, version)."
+            if sample:
+                summary += f" Examples: {sample}."
+            summary += " Use --verbose for per-entry details."
+            print(summary)
     return upserts
 
 
@@ -788,7 +809,7 @@ def main():
         conn.close()
         return
 
-    upserts = upsert_assembled(cur, assembled_entries)
+    upserts = upsert_assembled(cur, assembled_entries, verbose=args.verbose)
     conn.commit()
 
     print(f"Assembled {len(assembled_entries)} lemmas.")

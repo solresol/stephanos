@@ -46,6 +46,26 @@ ANCIENT_OCCUPATIONS = [
     "Q482980",   # author
 ]
 
+RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def get_with_retries(url: str, *, params: dict, headers: dict, timeout: int, attempts: int = 3):
+    last_exc = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=timeout)
+            response.raise_for_status()
+            return response
+        except requests.RequestException as exc:
+            last_exc = exc
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            if status_code not in RETRYABLE_HTTP_STATUS_CODES or attempt >= attempts:
+                raise
+            time.sleep(0.75 * attempt)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Retry helper exhausted without a response")
+
 
 def load_api_key():
     """Load OpenAI API key from ~/.openai.key"""
@@ -101,7 +121,7 @@ def query_wikidata(name_english: str, name_greek: str = None) -> list:
     for term in search_terms:
         # First, use Wikidata search API for fuzzy matching
         try:
-            search_response = requests.get(
+            search_response = get_with_retries(
                 "https://www.wikidata.org/w/api.php",
                 params={
                     "action": "wbsearchentities",
@@ -113,7 +133,6 @@ def query_wikidata(name_english: str, name_greek: str = None) -> list:
                 headers={"User-Agent": "StephanosProject/1.0 (ancient geography research)"},
                 timeout=30
             )
-            search_response.raise_for_status()
             search_data = search_response.json()
 
             # Get QIDs from search results
@@ -161,13 +180,12 @@ def query_wikidata(name_english: str, name_greek: str = None) -> list:
             LIMIT 20
             """
 
-            response = requests.get(
+            response = get_with_retries(
                 WIKIDATA_ENDPOINT,
                 params={"query": query, "format": "json"},
                 headers={"User-Agent": "StephanosProject/1.0 (ancient geography research)"},
                 timeout=30
             )
-            response.raise_for_status()
             data = response.json()
 
             for result in data.get("results", {}).get("bindings", []):

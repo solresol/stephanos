@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import re
 import unicodedata
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -340,7 +341,14 @@ def main() -> int:
             metric="cosine",
             random_state=int(args.random_state),
         )
-        embedding = reducer.fit_transform(X)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"n_jobs value 1 overridden to 1 by setting random_state\. Use no seed for parallelism\.",
+                category=UserWarning,
+                module=r"umap\.umap_",
+            )
+            embedding = reducer.fit_transform(X)
         embedding_method = "UMAP"
     else:
         # Fallback (UMAP not installed): fast 2D linear projection.
