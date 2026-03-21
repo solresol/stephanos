@@ -543,7 +543,7 @@ VERIFICATION_TOOL = {
 
 
 def verify_citation_with_llm(client, stephanos_context: str, original_text: str,
-                             author_name: str, citation: str, model="gpt-5-mini"):
+                             author_name: str, citation: str, model="gpt-5.4-mini"):
     """
     Use LLM to compare Stephanos's text with original source.
 

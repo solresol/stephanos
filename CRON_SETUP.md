@@ -4,7 +4,7 @@
 
 The `run_daily_pipeline.sh` script automates the entire Stephanos processing workflow:
 
-1. **Image Processing** - Extract Greek text from scanned pages (gpt-5-mini)
+1. **Image Processing** - Extract Greek text from scanned pages (gpt-5.4-mini)
 2. **Translation** - Translate Greek to English (gpt-5.1)
 3. **Website Generation** - Create progress and reference websites
 4. **Deployment** - Rsync to merah server
@@ -32,7 +32,7 @@ Or to run every 6 hours:
 ## Token Limits
 
 The pipeline respects daily token limits:
-- **Image processing (gpt-5-mini)**: 1,000,000 tokens/day
+- **Image processing (gpt-5.4-mini)**: 1,000,000 tokens/day
 - **Translation (gpt-5.1)**: 100,000 tokens/day
 
 When limits are reached, the script stops gracefully and will resume the next day.

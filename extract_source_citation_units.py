@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Extract structured source-citation units from Stephanos Greek lemmas using gpt-5-mini.
+Extract structured source-citation units from Stephanos Greek lemmas using gpt-5.4-mini.
 
 Goal: treat (author + work + book + identifiers) as the atomic unit.
 
@@ -148,7 +148,7 @@ def ensure_tables_exist(cur) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract structured source-citation units for lemmas")
-    parser.add_argument("--model", default="gpt-5-mini", help="Model to use (default: gpt-5-mini)")
+    parser.add_argument("--model", default="gpt-5.4-mini", help="Model to use (default: gpt-5.4-mini)")
     parser.add_argument("--limit", type=int, help="Limit number of lemmas to process")
     parser.add_argument("--lemma-id", type=int, help="Process only a specific lemma_id")
     parser.add_argument("--force", action="store_true", help="Reprocess even if mentions already exist")

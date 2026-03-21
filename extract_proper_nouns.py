@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Extract proper nouns from lemma entries using ChatGPT-5-mini.
+Extract proper nouns from lemma entries using ChatGPT-5.4-mini.
 
 For each unanalyzed lemma, identifies proper nouns (people, places, peoples, etc.)
 and extracts:
@@ -107,7 +107,7 @@ EXTRACT_PROPER_NOUNS_TOOL = {
 }
 
 
-def extract_proper_nouns_for_lemma(client, greek_text, model="gpt-5-mini"):
+def extract_proper_nouns_for_lemma(client, greek_text, model="gpt-5.4-mini"):
     """
     Call OpenAI API to extract proper nouns.
 

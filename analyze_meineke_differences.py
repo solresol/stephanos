@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Analyze Meineke/Billerbeck Greek differences with GPT-5-mini function calling.
+Analyze Meineke/Billerbeck Greek differences with GPT-5.4-mini function calling.
 
 Workflow:
 1. Sync all epitome lemma pairs into `meineke_text_differences` with normalized-class baseline.
@@ -26,7 +26,7 @@ from api_keys import load_api_key
 from db import get_connection
 from generate_reference_site import classify_text_difference
 
-DEFAULT_MODEL = "gpt-5-mini"
+DEFAULT_MODEL = "gpt-5.4-mini"
 DEFAULT_LIMIT = 20
 DEFAULT_DELAY = 1.0
 DEFAULT_DAILY_TOKEN_LIMIT = 1_000_000
@@ -848,7 +848,7 @@ def update_analysis_error(conn, cur, lemma_id: int, error_message: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Analyze Meineke/Billerbeck differences with GPT-5-mini")
+    parser = argparse.ArgumentParser(description="Analyze Meineke/Billerbeck differences with GPT-5.4-mini")
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help=f"Max rows to analyze this run (default: {DEFAULT_LIMIT})")
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY, help=f"Delay in seconds between API calls (default: {DEFAULT_DELAY})")
     parser.add_argument(

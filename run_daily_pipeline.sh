@@ -149,7 +149,7 @@ echo "Step 5b: Extracting proper nouns..." | tee -a "$LOGFILE"
 uv run extract_proper_nouns.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 5b2: Extract structured source-citation units (author+work+book)
-SOURCE_CITATION_EXTRACT_MODEL="${SOURCE_CITATION_EXTRACT_MODEL:-gpt-5-mini}"
+SOURCE_CITATION_EXTRACT_MODEL="${SOURCE_CITATION_EXTRACT_MODEL:-gpt-5.4-mini}"
 SOURCE_CITATION_EXTRACT_LIMIT="${SOURCE_CITATION_EXTRACT_LIMIT:-300}"
 SOURCE_CITATION_EXTRACT_DELAY="${SOURCE_CITATION_EXTRACT_DELAY:-0.1}"
 if [ "$SOURCE_CITATION_EXTRACT_LIMIT" -gt 0 ]; then
@@ -189,7 +189,7 @@ uv run extract_aliases.py --limit 20 2>&1 | tee -a "$LOGFILE"
 echo "Step 5f: Generating spelling variants..." | tee -a "$LOGFILE"
 uv run generate_spelling_variants.py 2>&1 | tee -a "$LOGFILE"
 
-# Step 5g: Analyze Meineke/Billerbeck differences with gpt-5-mini (small daily batch)
+# Step 5g: Analyze Meineke/Billerbeck differences with gpt-5.4-mini (small daily batch)
 echo "Step 5g: Analyzing Meineke/Billerbeck differences..." | tee -a "$LOGFILE"
 MEINEKE_DIFF_DAILY_TOKEN_LIMIT="${MEINEKE_DIFF_DAILY_TOKEN_LIMIT:-1000000}"
 uv run analyze_meineke_differences.py --limit 20 --daily-token-limit "$MEINEKE_DIFF_DAILY_TOKEN_LIMIT" --delay 1 2>&1 | tee -a "$LOGFILE"
