@@ -17,20 +17,13 @@ import json
 import os
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 import requests
 from openai import OpenAI
 
+from api_keys import load_api_key
 from db import get_connection
 import link_wikidata as author_linker
-
-
-def load_api_key() -> str:
-    key_path = Path.home() / ".openai.key"
-    if not key_path.exists():
-        raise FileNotFoundError(f"API key not found at {key_path}")
-    return key_path.read_text().strip()
 
 
 def table_exists(cur, table_name: str) -> bool:

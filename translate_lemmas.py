@@ -9,10 +9,10 @@ import argparse
 import json
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 from openai import OpenAI
 
+from api_keys import load_api_key
 from db import get_connection
 from translation_run_utils import DEFAULT_TRANSLATION_MODEL, lookup_public_block
 
@@ -35,15 +35,6 @@ TRANSLATE_TOOL = {
         },
     },
 }
-
-
-def load_api_key():
-    key_path = Path.home() / ".openai.key"
-    if not key_path.exists():
-        raise FileNotFoundError(f"API key file not found: {key_path}")
-    return key_path.read_text().strip()
-
-
 def get_tokens_today(cur):
     today = datetime.now(timezone.utc).date().isoformat()
     cur.execute(

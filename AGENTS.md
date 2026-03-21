@@ -77,5 +77,5 @@
 - Link to any tracking issue when applicable; call out operational risks (token spend, DB migrations, remote sync targets) in the description.
 
 ## Security & Configuration Notes
-- Keep secrets out of git: OpenAI key is read from `~/.openai.key`; DB credentials live in `config.py` but should be local overrides, not production secrets.
+- Keep secrets out of git: Stephanos OpenAI key is read from `~/.openai.stephanos.key`; DB credentials live in `config.py` but should be local overrides, not production secrets.
 - Database writes and rsync/SSH targets in `run_daily_pipeline.sh` are live operations—double-check paths and hosts before running or modifying.***

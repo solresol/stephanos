@@ -30,10 +30,10 @@ import base64
 import json
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 from openai import OpenAI
 
+from api_keys import load_api_key
 from db import get_connection
 
 DEFAULT_MODEL = "gpt-5.1"
@@ -116,15 +116,6 @@ EXTRACT_TOOL = {
         },
     },
 }
-
-
-def load_api_key():
-    key_path = Path.home() / ".openai.key"
-    if not key_path.exists():
-        raise FileNotFoundError(f"API key file not found: {key_path}")
-    return key_path.read_text().strip()
-
-
 def fetch_unprocessed_images(cur, limit: int | None, max_page_number: int | None):
     query = """
         SELECT id, image_filename, image_data

@@ -20,11 +20,11 @@ import json
 import os
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 import requests
 from openai import OpenAI
 
+from api_keys import load_api_key
 from db import get_connection
 
 # Wikidata SPARQL endpoint
@@ -65,16 +65,6 @@ def get_with_retries(url: str, *, params: dict, headers: dict, timeout: int, att
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("Retry helper exhausted without a response")
-
-
-def load_api_key():
-    """Load OpenAI API key from ~/.openai.key"""
-    key_path = Path.home() / ".openai.key"
-    if not key_path.exists():
-        raise FileNotFoundError(f"API key not found at {key_path}")
-    return key_path.read_text().strip()
-
-
 def normalize_name(name: str) -> list:
     """
     Generate search variants for a name.

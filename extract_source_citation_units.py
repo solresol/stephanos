@@ -16,19 +16,11 @@ import hashlib
 import json
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 from openai import OpenAI
 
+from api_keys import load_api_key
 from db import get_connection
-
-
-def load_api_key() -> str:
-    """Load OpenAI API key from ~/.openai.key"""
-    key_path = Path.home() / ".openai.key"
-    if not key_path.exists():
-        raise FileNotFoundError(f"API key file not found: {key_path}")
-    return key_path.read_text().strip()
 
 
 SYSTEM_PROMPT = """You are a classical philologist specializing in Byzantine Greek geographical texts.

@@ -484,8 +484,8 @@ from resolve_citation import resolve_to_cts, resolve_to_dfhg
 from fetch_source_text import fetch_from_perseus_cts, fetch_from_dfhg
 
 def load_api_key():
-    """Load OpenAI API key from ~/.openai.key"""
-    key_path = Path.home() / ".openai.key"
+    """Load OpenAI API key from ~/.openai.stephanos.key"""
+    key_path = Path.home() / ".openai.stephanos.key"
     return key_path.read_text().strip()
 
 

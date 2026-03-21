@@ -20,6 +20,7 @@ import unicodedata
 from openai import OpenAI
 from google import genai
 
+from api_keys import load_api_key
 from db import get_connection
 
 DEFAULT_MODEL = "gpt-5.1"
@@ -72,13 +73,6 @@ def get_or_create_generation(cur, name: str, description: str):
         (name, description),
     )
     return cur.fetchone()[0]
-
-def load_api_key():
-    """Load OpenAI API key from ~/.openai.key"""
-    key_path = Path.home() / ".openai.key"
-    if not key_path.exists():
-        raise FileNotFoundError(f"API key file not found: {key_path}")
-    return key_path.read_text().strip()
 
 def load_gemini_api_key():
     """Load Gemini API key from ~/.gemini.key"""

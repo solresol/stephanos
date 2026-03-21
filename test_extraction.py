@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 from openai import OpenAI
+from api_keys import load_api_key
 from db import get_connection
 
 # Import from extract_proper_nouns
@@ -23,8 +24,7 @@ def main():
     print()
 
     # Load API key
-    api_key = (Path.home() / ".openai.key").read_text().strip()
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=load_api_key())
 
     # Extract
     print("Calling API...")

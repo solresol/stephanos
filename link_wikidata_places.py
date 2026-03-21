@@ -21,11 +21,11 @@ import os
 import time
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 
 import requests
 from openai import OpenAI
 
+from api_keys import load_api_key
 from db import get_connection
 
 # Wikidata SPARQL endpoint
@@ -126,16 +126,6 @@ def is_within_ancient_world(lat: float, lon: float) -> bool:
     bounds = ANCIENT_WORLD_BOUNDS
     return (bounds["min_lon"] <= lon <= bounds["max_lon"] and
             bounds["min_lat"] <= lat <= bounds["max_lat"])
-
-
-def load_api_key():
-    """Load OpenAI API key from ~/.openai.key"""
-    key_path = Path.home() / ".openai.key"
-    if not key_path.exists():
-        raise FileNotFoundError(f"API key not found at {key_path}")
-    return key_path.read_text().strip()
-
-
 def normalize_place_name(name: str) -> list:
     """
     Generate search variants for a place name.

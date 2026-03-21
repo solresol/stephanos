@@ -19,10 +19,10 @@ import json
 import re
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 from openai import BadRequestError, OpenAI
 
+from api_keys import load_api_key
 from db import get_connection
 from generate_reference_site import classify_text_difference
 
@@ -173,15 +173,6 @@ Meineke excerpt (truncated):
 Token-level change windows (local pre-diff):
 {difference_windows}
 """
-
-
-def load_api_key() -> str:
-    key_path = Path.home() / ".openai.key"
-    if not key_path.exists():
-        raise FileNotFoundError(f"API key file not found: {key_path}")
-    return key_path.read_text().strip()
-
-
 def ensure_table(cur) -> None:
     cur.execute(
         """
