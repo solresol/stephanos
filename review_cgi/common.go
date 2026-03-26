@@ -75,6 +75,107 @@ type ProperNoun struct {
 	PendingImport               bool   `json:"pending_import,omitempty"`
 }
 
+type PlaceMention struct {
+	ID                 int   `json:"id"`
+	TextForm           string `json:"text_form"`
+	NormalizedForm     string `json:"normalized_form"`
+	MentionOrder       int    `json:"mention_order"`
+	CharStart          *int   `json:"char_start"`
+	CharEnd            *int   `json:"char_end"`
+	IsImplicit         bool   `json:"is_implicit"`
+	ExtractedPlaceType string `json:"extracted_place_type"`
+	ExtractedRegion    string `json:"extracted_region"`
+	EvidenceText       string `json:"evidence_text"`
+	MachineNotes       string `json:"machine_notes"`
+}
+
+type PlaceCandidate struct {
+	ID          int      `json:"id"`
+	SourceName  string   `json:"source_name"`
+	ExternalID  string   `json:"external_id"`
+	Label       string   `json:"label"`
+	Description string   `json:"description"`
+	PlaceType   string   `json:"place_type"`
+	Region      string   `json:"region"`
+	URL         string   `json:"url"`
+	Score       *float64 `json:"score"`
+	RankOrder   int      `json:"rank_order"`
+}
+
+type PlaceCluster struct {
+	ID                              int              `json:"id"`
+	ClusterIndex                    int              `json:"cluster_index"`
+	DisplayLabel                    string           `json:"display_label"`
+	InferredCanonicalName           string           `json:"inferred_canonical_name"`
+	PlaceType                       string           `json:"place_type"`
+	Region                          string           `json:"region"`
+	ExplicitNamePresent             bool             `json:"explicit_name_present"`
+	ExtractionConfidence            string           `json:"extraction_confidence"`
+	ExtractionNotes                 string           `json:"extraction_notes"`
+	PreferredExternalIDType         string           `json:"preferred_external_id_type"`
+	PreferredExternalIDValue        string           `json:"preferred_external_id_value"`
+	WikidataQID                     string           `json:"wikidata_qid"`
+	WikidataLabel                   string           `json:"wikidata_label"`
+	WikidataDescription             string           `json:"wikidata_description"`
+	WikidataConfidence              string           `json:"wikidata_confidence"`
+	ToposTextID                     string           `json:"topostext_id"`
+	PleiadesID                      string           `json:"pleiades_id"`
+	ResolutionStatus                string           `json:"resolution_status"`
+	HumanDisplayLabel               string           `json:"human_display_label"`
+	HumanInferredCanonicalName      string           `json:"human_inferred_canonical_name"`
+	HumanPlaceType                  string           `json:"human_place_type"`
+	HumanRegion                     string           `json:"human_region"`
+	HumanExplicitNamePresent        *bool            `json:"human_explicit_name_present"`
+	HumanExplicitNameSelection      string           `json:"-"`
+	HumanPreferredExternalIDType    string           `json:"human_preferred_external_id_type"`
+	HumanPreferredExternalIDValue   string           `json:"human_preferred_external_id_value"`
+	HumanWikidataQID                string           `json:"human_wikidata_qid"`
+	HumanWikidataLabel              string           `json:"human_wikidata_label"`
+	HumanWikidataDescription        string           `json:"human_wikidata_description"`
+	HumanToposTextID                string           `json:"human_topostext_id"`
+	HumanPleiadesID                 string           `json:"human_pleiades_id"`
+	HumanResolutionStatus           string           `json:"human_resolution_status"`
+	HumanResolutionNotes            string           `json:"human_resolution_notes"`
+	HumanResolvedBy                 string           `json:"human_resolved_by"`
+	HumanResolvedAt                 string           `json:"human_resolved_at"`
+	EffectiveDisplayLabel           string           `json:"-"`
+	EffectiveCanonicalName          string           `json:"-"`
+	EffectivePlaceType              string           `json:"-"`
+	EffectiveRegion                 string           `json:"-"`
+	EffectiveExplicitNamePresent    bool             `json:"-"`
+	EffectivePreferredExternalType  string           `json:"-"`
+	EffectivePreferredExternalValue string           `json:"-"`
+	EffectiveWikidataQID            string           `json:"-"`
+	EffectiveWikidataLabel          string           `json:"-"`
+	EffectiveWikidataDescription    string           `json:"-"`
+	EffectiveToposTextID            string           `json:"-"`
+	EffectivePleiadesID             string           `json:"-"`
+	EffectiveResolutionStatus       string           `json:"-"`
+	EffectiveResolutionSource       string           `json:"-"`
+	PendingImport                   bool             `json:"pending_import,omitempty"`
+	Mentions                        []PlaceMention   `json:"mentions"`
+	Candidates                      []PlaceCandidate `json:"candidates"`
+}
+
+type PlaceClusterReview struct {
+	ClusterID                 int
+	LemmaID                   int
+	DisplayLabel              string
+	InferredCanonicalName     string
+	PlaceType                 string
+	Region                    string
+	ExplicitNamePresent       *bool
+	PreferredExternalIDType   string
+	PreferredExternalIDValue  string
+	ChosenWikidataQID         string
+	ChosenToposTextID         string
+	ChosenPleiadesID          string
+	ResolutionStatus          string
+	Notes                     string
+	ReviewerUsername          string
+	ReviewedAt                string
+}
+
 // Lemma represents a single lemma entry from the JSON export
 type Lemma struct {
 	ID                            int                      `json:"id"`
@@ -119,6 +220,7 @@ type Lemma struct {
 	MeinekeOCRApparatus           []ApparatusEntry         `json:"meineke_ocr_apparatus"`
 	CommentaryEntries             []CommentaryEntry        `json:"commentary_entries"`
 	ProperNouns                   []ProperNoun             `json:"proper_nouns"`
+	PlaceClusters                 []PlaceCluster           `json:"place_clusters"`
 	Letter                        string                   `json:"letter"`
 	SortOrder                     int                      `json:"sort_order"`
 }
@@ -270,6 +372,25 @@ func OpenDatabase(dbPath string) (*sql.DB, error) {
 			reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
 		"CREATE INDEX IF NOT EXISTS idx_entity_actions_lemma ON entity_resolution_actions(lemma_id, reviewed_at, id)",
+		`CREATE TABLE IF NOT EXISTS place_cluster_reviews (
+			cluster_id INTEGER PRIMARY KEY,
+			lemma_id INTEGER NOT NULL,
+			display_label TEXT,
+			inferred_canonical_name TEXT,
+			place_type TEXT,
+			region TEXT,
+			explicit_name_present INTEGER,
+			preferred_external_id_type TEXT,
+			preferred_external_id_value TEXT,
+			chosen_wikidata_qid TEXT,
+			chosen_topostext_id TEXT,
+			chosen_pleiades_id TEXT,
+			resolution_status TEXT,
+			notes TEXT,
+			reviewer_username TEXT,
+			reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		"CREATE INDEX IF NOT EXISTS idx_place_cluster_reviews_lemma ON place_cluster_reviews(lemma_id, reviewed_at, cluster_id)",
 	}
 	for _, migration := range migrations {
 		db.Exec(migration) // Ignore errors (column may already exist)
@@ -940,6 +1061,474 @@ func ApplyEntityResolutionActions(baseline []ProperNoun, actions []EntityResolut
 			}
 			recomputeProperNounResolution(pn)
 		}
+	}
+
+	return resolved
+}
+
+func normalizePlaceResolutionStatus(status string) string {
+	status = strings.TrimSpace(strings.ToLower(status))
+	switch status {
+	case "approved", "corrected", "not_alignable", "removed", "added":
+		return status
+	default:
+		return ""
+	}
+}
+
+func normalizePreferredExternalIDType(idType string) string {
+	idType = strings.TrimSpace(strings.ToLower(idType))
+	switch idType {
+	case "topostext", "wikidata", "pleiades", "re", "none":
+		return idType
+	default:
+		return ""
+	}
+}
+
+func trimOptionalStringPtr(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
+}
+
+func compareBoolPtr(a *bool, b *bool) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func normalizePlaceCluster(cluster *PlaceCluster) {
+	if cluster == nil {
+		return
+	}
+	cluster.DisplayLabel = strings.TrimSpace(cluster.DisplayLabel)
+	cluster.InferredCanonicalName = strings.TrimSpace(cluster.InferredCanonicalName)
+	cluster.PlaceType = strings.TrimSpace(cluster.PlaceType)
+	cluster.Region = strings.TrimSpace(cluster.Region)
+	cluster.ExtractionConfidence = strings.TrimSpace(cluster.ExtractionConfidence)
+	cluster.ExtractionNotes = strings.TrimSpace(cluster.ExtractionNotes)
+	cluster.PreferredExternalIDType = normalizePreferredExternalIDType(cluster.PreferredExternalIDType)
+	cluster.PreferredExternalIDValue = strings.TrimSpace(cluster.PreferredExternalIDValue)
+	cluster.WikidataQID = strings.TrimSpace(cluster.WikidataQID)
+	cluster.WikidataLabel = strings.TrimSpace(cluster.WikidataLabel)
+	cluster.WikidataDescription = strings.TrimSpace(cluster.WikidataDescription)
+	cluster.WikidataConfidence = strings.TrimSpace(cluster.WikidataConfidence)
+	cluster.ToposTextID = strings.TrimSpace(cluster.ToposTextID)
+	cluster.PleiadesID = strings.TrimSpace(cluster.PleiadesID)
+	cluster.ResolutionStatus = strings.TrimSpace(cluster.ResolutionStatus)
+	cluster.HumanDisplayLabel = strings.TrimSpace(cluster.HumanDisplayLabel)
+	cluster.HumanInferredCanonicalName = strings.TrimSpace(cluster.HumanInferredCanonicalName)
+	cluster.HumanPlaceType = strings.TrimSpace(cluster.HumanPlaceType)
+	cluster.HumanRegion = strings.TrimSpace(cluster.HumanRegion)
+	cluster.HumanPreferredExternalIDType = normalizePreferredExternalIDType(cluster.HumanPreferredExternalIDType)
+	cluster.HumanPreferredExternalIDValue = strings.TrimSpace(cluster.HumanPreferredExternalIDValue)
+	cluster.HumanWikidataQID = strings.TrimSpace(cluster.HumanWikidataQID)
+	cluster.HumanWikidataLabel = strings.TrimSpace(cluster.HumanWikidataLabel)
+	cluster.HumanWikidataDescription = strings.TrimSpace(cluster.HumanWikidataDescription)
+	cluster.HumanToposTextID = strings.TrimSpace(cluster.HumanToposTextID)
+	cluster.HumanPleiadesID = strings.TrimSpace(cluster.HumanPleiadesID)
+	cluster.HumanResolutionStatus = normalizePlaceResolutionStatus(cluster.HumanResolutionStatus)
+	cluster.HumanResolutionNotes = strings.TrimSpace(cluster.HumanResolutionNotes)
+	cluster.HumanResolvedBy = strings.TrimSpace(cluster.HumanResolvedBy)
+	cluster.HumanResolvedAt = strings.TrimSpace(cluster.HumanResolvedAt)
+	cluster.HumanExplicitNameSelection = ""
+	if cluster.HumanExplicitNamePresent != nil {
+		if *cluster.HumanExplicitNamePresent {
+			cluster.HumanExplicitNameSelection = "explicit"
+		} else {
+			cluster.HumanExplicitNameSelection = "implicit"
+		}
+	}
+
+	for i := range cluster.Mentions {
+		cluster.Mentions[i].TextForm = strings.TrimSpace(cluster.Mentions[i].TextForm)
+		cluster.Mentions[i].NormalizedForm = strings.TrimSpace(cluster.Mentions[i].NormalizedForm)
+		cluster.Mentions[i].ExtractedPlaceType = strings.TrimSpace(cluster.Mentions[i].ExtractedPlaceType)
+		cluster.Mentions[i].ExtractedRegion = strings.TrimSpace(cluster.Mentions[i].ExtractedRegion)
+		cluster.Mentions[i].EvidenceText = strings.TrimSpace(cluster.Mentions[i].EvidenceText)
+		cluster.Mentions[i].MachineNotes = strings.TrimSpace(cluster.Mentions[i].MachineNotes)
+	}
+	for i := range cluster.Candidates {
+		cluster.Candidates[i].SourceName = normalizePreferredExternalIDType(cluster.Candidates[i].SourceName)
+		cluster.Candidates[i].ExternalID = strings.TrimSpace(cluster.Candidates[i].ExternalID)
+		cluster.Candidates[i].Label = strings.TrimSpace(cluster.Candidates[i].Label)
+		cluster.Candidates[i].Description = strings.TrimSpace(cluster.Candidates[i].Description)
+		cluster.Candidates[i].PlaceType = strings.TrimSpace(cluster.Candidates[i].PlaceType)
+		cluster.Candidates[i].Region = strings.TrimSpace(cluster.Candidates[i].Region)
+		cluster.Candidates[i].URL = strings.TrimSpace(cluster.Candidates[i].URL)
+	}
+}
+
+func recomputePlaceClusterResolution(cluster *PlaceCluster) {
+	if cluster == nil {
+		return
+	}
+	normalizePlaceCluster(cluster)
+
+	cluster.EffectiveDisplayLabel = cluster.DisplayLabel
+	if cluster.HumanDisplayLabel != "" {
+		cluster.EffectiveDisplayLabel = cluster.HumanDisplayLabel
+	}
+	cluster.EffectiveCanonicalName = cluster.InferredCanonicalName
+	if cluster.HumanInferredCanonicalName != "" {
+		cluster.EffectiveCanonicalName = cluster.HumanInferredCanonicalName
+	}
+	cluster.EffectivePlaceType = cluster.PlaceType
+	if cluster.HumanPlaceType != "" {
+		cluster.EffectivePlaceType = cluster.HumanPlaceType
+	}
+	cluster.EffectiveRegion = cluster.Region
+	if cluster.HumanRegion != "" {
+		cluster.EffectiveRegion = cluster.HumanRegion
+	}
+	cluster.EffectiveExplicitNamePresent = cluster.ExplicitNamePresent
+	if cluster.HumanExplicitNamePresent != nil {
+		cluster.EffectiveExplicitNamePresent = *cluster.HumanExplicitNamePresent
+	}
+
+	cluster.EffectivePreferredExternalType = cluster.PreferredExternalIDType
+	cluster.EffectivePreferredExternalValue = cluster.PreferredExternalIDValue
+	cluster.EffectiveWikidataQID = cluster.WikidataQID
+	cluster.EffectiveWikidataLabel = cluster.WikidataLabel
+	cluster.EffectiveWikidataDescription = cluster.WikidataDescription
+	cluster.EffectiveToposTextID = cluster.ToposTextID
+	cluster.EffectivePleiadesID = cluster.PleiadesID
+	cluster.EffectiveResolutionStatus = strings.TrimSpace(cluster.ResolutionStatus)
+	cluster.EffectiveResolutionSource = ""
+
+	switch cluster.HumanResolutionStatus {
+	case "corrected", "added":
+		if cluster.HumanPreferredExternalIDType != "" {
+			cluster.EffectivePreferredExternalType = cluster.HumanPreferredExternalIDType
+		} else if cluster.HumanToposTextID != "" {
+			cluster.EffectivePreferredExternalType = "topostext"
+		} else if cluster.HumanWikidataQID != "" {
+			cluster.EffectivePreferredExternalType = "wikidata"
+		} else if cluster.HumanPleiadesID != "" {
+			cluster.EffectivePreferredExternalType = "pleiades"
+		}
+		if cluster.HumanPreferredExternalIDValue != "" {
+			cluster.EffectivePreferredExternalValue = cluster.HumanPreferredExternalIDValue
+		} else if cluster.HumanToposTextID != "" {
+			cluster.EffectivePreferredExternalValue = cluster.HumanToposTextID
+		} else if cluster.HumanWikidataQID != "" {
+			cluster.EffectivePreferredExternalValue = cluster.HumanWikidataQID
+		} else if cluster.HumanPleiadesID != "" {
+			cluster.EffectivePreferredExternalValue = cluster.HumanPleiadesID
+		}
+		cluster.EffectiveWikidataQID = cluster.HumanWikidataQID
+		if cluster.HumanWikidataLabel != "" {
+			cluster.EffectiveWikidataLabel = cluster.HumanWikidataLabel
+		}
+		if cluster.HumanWikidataDescription != "" {
+			cluster.EffectiveWikidataDescription = cluster.HumanWikidataDescription
+		}
+		cluster.EffectiveToposTextID = cluster.HumanToposTextID
+		cluster.EffectivePleiadesID = cluster.HumanPleiadesID
+		cluster.EffectiveResolutionStatus = cluster.HumanResolutionStatus
+		cluster.EffectiveResolutionSource = "human"
+	case "approved":
+		if cluster.HumanPreferredExternalIDType != "" {
+			cluster.EffectivePreferredExternalType = cluster.HumanPreferredExternalIDType
+		}
+		if cluster.HumanPreferredExternalIDValue != "" {
+			cluster.EffectivePreferredExternalValue = cluster.HumanPreferredExternalIDValue
+		}
+		if cluster.HumanWikidataQID != "" {
+			cluster.EffectiveWikidataQID = cluster.HumanWikidataQID
+			if cluster.HumanWikidataLabel != "" {
+				cluster.EffectiveWikidataLabel = cluster.HumanWikidataLabel
+			}
+			if cluster.HumanWikidataDescription != "" {
+				cluster.EffectiveWikidataDescription = cluster.HumanWikidataDescription
+			}
+		}
+		if cluster.HumanToposTextID != "" {
+			cluster.EffectiveToposTextID = cluster.HumanToposTextID
+		}
+		if cluster.HumanPleiadesID != "" {
+			cluster.EffectivePleiadesID = cluster.HumanPleiadesID
+		}
+		cluster.EffectiveResolutionStatus = "approved"
+		cluster.EffectiveResolutionSource = "human"
+	case "not_alignable":
+		cluster.EffectivePreferredExternalType = "none"
+		cluster.EffectivePreferredExternalValue = ""
+		cluster.EffectiveWikidataQID = ""
+		cluster.EffectiveWikidataLabel = ""
+		cluster.EffectiveWikidataDescription = ""
+		cluster.EffectiveToposTextID = ""
+		cluster.EffectivePleiadesID = ""
+		cluster.EffectiveResolutionStatus = "not_alignable"
+		cluster.EffectiveResolutionSource = "human"
+	case "removed":
+		cluster.EffectivePreferredExternalType = "none"
+		cluster.EffectivePreferredExternalValue = ""
+		cluster.EffectiveWikidataQID = ""
+		cluster.EffectiveWikidataLabel = ""
+		cluster.EffectiveWikidataDescription = ""
+		cluster.EffectiveToposTextID = ""
+		cluster.EffectivePleiadesID = ""
+		cluster.EffectiveResolutionStatus = "removed"
+		cluster.EffectiveResolutionSource = "human"
+	default:
+		if cluster.EffectiveResolutionStatus == "" {
+			switch {
+			case cluster.EffectiveWikidataQID != "", cluster.EffectiveToposTextID != "", cluster.EffectivePleiadesID != "":
+				cluster.EffectiveResolutionStatus = "candidate"
+			default:
+				cluster.EffectiveResolutionStatus = "unresolved"
+			}
+		}
+		if cluster.EffectiveWikidataQID != "" || cluster.EffectiveToposTextID != "" || cluster.EffectivePleiadesID != "" {
+			cluster.EffectiveResolutionSource = "machine"
+		}
+	}
+}
+
+func nullableBoolFromInt(value sql.NullInt64) *bool {
+	if !value.Valid {
+		return nil
+	}
+	b := value.Int64 != 0
+	return &b
+}
+
+func FetchPlaceClusterReviews(db *sql.DB, lemmaID int) ([]PlaceClusterReview, error) {
+	if db == nil || lemmaID <= 0 {
+		return nil, nil
+	}
+	rows, err := db.Query(
+		`
+		SELECT
+			cluster_id,
+			lemma_id,
+			COALESCE(display_label, ''),
+			COALESCE(inferred_canonical_name, ''),
+			COALESCE(place_type, ''),
+			COALESCE(region, ''),
+			explicit_name_present,
+			COALESCE(preferred_external_id_type, ''),
+			COALESCE(preferred_external_id_value, ''),
+			COALESCE(chosen_wikidata_qid, ''),
+			COALESCE(chosen_topostext_id, ''),
+			COALESCE(chosen_pleiades_id, ''),
+			COALESCE(resolution_status, ''),
+			COALESCE(notes, ''),
+			COALESCE(reviewer_username, ''),
+			COALESCE(reviewed_at, '')
+		FROM place_cluster_reviews
+		WHERE lemma_id = ?
+		ORDER BY reviewed_at ASC, cluster_id ASC
+		`,
+		lemmaID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load place cluster reviews: %w", err)
+	}
+	defer rows.Close()
+
+	var reviews []PlaceClusterReview
+	for rows.Next() {
+		var review PlaceClusterReview
+		var explicitNamePresent sql.NullInt64
+		if err := rows.Scan(
+			&review.ClusterID,
+			&review.LemmaID,
+			&review.DisplayLabel,
+			&review.InferredCanonicalName,
+			&review.PlaceType,
+			&review.Region,
+			&explicitNamePresent,
+			&review.PreferredExternalIDType,
+			&review.PreferredExternalIDValue,
+			&review.ChosenWikidataQID,
+			&review.ChosenToposTextID,
+			&review.ChosenPleiadesID,
+			&review.ResolutionStatus,
+			&review.Notes,
+			&review.ReviewerUsername,
+			&review.ReviewedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan place cluster review: %w", err)
+		}
+		review.ExplicitNamePresent = nullableBoolFromInt(explicitNamePresent)
+		review.PreferredExternalIDType = normalizePreferredExternalIDType(review.PreferredExternalIDType)
+		review.ResolutionStatus = normalizePlaceResolutionStatus(review.ResolutionStatus)
+		reviews = append(reviews, review)
+	}
+	return reviews, rows.Err()
+}
+
+func SavePlaceClusterReview(
+	db *sql.DB,
+	review PlaceClusterReview,
+	username string,
+) error {
+	if db == nil || review.ClusterID <= 0 || review.LemmaID <= 0 {
+		return nil
+	}
+	explicitNamePresent := interface{}(nil)
+	if review.ExplicitNamePresent != nil {
+		if *review.ExplicitNamePresent {
+			explicitNamePresent = 1
+		} else {
+			explicitNamePresent = 0
+		}
+	}
+	review.DisplayLabel = strings.TrimSpace(review.DisplayLabel)
+	review.InferredCanonicalName = strings.TrimSpace(review.InferredCanonicalName)
+	review.PlaceType = strings.TrimSpace(review.PlaceType)
+	review.Region = strings.TrimSpace(review.Region)
+	review.PreferredExternalIDType = normalizePreferredExternalIDType(review.PreferredExternalIDType)
+	review.PreferredExternalIDValue = strings.TrimSpace(review.PreferredExternalIDValue)
+	review.ChosenWikidataQID = strings.TrimSpace(review.ChosenWikidataQID)
+	review.ChosenToposTextID = strings.TrimSpace(review.ChosenToposTextID)
+	review.ChosenPleiadesID = strings.TrimSpace(review.ChosenPleiadesID)
+	review.ResolutionStatus = normalizePlaceResolutionStatus(review.ResolutionStatus)
+	review.Notes = strings.TrimSpace(review.Notes)
+
+	_, err := db.Exec(
+		`
+		INSERT INTO place_cluster_reviews (
+			cluster_id,
+			lemma_id,
+			display_label,
+			inferred_canonical_name,
+			place_type,
+			region,
+			explicit_name_present,
+			preferred_external_id_type,
+			preferred_external_id_value,
+			chosen_wikidata_qid,
+			chosen_topostext_id,
+			chosen_pleiades_id,
+			resolution_status,
+			notes,
+			reviewer_username,
+			reviewed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(cluster_id) DO UPDATE SET
+			lemma_id = excluded.lemma_id,
+			display_label = excluded.display_label,
+			inferred_canonical_name = excluded.inferred_canonical_name,
+			place_type = excluded.place_type,
+			region = excluded.region,
+			explicit_name_present = excluded.explicit_name_present,
+			preferred_external_id_type = excluded.preferred_external_id_type,
+			preferred_external_id_value = excluded.preferred_external_id_value,
+			chosen_wikidata_qid = excluded.chosen_wikidata_qid,
+			chosen_topostext_id = excluded.chosen_topostext_id,
+			chosen_pleiades_id = excluded.chosen_pleiades_id,
+			resolution_status = excluded.resolution_status,
+			notes = excluded.notes,
+			reviewer_username = excluded.reviewer_username,
+			reviewed_at = excluded.reviewed_at
+		`,
+		review.ClusterID,
+		review.LemmaID,
+		review.DisplayLabel,
+		review.InferredCanonicalName,
+		review.PlaceType,
+		review.Region,
+		explicitNamePresent,
+		review.PreferredExternalIDType,
+		review.PreferredExternalIDValue,
+		review.ChosenWikidataQID,
+		review.ChosenToposTextID,
+		review.ChosenPleiadesID,
+		review.ResolutionStatus,
+		review.Notes,
+		username,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save place cluster review: %w", err)
+	}
+	return nil
+}
+
+func placeClusterReviewDiffers(cluster PlaceCluster, review PlaceClusterReview) bool {
+	if strings.TrimSpace(cluster.HumanDisplayLabel) != strings.TrimSpace(review.DisplayLabel) {
+		return true
+	}
+	if strings.TrimSpace(cluster.HumanInferredCanonicalName) != strings.TrimSpace(review.InferredCanonicalName) {
+		return true
+	}
+	if strings.TrimSpace(cluster.HumanPlaceType) != strings.TrimSpace(review.PlaceType) {
+		return true
+	}
+	if strings.TrimSpace(cluster.HumanRegion) != strings.TrimSpace(review.Region) {
+		return true
+	}
+	if !compareBoolPtr(cluster.HumanExplicitNamePresent, review.ExplicitNamePresent) {
+		return true
+	}
+	if strings.TrimSpace(cluster.HumanPreferredExternalIDType) != strings.TrimSpace(review.PreferredExternalIDType) {
+		return true
+	}
+	if strings.TrimSpace(cluster.HumanPreferredExternalIDValue) != strings.TrimSpace(review.PreferredExternalIDValue) {
+		return true
+	}
+	if strings.TrimSpace(cluster.HumanWikidataQID) != strings.TrimSpace(review.ChosenWikidataQID) {
+		return true
+	}
+	if strings.TrimSpace(cluster.HumanToposTextID) != strings.TrimSpace(review.ChosenToposTextID) {
+		return true
+	}
+	if strings.TrimSpace(cluster.HumanPleiadesID) != strings.TrimSpace(review.ChosenPleiadesID) {
+		return true
+	}
+	if strings.TrimSpace(cluster.HumanResolutionStatus) != strings.TrimSpace(review.ResolutionStatus) {
+		return true
+	}
+	if strings.TrimSpace(cluster.HumanResolutionNotes) != strings.TrimSpace(review.Notes) {
+		return true
+	}
+	return false
+}
+
+func ApplyPlaceClusterReviews(baseline []PlaceCluster, reviews []PlaceClusterReview) []PlaceCluster {
+	resolved := make([]PlaceCluster, len(baseline))
+	copy(resolved, baseline)
+
+	indexByID := map[int]int{}
+	for i := range resolved {
+		resolved[i].PendingImport = false
+		recomputePlaceClusterResolution(&resolved[i])
+		if resolved[i].ID > 0 {
+			indexByID[resolved[i].ID] = i
+		}
+	}
+
+	for _, review := range reviews {
+		idx, ok := indexByID[review.ClusterID]
+		if !ok {
+			continue
+		}
+		cluster := &resolved[idx]
+		cluster.PendingImport = placeClusterReviewDiffers(*cluster, review)
+		cluster.HumanDisplayLabel = strings.TrimSpace(review.DisplayLabel)
+		cluster.HumanInferredCanonicalName = strings.TrimSpace(review.InferredCanonicalName)
+		cluster.HumanPlaceType = strings.TrimSpace(review.PlaceType)
+		cluster.HumanRegion = strings.TrimSpace(review.Region)
+		cluster.HumanExplicitNamePresent = review.ExplicitNamePresent
+		cluster.HumanPreferredExternalIDType = normalizePreferredExternalIDType(review.PreferredExternalIDType)
+		cluster.HumanPreferredExternalIDValue = strings.TrimSpace(review.PreferredExternalIDValue)
+		cluster.HumanWikidataQID = strings.TrimSpace(review.ChosenWikidataQID)
+		cluster.HumanToposTextID = strings.TrimSpace(review.ChosenToposTextID)
+		cluster.HumanPleiadesID = strings.TrimSpace(review.ChosenPleiadesID)
+		cluster.HumanResolutionStatus = normalizePlaceResolutionStatus(review.ResolutionStatus)
+		cluster.HumanResolutionNotes = strings.TrimSpace(review.Notes)
+		cluster.HumanResolvedBy = strings.TrimSpace(review.ReviewerUsername)
+		cluster.HumanResolvedAt = strings.TrimSpace(review.ReviewedAt)
+		recomputePlaceClusterResolution(cluster)
 	}
 
 	return resolved

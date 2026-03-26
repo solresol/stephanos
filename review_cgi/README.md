@@ -4,10 +4,13 @@ Go-based CGI programs for reviewing lemma entries from the Stephanos of Byzantiu
 
 ## Components
 
-- `review.cgi` - Main review interface for viewing and navigating lemmas
-- `save.cgi` - Handles saving review data (corrections, status updates)
+- `review.cgi` - Translation review interface
+- `entities.cgi` - Named-entity and place-resolution interface
+- `save.cgi` - Handles saving review data (translations, commentary, entity actions)
 - `common.go` - Shared database and data loading functions
-- `template.go` - HTML template for the review interface
+- `page.go` - Shared page assembly and view-model helpers
+- `templates.go` - Translation and entity HTML templates
+- `shared_helpers.go` - Shared Meineke comparison and error helpers
 
 ## Building for OpenBSD
 
@@ -30,7 +33,8 @@ The solution is to use `github.com/mattn/go-sqlite3` which requires CGO but work
    ```bash
    ssh stephanos@merah.cassia.ifost.org.au
    cd /var/www/vhosts/stephanos.symmachus.org/cgi-bin
-   CGO_ENABLED=1 go build -o review.cgi review.go common.go template.go
+   CGO_ENABLED=1 go build -o review.cgi review.go common.go page.go templates.go shared_helpers.go
+   CGO_ENABLED=1 go build -o entities.cgi entities.go common.go page.go templates.go shared_helpers.go
    CGO_ENABLED=1 go build -o save.cgi save.go common.go
    ```
 
@@ -86,15 +90,25 @@ The `reviews` table in SQLite tracks review state:
 | `initial_translation_by` | Username who last edited initial translation |
 | `reviewed_translation_by` | Username who last edited reviewed translation |
 
+Additional local review tables:
+
+| Table | Description |
+|--------|-------------|
+| `commentary_entries` | Local commentary edits before nightly import |
+| `entity_resolution_actions` | Proper-noun resolution actions and missed-entity additions |
+| `place_cluster_reviews` | Human overrides for distinct same-named place clusters |
+
 ### Deprecated Fields
 
 - `reviewer_username` - This field is obsolete. It was the original single-user tracking field before per-field tracking was added. Kept for backward compatibility with legacy reviews. New code should use `greek_corrected_by`, `initial_translation_by`, and `reviewed_translation_by` instead.
+- `corrected_greek_text` remains preserved in SQLite and PostgreSQL for legacy reference, but the active translation workflow now treats Meineke text as the working Greek instead of exposing live OCR correction on the main page.
 
 ## Local Development
 
 For local development on Linux, you can build normally:
 ```bash
-go build -o review.cgi review.go common.go template.go
+go build -o review.cgi review.go common.go page.go templates.go shared_helpers.go
+go build -o entities.cgi entities.go common.go page.go templates.go shared_helpers.go
 go build -o save.cgi save.go common.go
 ```
 

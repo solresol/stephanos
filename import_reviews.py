@@ -474,6 +474,122 @@ def import_commentary_entries(sqlite_cur, pg_cur) -> tuple[int, int]:
     return inserted, cleared
 
 
+def import_place_cluster_reviews(sqlite_cur, pg_cur) -> tuple[int, int, int]:
+    """
+    Import current-state place-cluster review overrides from SQLite into Postgres.
+
+    Returns (applied_count, skipped_count, error_count).
+    """
+    if not sqlite_table_exists(sqlite_cur, "place_cluster_reviews"):
+        return 0, 0, 0
+
+    pg_cur.execute("SELECT to_regclass('public.place_clusters') IS NOT NULL")
+    if not pg_cur.fetchone()[0]:
+        log("WARNING: place_clusters missing; skipping place_cluster_reviews import.")
+        return 0, 0, 0
+
+    sqlite_cur.execute(
+        """
+        SELECT
+            cluster_id,
+            lemma_id,
+            COALESCE(display_label, '') AS display_label,
+            COALESCE(inferred_canonical_name, '') AS inferred_canonical_name,
+            COALESCE(place_type, '') AS place_type,
+            COALESCE(region, '') AS region,
+            explicit_name_present,
+            COALESCE(preferred_external_id_type, '') AS preferred_external_id_type,
+            COALESCE(preferred_external_id_value, '') AS preferred_external_id_value,
+            COALESCE(chosen_wikidata_qid, '') AS chosen_wikidata_qid,
+            COALESCE(chosen_topostext_id, '') AS chosen_topostext_id,
+            COALESCE(chosen_pleiades_id, '') AS chosen_pleiades_id,
+            COALESCE(resolution_status, '') AS resolution_status,
+            COALESCE(notes, '') AS notes,
+            COALESCE(reviewer_username, '') AS reviewer_username,
+            reviewed_at
+        FROM place_cluster_reviews
+        ORDER BY reviewed_at ASC, cluster_id ASC
+        """
+    )
+    rows = sqlite_cur.fetchall()
+    if not rows:
+        return 0, 0, 0
+
+    applied = skipped = errors = 0
+    for row in rows:
+        try:
+            cluster_id = int(row["cluster_id"] or 0)
+            lemma_id = int(row["lemma_id"] or 0)
+        except Exception:
+            skipped += 1
+            continue
+
+        if cluster_id <= 0 or lemma_id <= 0:
+            skipped += 1
+            continue
+
+        pg_cur.execute(
+            "SELECT 1 FROM place_clusters WHERE id = %s AND lemma_id = %s",
+            (cluster_id, lemma_id),
+        )
+        if not pg_cur.fetchone():
+            skipped += 1
+            continue
+
+        explicit_raw = row["explicit_name_present"]
+        explicit_name_present = None if explicit_raw is None else bool(explicit_raw)
+        reviewer = (row["reviewer_username"] or "").strip() or "review"
+        reviewed_at = row["reviewed_at"] or None
+
+        try:
+            pg_cur.execute(
+                """
+                UPDATE place_clusters
+                SET human_display_label = %s,
+                    human_inferred_canonical_name = %s,
+                    human_place_type = %s,
+                    human_region = %s,
+                    human_explicit_name_present = %s,
+                    human_preferred_external_id_type = %s,
+                    human_preferred_external_id_value = %s,
+                    human_wikidata_qid = %s,
+                    human_topostext_id = %s,
+                    human_pleiades_id = %s,
+                    human_resolution_status = %s,
+                    human_resolution_notes = %s,
+                    human_resolved_by = %s,
+                    human_resolved_at = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND lemma_id = %s
+                """,
+                (
+                    (row["display_label"] or "").strip() or None,
+                    (row["inferred_canonical_name"] or "").strip() or None,
+                    (row["place_type"] or "").strip() or None,
+                    (row["region"] or "").strip() or None,
+                    explicit_name_present,
+                    (row["preferred_external_id_type"] or "").strip() or None,
+                    (row["preferred_external_id_value"] or "").strip() or None,
+                    (row["chosen_wikidata_qid"] or "").strip() or None,
+                    (row["chosen_topostext_id"] or "").strip() or None,
+                    (row["chosen_pleiades_id"] or "").strip() or None,
+                    (row["resolution_status"] or "").strip() or None,
+                    (row["notes"] or "").strip() or None,
+                    reviewer,
+                    reviewed_at,
+                    cluster_id,
+                    lemma_id,
+                ),
+            )
+            applied += 1
+        except Exception as exc:
+            log(f"  ERROR importing place cluster review cluster_id={cluster_id} lemma={lemma_id}: {exc}")
+            errors += 1
+
+    return applied, skipped, errors
+
+
 def import_canonical_actions(sqlite_cur, pg_cur) -> tuple[int, int, int, int]:
     """
     Import new canonical actions (append-only) from SQLite into Postgres.
@@ -1133,6 +1249,21 @@ def import_reviews():
         pg_conn.close()
         return 1
 
+    place_cluster_applied = place_cluster_skipped = place_cluster_errors = 0
+    try:
+        place_cluster_applied, place_cluster_skipped, place_cluster_errors = import_place_cluster_reviews(sqlite_cur, pg_cur)
+        if place_cluster_applied or place_cluster_errors:
+            log(
+                "Place-cluster review import: "
+                f"applied={place_cluster_applied}, skipped={place_cluster_skipped}, errors={place_cluster_errors}"
+            )
+    except Exception as e:
+        log(f"ERROR: Place-cluster review import failed: {e}")
+        pg_conn.rollback()
+        sqlite_conn.close()
+        pg_conn.close()
+        return 1
+
     pg_conn.commit()
 
     # Close connections
@@ -1163,8 +1294,12 @@ def import_reviews():
     if commentary_imported or commentary_cleared:
         log(f"  Commentary imported: {commentary_imported}")
         log(f"  Commentary cleared previous: {commentary_cleared}")
+    if place_cluster_applied or place_cluster_errors:
+        log(f"  Place-cluster reviews applied: {place_cluster_applied}")
+        log(f"  Place-cluster reviews skipped: {place_cluster_skipped}")
+        log(f"  Place-cluster review errors: {place_cluster_errors}")
 
-    if error_count > 0 or variant_errors > 0 or human_sync_errors > 0 or entity_errors > 0:
+    if error_count > 0 or variant_errors > 0 or human_sync_errors > 0 or entity_errors > 0 or place_cluster_errors > 0:
         return 1
 
     return 0

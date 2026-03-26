@@ -287,10 +287,11 @@ tail ~/stephanos/logs/*.log
 - `setup_cron.sh` - Install automation
 
 **CGI source:**
-- `review_cgi/review.go` - Main review interface
+- `review_cgi/review.go` - Translation review interface
+- `review_cgi/entities.go` - Named-entity resolution interface
 - `review_cgi/save.go` - Save handler
 - `review_cgi/common.go` - Shared functions
-- `review_cgi/template.go` - HTML template
+- `review_cgi/templates.go` - HTML templates
 
 ---
 

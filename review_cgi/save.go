@@ -14,13 +14,13 @@ func main() {
 	// Read POST data
 	contentLength := os.Getenv("CONTENT_LENGTH")
 	if contentLength == "" {
-		showErrorAndExit("No POST data received")
+		showErrorAndExit("No POST data received", "translation")
 		return
 	}
 
 	length, err := strconv.Atoi(contentLength)
 	if err != nil || length <= 0 {
-		showErrorAndExit("Invalid content length")
+		showErrorAndExit("Invalid content length", "translation")
 		return
 	}
 
@@ -28,14 +28,14 @@ func main() {
 	body := make([]byte, length)
 	_, err = io.ReadFull(os.Stdin, body)
 	if err != nil {
-		showErrorAndExit(fmt.Sprintf("Failed to read POST data: %v", err))
+		showErrorAndExit(fmt.Sprintf("Failed to read POST data: %v", err), "translation")
 		return
 	}
 
 	// Parse form data
 	formData, err := url.ParseQuery(string(body))
 	if err != nil {
-		showErrorAndExit(fmt.Sprintf("Failed to parse form data: %v", err))
+		showErrorAndExit(fmt.Sprintf("Failed to parse form data: %v", err), "translation")
 		return
 	}
 
@@ -44,9 +44,11 @@ func main() {
 	lemmaIDStr := formData.Get("lemma_id")
 	reviewStatus := formData.Get("review_status")
 	correctedGreek := strings.TrimSpace(formData.Get("corrected_greek"))
+	_, correctedGreekProvided := formData["corrected_greek"]
 	correctedEnglish := strings.TrimSpace(formData.Get("corrected_english"))
 	reviewedEnglish := strings.TrimSpace(formData.Get("reviewed_english"))
 	notes := strings.TrimSpace(formData.Get("notes"))
+	returnView := normalizeReturnView(formData.Get("return_view"))
 	variantKind := strings.TrimSpace(formData.Get("variant_kind"))
 	variantID := strings.TrimSpace(formData.Get("variant_id"))
 	variantStatus := strings.TrimSpace(formData.Get("variant_status"))
@@ -67,6 +69,19 @@ func main() {
 	entityEnglish := strings.TrimSpace(formData.Get("entity_english"))
 	entityType := strings.TrimSpace(formData.Get("entity_type"))
 	entityRole := strings.TrimSpace(formData.Get("entity_role"))
+	clusterIDStr := strings.TrimSpace(formData.Get("cluster_id"))
+	placeAction := strings.TrimSpace(strings.ToLower(formData.Get("place_cluster_action")))
+	placeDisplayLabel := strings.TrimSpace(formData.Get("place_display_label"))
+	placeCanonicalName := strings.TrimSpace(formData.Get("place_inferred_canonical_name"))
+	placeType := strings.TrimSpace(formData.Get("place_type"))
+	placeRegion := strings.TrimSpace(formData.Get("place_region"))
+	placeExplicitName := strings.TrimSpace(formData.Get("place_explicit_name_present"))
+	placePreferredExternalType := strings.TrimSpace(formData.Get("place_preferred_external_id_type"))
+	placePreferredExternalValue := strings.TrimSpace(formData.Get("place_preferred_external_id_value"))
+	placeWikidataQID := strings.TrimSpace(formData.Get("place_wikidata_qid"))
+	placeToposTextID := strings.TrimSpace(formData.Get("place_topostext_id"))
+	placePleiadesID := strings.TrimSpace(formData.Get("place_pleiades_id"))
+	placeResolutionStatus := strings.TrimSpace(formData.Get("place_resolution_status"))
 	action := formData.Get("action") // "stay" or "continue" (default)
 	remoteUser := os.Getenv("REMOTE_USER")
 	setCanonical := setCanonicalRaw == "1" || strings.EqualFold(setCanonicalRaw, "true") || strings.EqualFold(setCanonicalRaw, "on")
@@ -74,13 +89,13 @@ func main() {
 
 	// Validate required fields
 	if lemmaIDStr == "" {
-		showErrorAndExit("Missing lemma ID")
+		showErrorAndExit("Missing lemma ID", returnView)
 		return
 	}
 
 	lemmaID, err := strconv.Atoi(lemmaIDStr)
 	if err != nil {
-		showErrorAndExit("Invalid lemma ID")
+		showErrorAndExit("Invalid lemma ID", returnView)
 		return
 	}
 
@@ -88,7 +103,7 @@ func main() {
 		config := GetConfig()
 		db, err := OpenDatabase(config.DBPath)
 		if err != nil {
-			showErrorAndExit(fmt.Sprintf("Failed to open database: %v", err))
+			showErrorAndExit(fmt.Sprintf("Failed to open database: %v", err), returnView)
 			return
 		}
 		defer db.Close()
@@ -97,7 +112,7 @@ func main() {
 		if properNounIDStr != "" {
 			properNounID, err = strconv.Atoi(properNounIDStr)
 			if err != nil {
-				showErrorAndExit("Invalid proper noun ID")
+				showErrorAndExit("Invalid proper noun ID", returnView)
 				return
 			}
 		}
@@ -118,12 +133,12 @@ func main() {
 				remoteUser,
 			)
 			if err != nil {
-				showErrorAndExit(fmt.Sprintf("Failed to save entity action: %v", err))
+				showErrorAndExit(fmt.Sprintf("Failed to save entity action: %v", err), returnView)
 				return
 			}
 		}
 
-		writeRedirect(lemmaID)
+		writeRedirect(lemmaID, returnView)
 		log.Printf(
 			"Entity action saved: lemma_id=%d, proper_noun_id=%d, action=%s, user=%s",
 			lemmaID,
@@ -134,11 +149,99 @@ func main() {
 		return
 	}
 
+	if formMode == "place_cluster" {
+		config := GetConfig()
+		db, err := OpenDatabase(config.DBPath)
+		if err != nil {
+			showErrorAndExit(fmt.Sprintf("Failed to open database: %v", err), returnView)
+			return
+		}
+		defer db.Close()
+
+		clusterID, err := strconv.Atoi(clusterIDStr)
+		if err != nil || clusterID <= 0 {
+			showErrorAndExit("Invalid place cluster ID", returnView)
+			return
+		}
+
+		var explicitNamePresent *bool
+		switch strings.TrimSpace(strings.ToLower(placeExplicitName)) {
+		case "explicit", "true", "1", "yes":
+			value := true
+			explicitNamePresent = &value
+		case "implicit", "false", "0", "no":
+			value := false
+			explicitNamePresent = &value
+		}
+
+		review := PlaceClusterReview{
+			ClusterID:                clusterID,
+			LemmaID:                  lemmaID,
+			DisplayLabel:             placeDisplayLabel,
+			InferredCanonicalName:    placeCanonicalName,
+			PlaceType:                placeType,
+			Region:                   placeRegion,
+			ExplicitNamePresent:      explicitNamePresent,
+			PreferredExternalIDType:  placePreferredExternalType,
+			PreferredExternalIDValue: placePreferredExternalValue,
+			ChosenWikidataQID:        placeWikidataQID,
+			ChosenToposTextID:        placeToposTextID,
+			ChosenPleiadesID:         placePleiadesID,
+			ResolutionStatus:         placeResolutionStatus,
+			Notes:                    notes,
+		}
+
+		switch placeAction {
+		case "approved":
+			review.ResolutionStatus = "approved"
+		case "not_alignable":
+			review.ResolutionStatus = "not_alignable"
+			review.PreferredExternalIDType = ""
+			review.PreferredExternalIDValue = ""
+			review.ChosenWikidataQID = ""
+			review.ChosenToposTextID = ""
+			review.ChosenPleiadesID = ""
+		case "removed":
+			review.ResolutionStatus = "removed"
+			review.PreferredExternalIDType = ""
+			review.PreferredExternalIDValue = ""
+			review.ChosenWikidataQID = ""
+			review.ChosenToposTextID = ""
+			review.ChosenPleiadesID = ""
+		case "clear_override":
+			review.DisplayLabel = ""
+			review.InferredCanonicalName = ""
+			review.PlaceType = ""
+			review.Region = ""
+			review.ExplicitNamePresent = nil
+			review.PreferredExternalIDType = ""
+			review.PreferredExternalIDValue = ""
+			review.ChosenWikidataQID = ""
+			review.ChosenToposTextID = ""
+			review.ChosenPleiadesID = ""
+			review.ResolutionStatus = ""
+			review.Notes = ""
+		default:
+			if review.ResolutionStatus == "" && (review.PreferredExternalIDType != "" || review.PreferredExternalIDValue != "" || review.ChosenWikidataQID != "" || review.ChosenToposTextID != "" || review.ChosenPleiadesID != "" || review.DisplayLabel != "" || review.InferredCanonicalName != "" || review.PlaceType != "" || review.Region != "" || review.Notes != "") {
+				review.ResolutionStatus = "corrected"
+			}
+		}
+
+		if err := SavePlaceClusterReview(db, review, remoteUser); err != nil {
+			showErrorAndExit(fmt.Sprintf("Failed to save place-cluster review: %v", err), returnView)
+			return
+		}
+
+		writeRedirect(lemmaID, returnView)
+		log.Printf("Place cluster review saved: lemma_id=%d, cluster_id=%d, action=%s, user=%s", lemmaID, clusterID, placeAction, remoteUser)
+		return
+	}
+
 	if formMode == "commentary" {
 		config := GetConfig()
 		db, err := OpenDatabase(config.DBPath)
 		if err != nil {
-			showErrorAndExit(fmt.Sprintf("Failed to open database: %v", err))
+			showErrorAndExit(fmt.Sprintf("Failed to open database: %v", err), returnView)
 			return
 		}
 		defer db.Close()
@@ -160,10 +263,10 @@ func main() {
 			err = nil
 		}
 		if err != nil {
-			showErrorAndExit(fmt.Sprintf("Failed to save commentary: %v", err))
+			showErrorAndExit(fmt.Sprintf("Failed to save commentary: %v", err), returnView)
 			return
 		}
-		writeRedirect(lemmaID)
+		writeRedirect(lemmaID, returnView)
 		log.Printf("Commentary saved: lemma_id=%d, action=%s, user=%s", lemmaID, commentaryAction, remoteUser)
 		return
 	}
@@ -202,19 +305,19 @@ func main() {
 	// Load lemma data
 	data, err := LoadLemmaData(config.DataFile)
 	if err != nil {
-		showErrorAndExit(fmt.Sprintf("Failed to load data: %v", err))
+		showErrorAndExit(fmt.Sprintf("Failed to load data: %v", err), returnView)
 		return
 	}
 	currentLemma := FindLemmaByID(data, lemmaID)
 	if currentLemma == nil {
-		showErrorAndExit("Lemma not found in review data")
+		showErrorAndExit("Lemma not found in review data", returnView)
 		return
 	}
 
 	// Open database
 	db, err := OpenDatabase(config.DBPath)
 	if err != nil {
-		showErrorAndExit(fmt.Sprintf("Failed to open database: %v", err))
+		showErrorAndExit(fmt.Sprintf("Failed to open database: %v", err), returnView)
 		return
 	}
 	defer db.Close()
@@ -222,8 +325,11 @@ func main() {
 	// Get old review to track changes
 	oldReview, err := GetReview(db, lemmaID)
 	if err != nil {
-		showErrorAndExit(fmt.Sprintf("Failed to get existing review: %v", err))
+		showErrorAndExit(fmt.Sprintf("Failed to get existing review: %v", err), returnView)
 		return
+	}
+	if !correctedGreekProvided {
+		correctedGreek = oldReview.CorrectedGreekText
 	}
 
 	// Create review record with new values, preserving "by" fields from old review
@@ -243,7 +349,7 @@ func main() {
 	// Save to database
 	err = SaveReview(db, review, oldReview, remoteUser)
 	if err != nil {
-		showErrorAndExit(fmt.Sprintf("Failed to save review: %v", err))
+		showErrorAndExit(fmt.Sprintf("Failed to save review: %v", err), returnView)
 		return
 	}
 
@@ -277,7 +383,7 @@ func main() {
 		remoteUser,
 	)
 	if err != nil {
-		showErrorAndExit(fmt.Sprintf("Failed to save translation variant review: %v", err))
+		showErrorAndExit(fmt.Sprintf("Failed to save translation variant review: %v", err), returnView)
 		return
 	}
 
@@ -302,7 +408,7 @@ func main() {
 			remoteUser,
 		)
 		if err != nil {
-			showErrorAndExit(fmt.Sprintf("Failed to save canonical action: %v", err))
+			showErrorAndExit(fmt.Sprintf("Failed to save canonical action: %v", err), returnView)
 			return
 		}
 	}
@@ -329,31 +435,55 @@ func main() {
 	}
 
 	// Redirect to target entry
-	writeRedirect(redirectID)
+	writeRedirect(redirectID, returnView)
 
 	// Log successful save
 	log.Printf("Review saved: lemma_id=%d, status=%s, user=%s", lemmaID, reviewStatus, remoteUser)
 }
 
-func writeRedirect(redirectID int) {
+func normalizeReturnView(returnView string) string {
+	switch strings.TrimSpace(strings.ToLower(returnView)) {
+	case "entities", "entity":
+		return "entities"
+	default:
+		return "translation"
+	}
+}
+
+func redirectPath(returnView string, redirectID int) string {
+	if normalizeReturnView(returnView) == "entities" {
+		if redirectID <= 0 {
+			return "/cgi-bin/entities.cgi"
+		}
+		return fmt.Sprintf("/cgi-bin/entities.cgi?id=%d", redirectID)
+	}
+	if redirectID <= 0 {
+		return "/cgi-bin/review.cgi"
+	}
+	return fmt.Sprintf("/cgi-bin/review.cgi?id=%d", redirectID)
+}
+
+func writeRedirect(redirectID int, returnView string) {
+	location := redirectPath(returnView, redirectID)
 	fmt.Println("Status: 303 See Other")
-	fmt.Printf("Location: /cgi-bin/review.cgi?id=%d\n", redirectID)
+	fmt.Printf("Location: %s\n", location)
 	fmt.Println("Content-Type: text/html; charset=utf-8")
 	fmt.Println()
 	fmt.Printf(`<!DOCTYPE html>
 <html>
 <head>
-    <meta http-equiv="refresh" content="0;url=/cgi-bin/review.cgi?id=%d">
+    <meta http-equiv="refresh" content="0;url=%s">
     <title>Redirecting...</title>
 </head>
 <body>
     <p>Review saved. Redirecting...</p>
-    <p><a href="/cgi-bin/review.cgi?id=%d">Click here if not redirected</a></p>
+    <p><a href="%s">Click here if not redirected</a></p>
 </body>
-</html>`, redirectID, redirectID)
+</html>`, location, location)
 }
 
-func showErrorAndExit(message string) {
+func showErrorAndExit(message string, returnView string) {
+	location := redirectPath(returnView, 0)
 	fmt.Println("Content-Type: text/html; charset=utf-8")
 	fmt.Println()
 	fmt.Printf(`<!DOCTYPE html>
@@ -380,10 +510,10 @@ func showErrorAndExit(message string) {
     <div class="error">
         <h1>Error Saving Review</h1>
         <p>%s</p>
-        <p><a href="/cgi-bin/review.cgi">← Return to review system</a></p>
+        <p><a href="%s">← Return to review system</a></p>
     </div>
 </body>
-</html>`, HTMLEscape(message))
+</html>`, HTMLEscape(message), location)
 
 	log.Printf("Error: %s", message)
 }

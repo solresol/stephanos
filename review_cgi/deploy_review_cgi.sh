@@ -13,9 +13,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 SOURCE_FILES=(
     "common.go"
+    "page.go"
     "review.go"
+    "entities.go"
     "save.go"
-    "template.go"
+    "templates.go"
+    "shared_helpers.go"
     "go.mod"
     "go.sum"
 )
@@ -34,9 +37,11 @@ ssh "$REMOTE_HOST" "
     cd '$REMOTE_BUILD_DIR'
     export CGO_ENABLED=1
     export CC=/usr/bin/cc
-    /usr/local/bin/go build -o review.cgi review.go common.go template.go
+    /usr/local/bin/go build -o review.cgi review.go common.go page.go templates.go shared_helpers.go
+    /usr/local/bin/go build -o entities.cgi entities.go common.go page.go templates.go shared_helpers.go
     /usr/local/bin/go build -o save.cgi save.go common.go
     install -m 755 review.cgi '$REMOTE_CGI_DIR/review.cgi'
+    install -m 755 entities.cgi '$REMOTE_CGI_DIR/entities.cgi'
     install -m 755 save.cgi '$REMOTE_CGI_DIR/save.cgi'
 "
 

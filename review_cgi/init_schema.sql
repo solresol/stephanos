@@ -103,6 +103,29 @@ CREATE TABLE IF NOT EXISTS entity_resolution_actions (
 CREATE INDEX IF NOT EXISTS idx_entity_actions_lemma
 ON entity_resolution_actions(lemma_id, reviewed_at, id);
 
+-- Distinct-place review overrides (current state, not append-only).
+CREATE TABLE IF NOT EXISTS place_cluster_reviews (
+    cluster_id INTEGER PRIMARY KEY,
+    lemma_id INTEGER NOT NULL,
+    display_label TEXT,
+    inferred_canonical_name TEXT,
+    place_type TEXT,
+    region TEXT,
+    explicit_name_present INTEGER,
+    preferred_external_id_type TEXT,
+    preferred_external_id_value TEXT,
+    chosen_wikidata_qid TEXT,
+    chosen_topostext_id TEXT,
+    chosen_pleiades_id TEXT,
+    resolution_status TEXT,
+    notes TEXT,
+    reviewer_username TEXT,
+    reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_place_cluster_reviews_lemma
+ON place_cluster_reviews(lemma_id, reviewed_at, cluster_id);
+
 -- Local phrase-level commentary queue.
 -- Public rendering is driven from PostgreSQL after nightly import.
 CREATE TABLE IF NOT EXISTS commentary_entries (

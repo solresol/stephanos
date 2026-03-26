@@ -39,7 +39,7 @@ func main() {
 		return
 	}
 
-	tmpl, err := template.New("translation").Parse(translationReviewTemplate)
+	tmpl, err := template.New("entities").Parse(entityResolutionTemplate)
 	if err != nil {
 		showError(fmt.Sprintf("Template error: %v", err))
 		return

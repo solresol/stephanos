@@ -148,6 +148,10 @@ uv run count_words.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 5b: Extracting proper nouns..." | tee -a "$LOGFILE"
 uv run extract_proper_nouns.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 5b1: Extract distinct place clusters for entity review
+echo "Step 5b1: Extracting place clusters..." | tee -a "$LOGFILE"
+uv run extract_place_clusters.py --delay 0.2 2>&1 | tee -a "$LOGFILE"
+
 # Step 5b2: Extract structured source-citation units (author+work+book)
 SOURCE_CITATION_EXTRACT_MODEL="${SOURCE_CITATION_EXTRACT_MODEL:-gpt-5.4-mini}"
 SOURCE_CITATION_EXTRACT_LIMIT="${SOURCE_CITATION_EXTRACT_LIMIT:-300}"

@@ -127,6 +127,38 @@ def enrich_proper_nouns_with_wikidata_metadata(proper_nouns_by_lemma: dict[int, 
             noun["effective_wikidata_description"] = effective.get("description", "")
 
 
+def enrich_place_clusters_with_wikidata_metadata(place_clusters_by_lemma: dict[int, list[dict]]) -> None:
+    """Attach cached Wikidata labels/descriptions to place-cluster rows."""
+    qids: list[str] = []
+    for clusters in place_clusters_by_lemma.values():
+        for cluster in clusters or []:
+            qids.extend(
+                [
+                    cluster.get("wikidata_qid", ""),
+                    cluster.get("human_wikidata_qid", ""),
+                ]
+            )
+
+    try:
+        metadata = wikidata_entity_cache.get_entity_metadata(qids)
+    except Exception as exc:
+        print(f"Warning: failed to enrich Wikidata labels for place clusters: {exc}")
+        return
+    if not metadata:
+        return
+
+    for clusters in place_clusters_by_lemma.values():
+        for cluster in clusters or []:
+            machine = metadata.get(cluster.get("wikidata_qid", ""), {})
+            human = metadata.get(cluster.get("human_wikidata_qid", ""), {})
+            if not cluster.get("wikidata_label"):
+                cluster["wikidata_label"] = machine.get("label", "")
+            if not cluster.get("wikidata_description"):
+                cluster["wikidata_description"] = machine.get("description", "")
+            cluster["human_wikidata_label"] = human.get("label", "")
+            cluster["human_wikidata_description"] = human.get("description", "")
+
+
 def sort_translation_variants(variants: list[dict]) -> list[dict]:
     """Keep authorative variants first and push legacy baselines to the end."""
     kind_priority = {
@@ -549,6 +581,229 @@ def export_lemmas():
         proper_nouns_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
         enrich_proper_nouns_with_wikidata_metadata(proper_nouns_by_lemma)
 
+    place_clusters_by_lemma = {}
+    cur.execute("SELECT to_regclass('public.place_clusters') IS NOT NULL")
+    has_place_clusters = bool(cur.fetchone()[0])
+    if has_place_clusters:
+        cluster_rows_by_id: dict[int, dict] = {}
+        cur.execute(
+            """
+            SELECT
+                id,
+                lemma_id,
+                cluster_index,
+                COALESCE(display_label, '') AS display_label,
+                COALESCE(inferred_canonical_name, '') AS inferred_canonical_name,
+                COALESCE(place_type, '') AS place_type,
+                COALESCE(region, '') AS region,
+                COALESCE(explicit_name_present, TRUE) AS explicit_name_present,
+                COALESCE(extraction_confidence, '') AS extraction_confidence,
+                COALESCE(extraction_notes, '') AS extraction_notes,
+                COALESCE(preferred_external_id_type, '') AS preferred_external_id_type,
+                COALESCE(preferred_external_id_value, '') AS preferred_external_id_value,
+                COALESCE(wikidata_qid, '') AS wikidata_qid,
+                COALESCE(wikidata_label, '') AS wikidata_label,
+                COALESCE(wikidata_description, '') AS wikidata_description,
+                COALESCE(wikidata_confidence, '') AS wikidata_confidence,
+                COALESCE(topostext_id, '') AS topostext_id,
+                COALESCE(pleiades_id, '') AS pleiades_id,
+                COALESCE(resolution_status, '') AS resolution_status,
+                COALESCE(human_display_label, '') AS human_display_label,
+                COALESCE(human_inferred_canonical_name, '') AS human_inferred_canonical_name,
+                COALESCE(human_place_type, '') AS human_place_type,
+                COALESCE(human_region, '') AS human_region,
+                human_explicit_name_present,
+                COALESCE(human_preferred_external_id_type, '') AS human_preferred_external_id_type,
+                COALESCE(human_preferred_external_id_value, '') AS human_preferred_external_id_value,
+                COALESCE(human_wikidata_qid, '') AS human_wikidata_qid,
+                COALESCE(human_topostext_id, '') AS human_topostext_id,
+                COALESCE(human_pleiades_id, '') AS human_pleiades_id,
+                COALESCE(human_resolution_status, '') AS human_resolution_status,
+                COALESCE(human_resolution_notes, '') AS human_resolution_notes,
+                COALESCE(human_resolved_by, '') AS human_resolved_by,
+                COALESCE(human_resolved_at::text, '') AS human_resolved_at
+            FROM place_clusters
+            ORDER BY lemma_id, cluster_index, id
+            """
+        )
+        for row in cur.fetchall():
+            (
+                cluster_id,
+                lemma_id,
+                cluster_index,
+                display_label,
+                inferred_canonical_name,
+                place_type,
+                region,
+                explicit_name_present,
+                extraction_confidence,
+                extraction_notes,
+                preferred_external_id_type,
+                preferred_external_id_value,
+                wikidata_qid,
+                wikidata_label,
+                wikidata_description,
+                wikidata_confidence,
+                topostext_id,
+                pleiades_id,
+                resolution_status,
+                human_display_label,
+                human_inferred_canonical_name,
+                human_place_type,
+                human_region,
+                human_explicit_name_present,
+                human_preferred_external_id_type,
+                human_preferred_external_id_value,
+                human_wikidata_qid,
+                human_topostext_id,
+                human_pleiades_id,
+                human_resolution_status,
+                human_resolution_notes,
+                human_resolved_by,
+                human_resolved_at,
+            ) = row
+            cluster = {
+                "id": int(cluster_id),
+                "cluster_index": int(cluster_index or 0),
+                "display_label": display_label or "",
+                "inferred_canonical_name": inferred_canonical_name or "",
+                "place_type": place_type or "",
+                "region": region or "",
+                "explicit_name_present": bool(explicit_name_present),
+                "extraction_confidence": extraction_confidence or "",
+                "extraction_notes": extraction_notes or "",
+                "preferred_external_id_type": preferred_external_id_type or "",
+                "preferred_external_id_value": preferred_external_id_value or "",
+                "wikidata_qid": wikidata_qid or "",
+                "wikidata_label": wikidata_label or "",
+                "wikidata_description": wikidata_description or "",
+                "wikidata_confidence": wikidata_confidence or "",
+                "topostext_id": topostext_id or "",
+                "pleiades_id": pleiades_id or "",
+                "resolution_status": resolution_status or "",
+                "human_display_label": human_display_label or "",
+                "human_inferred_canonical_name": human_inferred_canonical_name or "",
+                "human_place_type": human_place_type or "",
+                "human_region": human_region or "",
+                "human_explicit_name_present": human_explicit_name_present,
+                "human_preferred_external_id_type": human_preferred_external_id_type or "",
+                "human_preferred_external_id_value": human_preferred_external_id_value or "",
+                "human_wikidata_qid": human_wikidata_qid or "",
+                "human_topostext_id": human_topostext_id or "",
+                "human_pleiades_id": human_pleiades_id or "",
+                "human_resolution_status": human_resolution_status or "",
+                "human_resolution_notes": human_resolution_notes or "",
+                "human_resolved_by": human_resolved_by or "",
+                "human_resolved_at": human_resolved_at or "",
+                "mentions": [],
+                "candidates": [],
+            }
+            place_clusters_by_lemma.setdefault(int(lemma_id), []).append(cluster)
+            cluster_rows_by_id[int(cluster_id)] = cluster
+
+        cluster_ids = list(cluster_rows_by_id.keys())
+        if cluster_ids:
+            cur.execute(
+                """
+                SELECT
+                    place_cluster_id,
+                    id,
+                    COALESCE(text_form, '') AS text_form,
+                    COALESCE(normalized_form, '') AS normalized_form,
+                    COALESCE(mention_order, 0) AS mention_order,
+                    char_start,
+                    char_end,
+                    COALESCE(is_implicit, FALSE) AS is_implicit,
+                    COALESCE(extracted_place_type, '') AS extracted_place_type,
+                    COALESCE(extracted_region, '') AS extracted_region,
+                    COALESCE(evidence_text, '') AS evidence_text,
+                    COALESCE(machine_notes, '') AS machine_notes
+                FROM place_cluster_mentions
+                WHERE place_cluster_id = ANY(%s)
+                ORDER BY place_cluster_id, mention_order, id
+                """,
+                (cluster_ids,),
+            )
+            for (
+                place_cluster_id,
+                mention_id,
+                text_form,
+                normalized_form,
+                mention_order,
+                char_start,
+                char_end,
+                is_implicit,
+                extracted_place_type,
+                extracted_region,
+                evidence_text,
+                machine_notes,
+            ) in cur.fetchall():
+                cluster_rows_by_id[int(place_cluster_id)]["mentions"].append(
+                    {
+                        "id": int(mention_id),
+                        "text_form": text_form or "",
+                        "normalized_form": normalized_form or "",
+                        "mention_order": int(mention_order or 0),
+                        "char_start": char_start,
+                        "char_end": char_end,
+                        "is_implicit": bool(is_implicit),
+                        "extracted_place_type": extracted_place_type or "",
+                        "extracted_region": extracted_region or "",
+                        "evidence_text": evidence_text or "",
+                        "machine_notes": machine_notes or "",
+                    }
+                )
+
+            cur.execute(
+                """
+                SELECT
+                    place_cluster_id,
+                    id,
+                    COALESCE(source_name, '') AS source_name,
+                    COALESCE(external_id, '') AS external_id,
+                    COALESCE(label, '') AS label,
+                    COALESCE(description, '') AS description,
+                    COALESCE(place_type, '') AS place_type,
+                    COALESCE(region, '') AS region,
+                    COALESCE(url, '') AS url,
+                    score,
+                    COALESCE(rank_order, 0) AS rank_order
+                FROM place_cluster_candidates
+                WHERE place_cluster_id = ANY(%s)
+                ORDER BY place_cluster_id, rank_order, id
+                """,
+                (cluster_ids,),
+            )
+            for (
+                place_cluster_id,
+                candidate_id,
+                source_name,
+                external_id,
+                label,
+                description,
+                place_type,
+                region,
+                url,
+                score,
+                rank_order,
+            ) in cur.fetchall():
+                cluster_rows_by_id[int(place_cluster_id)]["candidates"].append(
+                    {
+                        "id": int(candidate_id),
+                        "source_name": source_name or "",
+                        "external_id": external_id or "",
+                        "label": label or "",
+                        "description": description or "",
+                        "place_type": place_type or "",
+                        "region": region or "",
+                        "url": url or "",
+                        "score": float(score) if score is not None else None,
+                        "rank_order": int(rank_order or 0),
+                    }
+                )
+
+        enrich_place_clusters_with_wikidata_metadata(place_clusters_by_lemma)
+
     translation_variants_by_lemma = {}
     cur.execute("SELECT to_regclass('public.translation_runs') IS NOT NULL")
     has_translation_runs = bool(cur.fetchone()[0])
@@ -792,6 +1047,7 @@ def export_lemmas():
             "canonical_variant_ref": selected_variant_ref,
             "commentary_entries": commentary_by_lemma.get(lemma_id, []),
             "proper_nouns": proper_nouns_by_lemma.get(lemma_id, []),
+            "place_clusters": place_clusters_by_lemma.get(lemma_id, []),
             "blocked_reasons": [risk_by_lemma.get(lemma_id, {}).get("translation_block_reason", "")]
             if risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False)
             else [],

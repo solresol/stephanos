@@ -1,9 +1,14 @@
 .PHONY: all clean test
 
-all: review.cgi save.cgi status.cgi
+COMMON_REVIEW_SRCS = common.go page.go templates.go shared_helpers.go
 
-review.cgi: review.go common.go template.go
-	go build -o review.cgi review.go common.go template.go
+all: review.cgi entities.cgi save.cgi status.cgi
+
+review.cgi: review.go $(COMMON_REVIEW_SRCS)
+	go build -o review.cgi review.go $(COMMON_REVIEW_SRCS)
+
+entities.cgi: entities.go $(COMMON_REVIEW_SRCS)
+	go build -o entities.cgi entities.go $(COMMON_REVIEW_SRCS)
 
 save.cgi: save.go common.go
 	go build -o save.cgi save.go common.go
@@ -16,12 +21,12 @@ status.cgi: status.go common.go
 	go build -ldflags "-X main.buildVersion=$$version -X main.buildTime=$$build_time" -o status.cgi status.go common.go
 
 clean:
-	rm -f review.cgi save.cgi status.cgi
+	rm -f review.cgi entities.cgi save.cgi status.cgi
 
 test:
-	go test -v
+	cd .. && python3 -m unittest test_place_cluster_extraction.py test_review_template_split.py
 
 # For deployment on merah
 deploy: all
 	@echo "Built CGI programs. Ready to deploy to merah."
-	@echo "Copy review.cgi, save.cgi, and status.cgi to /var/www/vhosts/stephanos.symmachus.org/cgi-bin/"
+	@echo "Copy review.cgi, entities.cgi, save.cgi, and status.cgi to /var/www/vhosts/stephanos.symmachus.org/cgi-bin/"
