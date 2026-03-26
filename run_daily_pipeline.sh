@@ -149,8 +149,17 @@ echo "Step 5b: Extracting proper nouns..." | tee -a "$LOGFILE"
 uv run extract_proper_nouns.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 5b1: Extract distinct place clusters for entity review
-echo "Step 5b1: Extracting place clusters..." | tee -a "$LOGFILE"
-uv run extract_place_clusters.py --delay 0.2 2>&1 | tee -a "$LOGFILE"
+PLACE_CLUSTER_EXTRACT_LIMIT="${PLACE_CLUSTER_EXTRACT_LIMIT:-3}"
+PLACE_CLUSTER_EXTRACT_DELAY="${PLACE_CLUSTER_EXTRACT_DELAY:-1}"
+PLACE_CLUSTER_DAILY_TOKEN_LIMIT="${PLACE_CLUSTER_DAILY_TOKEN_LIMIT:-12000}"
+if [ "$PLACE_CLUSTER_EXTRACT_LIMIT" -gt 0 ]; then
+    echo "Step 5b1: Extracting place clusters slowly (limit ${PLACE_CLUSTER_EXTRACT_LIMIT}/day)..." | tee -a "$LOGFILE"
+    uv run extract_place_clusters.py \
+        --daily-limit "$PLACE_CLUSTER_EXTRACT_LIMIT" \
+        --daily-token-limit "$PLACE_CLUSTER_DAILY_TOKEN_LIMIT" \
+        --delay "$PLACE_CLUSTER_EXTRACT_DELAY" \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: place-cluster extraction step failed" | tee -a "$LOGFILE"
+fi
 
 # Step 5b2: Extract structured source-citation units (author+work+book)
 SOURCE_CITATION_EXTRACT_MODEL="${SOURCE_CITATION_EXTRACT_MODEL:-gpt-5.4-mini}"

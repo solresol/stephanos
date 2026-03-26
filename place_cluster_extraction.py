@@ -18,6 +18,34 @@ PLACE_CANDIDATE_SOURCE_PRIORITY = {
     "other": 4,
 }
 
+PLACE_HEADWORD_TYPE_MARKERS = (
+    "place",
+    "city",
+    "polis",
+    "town",
+    "village",
+    "island",
+    "river",
+    "mountain",
+    "harbor",
+    "harbour",
+    "peninsula",
+    "district",
+    "fortress",
+    "region",
+    "ethnos",
+    "νήσ",
+    "πόλ",
+    "ποταμ",
+    "ὄρ",
+    "λιμήν",
+    "χερρόνησ",
+    "χώρα",
+    "κώμη",
+    "ἄκρα",
+    "φρούρι",
+)
+
 PLACE_CLUSTER_SYSTEM_PROMPT = """You are a classical philologist working on Stephanos of Byzantium.
 Your task is to identify distinct place referents within one lemma, especially when the same headword refers to multiple different places.
 
@@ -130,6 +158,28 @@ PLACE_CLUSTER_TOOL = {
 
 def normalize_space(value: str | None) -> str:
     return " ".join((value or "").split())
+
+
+def is_place_like_type(lemma_type: str | None) -> bool:
+    normalized = normalize_space(lemma_type).lower()
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in PLACE_HEADWORD_TYPE_MARKERS)
+
+
+def place_cluster_queue_priority(
+    *,
+    lemma_type: str | None,
+    has_headword_alignment: bool,
+    place_signal_count: int,
+) -> int:
+    score = 0
+    if has_headword_alignment:
+        score += 6
+    if is_place_like_type(lemma_type):
+        score += 4
+    score += min(max(int(place_signal_count or 0), 0), 5) * 2
+    return score
 
 
 def text_key(value: str | None) -> str:

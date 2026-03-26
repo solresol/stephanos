@@ -3,6 +3,7 @@ import unittest
 
 from place_cluster_extraction import (
     normalize_place_cluster_payload,
+    place_cluster_queue_priority,
     rank_place_candidates,
 )
 
@@ -101,6 +102,20 @@ class PlaceClusterExtractionTests(unittest.TestCase):
             [(candidate["source_name"], candidate["external_id"]) for candidate in ranked[:3]],
             [("topostext", "204EKo"), ("wikidata", "Q100"), ("pleiades", "123")],
         )
+
+    def test_queue_priority_prefers_place_like_headwords_with_existing_place_signals(self):
+        high_priority = place_cluster_queue_priority(
+            lemma_type="city",
+            has_headword_alignment=True,
+            place_signal_count=3,
+        )
+        low_priority = place_cluster_queue_priority(
+            lemma_type="ethnic",
+            has_headword_alignment=False,
+            place_signal_count=0,
+        )
+
+        self.assertGreater(high_priority, low_priority)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from link_wikidata_places import query_wikidata_places
 from place_cluster_extraction import (
     build_wikidata_candidates,
     extract_place_clusters_for_lemma,
+    place_cluster_queue_priority,
     preferred_machine_choice,
     rank_place_candidates,
 )
@@ -43,6 +44,7 @@ def current_meineke_sql(has_source_versions: bool) -> str:
 
 def load_lemma_rows(cur, *, limit: int | None, lemma_id: int | None, rebuild: bool) -> list[tuple]:
     has_source_versions = table_exists(cur, "lemma_source_text_versions")
+    has_proper_nouns = table_exists(cur, "proper_nouns")
     greek_expr = current_meineke_sql(has_source_versions)
     lateral_join = ""
     if has_source_versions:
@@ -57,6 +59,16 @@ def load_lemma_rows(cur, *, limit: int | None, lemma_id: int | None, rebuild: bo
             ORDER BY stv.id DESC
             LIMIT 1
         ) current_meineke ON TRUE
+        """
+    place_signal_expr = "0"
+    if has_proper_nouns:
+        place_signal_expr = """
+            COALESCE((
+                SELECT COUNT(*)
+                FROM proper_nouns pn
+                WHERE pn.lemma_id = a.id
+                  AND LOWER(COALESCE(pn.noun_type, '')) = 'place'
+            ), 0)
         """
 
     where_clauses = [
@@ -81,18 +93,38 @@ def load_lemma_rows(cur, *, limit: int | None, lemma_id: int | None, rebuild: bo
                 a.corrected_english_translation,
                 a.translation,
                 ''
-            ) AS english_translation
+            ) AS english_translation,
+            COALESCE(a.type, '') AS lemma_type,
+            (
+                COALESCE(NULLIF(BTRIM(a.wikidata_place_qid), ''), '') <> ''
+                OR COALESCE(NULLIF(BTRIM(a.pleiades_id), ''), '') <> ''
+            ) AS has_headword_alignment,
+            {place_signal_expr} AS place_signal_count
         FROM assembled_lemmas a
         {lateral_join}
         WHERE {' AND '.join(where_clauses)}
         ORDER BY a.id
     """
-    if limit is not None:
-        query += " LIMIT %s"
-        params.append(limit)
 
     cur.execute(query, params)
-    return cur.fetchall()
+    rows = cur.fetchall()
+    if lemma_id is not None:
+        return [row[:4] for row in rows]
+
+    prioritized_rows = sorted(
+        rows,
+        key=lambda row: (
+            -place_cluster_queue_priority(
+                lemma_type=row[4],
+                has_headword_alignment=bool(row[5]),
+                place_signal_count=int(row[6] or 0),
+            ),
+            row[0],
+        ),
+    )
+    if limit is not None:
+        prioritized_rows = prioritized_rows[:limit]
+    return [row[:4] for row in prioritized_rows]
 
 
 def upsert_cluster(cur, lemma_id: int, cluster: dict) -> int:
@@ -269,7 +301,14 @@ def build_cluster_records(headword: str, clusters: list[dict]) -> list[dict]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Extract per-lemma place clusters for named-entity review.")
-    parser.add_argument("--limit", type=int, default=None, help="Limit number of lemmas to process")
+    parser.add_argument("--limit", type=int, default=None, help="Legacy alias for --daily-limit")
+    parser.add_argument("--daily-limit", type=int, default=None, help="Maximum number of lemmas to process in this run")
+    parser.add_argument(
+        "--daily-token-limit",
+        type=int,
+        default=None,
+        help="Stop once this many extraction tokens have been used in the current run",
+    )
     parser.add_argument("--lemma-id", type=int, default=None, help="Process a single lemma ID")
     parser.add_argument("--model", default="gpt-5.4-mini", help="OpenAI model to use for extraction")
     parser.add_argument("--delay", type=float, default=0.0, help="Delay between lemmas")
@@ -279,6 +318,7 @@ def main() -> int:
         help="Re-run extraction for already analyzed lemmas. Existing human review fields are preserved.",
     )
     args = parser.parse_args()
+    effective_limit = args.daily_limit if args.daily_limit is not None else args.limit
 
     api_key = load_api_key()
     client = OpenAI(api_key=api_key)
@@ -289,7 +329,7 @@ def main() -> int:
     if not table_exists(cur, "place_clusters"):
         raise RuntimeError("place_clusters table missing. Apply migrations first.")
 
-    lemma_rows = load_lemma_rows(cur, limit=args.limit, lemma_id=args.lemma_id, rebuild=args.rebuild)
+    lemma_rows = load_lemma_rows(cur, limit=effective_limit, lemma_id=args.lemma_id, rebuild=args.rebuild)
     if not lemma_rows:
         print("No lemmas need place-cluster extraction.")
         conn.close()
@@ -299,6 +339,10 @@ def main() -> int:
     print(f"Extracting place clusters for {len(lemma_rows)} lemmas...")
 
     for index, (lemma_id, headword, greek_text, english_translation) in enumerate(lemma_rows, start=1):
+        if args.daily_token_limit is not None and total_tokens >= args.daily_token_limit:
+            print(f"Reached daily token limit ({args.daily_token_limit:,}); stopping.")
+            break
+
         if not (greek_text or "").strip():
             cur.execute(
                 """
