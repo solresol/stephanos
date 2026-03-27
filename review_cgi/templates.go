@@ -253,7 +253,7 @@ const sharedPageStyles = `
         .scan-strip {
             display: grid;
             gap: 12px;
-            max-height: 460px;
+            max-height: 700px;
             overflow: auto;
         }
         .scan-figure {
@@ -266,7 +266,7 @@ const sharedPageStyles = `
         .scan-figure img {
             background: #f8fafc;
             display: block;
-            max-height: 400px;
+            height: min(620px, 72vh);
             object-fit: contain;
             width: 100%;
         }
@@ -618,6 +618,9 @@ const sharedPageStyles = `
             .scan-grid {
                 grid-template-columns: 1fr 1fr;
             }
+            .scan-strip {
+                max-height: 940px;
+            }
             .context-grid {
                 grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
                 align-items: start;
@@ -644,6 +647,9 @@ const sharedPageStyles = `
             .place-form-grid {
                 grid-template-columns: repeat(3, minmax(0, 1fr));
             }
+            .scan-figure img {
+                height: min(840px, 82vh);
+            }
         }
         @media (max-width: 820px) {
             .lemma-header,
@@ -655,6 +661,12 @@ const sharedPageStyles = `
             }
             .metadata {
                 text-align: left;
+            }
+            .scan-strip {
+                max-height: 560px;
+            }
+            .scan-figure img {
+                height: min(500px, 62vh);
             }
         }
 `
@@ -838,21 +850,6 @@ const translationReviewTemplate = `<!DOCTYPE html>
                 </div>
             </div>
 
-            {{if .SourceLookupLinks}}
-            <div class="context-panel workspace-note-panel">
-                <div class="section-title">Quoted Sources</div>
-                <div class="source-link-list">
-                    {{range .SourceLookupLinks}}
-                    {{if .URL}}
-                    <a class="btn-subtle" href="{{.URL}}" target="_blank">{{.Label}}{{if .Note}} · {{.Note}}{{end}}</a>
-                    {{else}}
-                    <span class="cluster-pill">{{.Label}}{{if .Note}} · {{.Note}}{{end}}</span>
-                    {{end}}
-                    {{end}}
-                </div>
-            </div>
-            {{end}}
-
             <form method="POST" action="/cgi-bin/save.cgi" class="review-form">
                 <input type="hidden" name="form_mode" value="review">
                 <input type="hidden" name="return_view" value="translation">
@@ -864,7 +861,38 @@ const translationReviewTemplate = `<!DOCTYPE html>
                 <input type="hidden" id="canonical_kind" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "kind"}}{{end}}">
                 <input type="hidden" id="canonical_id" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "id"}}{{end}}">
 
-                <div class="review-meta-grid">
+                <div class="translation-edit-grid" style="margin-top: 18px;">
+                    <div class="form-group context-panel">
+                        <label for="corrected_english">Initial Human Translation{{if .Review.CorrectedEnglishTranslation}} <span class="helper-text">last edited by {{if .Review.InitialTranslationBy}}{{.Review.InitialTranslationBy}}{{else}}{{.Review.ReviewerUsername}}{{end}}</span>{{end}}</label>
+                        <div class="button-group" style="margin-bottom: 8px;">
+                            <button type="button" class="btn-subtle" onclick="copyAIToInitial()">Copy AI translation here</button>
+                        </div>
+                        <textarea name="corrected_english" id="corrected_english">{{.Review.CorrectedEnglishTranslation}}</textarea>
+                    </div>
+
+                    <div class="form-group context-panel">
+                        <label for="reviewed_english">Reviewed English Translation{{if .Review.ReviewedEnglishTranslation}} <span class="helper-text">last edited by {{if .Review.ReviewedTranslationBy}}{{.Review.ReviewedTranslationBy}}{{else}}{{.Review.ReviewerUsername}}{{end}}</span>{{end}}</label>
+                        <div class="button-group" style="margin-bottom: 8px;">
+                            <button type="button" class="btn-subtle" onclick="copyInitialToReviewed()">Use the initial translation as reviewed</button>
+                        </div>
+                        <textarea name="reviewed_english" id="reviewed_english">{{.Review.ReviewedEnglishTranslation}}</textarea>
+                    </div>
+
+                    <div class="form-group context-panel workspace-full">
+                        <label for="notes">Notes</label>
+                        <textarea class="notes-area" name="notes" id="notes">{{.Review.Notes}}</textarea>
+                    </div>
+                </div>
+
+                <div class="button-group" style="margin-top: 14px;">
+                    <button type="submit" name="action" value="continue" class="btn-save">Save & Continue →</button>
+                    <button type="submit" name="action" value="stay" class="btn-save-stay">Save</button>
+                    {{if .HasNext}}
+                    <button type="button" class="btn-skip" onclick="window.location.href='?id={{.NextID}}'">Skip to Next</button>
+                    {{end}}
+                </div>
+
+                <div class="review-meta-grid" style="margin-top: 18px;">
                     <div class="context-panel">
                         <div class="form-group">
                             <label>Translation Review State</label>
@@ -950,37 +978,6 @@ const translationReviewTemplate = `<!DOCTYPE html>
                         </details>
                         {{end}}
                     </div>
-                </div>
-
-                <div class="translation-edit-grid" style="margin-top: 18px;">
-                    <div class="form-group context-panel">
-                        <label for="corrected_english">Initial Human Translation{{if .Review.CorrectedEnglishTranslation}} <span class="helper-text">last edited by {{if .Review.InitialTranslationBy}}{{.Review.InitialTranslationBy}}{{else}}{{.Review.ReviewerUsername}}{{end}}</span>{{end}}</label>
-                        <div class="button-group" style="margin-bottom: 8px;">
-                            <button type="button" class="btn-subtle" onclick="copyAIToInitial()">Copy AI translation here</button>
-                        </div>
-                        <textarea name="corrected_english" id="corrected_english">{{.Review.CorrectedEnglishTranslation}}</textarea>
-                    </div>
-
-                    <div class="form-group context-panel">
-                        <label for="reviewed_english">Reviewed English Translation{{if .Review.ReviewedEnglishTranslation}} <span class="helper-text">last edited by {{if .Review.ReviewedTranslationBy}}{{.Review.ReviewedTranslationBy}}{{else}}{{.Review.ReviewerUsername}}{{end}}</span>{{end}}</label>
-                        <div class="button-group" style="margin-bottom: 8px;">
-                            <button type="button" class="btn-subtle" onclick="copyInitialToReviewed()">Use the initial translation as reviewed</button>
-                        </div>
-                        <textarea name="reviewed_english" id="reviewed_english">{{.Review.ReviewedEnglishTranslation}}</textarea>
-                    </div>
-
-                    <div class="form-group context-panel workspace-full">
-                        <label for="notes">Notes</label>
-                        <textarea class="notes-area" name="notes" id="notes">{{.Review.Notes}}</textarea>
-                    </div>
-                </div>
-
-                <div class="button-group" style="margin-top: 14px;">
-                    <button type="submit" name="action" value="continue" class="btn-save">Save & Continue →</button>
-                    <button type="submit" name="action" value="stay" class="btn-save-stay">Save</button>
-                    {{if .HasNext}}
-                    <button type="button" class="btn-skip" onclick="window.location.href='?id={{.NextID}}'">Skip to Next</button>
-                    {{end}}
                 </div>
             </form>
         </div>
@@ -1078,6 +1075,21 @@ const translationReviewTemplate = `<!DOCTYPE html>
                 </div>
             </details>
         </div>
+
+        {{if .SourceLookupLinks}}
+        <div class="card">
+            <div class="section-title">Quoted Sources</div>
+            <div class="source-link-list">
+                {{range .SourceLookupLinks}}
+                {{if .URL}}
+                <a class="btn-subtle" href="{{.URL}}" target="_blank">{{.Label}}{{if .Note}} · {{.Note}}{{end}}</a>
+                {{else}}
+                <span class="cluster-pill">{{.Label}}{{if .Note}} · {{.Note}}{{end}}</span>
+                {{end}}
+                {{end}}
+            </div>
+        </div>
+        {{end}}
     </div>
 
     <script>
