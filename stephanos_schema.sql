@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict 4GgVPVTGxsm3uR8PZfLWuggnTEHPzxypKC7bei5Sr0e9CBFheiDhhDyB0ceA31R
+\restrict SdFo76Uxtcc0jSwycD4vtxTWj6bZjkgvGeNTiSnsNQT8cTH9yS6hQYbUQJSlaID
 
 -- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
@@ -82,6 +82,8 @@ CREATE TABLE public.assembled_lemmas (
     quarantine_reason text,
     quarantined_at timestamp with time zone,
     wikidata_place_linked_by text,
+    place_clusters_analyzed boolean DEFAULT false,
+    place_clusters_analyzed_at timestamp with time zone,
     CONSTRAINT assembled_lemmas_wikidata_place_confidence_check CHECK ((wikidata_place_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text]))),
     CONSTRAINT check_review_status CHECK ((review_status = ANY (ARRAY['not_reviewed'::text, 'reviewed_ok'::text, 'reviewed_corrections'::text])))
 );
@@ -238,6 +240,169 @@ CREATE TABLE public.canonical_action_import_state (
     last_action_id bigint DEFAULT 0 NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
+
+
+--
+-- Name: place_clusters; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.place_clusters (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    cluster_index integer NOT NULL,
+    display_label text NOT NULL,
+    inferred_canonical_name text,
+    place_type text,
+    region text,
+    explicit_name_present boolean DEFAULT true NOT NULL,
+    extraction_confidence text,
+    extraction_notes text,
+    preferred_external_id_type text,
+    preferred_external_id_value text,
+    wikidata_qid text,
+    wikidata_label text,
+    wikidata_description text,
+    wikidata_confidence text,
+    topostext_id text,
+    pleiades_id text,
+    resolution_status text,
+    human_display_label text,
+    human_inferred_canonical_name text,
+    human_place_type text,
+    human_region text,
+    human_explicit_name_present boolean,
+    human_preferred_external_id_type text,
+    human_preferred_external_id_value text,
+    human_wikidata_qid text,
+    human_topostext_id text,
+    human_pleiades_id text,
+    human_resolution_status text,
+    human_resolution_notes text,
+    human_resolved_by text,
+    human_resolved_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT place_clusters_human_resolution_status_check CHECK (((human_resolution_status IS NULL) OR (human_resolution_status = ANY (ARRAY['approved'::text, 'corrected'::text, 'not_alignable'::text, 'removed'::text, 'added'::text])))),
+    CONSTRAINT place_clusters_wikidata_confidence_check CHECK (((wikidata_confidence IS NULL) OR (wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text]))))
+);
+
+
+--
+-- Name: TABLE place_clusters; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.place_clusters IS 'Distinct same-named places discussed within a single Stephanos lemma, with machine extraction plus human review overrides.';
+
+
+--
+-- Name: effective_place_clusters; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.effective_place_clusters AS
+ SELECT id,
+    lemma_id,
+    cluster_index,
+    display_label,
+    inferred_canonical_name,
+    place_type,
+    region,
+    explicit_name_present,
+    extraction_confidence,
+    extraction_notes,
+    preferred_external_id_type,
+    preferred_external_id_value,
+    wikidata_qid,
+    wikidata_label,
+    wikidata_description,
+    wikidata_confidence,
+    topostext_id,
+    pleiades_id,
+    resolution_status,
+    human_display_label,
+    human_inferred_canonical_name,
+    human_place_type,
+    human_region,
+    human_explicit_name_present,
+    human_preferred_external_id_type,
+    human_preferred_external_id_value,
+    human_wikidata_qid,
+    human_topostext_id,
+    human_pleiades_id,
+    human_resolution_status,
+    human_resolution_notes,
+    human_resolved_by,
+    human_resolved_at,
+    created_at,
+    updated_at,
+    COALESCE(NULLIF(btrim(human_display_label), ''::text), NULLIF(btrim(display_label), ''::text), concat(COALESCE(NULLIF(btrim(inferred_canonical_name), ''::text), 'place'::text), ' #', (cluster_index)::text)) AS effective_display_label,
+    COALESCE(NULLIF(btrim(human_inferred_canonical_name), ''::text), NULLIF(btrim(inferred_canonical_name), ''::text)) AS effective_canonical_name,
+    COALESCE(NULLIF(btrim(human_place_type), ''::text), NULLIF(btrim(place_type), ''::text)) AS effective_place_type,
+    COALESCE(NULLIF(btrim(human_region), ''::text), NULLIF(btrim(region), ''::text)) AS effective_region,
+    COALESCE(human_explicit_name_present, explicit_name_present) AS effective_explicit_name_present,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_type), ''::text),
+            CASE
+                WHEN (NULLIF(btrim(human_topostext_id), ''::text) IS NOT NULL) THEN 'topostext'::text
+                WHEN (NULLIF(btrim(human_wikidata_qid), ''::text) IS NOT NULL) THEN 'wikidata'::text
+                WHEN (NULLIF(btrim(human_pleiades_id), ''::text) IS NOT NULL) THEN 'pleiades'::text
+                ELSE NULL::text
+            END)
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_type), ''::text), NULLIF(btrim(preferred_external_id_type), ''::text),
+            CASE
+                WHEN (NULLIF(btrim(human_topostext_id), ''::text) IS NOT NULL) THEN 'topostext'::text
+                WHEN (NULLIF(btrim(human_wikidata_qid), ''::text) IS NOT NULL) THEN 'wikidata'::text
+                WHEN (NULLIF(btrim(human_pleiades_id), ''::text) IS NOT NULL) THEN 'pleiades'::text
+                WHEN (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) THEN 'topostext'::text
+                WHEN (NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) THEN 'wikidata'::text
+                WHEN (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL) THEN 'pleiades'::text
+                ELSE NULL::text
+            END)
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN 'none'::text
+            ELSE COALESCE(NULLIF(btrim(preferred_external_id_type), ''::text),
+            CASE
+                WHEN (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) THEN 'topostext'::text
+                WHEN (NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) THEN 'wikidata'::text
+                WHEN (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL) THEN 'pleiades'::text
+                ELSE NULL::text
+            END)
+        END AS effective_preferred_external_id_type,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_value), ''::text), NULLIF(btrim(human_topostext_id), ''::text), NULLIF(btrim(human_wikidata_qid), ''::text), NULLIF(btrim(human_pleiades_id), ''::text))
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_value), ''::text), NULLIF(btrim(preferred_external_id_value), ''::text), NULLIF(btrim(human_topostext_id), ''::text), NULLIF(btrim(human_wikidata_qid), ''::text), NULLIF(btrim(human_pleiades_id), ''::text), NULLIF(btrim(topostext_id), ''::text), NULLIF(btrim(wikidata_qid), ''::text), NULLIF(btrim(pleiades_id), ''::text))
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
+            ELSE COALESCE(NULLIF(btrim(preferred_external_id_value), ''::text), NULLIF(btrim(topostext_id), ''::text), NULLIF(btrim(wikidata_qid), ''::text), NULLIF(btrim(pleiades_id), ''::text))
+        END AS effective_preferred_external_id_value,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(human_wikidata_qid), ''::text)
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_wikidata_qid), ''::text), NULLIF(btrim(wikidata_qid), ''::text))
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
+            ELSE NULLIF(btrim(wikidata_qid), ''::text)
+        END AS effective_wikidata_qid,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(human_topostext_id), ''::text)
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_topostext_id), ''::text), NULLIF(btrim(topostext_id), ''::text))
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
+            ELSE NULLIF(btrim(topostext_id), ''::text)
+        END AS effective_topostext_id,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(human_pleiades_id), ''::text)
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_pleiades_id), ''::text), NULLIF(btrim(pleiades_id), ''::text))
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
+            ELSE NULLIF(btrim(pleiades_id), ''::text)
+        END AS effective_pleiades_id,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'approved'::text, 'added'::text, 'not_alignable'::text, 'removed'::text])) THEN human_resolution_status
+            WHEN (NULLIF(btrim(resolution_status), ''::text) IS NOT NULL) THEN resolution_status
+            WHEN ((NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL)) THEN 'candidate'::text
+            ELSE 'unresolved'::text
+        END AS effective_resolution_status,
+        CASE
+            WHEN (NULLIF(btrim(human_resolution_status), ''::text) IS NOT NULL) THEN 'human'::text
+            WHEN ((NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL)) THEN 'machine'::text
+            ELSE ''::text
+        END AS effective_resolution_source
+   FROM public.place_clusters pc
+  WHERE (COALESCE(human_resolution_status, ''::text) <> 'removed'::text);
 
 
 --
@@ -963,6 +1128,123 @@ ALTER SEQUENCE public.pdf_files_id_seq OWNED BY public.pdf_files.id;
 
 
 --
+-- Name: place_cluster_candidates; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.place_cluster_candidates (
+    id integer NOT NULL,
+    place_cluster_id integer NOT NULL,
+    source_name text NOT NULL,
+    external_id text NOT NULL,
+    label text,
+    description text,
+    place_type text,
+    region text,
+    url text,
+    score double precision,
+    rank_order integer DEFAULT 0 NOT NULL,
+    metadata_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE place_cluster_candidates; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.place_cluster_candidates IS 'Ranked gazetteer candidates for a distinct place cluster.';
+
+
+--
+-- Name: place_cluster_candidates_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.place_cluster_candidates_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: place_cluster_candidates_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.place_cluster_candidates_id_seq OWNED BY public.place_cluster_candidates.id;
+
+
+--
+-- Name: place_cluster_mentions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.place_cluster_mentions (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    place_cluster_id integer,
+    text_form text NOT NULL,
+    normalized_form text,
+    mention_order integer DEFAULT 0 NOT NULL,
+    char_start integer,
+    char_end integer,
+    is_implicit boolean DEFAULT false NOT NULL,
+    extracted_place_type text,
+    extracted_region text,
+    evidence_text text,
+    machine_notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE place_cluster_mentions; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.place_cluster_mentions IS 'Surface or implicit mentions that support a place cluster within a lemma.';
+
+
+--
+-- Name: place_cluster_mentions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.place_cluster_mentions_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: place_cluster_mentions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.place_cluster_mentions_id_seq OWNED BY public.place_cluster_mentions.id;
+
+
+--
+-- Name: place_clusters_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.place_clusters_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: place_clusters_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.place_clusters_id_seq OWNED BY public.place_clusters.id;
+
+
+--
 -- Name: proper_noun_aliases; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1466,6 +1748,27 @@ ALTER TABLE ONLY public.pdf_files ALTER COLUMN id SET DEFAULT nextval('public.pd
 
 
 --
+-- Name: place_cluster_candidates id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_candidates ALTER COLUMN id SET DEFAULT nextval('public.place_cluster_candidates_id_seq'::regclass);
+
+
+--
+-- Name: place_cluster_mentions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_mentions ALTER COLUMN id SET DEFAULT nextval('public.place_cluster_mentions_id_seq'::regclass);
+
+
+--
+-- Name: place_clusters id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_clusters ALTER COLUMN id SET DEFAULT nextval('public.place_clusters_id_seq'::regclass);
+
+
+--
 -- Name: proper_noun_aliases id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1776,6 +2079,46 @@ ALTER TABLE ONLY public.pdf_files
 
 
 --
+-- Name: place_cluster_candidates place_cluster_candidates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_candidates
+    ADD CONSTRAINT place_cluster_candidates_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: place_cluster_candidates place_cluster_candidates_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_candidates
+    ADD CONSTRAINT place_cluster_candidates_unique UNIQUE (place_cluster_id, source_name, external_id);
+
+
+--
+-- Name: place_cluster_mentions place_cluster_mentions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_mentions
+    ADD CONSTRAINT place_cluster_mentions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: place_clusters place_clusters_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_clusters
+    ADD CONSTRAINT place_clusters_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: place_clusters place_clusters_unique_per_lemma; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_clusters
+    ADD CONSTRAINT place_clusters_unique_per_lemma UNIQUE (lemma_id, cluster_index);
+
+
+--
 -- Name: proper_noun_aliases proper_noun_aliases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2038,6 +2381,62 @@ CREATE INDEX idx_lemma_images_image_id ON public.lemma_images USING btree (image
 --
 
 CREATE INDEX idx_lemma_images_lemma_id ON public.lemma_images USING btree (lemma_id);
+
+
+--
+-- Name: idx_place_cluster_candidates_cluster; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_cluster_candidates_cluster ON public.place_cluster_candidates USING btree (place_cluster_id, rank_order, id);
+
+
+--
+-- Name: idx_place_cluster_candidates_source; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_cluster_candidates_source ON public.place_cluster_candidates USING btree (source_name, external_id);
+
+
+--
+-- Name: idx_place_cluster_mentions_cluster; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_cluster_mentions_cluster ON public.place_cluster_mentions USING btree (place_cluster_id, mention_order, id);
+
+
+--
+-- Name: idx_place_cluster_mentions_lemma; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_cluster_mentions_lemma ON public.place_cluster_mentions USING btree (lemma_id, mention_order, id);
+
+
+--
+-- Name: idx_place_clusters_human_wikidata; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_clusters_human_wikidata ON public.place_clusters USING btree (human_wikidata_qid) WHERE (human_wikidata_qid IS NOT NULL);
+
+
+--
+-- Name: idx_place_clusters_lemma; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_clusters_lemma ON public.place_clusters USING btree (lemma_id, cluster_index);
+
+
+--
+-- Name: idx_place_clusters_resolution_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_clusters_resolution_status ON public.place_clusters USING btree (human_resolution_status) WHERE (human_resolution_status IS NOT NULL);
+
+
+--
+-- Name: idx_place_clusters_wikidata; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_clusters_wikidata ON public.place_clusters USING btree (wikidata_qid) WHERE (wikidata_qid IS NOT NULL);
 
 
 --
@@ -2532,6 +2931,38 @@ ALTER TABLE ONLY public.meineke_text_differences
 
 
 --
+-- Name: place_cluster_candidates place_cluster_candidates_place_cluster_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_candidates
+    ADD CONSTRAINT place_cluster_candidates_place_cluster_id_fkey FOREIGN KEY (place_cluster_id) REFERENCES public.place_clusters(id) ON DELETE CASCADE;
+
+
+--
+-- Name: place_cluster_mentions place_cluster_mentions_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_mentions
+    ADD CONSTRAINT place_cluster_mentions_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: place_cluster_mentions place_cluster_mentions_place_cluster_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_mentions
+    ADD CONSTRAINT place_cluster_mentions_place_cluster_id_fkey FOREIGN KEY (place_cluster_id) REFERENCES public.place_clusters(id) ON DELETE SET NULL;
+
+
+--
+-- Name: place_clusters place_clusters_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_clusters
+    ADD CONSTRAINT place_clusters_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
 -- Name: proper_noun_aliases proper_noun_aliases_proper_noun_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2671,5 +3102,5 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 4GgVPVTGxsm3uR8PZfLWuggnTEHPzxypKC7bei5Sr0e9CBFheiDhhDyB0ceA31R
+\unrestrict SdFo76Uxtcc0jSwycD4vtxTWj6bZjkgvGeNTiSnsNQT8cTH9yS6hQYbUQJSlaID
 
