@@ -219,6 +219,12 @@ const sharedPageStyles = `
             display: grid;
             gap: 18px;
         }
+        .translation-reading-grid,
+        .review-meta-grid,
+        .translation-edit-grid {
+            display: grid;
+            gap: 18px;
+        }
         .scan-panel,
         .context-panel,
         .translation-panel,
@@ -234,6 +240,15 @@ const sharedPageStyles = `
             border: 1px solid #dce6ef;
             border-radius: 12px;
             padding: 16px;
+        }
+        .review-form {
+            margin-top: 18px;
+        }
+        .workspace-note-panel {
+            margin-top: 16px;
+        }
+        .workspace-full {
+            grid-column: 1 / -1;
         }
         .scan-strip {
             display: grid;
@@ -607,6 +622,18 @@ const sharedPageStyles = `
                 grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
                 align-items: start;
             }
+            .translation-reading-grid {
+                grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+                align-items: start;
+            }
+            .review-meta-grid {
+                grid-template-columns: minmax(280px, 0.9fr) minmax(420px, 1.1fr);
+                align-items: start;
+            }
+            .translation-edit-grid {
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                align-items: start;
+            }
             .entity-context-grid {
                 grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
                 align-items: start;
@@ -763,7 +790,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
             </div>
             <div class="context-note">Comparison uses the current Billerbeck text for reference only. The main working Greek on this page is the Meineke text.</div>
 
-            <div class="context-grid" style="margin-top: 16px;">
+            <div class="translation-reading-grid" style="margin-top: 16px;">
                 <div class="context-panel">
                     <div class="section-title">{{.WorkingGreekLabel}}</div>
                     {{if .Lemma.MeinekeMainTextLines}}
@@ -808,33 +835,37 @@ const translationReviewTemplate = `<!DOCTYPE html>
                 <div class="translation-panel">
                     <div class="section-title">Latest AI Translation</div>
                     <div class="translation-block commentary-source" data-commentary-source="translation" tabindex="0" title="Select text here to add commentary">{{.Lemma.EnglishTranslation}}</div>
+                </div>
+            </div>
 
-                    {{if .SourceLookupLinks}}
-                    <div style="margin-top: 12px;">
-                        <div class="section-title">Quoted Sources</div>
-                        <div class="source-link-list">
-                            {{range .SourceLookupLinks}}
-                            {{if .URL}}
-                            <a class="btn-subtle" href="{{.URL}}" target="_blank">{{.Label}}{{if .Note}} · {{.Note}}{{end}}</a>
-                            {{else}}
-                            <span class="cluster-pill">{{.Label}}{{if .Note}} · {{.Note}}{{end}}</span>
-                            {{end}}
-                            {{end}}
-                        </div>
-                    </div>
+            {{if .SourceLookupLinks}}
+            <div class="context-panel workspace-note-panel">
+                <div class="section-title">Quoted Sources</div>
+                <div class="source-link-list">
+                    {{range .SourceLookupLinks}}
+                    {{if .URL}}
+                    <a class="btn-subtle" href="{{.URL}}" target="_blank">{{.Label}}{{if .Note}} · {{.Note}}{{end}}</a>
+                    {{else}}
+                    <span class="cluster-pill">{{.Label}}{{if .Note}} · {{.Note}}{{end}}</span>
                     {{end}}
+                    {{end}}
+                </div>
+            </div>
+            {{end}}
 
-                    <form method="POST" action="/cgi-bin/save.cgi" class="review-form" style="margin-top: 16px;">
-                        <input type="hidden" name="form_mode" value="review">
-                        <input type="hidden" name="return_view" value="translation">
-                        <input type="hidden" name="lemma_id" value="{{.Lemma.ID}}">
-                        <input type="hidden" name="current_position" value="{{.Lemma.SortOrder}}">
-                        <input type="hidden" id="ai_translation" value="{{.Lemma.EnglishTranslation}}">
-                        <input type="hidden" name="variant_id" id="variant_id" value="">
-                        <input type="hidden" name="source_text_version_id" id="source_text_version_id" value="">
-                        <input type="hidden" id="canonical_kind" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "kind"}}{{end}}">
-                        <input type="hidden" id="canonical_id" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "id"}}{{end}}">
+            <form method="POST" action="/cgi-bin/save.cgi" class="review-form">
+                <input type="hidden" name="form_mode" value="review">
+                <input type="hidden" name="return_view" value="translation">
+                <input type="hidden" name="lemma_id" value="{{.Lemma.ID}}">
+                <input type="hidden" name="current_position" value="{{.Lemma.SortOrder}}">
+                <input type="hidden" id="ai_translation" value="{{.Lemma.EnglishTranslation}}">
+                <input type="hidden" name="variant_id" id="variant_id" value="">
+                <input type="hidden" name="source_text_version_id" id="source_text_version_id" value="">
+                <input type="hidden" id="canonical_kind" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "kind"}}{{end}}">
+                <input type="hidden" id="canonical_id" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "id"}}{{end}}">
 
+                <div class="review-meta-grid">
+                    <div class="context-panel">
                         <div class="form-group">
                             <label>Translation Review State</label>
                             <div class="radio-group">
@@ -843,115 +874,115 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                 <label><input type="radio" name="review_status" value="not_reviewed" {{if eq .Review.ReviewStatus "not_reviewed"}}checked{{end}}>Skip / not reviewed</label>
                             </div>
                         </div>
+                    </div>
 
-                        <div class="publication-panel" style="margin-bottom: 16px;">
-                            <div class="section-title">Publication Controls</div>
-                            <div id="selected_variant_summary" class="selected-variant">No variant selected.</div>
-                            <div class="publication-grid" style="margin-top: 12px;">
-                                <div class="form-group">
-                                    <label for="variant_kind">Variant kind</label>
-                                    <select name="variant_kind" id="variant_kind">
-                                        <option value="translation_run">translation_run</option>
-                                        <option value="human_translation">human_translation</option>
-                                        <option value="legacy_assembled">legacy_assembled</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label for="variant_status">Variant status</label>
-                                    <select name="variant_status" id="variant_status">
-                                        <option value="draft">draft</option>
-                                        <option value="approved">approved</option>
-                                        <option value="rejected">rejected</option>
-                                        <option value="hidden">hidden</option>
-                                        <option value="blocked" {{if .Lemma.TranslationBlocked}}selected{{end}}>blocked</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label for="canonical_action">Canonical action</label>
-                                    <select name="canonical_action" id="canonical_action">
-                                        <option value="">(none)</option>
-                                        <option value="add">Add as canonical</option>
-                                        <option value="remove">Remove from canonicals</option>
-                                        <option value="set_primary">Set as primary</option>
-                                        <option value="clear_primary">Clear primary</option>
-                                        <option value="clear_all">Clear all canonicals</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            {{if .Lemma.TranslationVariants}}
-                            <details class="context-details" style="margin-top: 10px;">
-                                <summary>Show translation variants</summary>
-                                <div style="margin-top: 12px; overflow:auto;">
-                                    <table style="border-collapse: collapse; width: 100%;">
-                                        <tr style="background: #f8fafc;">
-                                            <th style="padding: 8px; text-align:left;">Select</th>
-                                            <th style="padding: 8px; text-align:left;">Kind</th>
-                                            <th style="padding: 8px; text-align:left;">Status</th>
-                                            <th style="padding: 8px; text-align:left;">Text</th>
-                                            <th style="padding: 8px; text-align:left;">Canonical</th>
-                                        </tr>
-                                        {{range .Lemma.TranslationVariants}}
-                                        <tr>
-                                            <td style="border-top: 1px solid #e5edf5; padding: 8px;">
-                                                <button
-                                                    type="button"
-                                                    class="variant-select-btn"
-                                                    data-kind="{{index . "kind"}}"
-                                                    data-id="{{index . "id"}}"
-                                                    data-status="{{index . "status"}}"
-                                                    data-source-text-version-id="{{index . "source_text_version_id"}}"
-                                                    data-blocked-legacy="{{if and (eq (index . "kind") "legacy_assembled") $.Lemma.TranslationBlocked}}1{{else}}0{{end}}"
-                                                >Select</button>
-                                            </td>
-                                            <td style="border-top: 1px solid #e5edf5; padding: 8px;">
-                                                {{index . "kind"}}{{if index . "deprecated"}}<div class="helper-text">{{if index . "deprecation_note"}}{{index . "deprecation_note"}}{{else}}Legacy baseline retained for context.{{end}}</div>{{end}}
-                                            </td>
-                                            <td style="border-top: 1px solid #e5edf5; padding: 8px;">{{index . "status"}}</td>
-                                            <td style="border-top: 1px solid #e5edf5; padding: 8px;">{{index . "preview"}}</td>
-                                            <td style="border-top: 1px solid #e5edf5; padding: 8px;">{{if index . "primary"}}primary{{else if index . "canonical"}}canonical{{else}}–{{end}}</td>
-                                        </tr>
-                                        {{end}}
-                                    </table>
-                                    <div id="selected_variant_label" class="helper-text" style="margin-top: 10px;"></div>
-                                </div>
-                            </details>
-                            {{end}}
-                        </div>
-
-                        <div class="form-grid">
+                    <div class="publication-panel">
+                        <div class="section-title">Publication Controls</div>
+                        <div id="selected_variant_summary" class="selected-variant">No variant selected.</div>
+                        <div class="publication-grid" style="margin-top: 12px;">
                             <div class="form-group">
-                                <label for="corrected_english">Initial Human Translation{{if .Review.CorrectedEnglishTranslation}} <span class="helper-text">last edited by {{if .Review.InitialTranslationBy}}{{.Review.InitialTranslationBy}}{{else}}{{.Review.ReviewerUsername}}{{end}}</span>{{end}}</label>
-                                <div class="button-group" style="margin-bottom: 8px;">
-                                    <button type="button" class="btn-subtle" onclick="copyAIToInitial()">Copy AI translation here</button>
-                                </div>
-                                <textarea name="corrected_english" id="corrected_english">{{.Review.CorrectedEnglishTranslation}}</textarea>
+                                <label for="variant_kind">Variant kind</label>
+                                <select name="variant_kind" id="variant_kind">
+                                    <option value="translation_run">translation_run</option>
+                                    <option value="human_translation">human_translation</option>
+                                    <option value="legacy_assembled">legacy_assembled</option>
+                                </select>
                             </div>
-
                             <div class="form-group">
-                                <label for="reviewed_english">Reviewed English Translation{{if .Review.ReviewedEnglishTranslation}} <span class="helper-text">last edited by {{if .Review.ReviewedTranslationBy}}{{.Review.ReviewedTranslationBy}}{{else}}{{.Review.ReviewerUsername}}{{end}}</span>{{end}}</label>
-                                <div class="button-group" style="margin-bottom: 8px;">
-                                    <button type="button" class="btn-subtle" onclick="copyInitialToReviewed()">Use the initial translation as reviewed</button>
-                                </div>
-                                <textarea name="reviewed_english" id="reviewed_english">{{.Review.ReviewedEnglishTranslation}}</textarea>
+                                <label for="variant_status">Variant status</label>
+                                <select name="variant_status" id="variant_status">
+                                    <option value="draft">draft</option>
+                                    <option value="approved">approved</option>
+                                    <option value="rejected">rejected</option>
+                                    <option value="hidden">hidden</option>
+                                    <option value="blocked" {{if .Lemma.TranslationBlocked}}selected{{end}}>blocked</option>
+                                </select>
                             </div>
-
                             <div class="form-group">
-                                <label for="notes">Notes</label>
-                                <textarea class="notes-area" name="notes" id="notes">{{.Review.Notes}}</textarea>
+                                <label for="canonical_action">Canonical action</label>
+                                <select name="canonical_action" id="canonical_action">
+                                    <option value="">(none)</option>
+                                    <option value="add">Add as canonical</option>
+                                    <option value="remove">Remove from canonicals</option>
+                                    <option value="set_primary">Set as primary</option>
+                                    <option value="clear_primary">Clear primary</option>
+                                    <option value="clear_all">Clear all canonicals</option>
+                                </select>
                             </div>
                         </div>
 
-                        <div class="button-group" style="margin-top: 14px;">
-                            <button type="submit" name="action" value="continue" class="btn-save">Save & Continue →</button>
-                            <button type="submit" name="action" value="stay" class="btn-save-stay">Save</button>
-                            {{if .HasNext}}
-                            <button type="button" class="btn-skip" onclick="window.location.href='?id={{.NextID}}'">Skip to Next</button>
-                            {{end}}
-                        </div>
-                    </form>
+                        {{if .Lemma.TranslationVariants}}
+                        <details class="context-details" style="margin-top: 10px;">
+                            <summary>Show translation variants</summary>
+                            <div style="margin-top: 12px; overflow:auto;">
+                                <table style="border-collapse: collapse; width: 100%;">
+                                    <tr style="background: #f8fafc;">
+                                        <th style="padding: 8px; text-align:left;">Select</th>
+                                        <th style="padding: 8px; text-align:left;">Kind</th>
+                                        <th style="padding: 8px; text-align:left;">Status</th>
+                                        <th style="padding: 8px; text-align:left;">Text</th>
+                                        <th style="padding: 8px; text-align:left;">Canonical</th>
+                                    </tr>
+                                    {{range .Lemma.TranslationVariants}}
+                                    <tr>
+                                        <td style="border-top: 1px solid #e5edf5; padding: 8px;">
+                                            <button
+                                                type="button"
+                                                class="variant-select-btn"
+                                                data-kind="{{index . "kind"}}"
+                                                data-id="{{index . "id"}}"
+                                                data-status="{{index . "status"}}"
+                                                data-source-text-version-id="{{index . "source_text_version_id"}}"
+                                                data-blocked-legacy="{{if and (eq (index . "kind") "legacy_assembled") $.Lemma.TranslationBlocked}}1{{else}}0{{end}}"
+                                            >Select</button>
+                                        </td>
+                                        <td style="border-top: 1px solid #e5edf5; padding: 8px;">
+                                            {{index . "kind"}}{{if index . "deprecated"}}<div class="helper-text">{{if index . "deprecation_note"}}{{index . "deprecation_note"}}{{else}}Legacy baseline retained for context.{{end}}</div>{{end}}
+                                        </td>
+                                        <td style="border-top: 1px solid #e5edf5; padding: 8px;">{{index . "status"}}</td>
+                                        <td style="border-top: 1px solid #e5edf5; padding: 8px;">{{index . "preview"}}</td>
+                                        <td style="border-top: 1px solid #e5edf5; padding: 8px;">{{if index . "primary"}}primary{{else if index . "canonical"}}canonical{{else}}–{{end}}</td>
+                                    </tr>
+                                    {{end}}
+                                </table>
+                                <div id="selected_variant_label" class="helper-text" style="margin-top: 10px;"></div>
+                            </div>
+                        </details>
+                        {{end}}
+                    </div>
                 </div>
-            </div>
+
+                <div class="translation-edit-grid" style="margin-top: 18px;">
+                    <div class="form-group context-panel">
+                        <label for="corrected_english">Initial Human Translation{{if .Review.CorrectedEnglishTranslation}} <span class="helper-text">last edited by {{if .Review.InitialTranslationBy}}{{.Review.InitialTranslationBy}}{{else}}{{.Review.ReviewerUsername}}{{end}}</span>{{end}}</label>
+                        <div class="button-group" style="margin-bottom: 8px;">
+                            <button type="button" class="btn-subtle" onclick="copyAIToInitial()">Copy AI translation here</button>
+                        </div>
+                        <textarea name="corrected_english" id="corrected_english">{{.Review.CorrectedEnglishTranslation}}</textarea>
+                    </div>
+
+                    <div class="form-group context-panel">
+                        <label for="reviewed_english">Reviewed English Translation{{if .Review.ReviewedEnglishTranslation}} <span class="helper-text">last edited by {{if .Review.ReviewedTranslationBy}}{{.Review.ReviewedTranslationBy}}{{else}}{{.Review.ReviewerUsername}}{{end}}</span>{{end}}</label>
+                        <div class="button-group" style="margin-bottom: 8px;">
+                            <button type="button" class="btn-subtle" onclick="copyInitialToReviewed()">Use the initial translation as reviewed</button>
+                        </div>
+                        <textarea name="reviewed_english" id="reviewed_english">{{.Review.ReviewedEnglishTranslation}}</textarea>
+                    </div>
+
+                    <div class="form-group context-panel workspace-full">
+                        <label for="notes">Notes</label>
+                        <textarea class="notes-area" name="notes" id="notes">{{.Review.Notes}}</textarea>
+                    </div>
+                </div>
+
+                <div class="button-group" style="margin-top: 14px;">
+                    <button type="submit" name="action" value="continue" class="btn-save">Save & Continue →</button>
+                    <button type="submit" name="action" value="stay" class="btn-save-stay">Save</button>
+                    {{if .HasNext}}
+                    <button type="button" class="btn-skip" onclick="window.location.href='?id={{.NextID}}'">Skip to Next</button>
+                    {{end}}
+                </div>
+            </form>
         </div>
 
         <div class="card">
