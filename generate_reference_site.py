@@ -18,7 +18,11 @@ from db import DB_PORT as STEPHANOS_DB_PORT
 from db import DB_USER as STEPHANOS_DB_USER
 import canonical_variants
 import citation_format
-from translation_rendering import render_inline_markup, split_translation_blocks
+from translation_rendering import (
+    render_inline_markup,
+    sanitize_public_translation_text,
+    split_translation_blocks,
+)
 
 OUTPUT_DIR = "reference_site"
 
@@ -682,6 +686,7 @@ def get_all_lemmas(cur):
                     "id": str(v.get("id", "") or ""),
                     "is_primary": bool(v.get("is_primary", False)),
                     "status": v.get("status", ""),
+                    "source_document": v.get("source_document", ""),
                     "source_text_version_id": str(v.get("source_text_version_id", "") or ""),
                     "translation_text": (v.get("translation_text", "") or "").strip(),
                     "model": v.get("model", ""),
@@ -1130,8 +1135,12 @@ def render_lemma_cards(lemmas):
                 lambda inner: f"<em>{inner}</em>",
             )
 
-        def render_translation_text(text: str) -> str:
-            raw = text or ""
+        def render_translation_text(text: str, *, source_document: str = "") -> str:
+            raw = sanitize_public_translation_text(
+                text or "",
+                displayed_greek=lemma.get("greek_text", "") or "",
+                source_document=source_document or "",
+            )
             blocks = split_translation_blocks(raw)
             if raw.strip() and not blocks:
                 return '<div class="translation-text"><p><span class="pending-translation">Translation pending</span></p></div>'
@@ -1159,7 +1168,10 @@ def render_lemma_cards(lemmas):
             translation = '<div class="translation-text"><p><span class="pending-translation">Translation pending</span></p></div>'
         else:
             primary_text = (presented[0].get("translation_text") if isinstance(presented[0], dict) else "") or ""
-            translation = render_translation_text(primary_text)
+            primary_source_document = (
+                presented[0].get("source_document") if isinstance(presented[0], dict) else ""
+            ) or ""
+            translation = render_translation_text(primary_text, source_document=primary_source_document)
 
             if len(presented) > 1:
                 extra_rows = []
@@ -1170,12 +1182,13 @@ def render_lemma_cards(lemmas):
                     if v.get("is_primary"):
                         label = (label + " (primary)").strip()
                     text = (v.get("translation_text") or "").strip()
+                    source_document = (v.get("source_document") or "").strip()
                     if not text:
                         continue
                     extra_rows.append(
                         f"<div class='translation-variant'>"
                         f"<div class='translation-variant-label'>{html_module.escape(label)}</div>"
-                        f"<div class='translation-variant-text'>{render_translation_text(text)}</div>"
+                        f"<div class='translation-variant-text'>{render_translation_text(text, source_document=source_document)}</div>"
                         f"</div>"
                     )
 

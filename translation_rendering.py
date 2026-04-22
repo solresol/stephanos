@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Callable
 
@@ -9,6 +10,33 @@ _BRACKET_SPAN_RE = re.compile(r"\[([^\[\]]*)\]")
 _FENCED_VERSE_RE = re.compile(r"```(?:verse)?\s*\n?(.*?)\n?```", re.DOTALL | re.IGNORECASE)
 _INLINE_MARKUP_RE = re.compile(r"\*\*(.+?)\*\*|\*(.+?)\*")
 _WORDISH_RE = re.compile(r"[0-9A-Za-z\u0370-\u03FF\u1F00-\u1FFF]")
+_WORDISH_TOKEN_RE = re.compile(r"[0-9A-Za-z\u0370-\u03FF\u1F00-\u1FFF]+")
+_GREEK_CHAR_RE = re.compile(r"[\u0370-\u03FF\u1F00-\u1FFF]")
+_LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
+_DIGIT_RE = re.compile(r"\d")
+_GREEK_WORD_RE = re.compile(r"[\u0370-\u03FF\u1F00-\u1FFF]{2,}")
+_CITE_KEYWORD_RE = re.compile(r"(?i)\b(?:FGrHist|fr\.?|fragment(?:um)?|frag\.?)\b")
+_CITE_CREF_RE = re.compile(r"\bC\s*\d")
+_EN_CITATION_KEYWORD_RE = re.compile(
+    r"(?i)\b(?:"
+    r"fgrhist|fhg|frag(?:ment)?|fr\.?|powell|jacoby|livrea|heitsch|stiehle|lasserre|"
+    r"cappelletto|merkelbach|west|radt|pfeiffer|lightfoot|theodoridis|schneidewin|"
+    r"leutsch|diller|ggm|vs|re|loc\.?\s+cit\.?|ibid(?:em)?|book|books|chapter|"
+    r"strabo|pausanias|thucydides|herodotus|polybius|appian|homer|zenobius|ephorus|"
+    r"callimachus|dionysius|menippus|alexander|artemidorus|hecataeus|philistos|"
+    r"lycophron|herodian|eudoxus"
+    r")\b"
+)
+_EN_EDITORIAL_KEYWORD_RE = re.compile(
+    r"(?i)\b(?:"
+    r"gentilic|ethnic|ethnicon|demonym|adjective|adjectival|feminine|masculine|neuter|"
+    r"plural|singular|nominative|genitive|dative|accusative|vocative|locative|"
+    r"local form|local case|so called|one says|that is|i\.e\.|as in|called|named|"
+    r"spelled|written|accented|type|the form|the pattern|the letter|lacuna|states|"
+    r"mentions|writes|say|says"
+    r")\b"
+)
+_EN_CITATION_NUMBER_RE = re.compile(r"(?i)(?:\b[A-Z]?\d+(?:[.,;]\d+|[–-]\d+)*\b|\bC\s*\d+\b)")
 _QUOTE_PAIRS = (
     ("“", "”"),
     ('"', '"'),
@@ -30,38 +58,154 @@ class QuotedSpan:
     text: str
 
 
-def normalize_line_preserving_whitespace(text: str) -> str:
+def _normalize_whitespace(text: str) -> str:
     if not text:
         return ""
-
-    normalized_lines = []
-    for raw_line in text.splitlines():
-        line = raw_line.replace("\u00a0", " ")
-        line = re.sub(r"[ \t]+", " ", line)
-        line = re.sub(r"\s+([,.;:!?])", r"\1", line)
-        line = line.strip()
-        if line:
-            normalized_lines.append(line)
-        elif normalized_lines and normalized_lines[-1] != "":
-            normalized_lines.append("")
-
-    return "\n".join(normalized_lines).strip()
+    return re.sub(r"\s+", " ", text.replace("\u00a0", " ")).strip()
 
 
-def strip_all_bracketed_spans(text: str) -> str:
+def _is_greek_citation_span(span_text: str) -> bool:
+    text = _normalize_whitespace(span_text)
     if not text:
+        return False
+    if _CITE_KEYWORD_RE.search(text) or _CITE_CREF_RE.search(text):
+        return True
+
+    has_greek = bool(_GREEK_CHAR_RE.search(text))
+    has_latin = bool(_LATIN_CHAR_RE.search(text))
+    has_digit = bool(_DIGIT_RE.search(text))
+
+    if not has_greek and (has_latin or has_digit):
+        return True
+
+    if has_digit:
+        greek_words = _GREEK_WORD_RE.findall(text)
+        if len(greek_words) <= 1:
+            return True
+
+    return False
+
+
+def _wordish_token_count(text: str) -> int:
+    if not text:
+        return 0
+    return len(_WORDISH_TOKEN_RE.findall(text))
+
+
+def _is_substantive_content_span(span_text: str) -> bool:
+    return _wordish_token_count(span_text) >= 4
+
+
+def _count_substantive_non_citation_greek_spans(text: str, regex: re.Pattern[str]) -> int:
+    if not text:
+        return 0
+
+    count = 0
+    for match in regex.finditer(text):
+        inner = _normalize_whitespace(match.group(1))
+        if inner and not _is_greek_citation_span(inner) and _is_substantive_content_span(inner):
+            count += 1
+    return count
+
+
+def _english_span_is_citation_like(span_text: str) -> bool:
+    text = _normalize_whitespace(span_text)
+    if not text:
+        return False
+    if _EN_CITATION_KEYWORD_RE.search(text):
+        return True
+    if _EN_CITATION_NUMBER_RE.search(text):
+        has_greek = bool(_GREEK_CHAR_RE.search(text))
+        word_count = len(text.split())
+        if not has_greek or word_count <= 4:
+            return True
+    return False
+
+
+def _english_span_is_editorial_like(span_text: str) -> bool:
+    text = _normalize_whitespace(span_text)
+    if not text:
+        return False
+    if _EN_EDITORIAL_KEYWORD_RE.search(text):
+        return True
+    lowered = text.lower()
+    if lowered in {
+        "so",
+        "called",
+        "named",
+        "from",
+        "also",
+        "one says",
+        "the ethnics",
+        "the ethnic",
+    }:
+        return True
+    return False
+
+
+def sanitize_public_translation_text(
+    text: str,
+    *,
+    displayed_greek: str = "",
+    source_document: str = "",
+) -> str:
+    raw = text or ""
+    if not raw:
         return ""
 
-    current = text
-    for _ in range(8):
-        previous = current
-        current = _PAREN_SPAN_RE.sub("", current)
-        current = _BRACKET_SPAN_RE.sub("", current)
-        if current == previous:
+    normalized_source_document = (source_document or "").strip().lower()
+    if normalized_source_document == "meineke":
+        return raw
+
+    paren_content_span_budget = _count_substantive_non_citation_greek_spans(displayed_greek, _PAREN_SPAN_RE)
+    bracket_content_span_budget = _count_substantive_non_citation_greek_spans(displayed_greek, _BRACKET_SPAN_RE)
+    kept_paren_content_spans = 0
+    kept_bracket_content_spans = 0
+
+    def make_replacer(span_kind: str) -> Callable[[re.Match], str]:
+        def replacer(match: re.Match) -> str:
+            nonlocal kept_paren_content_spans, kept_bracket_content_spans
+            inner = _normalize_whitespace(match.group(1))
+            if not inner:
+                return ""
+            if _english_span_is_citation_like(inner):
+                return ""
+            if _english_span_is_editorial_like(inner):
+                return ""
+            if not _is_substantive_content_span(inner):
+                return ""
+
+            if span_kind == "paren":
+                if kept_paren_content_spans < paren_content_span_budget:
+                    kept_paren_content_spans += 1
+                    return match.group(0)
+                return ""
+
+            if kept_bracket_content_spans < bracket_content_span_budget:
+                kept_bracket_content_spans += 1
+                return match.group(0)
+            return ""
+
+        return replacer
+
+    paren_replacer = make_replacer("paren")
+    bracket_replacer = make_replacer("bracket")
+
+    sanitized = raw
+    for _ in range(4):
+        previous = sanitized
+        sanitized = _PAREN_SPAN_RE.sub(paren_replacer, sanitized)
+        sanitized = _BRACKET_SPAN_RE.sub(bracket_replacer, sanitized)
+        if sanitized == previous:
             break
 
-    current = current.replace("(", "").replace(")", "").replace("[", "").replace("]", "")
-    return normalize_line_preserving_whitespace(current)
+    sanitized = unicodedata.normalize("NFC", sanitized)
+    sanitized = re.sub(r"[ \t]+", " ", sanitized)
+    sanitized = re.sub(r"([,;:])(?:\s*\1)+", r"\1", sanitized)
+    sanitized = re.sub(r",(?=\s*(?:['\"”’])?[.;:!?])", "", sanitized)
+    sanitized = re.sub(r"\s+([,.;:!?])", r"\1", sanitized)
+    sanitized = re.sub(r"\s+([”’])", r"\1", sanitized)
+    return sanitized.strip()
 
 
 def normalize_prose_text(text: str) -> str:
@@ -206,7 +350,7 @@ def _split_paragraph_blocks(text: str) -> list[TranslationBlock]:
 
 
 def split_translation_blocks(text: str) -> list[TranslationBlock]:
-    cleaned = strip_all_bracketed_spans(text or "")
+    cleaned = text or ""
     if not cleaned:
         return []
 
