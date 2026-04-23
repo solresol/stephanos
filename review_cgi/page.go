@@ -128,13 +128,103 @@ func isNewerTranslationRun(candidate map[string]interface{}, current map[string]
 	return candidateTextID > currentTextID
 }
 
+func joinNonEmpty(parts ...string) string {
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			values = append(values, part)
+		}
+	}
+	return strings.Join(values, " · ")
+}
+
+func latestAITranslationRunLabel(variant map[string]interface{}) string {
+	if variant == nil {
+		return "No stored AI translation available."
+	}
+
+	profile := strings.TrimSpace(mapStringValue(variant, "profile_name"))
+	profileVersion := strings.TrimSpace(mapStringValue(variant, "profile_version"))
+	model := strings.TrimSpace(mapStringValue(variant, "model"))
+	createdAt := strings.TrimSpace(mapStringValue(variant, "created_at"))
+
+	profileLabel := ""
+	if profile != "" {
+		profileLabel = profile
+		if profileVersion != "" {
+			profileLabel += " v" + profileVersion
+		}
+	}
+
+	label := joinNonEmpty(
+		"Most recent stored AI translation run",
+		func() string {
+			if model == "" {
+				return ""
+			}
+			return "model: " + model
+		}(),
+		func() string {
+			if profileLabel == "" {
+				return ""
+			}
+			return "profile: " + profileLabel
+		}(),
+		func() string {
+			if createdAt == "" {
+				return ""
+			}
+			return "created: " + createdAt
+		}(),
+	)
+	if label != "" {
+		return label
+	}
+	return "Showing the most recent stored AI translation run."
+}
+
+func latestAILegacyLabel(variant map[string]interface{}) string {
+	if variant == nil {
+		return "No stored AI translation available."
+	}
+
+	model := strings.TrimSpace(mapStringValue(variant, "model"))
+	if model == "" {
+		model = "gpt-5.2"
+	}
+	profileVersion := strings.TrimSpace(mapStringValue(variant, "profile_version"))
+	createdAt := strings.TrimSpace(mapStringValue(variant, "created_at"))
+
+	label := joinNonEmpty(
+		"Legacy assembled AI baseline",
+		"model: "+model,
+		func() string {
+			if profileVersion == "" {
+				return ""
+			}
+			return "prompt version: " + profileVersion
+		}(),
+		func() string {
+			if createdAt == "" {
+				return ""
+			}
+			return "translated: " + createdAt
+		}(),
+	)
+	if label != "" {
+		return label
+	}
+	return "Showing the legacy assembled AI baseline."
+}
+
 func chooseLatestAITranslation(lemma *Lemma) (string, string) {
 	if lemma == nil {
 		return "", "No stored AI translation available."
 	}
 
 	var latestRun map[string]interface{}
-	legacyText := ""
+	var legacyVariant map[string]interface{}
 
 	for _, variant := range lemma.TranslationVariants {
 		kind := mapStringValue(variant, "kind")
@@ -149,21 +239,17 @@ func chooseLatestAITranslation(lemma *Lemma) (string, string) {
 				latestRun = variant
 			}
 		case "legacy_assembled":
-			if legacyText == "" {
-				legacyText = text
+			if legacyVariant == nil {
+				legacyVariant = variant
 			}
 		}
 	}
 
 	if latestRun != nil {
-		label := "Showing the most recent stored AI translation run."
-		if createdAt := strings.TrimSpace(mapStringValue(latestRun, "created_at")); createdAt != "" {
-			label = fmt.Sprintf("Showing AI run from %s.", createdAt)
-		}
-		return strings.TrimSpace(mapStringValue(latestRun, "text")), label
+		return strings.TrimSpace(mapStringValue(latestRun, "text")), latestAITranslationRunLabel(latestRun)
 	}
-	if legacyText != "" {
-		return legacyText, "Showing the legacy assembled AI baseline."
+	if legacyVariant != nil {
+		return strings.TrimSpace(mapStringValue(legacyVariant, "text")), latestAILegacyLabel(legacyVariant)
 	}
 	return "", "No stored AI translation available."
 }

@@ -22,6 +22,7 @@ import wikidata_entity_cache
 OUTPUT_FILE = "review_data.json"
 _MEINEKE_OBJECT_TAG_RE = re.compile(r"\[/?object[^\]]*\]")
 _OCR_IMAGE_NOTE_RE = re.compile(r"OCR from image ([^\s]+)")
+LEGACY_TRANSLATION_MODEL = "gpt-5.2"
 
 # Greek letter ordering for sort
 GREEK_LETTERS = [
@@ -244,6 +245,8 @@ def export_lemmas():
                 COALESCE(a.greek_text, '') as greek_text,
                 COALESCE(a.human_greek_text, '') as human_greek_text,
                 COALESCE(a.translation, '') as english_translation,
+                a.translated_at as legacy_translated_at,
+                COALESCE(a.translation_prompt_version, 0) as legacy_translation_prompt_version,
                 a.type,
                 a.volume_label,
                 a.meineke_id,
@@ -305,6 +308,8 @@ def export_lemmas():
                 COALESCE(a.greek_text, '') as greek_text,
                 COALESCE(a.human_greek_text, '') as human_greek_text,
                 COALESCE(a.translation, '') as english_translation,
+                a.translated_at as legacy_translated_at,
+                COALESCE(a.translation_prompt_version, 0) as legacy_translation_prompt_version,
                 a.type,
                 a.volume_label,
                 a.meineke_id,
@@ -1005,7 +1010,7 @@ def export_lemmas():
     lemmas = []
     for row in rows:
         (lemma_id, lemma, entry_number, version, greek_text, human_greek_text, english_translation,
-         lemma_type, volume_label, meineke_id, billerbeck_id, nodegoat_id, word_count,
+         legacy_translated_at, legacy_translation_prompt_version, lemma_type, volume_label, meineke_id, billerbeck_id, nodegoat_id, word_count,
          confidence, meineke_greek_paragraph, image_filenames, meineke_image_filenames,
          meineke_normalized_class, meineke_llm_status, meineke_difference_level,
          meineke_translation_impact, meineke_translation_impact_note,
@@ -1043,6 +1048,10 @@ def export_lemmas():
             "status": "blocked" if risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False) else "approved",
             "source_document": "billerbeck",
             "source_text_version_id": "",
+            "profile_name": "legacy_scholarly" if int(legacy_translation_prompt_version or 0) > 0 else "",
+            "profile_version": int(legacy_translation_prompt_version) if int(legacy_translation_prompt_version or 0) > 0 else None,
+            "model": LEGACY_TRANSLATION_MODEL,
+            "created_at": str(legacy_translated_at) if legacy_translated_at else "",
             "text": legacy_translation,
             "preview": preview_text(legacy_translation),
             "deprecated": True,

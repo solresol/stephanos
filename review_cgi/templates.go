@@ -297,6 +297,18 @@ const sharedPageStyles = `
         .translation-block {
             line-height: 1.65;
         }
+        .variant-text-details {
+            min-width: 320px;
+        }
+        .variant-text-details summary {
+            color: #15324c;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .variant-text-details .translation-block {
+            margin-top: 10px;
+            max-height: none;
+        }
         .commentary-source {
             cursor: text;
             user-select: text;
@@ -957,7 +969,15 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                             {{index . "kind"}}{{if index . "deprecated"}}<div class="helper-text">{{if index . "deprecation_note"}}{{index . "deprecation_note"}}{{else}}Legacy baseline retained for context.{{end}}</div>{{end}}
                                         </td>
                                         <td style="border-top: 1px solid #e5edf5; padding: 8px;">{{index . "status"}}</td>
-                                        <td style="border-top: 1px solid #e5edf5; padding: 8px;">{{index . "preview"}}</td>
+                                        <td style="border-top: 1px solid #e5edf5; padding: 8px;">
+                                            <details class="variant-text-details">
+                                                <summary>{{if index . "preview"}}{{index . "preview"}}{{else}}No text stored.{{end}}</summary>
+                                                <div class="helper-text" style="margin-top: 8px;">
+                                                    {{if index . "model"}}model: {{index . "model"}}{{else if eq (index . "kind") "legacy_assembled"}}model: gpt-5.2{{end}}{{if index . "profile_name"}} · profile: {{index . "profile_name"}}{{end}}{{if index . "profile_version"}} v{{index . "profile_version"}}{{end}}{{if index . "created_at"}} · created: {{index . "created_at"}}{{end}}
+                                                </div>
+                                                <div class="translation-block">{{index . "text"}}</div>
+                                            </details>
+                                        </td>
                                         <td style="border-top: 1px solid #e5edf5; padding: 8px;">{{if index . "primary"}}primary{{else if index . "canonical"}}canonical{{else}}–{{end}}</td>
                                     </tr>
                                     {{end}}
