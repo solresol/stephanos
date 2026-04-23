@@ -17,6 +17,7 @@ SOURCE_FILES=(
     "review.go"
     "entities.go"
     "save.go"
+    "status.go"
     "templates.go"
     "shared_helpers.go"
     "go.mod"
@@ -40,9 +41,11 @@ ssh "$REMOTE_HOST" "
     /usr/local/bin/go build -o review.cgi review.go common.go page.go templates.go shared_helpers.go
     /usr/local/bin/go build -o entities.cgi entities.go common.go page.go templates.go shared_helpers.go
     /usr/local/bin/go build -o save.cgi save.go common.go
+    /usr/local/bin/go build -o status.cgi status.go common.go
     install -m 755 review.cgi '$REMOTE_CGI_DIR/review.cgi'
     install -m 755 entities.cgi '$REMOTE_CGI_DIR/entities.cgi'
     install -m 755 save.cgi '$REMOTE_CGI_DIR/save.cgi'
+    install -m 755 status.cgi '$REMOTE_CGI_DIR/status.cgi'
 "
 
 echo "Review CGI deployed to ${REMOTE_HOST}:${REMOTE_CGI_DIR}"

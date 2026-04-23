@@ -26,22 +26,22 @@ import (
 
 // LemmaStatus represents the review status for a single lemma
 type LemmaStatus struct {
-	OCRChecked           bool   `json:"ocr_checked"`
-	InitialTranslation   bool   `json:"initial_translation"`
-	TranslationConfirmed bool   `json:"translation_confirmed"`
-	OCRCheckedBy         string `json:"ocr_checked_by,omitempty"`
-	InitialTranslationBy string `json:"initial_translation_by,omitempty"`
+	OCRChecked             bool   `json:"ocr_checked"`
+	InitialTranslation     bool   `json:"initial_translation"`
+	TranslationConfirmed   bool   `json:"translation_confirmed"`
+	OCRCheckedBy           string `json:"ocr_checked_by,omitempty"`
+	InitialTranslationBy   string `json:"initial_translation_by,omitempty"`
 	TranslationConfirmedBy string `json:"translation_confirmed_by,omitempty"`
 }
 
 // StatusResponse is the JSON response from the status endpoint
 type StatusResponse struct {
-	Letter      string                 `json:"letter"`
-	Statuses    map[int]LemmaStatus    `json:"statuses"`
-	LemmaCount  int                    `json:"lemma_count"`
-	ReviewCount int                    `json:"review_count"`
-	TimingMs    float64                `json:"timing_ms"`
-	Error       string                 `json:"error,omitempty"`
+	Letter      string              `json:"letter"`
+	Statuses    map[int]LemmaStatus `json:"statuses"`
+	LemmaCount  int                 `json:"lemma_count"`
+	ReviewCount int                 `json:"review_count"`
+	TimingMs    float64             `json:"timing_ms"`
+	Error       string              `json:"error,omitempty"`
 }
 
 type VersionResponse struct {
@@ -110,9 +110,11 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	// Query all reviews
 	query := `
 		SELECT lemma_id,
+		       COALESCE(review_status, ''),
 		       COALESCE(corrected_greek_text, ''),
 		       COALESCE(corrected_english_translation, ''),
 		       COALESCE(reviewed_english_translation, ''),
+		       COALESCE(notes, ''),
 		       COALESCE(greek_corrected_by, ''),
 		       COALESCE(initial_translation_by, ''),
 		       COALESCE(reviewed_translation_by, '')
@@ -132,10 +134,10 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	for rows.Next() {
 		var lemmaID int
-		var greekText, englishTrans, reviewedTrans string
+		var reviewStatus, greekText, englishTrans, reviewedTrans, notes string
 		var greekBy, initialBy, reviewedBy string
 
-		if err := rows.Scan(&lemmaID, &greekText, &englishTrans, &reviewedTrans, &greekBy, &initialBy, &reviewedBy); err != nil {
+		if err := rows.Scan(&lemmaID, &reviewStatus, &greekText, &englishTrans, &reviewedTrans, &notes, &greekBy, &initialBy, &reviewedBy); err != nil {
 			continue
 		}
 
@@ -144,7 +146,9 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		reviewCount++
+		if strings.TrimSpace(reviewStatus) == "reviewed_ok" || greekText != "" || englishTrans != "" || reviewedTrans != "" || notes != "" {
+			reviewCount++
+		}
 		statuses[lemmaID] = LemmaStatus{
 			OCRChecked:             greekText != "",
 			InitialTranslation:     englishTrans != "",

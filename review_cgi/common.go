@@ -46,37 +46,37 @@ type CommentaryEntry struct {
 }
 
 type ProperNoun struct {
-	ID                          int    `json:"id"`
-	TextForm                    string `json:"text_form"`
-	LemmaForm                   string `json:"lemma_form"`
-	English                     string `json:"english"`
-	Type                        string `json:"type"`
-	Role                        string `json:"role"`
-	Citation                    string `json:"citation"`
-	WorkTitle                   string `json:"work_title"`
-	WikidataQID                 string `json:"wikidata_qid"`
-	WikidataLabel               string `json:"wikidata_label"`
-	WikidataDescription         string `json:"wikidata_description"`
-	WikidataConfidence          string `json:"wikidata_confidence"`
-	HumanWikidataQID            string `json:"human_wikidata_qid"`
-	HumanWikidataLabel          string `json:"human_wikidata_label"`
-	HumanWikidataDescription    string `json:"human_wikidata_description"`
-	HumanResolutionStatus       string `json:"human_resolution_status"`
-	HumanResolutionNotes        string `json:"human_resolution_notes"`
-	HumanResolvedBy             string `json:"human_resolved_by"`
-	HumanResolvedAt             string `json:"human_resolved_at"`
-	EffectiveWikidataQID        string `json:"effective_wikidata_qid"`
-	EffectiveWikidataLabel      string `json:"effective_wikidata_label"`
+	ID                           int    `json:"id"`
+	TextForm                     string `json:"text_form"`
+	LemmaForm                    string `json:"lemma_form"`
+	English                      string `json:"english"`
+	Type                         string `json:"type"`
+	Role                         string `json:"role"`
+	Citation                     string `json:"citation"`
+	WorkTitle                    string `json:"work_title"`
+	WikidataQID                  string `json:"wikidata_qid"`
+	WikidataLabel                string `json:"wikidata_label"`
+	WikidataDescription          string `json:"wikidata_description"`
+	WikidataConfidence           string `json:"wikidata_confidence"`
+	HumanWikidataQID             string `json:"human_wikidata_qid"`
+	HumanWikidataLabel           string `json:"human_wikidata_label"`
+	HumanWikidataDescription     string `json:"human_wikidata_description"`
+	HumanResolutionStatus        string `json:"human_resolution_status"`
+	HumanResolutionNotes         string `json:"human_resolution_notes"`
+	HumanResolvedBy              string `json:"human_resolved_by"`
+	HumanResolvedAt              string `json:"human_resolved_at"`
+	EffectiveWikidataQID         string `json:"effective_wikidata_qid"`
+	EffectiveWikidataLabel       string `json:"effective_wikidata_label"`
 	EffectiveWikidataDescription string `json:"effective_wikidata_description"`
-	EffectiveWikidataConfidence string `json:"effective_wikidata_confidence"`
-	EffectiveResolutionStatus   string `json:"effective_resolution_status"`
-	EffectiveResolutionSource   string `json:"effective_resolution_source"`
-	LocalOnly                   bool   `json:"local_only,omitempty"`
-	PendingImport               bool   `json:"pending_import,omitempty"`
+	EffectiveWikidataConfidence  string `json:"effective_wikidata_confidence"`
+	EffectiveResolutionStatus    string `json:"effective_resolution_status"`
+	EffectiveResolutionSource    string `json:"effective_resolution_source"`
+	LocalOnly                    bool   `json:"local_only,omitempty"`
+	PendingImport                bool   `json:"pending_import,omitempty"`
 }
 
 type PlaceMention struct {
-	ID                 int   `json:"id"`
+	ID                 int    `json:"id"`
 	TextForm           string `json:"text_form"`
 	NormalizedForm     string `json:"normalized_form"`
 	MentionOrder       int    `json:"mention_order"`
@@ -158,22 +158,22 @@ type PlaceCluster struct {
 }
 
 type PlaceClusterReview struct {
-	ClusterID                 int
-	LemmaID                   int
-	DisplayLabel              string
-	InferredCanonicalName     string
-	PlaceType                 string
-	Region                    string
-	ExplicitNamePresent       *bool
-	PreferredExternalIDType   string
-	PreferredExternalIDValue  string
-	ChosenWikidataQID         string
-	ChosenToposTextID         string
-	ChosenPleiadesID          string
-	ResolutionStatus          string
-	Notes                     string
-	ReviewerUsername          string
-	ReviewedAt                string
+	ClusterID                int
+	LemmaID                  int
+	DisplayLabel             string
+	InferredCanonicalName    string
+	PlaceType                string
+	Region                   string
+	ExplicitNamePresent      *bool
+	PreferredExternalIDType  string
+	PreferredExternalIDValue string
+	ChosenWikidataQID        string
+	ChosenToposTextID        string
+	ChosenPleiadesID         string
+	ResolutionStatus         string
+	Notes                    string
+	ReviewerUsername         string
+	ReviewedAt               string
 }
 
 // Lemma represents a single lemma entry from the JSON export
@@ -250,6 +250,48 @@ type Review struct {
 	ReviewedTranslationBy string
 }
 
+func normalizeStoredReviewStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "reviewed_ok", "reviewed_corrections":
+		return strings.TrimSpace(status)
+	default:
+		return "not_reviewed"
+	}
+}
+
+func reviewHasStoredContent(review *Review) bool {
+	if review == nil {
+		return false
+	}
+	return strings.TrimSpace(review.CorrectedGreekText) != "" ||
+		strings.TrimSpace(review.CorrectedEnglishTranslation) != "" ||
+		strings.TrimSpace(review.ReviewedEnglishTranslation) != "" ||
+		strings.TrimSpace(review.Notes) != ""
+}
+
+func deriveStoredReviewStatus(previousStatus, correctedGreek, correctedEnglish, reviewedEnglish, notes string) string {
+	if strings.TrimSpace(correctedGreek) != "" ||
+		strings.TrimSpace(correctedEnglish) != "" ||
+		strings.TrimSpace(reviewedEnglish) != "" ||
+		strings.TrimSpace(notes) != "" {
+		return "reviewed_corrections"
+	}
+	if normalizeStoredReviewStatus(previousStatus) == "reviewed_ok" {
+		return "reviewed_ok"
+	}
+	return "not_reviewed"
+}
+
+func effectiveReviewStatus(review *Review) string {
+	if review == nil {
+		return "not_reviewed"
+	}
+	if reviewHasStoredContent(review) {
+		return "reviewed_corrections"
+	}
+	return normalizeStoredReviewStatus(review.ReviewStatus)
+}
+
 // Config holds application configuration
 type Config struct {
 	DataFile     string
@@ -311,6 +353,7 @@ func OpenDatabase(dbPath string) (*sql.DB, error) {
 		"ALTER TABLE reviews ADD COLUMN greek_corrected_by TEXT",
 		"ALTER TABLE reviews ADD COLUMN initial_translation_by TEXT",
 		"ALTER TABLE reviews ADD COLUMN reviewed_translation_by TEXT",
+		"DROP INDEX IF EXISTS idx_review_status",
 		`CREATE TABLE IF NOT EXISTS translation_variant_reviews (
 			lemma_id INTEGER NOT NULL,
 			variant_kind TEXT NOT NULL,
@@ -1769,6 +1812,18 @@ func GetReview(db *sql.DB, lemmaID int) (*Review, error) {
 
 // SaveReview saves or updates review data, tracking who modified each field
 func SaveReview(db *sql.DB, review *Review, oldReview *Review, username string) error {
+	previousStatus := review.ReviewStatus
+	if oldReview != nil {
+		previousStatus = oldReview.ReviewStatus
+	}
+	review.ReviewStatus = deriveStoredReviewStatus(
+		previousStatus,
+		review.CorrectedGreekText,
+		review.CorrectedEnglishTranslation,
+		review.ReviewedEnglishTranslation,
+		review.Notes,
+	)
+
 	// Determine which "by" fields to update based on what changed
 	greekBy := review.GreekCorrectedBy
 	initialBy := review.InitialTranslationBy
@@ -1896,9 +1951,35 @@ func GetReviewStats(db *sql.DB) (total, reviewed, reviewedOK, reviewedCorrection
 	query := `
 		SELECT
 			COUNT(*) as total,
-			COALESCE(SUM(CASE WHEN review_status != 'not_reviewed' THEN 1 ELSE 0 END), 0) as reviewed,
-			COALESCE(SUM(CASE WHEN review_status = 'reviewed_ok' THEN 1 ELSE 0 END), 0) as reviewed_ok,
-			COALESCE(SUM(CASE WHEN review_status = 'reviewed_corrections' THEN 1 ELSE 0 END), 0) as reviewed_corrections
+			COALESCE(SUM(
+				CASE
+					WHEN COALESCE(corrected_greek_text, '') <> ''
+					  OR COALESCE(corrected_english_translation, '') <> ''
+					  OR COALESCE(reviewed_english_translation, '') <> ''
+					  OR COALESCE(notes, '') <> ''
+					  OR COALESCE(review_status, '') = 'reviewed_ok'
+					THEN 1 ELSE 0
+				END
+			), 0) as reviewed,
+			COALESCE(SUM(
+				CASE
+					WHEN COALESCE(corrected_greek_text, '') = ''
+					  AND COALESCE(corrected_english_translation, '') = ''
+					  AND COALESCE(reviewed_english_translation, '') = ''
+					  AND COALESCE(notes, '') = ''
+					  AND COALESCE(review_status, '') = 'reviewed_ok'
+					THEN 1 ELSE 0
+				END
+			), 0) as reviewed_ok,
+			COALESCE(SUM(
+				CASE
+					WHEN COALESCE(corrected_greek_text, '') <> ''
+					  OR COALESCE(corrected_english_translation, '') <> ''
+					  OR COALESCE(reviewed_english_translation, '') <> ''
+					  OR COALESCE(notes, '') <> ''
+					THEN 1 ELSE 0
+				END
+			), 0) as reviewed_corrections
 		FROM reviews
 	`
 
@@ -1937,7 +2018,7 @@ func GetNextUnreviewedInLetter(db *sql.DB, data *LemmaData, currentLemma *Lemma)
 
 		// Check if this lemma is unreviewed
 		review, err := GetReview(db, lemma.ID)
-		if err == nil && review.ReviewStatus == "not_reviewed" {
+		if err == nil && effectiveReviewStatus(review) == "not_reviewed" {
 			return lemma
 		}
 	}

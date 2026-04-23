@@ -42,7 +42,6 @@ func main() {
 	// Extract form fields
 	formMode := strings.TrimSpace(formData.Get("form_mode"))
 	lemmaIDStr := formData.Get("lemma_id")
-	reviewStatus := formData.Get("review_status")
 	correctedGreek := strings.TrimSpace(formData.Get("corrected_greek"))
 	_, correctedGreekProvided := formData["corrected_greek"]
 	correctedEnglish := strings.TrimSpace(formData.Get("corrected_english"))
@@ -288,17 +287,6 @@ func main() {
 		variantStatus = "draft"
 	}
 
-	// Validate review status
-	validStatuses := map[string]bool{
-		"not_reviewed":         true,
-		"reviewed_ok":          true,
-		"reviewed_corrections": true,
-	}
-
-	if !validStatuses[reviewStatus] {
-		reviewStatus = "not_reviewed"
-	}
-
 	// Load configuration
 	config := GetConfig()
 
@@ -331,6 +319,13 @@ func main() {
 	if !correctedGreekProvided {
 		correctedGreek = oldReview.CorrectedGreekText
 	}
+	reviewStatus := deriveStoredReviewStatus(
+		oldReview.ReviewStatus,
+		correctedGreek,
+		correctedEnglish,
+		reviewedEnglish,
+		notes,
+	)
 
 	// Create review record with new values, preserving "by" fields from old review
 	review := &Review{

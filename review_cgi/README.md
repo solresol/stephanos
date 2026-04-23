@@ -79,7 +79,7 @@ The `reviews` table in SQLite tracks review state:
 | Column | Description |
 |--------|-------------|
 | `lemma_id` | Primary key, references lemma ID from JSON |
-| `review_status` | `not_reviewed`, `reviewed_ok`, or `reviewed_corrections` |
+| `review_status` | Legacy-derived compatibility field; new saves infer it from stored human edits instead of a separate UI control |
 | `corrected_greek_text` | Human-corrected Greek (if OCR had errors) |
 | `corrected_english_translation` | Initial human translation |
 | `reviewed_english_translation` | Reviewed/approved translation |
@@ -101,6 +101,7 @@ Additional local review tables:
 ### Deprecated Fields
 
 - `reviewer_username` - This field is obsolete. It was the original single-user tracking field before per-field tracking was added. Kept for backward compatibility with legacy reviews. New code should use `greek_corrected_by`, `initial_translation_by`, and `reviewed_translation_by` instead.
+- `review_status` is now legacy-derived. The separate "Translation Review State" control has been removed from the review UI; rows with stored human edits/notes are treated as `reviewed_corrections`, while older `reviewed_ok` rows remain readable for compatibility.
 - `corrected_greek_text` remains preserved in SQLite and PostgreSQL for legacy reference, but the active translation workflow now treats Meineke text as the working Greek instead of exposing live OCR correction on the main page.
 
 ## Local Development

@@ -846,7 +846,8 @@ const translationReviewTemplate = `<!DOCTYPE html>
 
                 <div class="translation-panel">
                     <div class="section-title">Latest AI Translation</div>
-                    <div class="translation-block commentary-source" data-commentary-source="translation" tabindex="0" title="Select text here to add commentary">{{.Lemma.EnglishTranslation}}</div>
+                    <div class="helper-text" style="margin-bottom: 8px;">{{.LatestAITranslationLabel}}</div>
+                    <div class="translation-block commentary-source" data-commentary-source="translation" tabindex="0" title="Select text here to add commentary">{{.LatestAITranslation}}</div>
                 </div>
             </div>
 
@@ -855,7 +856,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
                 <input type="hidden" name="return_view" value="translation">
                 <input type="hidden" name="lemma_id" value="{{.Lemma.ID}}">
                 <input type="hidden" name="current_position" value="{{.Lemma.SortOrder}}">
-                <input type="hidden" id="ai_translation" value="{{.Lemma.EnglishTranslation}}">
+                <input type="hidden" id="ai_translation" value="{{.LatestAITranslation}}">
                 <input type="hidden" name="variant_id" id="variant_id" value="">
                 <input type="hidden" name="source_text_version_id" id="source_text_version_id" value="">
                 <input type="hidden" id="canonical_kind" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "kind"}}{{end}}">
@@ -892,19 +893,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
                     {{end}}
                 </div>
 
-                <div class="review-meta-grid" style="margin-top: 18px;">
-                    <div class="context-panel">
-                        <div class="form-group">
-                            <label>Translation Review State</label>
-                            <div class="radio-group">
-                                <label><input type="radio" name="review_status" value="reviewed_ok" {{if eq .Review.ReviewStatus "reviewed_ok"}}checked{{end}}>Translation looks OK</label>
-                                <label><input type="radio" name="review_status" value="reviewed_corrections" {{if eq .Review.ReviewStatus "reviewed_corrections"}}checked{{end}}>Translation edited here</label>
-                                <label><input type="radio" name="review_status" value="not_reviewed" {{if eq .Review.ReviewStatus "not_reviewed"}}checked{{end}}>Skip / not reviewed</label>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="publication-panel">
+                <div class="publication-panel" style="margin-top: 18px;">
                         <div class="section-title">Publication Controls</div>
                         <div id="selected_variant_summary" class="selected-variant">No variant selected.</div>
                         <div class="publication-grid" style="margin-top: 12px;">
@@ -977,7 +966,6 @@ const translationReviewTemplate = `<!DOCTYPE html>
                             </div>
                         </details>
                         {{end}}
-                    </div>
                 </div>
             </form>
         </div>

@@ -44,6 +44,25 @@ def sqlite_column_exists(cur, table_name: str, column_name: str) -> bool:
     return any((row["name"] or "").strip().lower() == column_name.lower() for row in cur.fetchall())
 
 
+def derive_effective_review_status(
+    review_status: str | None,
+    corrected_greek: str | None,
+    corrected_english: str | None,
+    reviewed_english: str | None,
+    notes: str | None,
+) -> str:
+    if (
+        (corrected_greek or "").strip()
+        or (corrected_english or "").strip()
+        or (reviewed_english or "").strip()
+        or (notes or "").strip()
+    ):
+        return "reviewed_corrections"
+    if (review_status or "").strip() == "reviewed_ok":
+        return "reviewed_ok"
+    return "not_reviewed"
+
+
 def ensure_canonical_import_state_table(pg_cur):
     pg_cur.execute(
         """
@@ -1074,18 +1093,30 @@ def import_reviews():
     pg_cur.execute("SELECT to_regclass('public.human_translations') IS NOT NULL")
     has_human_translations = bool(pg_cur.fetchone()[0])
 
-    # Get all reviewed entries from SQLite
+    # Get all rows that might carry human review content. review_status is now
+    # legacy-derived, so we no longer filter solely on that flag.
     sqlite_cur.execute("""
         SELECT lemma_id, review_status,
                corrected_greek_text, corrected_english_translation,
                reviewed_english_translation,
                reviewer_username, reviewed_at, notes
         FROM reviews
-        WHERE review_status != 'not_reviewed'
         ORDER BY reviewed_at
     """)
 
-    reviews = sqlite_cur.fetchall()
+    all_reviews = sqlite_cur.fetchall()
+    reviews = []
+    for review in all_reviews:
+        effective_status = derive_effective_review_status(
+            review["review_status"],
+            review["corrected_greek_text"],
+            review["corrected_english_translation"],
+            review["reviewed_english_translation"],
+            review["notes"],
+        )
+        if effective_status == "not_reviewed":
+            continue
+        reviews.append((review, effective_status))
     log(f"Found {len(reviews)} reviewed entries in SQLite")
 
     # Statistics
@@ -1096,9 +1127,8 @@ def import_reviews():
     human_sync_errors = 0
 
     # Process each review
-    for review in reviews:
+    for review, effective_status in reviews:
         lemma_id = review['lemma_id']
-        review_status = review['review_status']
         corrected_greek = review['corrected_greek_text'] or None
         corrected_english = review['corrected_english_translation'] or None
         reviewed_english = review['reviewed_english_translation'] or None
@@ -1132,7 +1162,7 @@ def import_reviews():
             """
 
             pg_cur.execute(update_query, (
-                review_status,
+                effective_status,
                 corrected_greek,
                 corrected_english,
                 reviewed_english,
@@ -1162,7 +1192,7 @@ def import_reviews():
                     human_sync_errors += 1
 
             # Log details for reviewed_corrections
-            if review_status == 'reviewed_corrections':
+            if effective_status == 'reviewed_corrections':
                 corrections = []
                 if corrected_greek:
                     corrections.append("Greek")

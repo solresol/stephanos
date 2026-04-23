@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type SourceLookupLink struct {
@@ -15,33 +16,35 @@ type SourceLookupLink struct {
 }
 
 type PageData struct {
-	Lemma                          *Lemma
-	Review                         *Review
-	TotalCount                     int
-	ReviewedCount                  int
-	PercentComplete                int
-	CurrentPosition                int
-	HasPrevious                    bool
-	HasNext                        bool
-	PreviousID                     int
-	NextID                         int
-	HasNextUnreviewed              bool
-	LetterName                     string
-	LetterNav                      []LetterNav
-	ShowMeineke                    bool
-	BillerbeckCompareText          string
-	MeinekeStatus                  string
-	MeinekeStatusLabel             string
-	WorkingGreekLabel              string
+	Lemma                           *Lemma
+	Review                          *Review
+	TotalCount                      int
+	ReviewedCount                   int
+	PercentComplete                 int
+	CurrentPosition                 int
+	HasPrevious                     bool
+	HasNext                         bool
+	PreviousID                      int
+	NextID                          int
+	HasNextUnreviewed               bool
+	LetterName                      string
+	LetterNav                       []LetterNav
+	ShowMeineke                     bool
+	BillerbeckCompareText           string
+	MeinekeStatus                   string
+	MeinekeStatusLabel              string
+	WorkingGreekLabel               string
 	WorkingGreekSourceTextVersionID string
-	EntityContextTranslation       string
-	EntityContextTranslationLabel  string
-	SourceLookupLinks              []SourceLookupLink
-	PlaceClusterCount              int
-	OtherEntityCount               int
-	PrimaryEntities                []ProperNoun
-	SecondaryEntities              []ProperNoun
-	LegacyPlaceEntities            []ProperNoun
+	LatestAITranslation             string
+	LatestAITranslationLabel        string
+	EntityContextTranslation        string
+	EntityContextTranslationLabel   string
+	SourceLookupLinks               []SourceLookupLink
+	PlaceClusterCount               int
+	OtherEntityCount                int
+	PrimaryEntities                 []ProperNoun
+	SecondaryEntities               []ProperNoun
+	LegacyPlaceEntities             []ProperNoun
 }
 
 func workingGreekLabel(lemma *Lemma) (string, string) {
@@ -72,6 +75,97 @@ func chooseEntityContextTranslation(review *Review, lemma *Lemma) (string, strin
 		}
 	}
 	return "", "Translation context unavailable"
+}
+
+func parseVariantTimestamp(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+
+	layouts := []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999-07:00",
+		"2006-01-02 15:04:05.999999",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
+func variantIDOrder(value string) (int, string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return -1, ""
+	}
+	id, err := strconv.Atoi(value)
+	if err != nil {
+		return -1, value
+	}
+	return id, value
+}
+
+func isNewerTranslationRun(candidate map[string]interface{}, current map[string]interface{}) bool {
+	if current == nil {
+		return true
+	}
+
+	candidateTime := parseVariantTimestamp(mapStringValue(candidate, "created_at"))
+	currentTime := parseVariantTimestamp(mapStringValue(current, "created_at"))
+	if !candidateTime.Equal(currentTime) {
+		return candidateTime.After(currentTime)
+	}
+
+	candidateID, candidateTextID := variantIDOrder(mapStringValue(candidate, "id"))
+	currentID, currentTextID := variantIDOrder(mapStringValue(current, "id"))
+	if candidateID != currentID {
+		return candidateID > currentID
+	}
+	return candidateTextID > currentTextID
+}
+
+func chooseLatestAITranslation(lemma *Lemma) (string, string) {
+	if lemma == nil {
+		return "", "No stored AI translation available."
+	}
+
+	var latestRun map[string]interface{}
+	legacyText := ""
+
+	for _, variant := range lemma.TranslationVariants {
+		kind := mapStringValue(variant, "kind")
+		text := strings.TrimSpace(mapStringValue(variant, "text"))
+		if text == "" {
+			continue
+		}
+
+		switch kind {
+		case "translation_run":
+			if isNewerTranslationRun(variant, latestRun) {
+				latestRun = variant
+			}
+		case "legacy_assembled":
+			if legacyText == "" {
+				legacyText = text
+			}
+		}
+	}
+
+	if latestRun != nil {
+		label := "Showing the most recent stored AI translation run."
+		if createdAt := strings.TrimSpace(mapStringValue(latestRun, "created_at")); createdAt != "" {
+			label = fmt.Sprintf("Showing AI run from %s.", createdAt)
+		}
+		return strings.TrimSpace(mapStringValue(latestRun, "text")), label
+	}
+	if legacyText != "" {
+		return legacyText, "Showing the legacy assembled AI baseline."
+	}
+	return "", "No stored AI translation available."
 }
 
 func buildSourceLookupLinks(lemma *Lemma) []SourceLookupLink {
@@ -255,6 +349,7 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		len(currentLemma.Apparatus) > 0 ||
 		len(currentLemma.MeinekeScanFilenames) > 0
 	workingGreekTitle, sourceTextVersionID := workingGreekLabel(currentLemma)
+	latestAITranslation, latestAITranslationLabel := chooseLatestAITranslation(currentLemma)
 	entityTranslation, entityTranslationLabel := chooseEntityContextTranslation(review, currentLemma)
 	primaryEntities, secondaryEntities, legacyPlaceEntities := splitEntityBuckets(currentLemma)
 
@@ -276,6 +371,8 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		MeinekeStatusLabel:              meinekeStatusLabel(meinekeStatus),
 		WorkingGreekLabel:               workingGreekTitle,
 		WorkingGreekSourceTextVersionID: sourceTextVersionID,
+		LatestAITranslation:             latestAITranslation,
+		LatestAITranslationLabel:        latestAITranslationLabel,
 		EntityContextTranslation:        entityTranslation,
 		EntityContextTranslationLabel:   entityTranslationLabel,
 		SourceLookupLinks:               buildSourceLookupLinks(currentLemma),

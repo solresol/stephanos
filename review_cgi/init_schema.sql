@@ -5,6 +5,7 @@
 -- Main reviews table
 CREATE TABLE IF NOT EXISTS reviews (
     lemma_id INTEGER PRIMARY KEY,
+    -- Legacy-derived status retained for compatibility with older exports/imports.
     review_status TEXT NOT NULL DEFAULT 'not_reviewed',
     corrected_greek_text TEXT,
     corrected_english_translation TEXT,
@@ -13,10 +14,6 @@ CREATE TABLE IF NOT EXISTS reviews (
     notes TEXT,
     CHECK (review_status IN ('not_reviewed', 'reviewed_ok', 'reviewed_corrections'))
 );
-
--- Index for filtering by review status
-CREATE INDEX IF NOT EXISTS idx_review_status
-ON reviews(review_status);
 
 -- Index for filtering by reviewer
 CREATE INDEX IF NOT EXISTS idx_reviewer
