@@ -218,6 +218,11 @@ type Lemma struct {
 	MeinekeOCRText                string                   `json:"meineke_ocr_text"`
 	MeinekeOCRMainTextLines       []SourceLine             `json:"meineke_ocr_main_text_lines"`
 	MeinekeOCRApparatus           []ApparatusEntry         `json:"meineke_ocr_apparatus"`
+	BillerbeckGermanText          string                   `json:"billerbeck_german_text"`
+	BillerbeckGermanEnglish       string                   `json:"billerbeck_german_english"`
+	BillerbeckGermanScanFilenames []string                 `json:"billerbeck_german_scan_filenames"`
+	BillerbeckGermanStatus        string                   `json:"billerbeck_german_translation_status"`
+	BillerbeckGermanModel         string                   `json:"billerbeck_german_translation_model"`
 	CommentaryEntries             []CommentaryEntry        `json:"commentary_entries"`
 	ProperNouns                   []ProperNoun             `json:"proper_nouns"`
 	PlaceClusters                 []PlaceCluster           `json:"place_clusters"`

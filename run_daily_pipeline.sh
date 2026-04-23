@@ -94,9 +94,29 @@ echo "Step 3: Skipping Billerbeck OCR (OCR corpus complete)." | tee -a "$LOGFILE
 echo "Step 3b: Processing Meineke images..." | tee -a "$LOGFILE"
 uv run process_meineke_pages.py --delay 1 2>&1 | tee -a "$LOGFILE"
 
+# Step 3c: Queue alternate-parity Billerbeck PDF pages for the German reference lane
+BILLERBECK_GERMAN_QUEUE_LIMIT="${BILLERBECK_GERMAN_QUEUE_LIMIT:-3}"
+if [ "$BILLERBECK_GERMAN_QUEUE_LIMIT" -gt 0 ]; then
+    echo "Step 3c: Queueing Billerbeck German PDF pages..." | tee -a "$LOGFILE"
+    uv run enqueue_billerbeck_german_pdf_pages.py --limit "$BILLERBECK_GERMAN_QUEUE_LIMIT" \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: Billerbeck German PDF enqueue step failed" | tee -a "$LOGFILE"
+fi
+
+# Step 3d: Slowly OCR Billerbeck German reference pages from the existing image corpus
+BILLERBECK_GERMAN_OCR_LIMIT="${BILLERBECK_GERMAN_OCR_LIMIT:-3}"
+if [ "$BILLERBECK_GERMAN_OCR_LIMIT" -gt 0 ]; then
+    echo "Step 3d: Processing Billerbeck German pages..." | tee -a "$LOGFILE"
+    uv run process_billerbeck_german_pages.py --limit "$BILLERBECK_GERMAN_OCR_LIMIT" --delay 1 \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: Billerbeck German OCR step failed" | tee -a "$LOGFILE"
+fi
+
 # Step 4: Assemble lemmas across pages (handles continuations and human overrides)
 echo "Step 4: Assembling lemmas..." | tee -a "$LOGFILE"
 uv run assemble_lemmas.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 4a: Assemble Billerbeck German OCR into per-lemma reference rows
+echo "Step 4a: Assembling Billerbeck German references..." | tee -a "$LOGFILE"
+uv run assemble_billerbeck_german.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Billerbeck German assembly step failed" | tee -a "$LOGFILE"
 
 # Step 4b: Assemble Meineke source text versions (OCR + CSV fallback)
 echo "Step 4b: Assembling Meineke source texts..." | tee -a "$LOGFILE"
@@ -139,6 +159,14 @@ echo "Step 5: Translating lemmas with gpt-5.2..." | tee -a "$LOGFILE"
 uv run translate_lemmas.py \
     --delay 1 \
     2>&1 | tee -a "$LOGFILE"
+
+# Step 5aa: Translate assembled Billerbeck German references to English
+BILLERBECK_GERMAN_TRANSLATE_LIMIT="${BILLERBECK_GERMAN_TRANSLATE_LIMIT:-5}"
+if [ "$BILLERBECK_GERMAN_TRANSLATE_LIMIT" -gt 0 ]; then
+    echo "Step 5aa: Translating Billerbeck German references..." | tee -a "$LOGFILE"
+    uv run translate_billerbeck_german.py --limit "$BILLERBECK_GERMAN_TRANSLATE_LIMIT" --delay 1 \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: Billerbeck German translation step failed" | tee -a "$LOGFILE"
+fi
 
 # Step 5a: Count words in Greek text
 echo "Step 5a: Counting words in Greek text..." | tee -a "$LOGFILE"

@@ -183,7 +183,7 @@ def main():
     parser.add_argument(
         "--source-document",
         default="billerbeck",
-        choices=["billerbeck", "meineke"],
+        choices=["billerbeck", "billerbeck_german", "meineke"],
         help="Source document label to store on queued images (default: billerbeck)",
     )
     parser.add_argument("--skip-db", action="store_true",

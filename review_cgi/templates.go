@@ -863,6 +863,43 @@ const translationReviewTemplate = `<!DOCTYPE html>
                 </div>
             </div>
 
+            {{if or .Lemma.BillerbeckGermanText .Lemma.BillerbeckGermanEnglish .Lemma.BillerbeckGermanScanFilenames}}
+            <div class="translation-reading-grid" style="margin-top: 18px;">
+                <div class="context-panel">
+                    <div class="section-title">Billerbeck German Reference</div>
+                    <div class="context-note">OCR of Billerbeck's German translation, kept here as translator-facing reference only.</div>
+                    {{if .Lemma.BillerbeckGermanScanFilenames}}
+                    <details class="context-details" style="margin-top: 12px;">
+                        <summary>Show Billerbeck German scan pages</summary>
+                        <div class="scan-strip" style="margin-top: 12px;">
+                            {{range $filename := .Lemma.BillerbeckGermanScanFilenames}}
+                            <div class="scan-figure">
+                                <img src="/protected/{{$filename}}" alt="{{$filename}}">
+                                <div class="scan-caption">{{$filename}}</div>
+                            </div>
+                            {{end}}
+                        </div>
+                    </details>
+                    {{end}}
+                    {{if .Lemma.BillerbeckGermanText}}
+                    <div class="reading-block" style="margin-top: 12px;">{{.Lemma.BillerbeckGermanText}}</div>
+                    {{else}}
+                    <div class="empty-state" style="margin-top: 12px;">No Billerbeck German text is currently attached for this lemma.</div>
+                    {{end}}
+                </div>
+
+                <div class="translation-panel">
+                    <div class="section-title">English From Billerbeck German</div>
+                    {{if .Lemma.BillerbeckGermanModel}}<div class="helper-text" style="margin-bottom: 8px;">{{.Lemma.BillerbeckGermanStatus}} · {{.Lemma.BillerbeckGermanModel}}</div>{{else if .Lemma.BillerbeckGermanStatus}}<div class="helper-text" style="margin-bottom: 8px;">{{.Lemma.BillerbeckGermanStatus}}</div>{{end}}
+                    {{if .Lemma.BillerbeckGermanEnglish}}
+                    <div class="translation-block">{{.Lemma.BillerbeckGermanEnglish}}</div>
+                    {{else}}
+                    <div class="empty-state">No English reference translation has been generated yet.</div>
+                    {{end}}
+                </div>
+            </div>
+            {{end}}
+
             <form method="POST" action="/cgi-bin/save.cgi" class="review-form">
                 <input type="hidden" name="form_mode" value="review">
                 <input type="hidden" name="return_view" value="translation">

@@ -871,6 +871,45 @@ def export_lemmas():
 
         enrich_place_clusters_with_wikidata_metadata(place_clusters_by_lemma)
 
+    german_refs_by_lemma = {}
+    cur.execute("SELECT to_regclass('public.lemma_billerbeck_german_refs') IS NOT NULL")
+    has_billerbeck_german_refs = bool(cur.fetchone()[0])
+    if has_billerbeck_german_refs:
+        cur.execute(
+            """
+            SELECT
+                lemma_id,
+                COALESCE(german_text, '') AS german_text,
+                COALESCE(english_translation, '') AS english_translation,
+                COALESCE(source_image_filenames::text, '[]') AS source_image_filenames,
+                COALESCE(translation_status, '') AS translation_status,
+                COALESCE(translation_model, '') AS translation_model
+            FROM lemma_billerbeck_german_refs
+            """
+        )
+        for (
+            lemma_id,
+            german_text,
+            english_translation,
+            source_image_filenames,
+            translation_status,
+            translation_model,
+        ) in cur.fetchall():
+            if isinstance(source_image_filenames, str):
+                try:
+                    source_image_filenames = json.loads(source_image_filenames)
+                except json.JSONDecodeError:
+                    source_image_filenames = []
+            elif source_image_filenames is None:
+                source_image_filenames = []
+            german_refs_by_lemma[lemma_id] = {
+                "german_text": german_text or "",
+                "english_translation": english_translation or "",
+                "source_image_filenames": source_image_filenames if isinstance(source_image_filenames, list) else [],
+                "translation_status": translation_status or "",
+                "translation_model": translation_model or "",
+            }
+
     translation_variants_by_lemma = {}
     cur.execute("SELECT to_regclass('public.translation_runs') IS NOT NULL")
     has_translation_runs = bool(cur.fetchone()[0])
@@ -1077,6 +1116,7 @@ def export_lemmas():
         current_meineke = current_meineke_by_lemma.get(lemma_id, {})
         current_meineke_version_id = current_meineke.get("id")
         current_meineke_text = current_meineke.get("text_body") or meineke_greek_paragraph or ""
+        german_ref = german_refs_by_lemma.get(lemma_id, {})
 
         validated_meineke_scan_filenames = []
         for scan_info in meineke_ocr_scan_infos_by_lemma.get(lemma_id, []):
@@ -1147,6 +1187,11 @@ def export_lemmas():
             "meineke_scan_filenames": merged_meineke_scan_filenames,
             "meineke_main_text_lines": meineke_lines_by_version.get(current_meineke_version_id, []),
             "apparatus": meineke_apparatus_by_version.get(current_meineke_version_id, []),
+            "billerbeck_german_text": german_ref.get("german_text", ""),
+            "billerbeck_german_english": german_ref.get("english_translation", ""),
+            "billerbeck_german_scan_filenames": german_ref.get("source_image_filenames", []),
+            "billerbeck_german_translation_status": german_ref.get("translation_status", ""),
+            "billerbeck_german_translation_model": german_ref.get("translation_model", ""),
         }
 
         lemmas.append(lemma_data)

@@ -3099,8 +3099,119 @@ ALTER TABLE ONLY public.translation_runs
 
 
 --
+-- Name: billerbeck_german_pages; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.billerbeck_german_pages (
+    id integer NOT NULL,
+    image_id integer NOT NULL,
+    image_filename text NOT NULL,
+    volume_number integer,
+    volume_label text,
+    page_number integer,
+    status text NOT NULL,
+    is_german boolean,
+    has_headword_entries boolean,
+    headword_hint_json jsonb NOT NULL,
+    ocr_payload jsonb NOT NULL,
+    ocr_notes text,
+    ocr_model text,
+    ocr_tokens integer NOT NULL,
+    processed_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: lemma_billerbeck_german_refs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_billerbeck_german_refs (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    lemma_headword text,
+    billerbeck_id text,
+    german_text text NOT NULL,
+    german_hash text NOT NULL,
+    english_translation text,
+    source_page_ids jsonb NOT NULL,
+    source_image_ids jsonb NOT NULL,
+    source_image_filenames jsonb NOT NULL,
+    source_page_count integer NOT NULL,
+    ocr_confidence text,
+    translation_status text NOT NULL,
+    translation_model text,
+    translation_tokens integer NOT NULL,
+    translated_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    notes text
+);
+
+
+--
+-- Name: billerbeck_german_pages billerbeck_german_pages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billerbeck_german_pages
+    ADD CONSTRAINT billerbeck_german_pages_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: lemma_billerbeck_german_refs lemma_billerbeck_german_refs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_billerbeck_german_refs
+    ADD CONSTRAINT lemma_billerbeck_german_refs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: billerbeck_german_pages_image_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX billerbeck_german_pages_image_id_idx ON public.billerbeck_german_pages USING btree (image_id);
+
+
+--
+-- Name: billerbeck_german_pages_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX billerbeck_german_pages_status_idx ON public.billerbeck_german_pages USING btree (status, processed_at);
+
+
+--
+-- Name: lemma_billerbeck_german_refs_lemma_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX lemma_billerbeck_german_refs_lemma_id_idx ON public.lemma_billerbeck_german_refs USING btree (lemma_id);
+
+
+--
+-- Name: lemma_billerbeck_german_refs_translation_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_billerbeck_german_refs_translation_status_idx ON public.lemma_billerbeck_german_refs USING btree (translation_status, updated_at);
+
+
+--
+-- Name: billerbeck_german_pages billerbeck_german_pages_image_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billerbeck_german_pages
+    ADD CONSTRAINT billerbeck_german_pages_image_id_fkey FOREIGN KEY (image_id) REFERENCES public.images(id) ON DELETE CASCADE;
+
+
+--
+-- Name: lemma_billerbeck_german_refs lemma_billerbeck_german_refs_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_billerbeck_german_refs
+    ADD CONSTRAINT lemma_billerbeck_german_refs_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
 -- PostgreSQL database dump complete
 --
 
 \unrestrict SdFo76Uxtcc0jSwycD4vtxTWj6bZjkgvGeNTiSnsNQT8cTH9yS6hQYbUQJSlaID
-
