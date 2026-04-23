@@ -38,11 +38,6 @@ GROUP2_FILENAME = "group2_ai_comparison_plus_latest.pdf"
 MANIFEST_FILENAME = "packet_manifest.json"
 SOURCE_STALENESS_WARNING_DAYS = 2.0
 
-# Local correction requested by Greg on 2026-04-22.
-MANUAL_MEINEKE_SCAN_OVERRIDES = {
-    "Κύρνος": ["meineke_page_397.jpg"],
-}
-
 GROUPS = [
     {
         "slug": "group1_original_ai_plus_human",
@@ -606,20 +601,12 @@ def build_human_translation_section(
 
 def build_scan_summary(lemma_row: dict[str, Any]) -> str:
     scans = list(lemma_row.get("meineke_scan_filenames") or [])
-    override_scans = MANUAL_MEINEKE_SCAN_OVERRIDES.get(lemma_row.get("lemma", ""), [])
-    if override_scans:
-        scans = override_scans
 
     if not scans:
         return "<div class='scan-summary empty-inline'>No Meineke scan filename stored.</div>"
 
     parts = [html.escape(scan) for scan in scans]
     body = ", ".join(parts)
-    if override_scans:
-        return (
-            "<div class='scan-summary'>Meineke scan reference: "
-            f"{body} <span class='aside'>(manual correction applied for this packet)</span></div>"
-        )
     return f"<div class='scan-summary'>Meineke scan reference: {body}</div>"
 
 
@@ -645,7 +632,7 @@ def build_entry_html(
         "human_variant_count": len(human_variants),
         "note_count": len(notes_blocks),
         "translation_blocked": bool(lemma_row.get("translation_blocked")),
-        "meineke_scan_filenames": MANUAL_MEINEKE_SCAN_OVERRIDES.get(lemma_name, lemma_row.get("meineke_scan_filenames", [])),
+        "meineke_scan_filenames": lemma_row.get("meineke_scan_filenames", []),
     }
 
     header_bits = [
@@ -1079,20 +1066,11 @@ def render_latest_translation_block_latex(block: dict[str, Any] | None) -> str:
 
 def build_scan_summary_latex(lemma_row: dict[str, Any]) -> str:
     scans = list(lemma_row.get("meineke_scan_filenames") or [])
-    override_scans = MANUAL_MEINEKE_SCAN_OVERRIDES.get(lemma_row.get("lemma", ""), [])
-    if override_scans:
-        scans = override_scans
 
     if not scans:
         return r"{\small\color{packetmuted}\packetempty{No Meineke scan filename stored.}\par}"
 
     body = ", ".join(latex_escape(scan) for scan in scans)
-    if override_scans:
-        return (
-            r"{\small\color{packetmuted}Meineke scan reference: "
-            + body
-            + r" {\color{packetaccent}\emph{(manual correction applied for this packet)}}\par}"
-        )
     return r"{\small\color{packetmuted}Meineke scan reference: " + body + r"\par}"
 
 
@@ -1493,9 +1471,6 @@ def main() -> int:
             summary_lines.append(
                 "Original AI translation means the earliest stored translation_run for the entry."
             )
-        summary_lines.append(
-            "Kyrnos uses a manual Meineke scan correction to page 397 for this packet."
-        )
 
         output_path = args.output_dir / group["output_filename"]
         write_pdf(

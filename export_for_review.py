@@ -93,6 +93,55 @@ def preview_text(text: str, limit: int = 180) -> str:
     return preview
 
 
+def parse_meineke_page_filename(meineke_id: str) -> str:
+    """Derive a Meineke page image filename from ids like '397.3'."""
+    text = (meineke_id or "").strip()
+    if not text:
+        return ""
+    match = re.match(r"^(\d+)(?:\.\d+)?$", text)
+    if not match:
+        return ""
+    return f"meineke_page_{match.group(1)}.jpg"
+
+
+def normalize_text_for_match(text: str) -> str:
+    """Normalize Greek text enough for fuzzy OCR/source matching."""
+    decomposed = unicodedata.normalize("NFD", text or "")
+    without_combining = "".join(char for char in decomposed if not unicodedata.combining(char))
+    lowered = without_combining.lower()
+    collapsed = re.sub(r"\s+", " ", lowered)
+    return collapsed.strip()
+
+
+def extract_match_tokens(text: str) -> set[str]:
+    """Extract normalized word-ish tokens for coarse overlap checks."""
+    normalized = normalize_text_for_match(text)
+    return set(re.findall(r"[\w']+", normalized, flags=re.UNICODE))
+
+
+def ocr_text_matches_current_meineke(ocr_text: str, current_text: str) -> bool:
+    """
+    Keep OCR provenance only when it plausibly matches the current Meineke text.
+
+    This is intentionally conservative: if we cannot validate a mismatch, we
+    prefer dropping the suspect OCR scan reference and falling back to the
+    known Meineke page.
+    """
+    if not (ocr_text or "").strip() or not (current_text or "").strip():
+        return True
+
+    current_tokens = extract_match_tokens(current_text)
+    ocr_tokens = extract_match_tokens(ocr_text)
+    if not current_tokens or not ocr_tokens:
+        return True
+
+    overlap = len(current_tokens & ocr_tokens)
+    min_size = min(len(current_tokens), len(ocr_tokens))
+    required_overlap = 2 if min_size <= 6 else 3
+    overlap_ratio = overlap / min_size if min_size else 0.0
+    return overlap >= required_overlap and overlap_ratio >= 0.3
+
+
 def enrich_proper_nouns_with_wikidata_metadata(proper_nouns_by_lemma: dict[int, list[dict]]) -> None:
     """Attach cached Wikidata labels/descriptions to exported proper-noun rows."""
     qids: list[str] = []
@@ -348,7 +397,15 @@ def export_lemmas():
     current_meineke_by_lemma = {}
     meineke_lines_by_version = {}
     meineke_apparatus_by_version = {}
-    meineke_scan_filenames_by_lemma = {}
+    meineke_ocr_scan_infos_by_lemma = {}
+    cur.execute(
+        """
+        SELECT image_filename
+        FROM images
+        WHERE source_document = 'meineke'
+        """
+    )
+    known_meineke_image_filenames = {row[0] for row in cur.fetchall() if row[0]}
     cur.execute("SELECT to_regclass('public.lemma_source_text_versions') IS NOT NULL")
     has_source_versions = bool(cur.fetchone()[0])
     if has_source_versions:
@@ -393,7 +450,12 @@ def export_lemmas():
                 if source_variant == "ocr" and notes:
                     match = _OCR_IMAGE_NOTE_RE.search(notes)
                     if match:
-                        meineke_scan_filenames_by_lemma.setdefault(lemma_id, []).append(match.group(1))
+                        meineke_ocr_scan_infos_by_lemma.setdefault(lemma_id, []).append(
+                            {
+                                "filename": match.group(1),
+                                "text_body": text_body or "",
+                            }
+                        )
                 # Deprecate Meineke OCR as a displayed/public text source; keep only
                 # the current non-OCR Meineke source text for comparison.
                 if is_current and source_variant != "ocr":
@@ -1007,10 +1069,30 @@ def export_lemmas():
         current_meineke_version_id = current_meineke.get("id")
         current_meineke_text = current_meineke.get("text_body") or meineke_greek_paragraph or ""
 
+        validated_meineke_scan_filenames = []
+        for scan_info in meineke_ocr_scan_infos_by_lemma.get(lemma_id, []):
+            filename = scan_info.get("filename", "")
+            if not filename:
+                continue
+            if not ocr_text_matches_current_meineke(
+                scan_info.get("text_body", ""), current_meineke_text
+            ):
+                continue
+            if filename not in validated_meineke_scan_filenames:
+                validated_meineke_scan_filenames.append(filename)
+
         merged_meineke_scan_filenames = []
-        for filename in meineke_scan_filenames_by_lemma.get(lemma_id, []) + meineke_image_filenames:
+        for filename in validated_meineke_scan_filenames + meineke_image_filenames:
             if filename and filename not in merged_meineke_scan_filenames:
                 merged_meineke_scan_filenames.append(filename)
+
+        derived_meineke_page_filename = parse_meineke_page_filename(meineke_id or "")
+        if (
+            not merged_meineke_scan_filenames
+            and derived_meineke_page_filename
+            and derived_meineke_page_filename in known_meineke_image_filenames
+        ):
+            merged_meineke_scan_filenames.append(derived_meineke_page_filename)
 
         lemma_data = {
             "id": lemma_id,
