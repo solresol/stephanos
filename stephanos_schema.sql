@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict SdFo76Uxtcc0jSwycD4vtxTWj6bZjkgvGeNTiSnsNQT8cTH9yS6hQYbUQJSlaID
+\restrict HleLC5VKVITZLE5miiTGvwvNy4jPl4KPwkO3o2IPqeFvO1nfryFqJw3vrS599Ua
 
 -- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
@@ -177,6 +177,51 @@ CREATE SEQUENCE public.assembled_lemmas_id_seq
 --
 
 ALTER SEQUENCE public.assembled_lemmas_id_seq OWNED BY public.assembled_lemmas.id;
+
+
+--
+-- Name: billerbeck_german_pages; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.billerbeck_german_pages (
+    id integer NOT NULL,
+    image_id integer NOT NULL,
+    image_filename text NOT NULL,
+    volume_number integer,
+    volume_label text,
+    page_number integer,
+    status text NOT NULL,
+    is_german boolean,
+    has_headword_entries boolean,
+    headword_hint_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    ocr_payload jsonb DEFAULT '{}'::jsonb NOT NULL,
+    ocr_notes text,
+    ocr_model text,
+    ocr_tokens integer DEFAULT 0 NOT NULL,
+    processed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: billerbeck_german_pages_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.billerbeck_german_pages_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: billerbeck_german_pages_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.billerbeck_german_pages_id_seq OWNED BY public.billerbeck_german_pages.id;
 
 
 --
@@ -733,6 +778,53 @@ CREATE SEQUENCE public.lemma_apparatus_entries_id_seq
 --
 
 ALTER SEQUENCE public.lemma_apparatus_entries_id_seq OWNED BY public.lemma_apparatus_entries.id;
+
+
+--
+-- Name: lemma_billerbeck_german_refs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_billerbeck_german_refs (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    lemma_headword text,
+    billerbeck_id text,
+    german_text text NOT NULL,
+    german_hash text NOT NULL,
+    english_translation text,
+    source_page_ids jsonb DEFAULT '[]'::jsonb NOT NULL,
+    source_image_ids jsonb DEFAULT '[]'::jsonb NOT NULL,
+    source_image_filenames jsonb DEFAULT '[]'::jsonb NOT NULL,
+    source_page_count integer DEFAULT 0 NOT NULL,
+    ocr_confidence text,
+    translation_status text DEFAULT 'pending'::text NOT NULL,
+    translation_model text,
+    translation_tokens integer DEFAULT 0 NOT NULL,
+    translated_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    notes text
+);
+
+
+--
+-- Name: lemma_billerbeck_german_refs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.lemma_billerbeck_german_refs_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: lemma_billerbeck_german_refs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.lemma_billerbeck_german_refs_id_seq OWNED BY public.lemma_billerbeck_german_refs.id;
 
 
 --
@@ -1395,6 +1487,235 @@ ALTER SEQUENCE public.text_pair_differences_id_seq OWNED BY public.text_pair_dif
 
 
 --
+-- Name: translation_guidance_backlog_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_backlog_items (
+    id integer NOT NULL,
+    rule_id integer NOT NULL,
+    rule_revision_id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    source_text_version_id integer NOT NULL,
+    backlog_kind text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    translation_variant_kind text,
+    translation_variant_id text,
+    priority integer DEFAULT 100 NOT NULL,
+    created_by text,
+    assigned_to text,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    started_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT translation_guidance_backlog_items_kind_check CHECK ((backlog_kind = ANY (ARRAY['scan_rule'::text, 'rerun_translation'::text, 'review_translation'::text]))),
+    CONSTRAINT translation_guidance_backlog_items_priority_check CHECK ((priority >= 0)),
+    CONSTRAINT translation_guidance_backlog_items_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'in_progress'::text, 'completed'::text, 'dismissed'::text, 'cancelled'::text, 'failed'::text])))
+);
+
+
+--
+-- Name: translation_guidance_backlog_items_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_guidance_backlog_items_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_guidance_backlog_items_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_guidance_backlog_items_id_seq OWNED BY public.translation_guidance_backlog_items.id;
+
+
+--
+-- Name: translation_guidance_matches; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_matches (
+    id integer NOT NULL,
+    rule_id integer NOT NULL,
+    rule_revision_id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    source_text_version_id integer NOT NULL,
+    detector_kind text NOT NULL,
+    detector_version text,
+    match_status text NOT NULL,
+    occurrence_count integer DEFAULT 0 NOT NULL,
+    confidence text,
+    evidence_text text,
+    evidence_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    detected_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT translation_guidance_matches_confidence_check CHECK (((confidence IS NULL) OR (confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])))),
+    CONSTRAINT translation_guidance_matches_occurrence_count_check CHECK ((occurrence_count >= 0)),
+    CONSTRAINT translation_guidance_matches_status_check CHECK ((match_status = ANY (ARRAY['matched'::text, 'not_matched'::text, 'uncertain'::text, 'needs_review'::text, 'skipped'::text])))
+);
+
+
+--
+-- Name: translation_guidance_matches_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_guidance_matches_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_guidance_matches_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_guidance_matches_id_seq OWNED BY public.translation_guidance_matches.id;
+
+
+--
+-- Name: translation_guidance_rule_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_rule_revisions (
+    id integer NOT NULL,
+    rule_id integer NOT NULL,
+    revision_number integer NOT NULL,
+    action text NOT NULL,
+    changed_by text NOT NULL,
+    change_summary text,
+    source_context_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    snapshot_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT translation_guidance_rule_revisions_action_check CHECK ((action = ANY (ARRAY['create'::text, 'update'::text, 'retire'::text, 'reactivate'::text])))
+);
+
+
+--
+-- Name: translation_guidance_rule_revisions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_guidance_rule_revisions_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_guidance_rule_revisions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_guidance_rule_revisions_id_seq OWNED BY public.translation_guidance_rule_revisions.id;
+
+
+--
+-- Name: translation_guidance_rules; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_rules (
+    id integer NOT NULL,
+    rule_key text NOT NULL,
+    rule_code text,
+    kind text NOT NULL,
+    label text NOT NULL,
+    normalized_label text NOT NULL,
+    preferred_translation text,
+    word_class text,
+    status text DEFAULT 'in_progress'::text NOT NULL,
+    application_mode text NOT NULL,
+    citations_text text,
+    notes text,
+    source_workbook text,
+    source_sheet text,
+    source_row_number integer,
+    created_by text,
+    updated_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    retired_at timestamp with time zone,
+    CONSTRAINT translation_guidance_rules_application_mode_check CHECK ((application_mode = ANY (ARRAY['replace'::text, 'required'::text, 'advisory'::text]))),
+    CONSTRAINT translation_guidance_rules_kind_check CHECK ((kind = ANY (ARRAY['gloss'::text, 'formula'::text, 'proper_noun'::text]))),
+    CONSTRAINT translation_guidance_rules_status_check CHECK ((status = ANY (ARRAY['in_progress'::text, 'settled'::text, 'unsure'::text, 'retired'::text])))
+);
+
+
+--
+-- Name: translation_guidance_rules_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_guidance_rules_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_guidance_rules_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_guidance_rules_id_seq OWNED BY public.translation_guidance_rules.id;
+
+
+--
+-- Name: translation_guidance_scan_queue; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_scan_queue (
+    id integer NOT NULL,
+    rule_id integer NOT NULL,
+    rule_revision_id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    source_text_version_id integer NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    priority integer DEFAULT 100 NOT NULL,
+    detector_kind text,
+    attempts integer DEFAULT 0 NOT NULL,
+    requested_by text,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    started_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    error_message text,
+    CONSTRAINT translation_guidance_scan_queue_attempts_check CHECK ((attempts >= 0)),
+    CONSTRAINT translation_guidance_scan_queue_priority_check CHECK ((priority >= 0)),
+    CONSTRAINT translation_guidance_scan_queue_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])))
+);
+
+
+--
+-- Name: translation_guidance_scan_queue_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_guidance_scan_queue_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_guidance_scan_queue_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_guidance_scan_queue_id_seq OWNED BY public.translation_guidance_scan_queue.id;
+
+
+--
 -- Name: translation_prompt_profile_versions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1643,6 +1964,13 @@ ALTER TABLE ONLY public.assembled_lemmas ALTER COLUMN id SET DEFAULT nextval('pu
 
 
 --
+-- Name: billerbeck_german_pages id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billerbeck_german_pages ALTER COLUMN id SET DEFAULT nextval('public.billerbeck_german_pages_id_seq'::regclass);
+
+
+--
 -- Name: brady_entity_tags id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1689,6 +2017,13 @@ ALTER TABLE ONLY public.images ALTER COLUMN id SET DEFAULT nextval('public.image
 --
 
 ALTER TABLE ONLY public.lemma_apparatus_entries ALTER COLUMN id SET DEFAULT nextval('public.lemma_apparatus_entries_id_seq'::regclass);
+
+
+--
+-- Name: lemma_billerbeck_german_refs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_billerbeck_german_refs ALTER COLUMN id SET DEFAULT nextval('public.lemma_billerbeck_german_refs_id_seq'::regclass);
 
 
 --
@@ -1797,6 +2132,41 @@ ALTER TABLE ONLY public.text_pair_differences ALTER COLUMN id SET DEFAULT nextva
 
 
 --
+-- Name: translation_guidance_backlog_items id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_backlog_items ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_backlog_items_id_seq'::regclass);
+
+
+--
+-- Name: translation_guidance_matches id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_matches ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_matches_id_seq'::regclass);
+
+
+--
+-- Name: translation_guidance_rule_revisions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_rule_revisions ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_rule_revisions_id_seq'::regclass);
+
+
+--
+-- Name: translation_guidance_rules id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_rules ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_rules_id_seq'::regclass);
+
+
+--
+-- Name: translation_guidance_scan_queue id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_queue ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_scan_queue_id_seq'::regclass);
+
+
+--
 -- Name: translation_prompt_profile_versions id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1852,6 +2222,14 @@ ALTER TABLE ONLY public.assembled_lemmas
 
 ALTER TABLE ONLY public.assembled_lemmas
     ADD CONSTRAINT assembled_lemmas_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: billerbeck_german_pages billerbeck_german_pages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billerbeck_german_pages
+    ADD CONSTRAINT billerbeck_german_pages_pkey PRIMARY KEY (id);
 
 
 --
@@ -1940,6 +2318,14 @@ ALTER TABLE ONLY public.images
 
 ALTER TABLE ONLY public.lemma_apparatus_entries
     ADD CONSTRAINT lemma_apparatus_entries_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: lemma_billerbeck_german_refs lemma_billerbeck_german_refs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_billerbeck_german_refs
+    ADD CONSTRAINT lemma_billerbeck_german_refs_pkey PRIMARY KEY (id);
 
 
 --
@@ -2167,6 +2553,46 @@ ALTER TABLE ONLY public.text_pair_differences
 
 
 --
+-- Name: translation_guidance_backlog_items translation_guidance_backlog_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_backlog_items
+    ADD CONSTRAINT translation_guidance_backlog_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_matches translation_guidance_matches_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_matches
+    ADD CONSTRAINT translation_guidance_matches_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_rule_revisions translation_guidance_rule_revisions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_rule_revisions
+    ADD CONSTRAINT translation_guidance_rule_revisions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_rules translation_guidance_rules_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_rules
+    ADD CONSTRAINT translation_guidance_rules_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_scan_queue translation_guidance_scan_queue_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_queue
+    ADD CONSTRAINT translation_guidance_scan_queue_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: translation_prompt_profile_versions translation_prompt_profile_versions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2227,6 +2653,20 @@ ALTER TABLE ONLY public.translation_runs
 --
 
 CREATE UNIQUE INDEX assembled_lemmas_billerbeck_version_idx ON public.assembled_lemmas USING btree (billerbeck_id, version) WHERE (billerbeck_id IS NOT NULL);
+
+
+--
+-- Name: billerbeck_german_pages_image_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX billerbeck_german_pages_image_id_idx ON public.billerbeck_german_pages USING btree (image_id);
+
+
+--
+-- Name: billerbeck_german_pages_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX billerbeck_german_pages_status_idx ON public.billerbeck_german_pages USING btree (status, processed_at);
 
 
 --
@@ -2482,6 +2922,20 @@ CREATE INDEX lemma_apparatus_entries_source_idx ON public.lemma_apparatus_entrie
 
 
 --
+-- Name: lemma_billerbeck_german_refs_lemma_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX lemma_billerbeck_german_refs_lemma_id_idx ON public.lemma_billerbeck_german_refs USING btree (lemma_id);
+
+
+--
+-- Name: lemma_billerbeck_german_refs_translation_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_billerbeck_german_refs_translation_status_idx ON public.lemma_billerbeck_german_refs USING btree (translation_status, updated_at);
+
+
+--
 -- Name: lemma_canonical_variants_active_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2650,6 +3104,90 @@ CREATE UNIQUE INDEX text_pair_differences_pair_unique_idx ON public.text_pair_di
 
 
 --
+-- Name: translation_guidance_backlog_items_active_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_guidance_backlog_items_active_idx ON public.translation_guidance_backlog_items USING btree (rule_revision_id, lemma_id, source_text_version_id, backlog_kind, COALESCE(translation_variant_kind, ''::text), COALESCE(translation_variant_id, ''::text)) WHERE (status = ANY (ARRAY['pending'::text, 'in_progress'::text]));
+
+
+--
+-- Name: translation_guidance_backlog_items_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_backlog_items_status_idx ON public.translation_guidance_backlog_items USING btree (status, priority, created_at);
+
+
+--
+-- Name: translation_guidance_matches_lemma_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_matches_lemma_status_idx ON public.translation_guidance_matches USING btree (lemma_id, match_status, updated_at);
+
+
+--
+-- Name: translation_guidance_matches_unique_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_guidance_matches_unique_idx ON public.translation_guidance_matches USING btree (rule_revision_id, lemma_id, source_text_version_id, detector_kind);
+
+
+--
+-- Name: translation_guidance_rule_revisions_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_rule_revisions_created_idx ON public.translation_guidance_rule_revisions USING btree (created_at DESC, rule_id);
+
+
+--
+-- Name: translation_guidance_rule_revisions_rule_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_guidance_rule_revisions_rule_revision_idx ON public.translation_guidance_rule_revisions USING btree (rule_id, revision_number);
+
+
+--
+-- Name: translation_guidance_rules_kind_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_rules_kind_status_idx ON public.translation_guidance_rules USING btree (kind, status, updated_at);
+
+
+--
+-- Name: translation_guidance_rules_normalized_label_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_rules_normalized_label_idx ON public.translation_guidance_rules USING btree (normalized_label);
+
+
+--
+-- Name: translation_guidance_rules_rule_code_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_guidance_rules_rule_code_idx ON public.translation_guidance_rules USING btree (rule_code) WHERE (rule_code IS NOT NULL);
+
+
+--
+-- Name: translation_guidance_rules_rule_key_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_guidance_rules_rule_key_idx ON public.translation_guidance_rules USING btree (rule_key);
+
+
+--
+-- Name: translation_guidance_scan_queue_active_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_guidance_scan_queue_active_idx ON public.translation_guidance_scan_queue USING btree (rule_revision_id, lemma_id, source_text_version_id) WHERE (status = ANY (ARRAY['pending'::text, 'running'::text]));
+
+
+--
+-- Name: translation_guidance_scan_queue_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_scan_queue_status_idx ON public.translation_guidance_scan_queue USING btree (status, priority, created_at);
+
+
+--
 -- Name: translation_prompt_profile_versions_active_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2704,6 +3242,14 @@ CREATE UNIQUE INDEX translation_runs_request_run_idx ON public.translation_runs 
 
 ALTER TABLE ONLY public.assembled_lemmas
     ADD CONSTRAINT assembled_lemmas_ocr_generation_id_fkey FOREIGN KEY (ocr_generation_id) REFERENCES public.ocr_generations(id) ON DELETE SET NULL;
+
+
+--
+-- Name: billerbeck_german_pages billerbeck_german_pages_image_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billerbeck_german_pages
+    ADD CONSTRAINT billerbeck_german_pages_image_id_fkey FOREIGN KEY (image_id) REFERENCES public.images(id) ON DELETE CASCADE;
 
 
 --
@@ -2792,6 +3338,14 @@ ALTER TABLE ONLY public.lemma_apparatus_entries
 
 ALTER TABLE ONLY public.lemma_apparatus_entries
     ADD CONSTRAINT lemma_apparatus_entries_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: lemma_billerbeck_german_refs lemma_billerbeck_german_refs_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_billerbeck_german_refs
+    ADD CONSTRAINT lemma_billerbeck_german_refs_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
 
 
 --
@@ -3011,6 +3565,110 @@ ALTER TABLE ONLY public.text_pair_differences
 
 
 --
+-- Name: translation_guidance_backlog_items translation_guidance_backlog_items_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_backlog_items
+    ADD CONSTRAINT translation_guidance_backlog_items_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_backlog_items translation_guidance_backlog_items_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_backlog_items
+    ADD CONSTRAINT translation_guidance_backlog_items_rule_id_fkey FOREIGN KEY (rule_id) REFERENCES public.translation_guidance_rules(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_backlog_items translation_guidance_backlog_items_rule_revision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_backlog_items
+    ADD CONSTRAINT translation_guidance_backlog_items_rule_revision_id_fkey FOREIGN KEY (rule_revision_id) REFERENCES public.translation_guidance_rule_revisions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_backlog_items translation_guidance_backlog_items_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_backlog_items
+    ADD CONSTRAINT translation_guidance_backlog_items_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_matches translation_guidance_matches_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_matches
+    ADD CONSTRAINT translation_guidance_matches_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_matches translation_guidance_matches_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_matches
+    ADD CONSTRAINT translation_guidance_matches_rule_id_fkey FOREIGN KEY (rule_id) REFERENCES public.translation_guidance_rules(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_matches translation_guidance_matches_rule_revision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_matches
+    ADD CONSTRAINT translation_guidance_matches_rule_revision_id_fkey FOREIGN KEY (rule_revision_id) REFERENCES public.translation_guidance_rule_revisions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_matches translation_guidance_matches_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_matches
+    ADD CONSTRAINT translation_guidance_matches_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_rule_revisions translation_guidance_rule_revisions_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_rule_revisions
+    ADD CONSTRAINT translation_guidance_rule_revisions_rule_id_fkey FOREIGN KEY (rule_id) REFERENCES public.translation_guidance_rules(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_scan_queue translation_guidance_scan_queue_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_queue
+    ADD CONSTRAINT translation_guidance_scan_queue_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_scan_queue translation_guidance_scan_queue_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_queue
+    ADD CONSTRAINT translation_guidance_scan_queue_rule_id_fkey FOREIGN KEY (rule_id) REFERENCES public.translation_guidance_rules(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_scan_queue translation_guidance_scan_queue_rule_revision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_queue
+    ADD CONSTRAINT translation_guidance_scan_queue_rule_revision_id_fkey FOREIGN KEY (rule_revision_id) REFERENCES public.translation_guidance_rule_revisions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_scan_queue translation_guidance_scan_queue_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_queue
+    ADD CONSTRAINT translation_guidance_scan_queue_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
 -- Name: translation_prompt_profile_versions translation_prompt_profile_versions_profile_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3099,119 +3757,8 @@ ALTER TABLE ONLY public.translation_runs
 
 
 --
--- Name: billerbeck_german_pages; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.billerbeck_german_pages (
-    id integer NOT NULL,
-    image_id integer NOT NULL,
-    image_filename text NOT NULL,
-    volume_number integer,
-    volume_label text,
-    page_number integer,
-    status text NOT NULL,
-    is_german boolean,
-    has_headword_entries boolean,
-    headword_hint_json jsonb NOT NULL,
-    ocr_payload jsonb NOT NULL,
-    ocr_notes text,
-    ocr_model text,
-    ocr_tokens integer NOT NULL,
-    processed_at timestamp with time zone,
-    created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL
-);
-
-
---
--- Name: lemma_billerbeck_german_refs; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.lemma_billerbeck_german_refs (
-    id integer NOT NULL,
-    lemma_id integer NOT NULL,
-    lemma_headword text,
-    billerbeck_id text,
-    german_text text NOT NULL,
-    german_hash text NOT NULL,
-    english_translation text,
-    source_page_ids jsonb NOT NULL,
-    source_image_ids jsonb NOT NULL,
-    source_image_filenames jsonb NOT NULL,
-    source_page_count integer NOT NULL,
-    ocr_confidence text,
-    translation_status text NOT NULL,
-    translation_model text,
-    translation_tokens integer NOT NULL,
-    translated_at timestamp with time zone,
-    created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    notes text
-);
-
-
---
--- Name: billerbeck_german_pages billerbeck_german_pages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.billerbeck_german_pages
-    ADD CONSTRAINT billerbeck_german_pages_pkey PRIMARY KEY (id);
-
-
---
--- Name: lemma_billerbeck_german_refs lemma_billerbeck_german_refs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_billerbeck_german_refs
-    ADD CONSTRAINT lemma_billerbeck_german_refs_pkey PRIMARY KEY (id);
-
-
---
--- Name: billerbeck_german_pages_image_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX billerbeck_german_pages_image_id_idx ON public.billerbeck_german_pages USING btree (image_id);
-
-
---
--- Name: billerbeck_german_pages_status_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX billerbeck_german_pages_status_idx ON public.billerbeck_german_pages USING btree (status, processed_at);
-
-
---
--- Name: lemma_billerbeck_german_refs_lemma_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX lemma_billerbeck_german_refs_lemma_id_idx ON public.lemma_billerbeck_german_refs USING btree (lemma_id);
-
-
---
--- Name: lemma_billerbeck_german_refs_translation_status_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX lemma_billerbeck_german_refs_translation_status_idx ON public.lemma_billerbeck_german_refs USING btree (translation_status, updated_at);
-
-
---
--- Name: billerbeck_german_pages billerbeck_german_pages_image_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.billerbeck_german_pages
-    ADD CONSTRAINT billerbeck_german_pages_image_id_fkey FOREIGN KEY (image_id) REFERENCES public.images(id) ON DELETE CASCADE;
-
-
---
--- Name: lemma_billerbeck_german_refs lemma_billerbeck_german_refs_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_billerbeck_german_refs
-    ADD CONSTRAINT lemma_billerbeck_german_refs_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
-
-
---
 -- PostgreSQL database dump complete
 --
 
-\unrestrict SdFo76Uxtcc0jSwycD4vtxTWj6bZjkgvGeNTiSnsNQT8cTH9yS6hQYbUQJSlaID
+\unrestrict HleLC5VKVITZLE5miiTGvwvNy4jPl4KPwkO3o2IPqeFvO1nfryFqJw3vrS599Ua
+

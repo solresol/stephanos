@@ -143,6 +143,8 @@ def significant_tokens(text: str) -> set[str]:
 
 
 def should_escalate_formula(rule_label: str, source_text: str) -> bool:
+    if re.search(r"\bX\b|\bY\b|\[", rule_label or ""):
+        return True
     rule_tokens = significant_tokens(rule_label)
     source_tokens = significant_tokens(source_text)
     return bool(rule_tokens and source_tokens and (rule_tokens & source_tokens))
@@ -377,7 +379,10 @@ def main() -> None:
             result = find_deterministic_match(source_text, rule_label)
             if (
                 rule_kind == "formula"
-                and result["match_status"] == "not_matched"
+                and (
+                    result["match_status"] == "not_matched"
+                    or re.search(r"\bX\b|\bY\b|\[", rule_label or "")
+                )
                 and formula_ai_used < args.formula_ai_limit
                 and should_escalate_formula(rule_label, source_text)
             ):
