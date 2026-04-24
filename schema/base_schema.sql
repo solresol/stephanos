@@ -2,10 +2,10 @@
 -- PostgreSQL database dump
 --
 
-\restrict EzdjPvp1XRoyZp5E2g5PDbFQXDhrpldUR5NDw3cg4CeG8sWa8EVQ58vXpJ4bCz2
+\restrict 4gxbFbaKUG4vV0G1mjVfFNgnUsomS4fR8qFUd0kDMOkmGagLyDrqCYezhQkORi8
 
--- Dumped from database version 16.11 (Ubuntu 16.11-0ubuntu0.24.04.1)
--- Dumped by pg_dump version 16.11 (Ubuntu 16.11-0ubuntu0.24.04.1)
+-- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
+-- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -69,7 +69,6 @@ CREATE TABLE public.assembled_lemmas (
     wikidata_place_label text,
     wikidata_place_confidence text,
     wikidata_place_linked_at timestamp with time zone,
-    wikidata_place_linked_by text,
     latitude double precision,
     longitude double precision,
     pleiades_id text,
@@ -82,6 +81,9 @@ CREATE TABLE public.assembled_lemmas (
     quarantined boolean DEFAULT false NOT NULL,
     quarantine_reason text,
     quarantined_at timestamp with time zone,
+    wikidata_place_linked_by text,
+    place_clusters_analyzed boolean DEFAULT false,
+    place_clusters_analyzed_at timestamp with time zone,
     CONSTRAINT assembled_lemmas_wikidata_place_confidence_check CHECK ((wikidata_place_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text]))),
     CONSTRAINT check_review_status CHECK ((review_status = ANY (ARRAY['not_reviewed'::text, 'reviewed_ok'::text, 'reviewed_corrections'::text])))
 );
@@ -93,6 +95,10 @@ CREATE TABLE public.assembled_lemmas (
 
 COMMENT ON COLUMN public.assembled_lemmas.source_image_ids IS 'DEPRECATED: Use lemma_images junction table instead. Will be removed in future migration.';
 
+
+--
+-- Name: COLUMN assembled_lemmas.corrected_greek_scan; Type: COMMENT; Schema: public; Owner: -
+--
 
 COMMENT ON COLUMN public.assembled_lemmas.corrected_greek_scan IS 'Human-corrected Greek text from review system, overrides OCR greek_text';
 
@@ -174,6 +180,103 @@ ALTER SEQUENCE public.assembled_lemmas_id_seq OWNED BY public.assembled_lemmas.i
 
 
 --
+-- Name: billerbeck_german_pages; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.billerbeck_german_pages (
+    id integer NOT NULL,
+    image_id integer NOT NULL,
+    image_filename text NOT NULL,
+    volume_number integer,
+    volume_label text,
+    page_number integer,
+    status text NOT NULL,
+    is_german boolean,
+    has_headword_entries boolean,
+    headword_hint_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    ocr_payload jsonb DEFAULT '{}'::jsonb NOT NULL,
+    ocr_notes text,
+    ocr_model text,
+    ocr_tokens integer DEFAULT 0 NOT NULL,
+    processed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: billerbeck_german_pages_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.billerbeck_german_pages_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: billerbeck_german_pages_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.billerbeck_german_pages_id_seq OWNED BY public.billerbeck_german_pages.id;
+
+
+--
+-- Name: brady_entity_tags; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.brady_entity_tags (
+    id integer NOT NULL,
+    row_fingerprint text NOT NULL,
+    source_serial text,
+    billerbeck_id text NOT NULL,
+    meineke_id text,
+    headword text,
+    word text DEFAULT ''::text NOT NULL,
+    title text,
+    tt_tag text,
+    word_in_context text,
+    entity_type text,
+    wikidata_qid text,
+    pleiades_id text,
+    latitude double precision,
+    longitude double precision,
+    latlong text,
+    edate text,
+    is_headword boolean DEFAULT false NOT NULL,
+    authority_kind text,
+    topostext_id text,
+    re_identifier text,
+    placeholder_status text,
+    source_file text,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: brady_entity_tags_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.brady_entity_tags_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: brady_entity_tags_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.brady_entity_tags_id_seq OWNED BY public.brady_entity_tags.id;
+
+
+--
 -- Name: canonical_action_import_state; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -182,6 +285,258 @@ CREATE TABLE public.canonical_action_import_state (
     last_action_id bigint DEFAULT 0 NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
+
+
+--
+-- Name: place_clusters; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.place_clusters (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    cluster_index integer NOT NULL,
+    display_label text NOT NULL,
+    inferred_canonical_name text,
+    place_type text,
+    region text,
+    explicit_name_present boolean DEFAULT true NOT NULL,
+    extraction_confidence text,
+    extraction_notes text,
+    preferred_external_id_type text,
+    preferred_external_id_value text,
+    wikidata_qid text,
+    wikidata_label text,
+    wikidata_description text,
+    wikidata_confidence text,
+    topostext_id text,
+    pleiades_id text,
+    resolution_status text,
+    human_display_label text,
+    human_inferred_canonical_name text,
+    human_place_type text,
+    human_region text,
+    human_explicit_name_present boolean,
+    human_preferred_external_id_type text,
+    human_preferred_external_id_value text,
+    human_wikidata_qid text,
+    human_topostext_id text,
+    human_pleiades_id text,
+    human_resolution_status text,
+    human_resolution_notes text,
+    human_resolved_by text,
+    human_resolved_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT place_clusters_human_resolution_status_check CHECK (((human_resolution_status IS NULL) OR (human_resolution_status = ANY (ARRAY['approved'::text, 'corrected'::text, 'not_alignable'::text, 'removed'::text, 'added'::text])))),
+    CONSTRAINT place_clusters_wikidata_confidence_check CHECK (((wikidata_confidence IS NULL) OR (wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text]))))
+);
+
+
+--
+-- Name: TABLE place_clusters; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.place_clusters IS 'Distinct same-named places discussed within a single Stephanos lemma, with machine extraction plus human review overrides.';
+
+
+--
+-- Name: effective_place_clusters; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.effective_place_clusters AS
+ SELECT id,
+    lemma_id,
+    cluster_index,
+    display_label,
+    inferred_canonical_name,
+    place_type,
+    region,
+    explicit_name_present,
+    extraction_confidence,
+    extraction_notes,
+    preferred_external_id_type,
+    preferred_external_id_value,
+    wikidata_qid,
+    wikidata_label,
+    wikidata_description,
+    wikidata_confidence,
+    topostext_id,
+    pleiades_id,
+    resolution_status,
+    human_display_label,
+    human_inferred_canonical_name,
+    human_place_type,
+    human_region,
+    human_explicit_name_present,
+    human_preferred_external_id_type,
+    human_preferred_external_id_value,
+    human_wikidata_qid,
+    human_topostext_id,
+    human_pleiades_id,
+    human_resolution_status,
+    human_resolution_notes,
+    human_resolved_by,
+    human_resolved_at,
+    created_at,
+    updated_at,
+    COALESCE(NULLIF(btrim(human_display_label), ''::text), NULLIF(btrim(display_label), ''::text), concat(COALESCE(NULLIF(btrim(inferred_canonical_name), ''::text), 'place'::text), ' #', (cluster_index)::text)) AS effective_display_label,
+    COALESCE(NULLIF(btrim(human_inferred_canonical_name), ''::text), NULLIF(btrim(inferred_canonical_name), ''::text)) AS effective_canonical_name,
+    COALESCE(NULLIF(btrim(human_place_type), ''::text), NULLIF(btrim(place_type), ''::text)) AS effective_place_type,
+    COALESCE(NULLIF(btrim(human_region), ''::text), NULLIF(btrim(region), ''::text)) AS effective_region,
+    COALESCE(human_explicit_name_present, explicit_name_present) AS effective_explicit_name_present,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_type), ''::text),
+            CASE
+                WHEN (NULLIF(btrim(human_topostext_id), ''::text) IS NOT NULL) THEN 'topostext'::text
+                WHEN (NULLIF(btrim(human_wikidata_qid), ''::text) IS NOT NULL) THEN 'wikidata'::text
+                WHEN (NULLIF(btrim(human_pleiades_id), ''::text) IS NOT NULL) THEN 'pleiades'::text
+                ELSE NULL::text
+            END)
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_type), ''::text), NULLIF(btrim(preferred_external_id_type), ''::text),
+            CASE
+                WHEN (NULLIF(btrim(human_topostext_id), ''::text) IS NOT NULL) THEN 'topostext'::text
+                WHEN (NULLIF(btrim(human_wikidata_qid), ''::text) IS NOT NULL) THEN 'wikidata'::text
+                WHEN (NULLIF(btrim(human_pleiades_id), ''::text) IS NOT NULL) THEN 'pleiades'::text
+                WHEN (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) THEN 'topostext'::text
+                WHEN (NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) THEN 'wikidata'::text
+                WHEN (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL) THEN 'pleiades'::text
+                ELSE NULL::text
+            END)
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN 'none'::text
+            ELSE COALESCE(NULLIF(btrim(preferred_external_id_type), ''::text),
+            CASE
+                WHEN (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) THEN 'topostext'::text
+                WHEN (NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) THEN 'wikidata'::text
+                WHEN (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL) THEN 'pleiades'::text
+                ELSE NULL::text
+            END)
+        END AS effective_preferred_external_id_type,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_value), ''::text), NULLIF(btrim(human_topostext_id), ''::text), NULLIF(btrim(human_wikidata_qid), ''::text), NULLIF(btrim(human_pleiades_id), ''::text))
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_value), ''::text), NULLIF(btrim(preferred_external_id_value), ''::text), NULLIF(btrim(human_topostext_id), ''::text), NULLIF(btrim(human_wikidata_qid), ''::text), NULLIF(btrim(human_pleiades_id), ''::text), NULLIF(btrim(topostext_id), ''::text), NULLIF(btrim(wikidata_qid), ''::text), NULLIF(btrim(pleiades_id), ''::text))
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
+            ELSE COALESCE(NULLIF(btrim(preferred_external_id_value), ''::text), NULLIF(btrim(topostext_id), ''::text), NULLIF(btrim(wikidata_qid), ''::text), NULLIF(btrim(pleiades_id), ''::text))
+        END AS effective_preferred_external_id_value,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(human_wikidata_qid), ''::text)
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_wikidata_qid), ''::text), NULLIF(btrim(wikidata_qid), ''::text))
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
+            ELSE NULLIF(btrim(wikidata_qid), ''::text)
+        END AS effective_wikidata_qid,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(human_topostext_id), ''::text)
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_topostext_id), ''::text), NULLIF(btrim(topostext_id), ''::text))
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
+            ELSE NULLIF(btrim(topostext_id), ''::text)
+        END AS effective_topostext_id,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(human_pleiades_id), ''::text)
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_pleiades_id), ''::text), NULLIF(btrim(pleiades_id), ''::text))
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
+            ELSE NULLIF(btrim(pleiades_id), ''::text)
+        END AS effective_pleiades_id,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'approved'::text, 'added'::text, 'not_alignable'::text, 'removed'::text])) THEN human_resolution_status
+            WHEN (NULLIF(btrim(resolution_status), ''::text) IS NOT NULL) THEN resolution_status
+            WHEN ((NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL)) THEN 'candidate'::text
+            ELSE 'unresolved'::text
+        END AS effective_resolution_status,
+        CASE
+            WHEN (NULLIF(btrim(human_resolution_status), ''::text) IS NOT NULL) THEN 'human'::text
+            WHEN ((NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL)) THEN 'machine'::text
+            ELSE ''::text
+        END AS effective_resolution_source
+   FROM public.place_clusters pc
+  WHERE (COALESCE(human_resolution_status, ''::text) <> 'removed'::text);
+
+
+--
+-- Name: proper_nouns; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.proper_nouns (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    proper_noun text NOT NULL,
+    lemma_form text NOT NULL,
+    english_translation text,
+    created_at timestamp with time zone DEFAULT now(),
+    noun_type text,
+    role text DEFAULT 'entity'::text NOT NULL,
+    citation text,
+    work_title text,
+    wikidata_qid text,
+    wikidata_confidence text,
+    wikidata_linked_at timestamp with time zone,
+    wikidata_linked_by text,
+    human_wikidata_qid text,
+    human_resolution_status text,
+    human_resolution_notes text,
+    human_resolved_by text,
+    human_resolved_at timestamp with time zone,
+    CONSTRAINT proper_nouns_human_resolution_status_check CHECK (((human_resolution_status IS NULL) OR (human_resolution_status = ANY (ARRAY['approved'::text, 'corrected'::text, 'not_alignable'::text, 'removed'::text, 'added'::text])))),
+    CONSTRAINT proper_nouns_role_check CHECK ((role = ANY (ARRAY['entity'::text, 'source'::text]))),
+    CONSTRAINT proper_nouns_wikidata_confidence_check CHECK ((wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text])))
+);
+
+
+--
+-- Name: effective_proper_nouns; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.effective_proper_nouns AS
+ SELECT id,
+    lemma_id,
+    proper_noun,
+    lemma_form,
+    english_translation,
+    created_at,
+    noun_type,
+    role,
+    citation,
+    work_title,
+    wikidata_qid,
+    wikidata_confidence,
+    wikidata_linked_at,
+    wikidata_linked_by,
+    human_wikidata_qid,
+    human_resolution_status,
+    human_resolution_notes,
+    human_resolved_by,
+    human_resolved_at,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(human_wikidata_qid), ''::text)
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_wikidata_qid), ''::text), NULLIF(btrim(wikidata_qid), ''::text))
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
+            ELSE NULLIF(btrim(wikidata_qid), ''::text)
+        END AS effective_wikidata_qid,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'approved'::text, 'added'::text])) THEN 'human'::text
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN 'not_alignable'::text
+            WHEN (NULLIF(btrim(wikidata_confidence), ''::text) IS NOT NULL) THEN wikidata_confidence
+            WHEN (NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) THEN 'linked'::text
+            ELSE NULL::text
+        END AS effective_wikidata_confidence,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'approved'::text, 'added'::text, 'not_alignable'::text])) THEN human_resolution_status
+            WHEN (NULLIF(btrim(wikidata_confidence), ''::text) IS NOT NULL) THEN wikidata_confidence
+            WHEN (NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) THEN 'linked'::text
+            ELSE NULL::text
+        END AS effective_resolution_status,
+        CASE
+            WHEN (NULLIF(btrim(human_resolution_status), ''::text) IS NOT NULL) THEN 'human'::text
+            WHEN ((NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(wikidata_confidence), ''::text) IS NOT NULL)) THEN 'machine'::text
+            ELSE NULL::text
+        END AS effective_resolution_source,
+    COALESCE(NULLIF(btrim(human_resolution_notes), ''::text), NULL::text) AS effective_resolution_notes,
+    COALESCE(NULLIF(btrim(human_resolved_by), ''::text), NULLIF(btrim(wikidata_linked_by), ''::text)) AS effective_resolved_by,
+    COALESCE(human_resolved_at, wikidata_linked_at) AS effective_resolved_at,
+        CASE
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN false
+            ELSE true
+        END AS needs_alignment
+   FROM public.proper_nouns pn
+  WHERE (COALESCE(human_resolution_status, ''::text) <> 'removed'::text);
 
 
 --
@@ -426,6 +781,70 @@ ALTER SEQUENCE public.lemma_apparatus_entries_id_seq OWNED BY public.lemma_appar
 
 
 --
+-- Name: lemma_billerbeck_german_refs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_billerbeck_german_refs (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    lemma_headword text,
+    billerbeck_id text,
+    german_text text NOT NULL,
+    german_hash text NOT NULL,
+    english_translation text,
+    source_page_ids jsonb DEFAULT '[]'::jsonb NOT NULL,
+    source_image_ids jsonb DEFAULT '[]'::jsonb NOT NULL,
+    source_image_filenames jsonb DEFAULT '[]'::jsonb NOT NULL,
+    source_page_count integer DEFAULT 0 NOT NULL,
+    ocr_confidence text,
+    translation_status text DEFAULT 'pending'::text NOT NULL,
+    translation_model text,
+    translation_tokens integer DEFAULT 0 NOT NULL,
+    translated_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    notes text
+);
+
+
+--
+-- Name: lemma_billerbeck_german_refs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.lemma_billerbeck_german_refs_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: lemma_billerbeck_german_refs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.lemma_billerbeck_german_refs_id_seq OWNED BY public.lemma_billerbeck_german_refs.id;
+
+
+--
+-- Name: lemma_canonical_variants; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_canonical_variants (
+    lemma_id integer NOT NULL,
+    variant_kind text NOT NULL,
+    variant_id text NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    is_primary boolean DEFAULT false NOT NULL,
+    updated_by text,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT lemma_canonical_variants_check CHECK (((NOT is_primary) OR is_active)),
+    CONSTRAINT lemma_canonical_variants_variant_kind_check CHECK ((variant_kind = ANY (ARRAY['translation_run'::text, 'human_translation'::text, 'legacy_assembled'::text])))
+);
+
+
+--
 -- Name: lemma_commentary_entries; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -460,23 +879,6 @@ CREATE SEQUENCE public.lemma_commentary_entries_id_seq
 --
 
 ALTER SEQUENCE public.lemma_commentary_entries_id_seq OWNED BY public.lemma_commentary_entries.id;
-
-
---
--- Name: lemma_canonical_variants; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.lemma_canonical_variants (
-    lemma_id integer NOT NULL,
-    variant_kind text NOT NULL,
-    variant_id text NOT NULL,
-    is_active boolean DEFAULT true NOT NULL,
-    is_primary boolean DEFAULT false NOT NULL,
-    updated_by text,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT lemma_canonical_variants_check CHECK (((NOT is_primary) OR is_active)),
-    CONSTRAINT lemma_canonical_variants_variant_kind_check CHECK ((variant_kind = ANY (ARRAY['translation_run'::text, 'human_translation'::text, 'legacy_assembled'::text])))
-);
 
 
 --
@@ -539,6 +941,43 @@ CREATE TABLE public.lemma_images (
     image_id integer NOT NULL,
     "position" integer DEFAULT 0 NOT NULL
 );
+
+
+--
+-- Name: lemma_source_citation_mentions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_source_citation_mentions (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    unit_id integer NOT NULL,
+    raw_citation_text text DEFAULT ''::text NOT NULL,
+    extracted_confidence text,
+    extracted_by_model text,
+    extracted_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT lemma_source_citation_mentions_extracted_confidence_check CHECK (((extracted_confidence IS NULL) OR (extracted_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))))
+);
+
+
+--
+-- Name: lemma_source_citation_mentions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.lemma_source_citation_mentions_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: lemma_source_citation_mentions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.lemma_source_citation_mentions_id_seq OWNED BY public.lemma_source_citation_mentions.id;
 
 
 --
@@ -715,6 +1154,95 @@ ALTER SEQUENCE public.meineke_text_differences_id_seq OWNED BY public.meineke_te
 
 
 --
+-- Name: meineke_word_lemma_documents; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.meineke_word_lemma_documents (
+    id integer NOT NULL,
+    source_text_version_id integer NOT NULL,
+    source_lemma_id integer NOT NULL,
+    source_text_hash text NOT NULL,
+    passage_text text NOT NULL,
+    token_count integer DEFAULT 0 NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    model text,
+    tokens_used integer DEFAULT 0 NOT NULL,
+    error_message text,
+    processed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT meineke_word_lemma_documents_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'processing'::text, 'completed'::text, 'skipped'::text, 'error'::text]))),
+    CONSTRAINT meineke_word_lemma_documents_token_count_check CHECK ((token_count >= 0)),
+    CONSTRAINT meineke_word_lemma_documents_tokens_used_check CHECK ((tokens_used >= 0))
+);
+
+
+--
+-- Name: meineke_word_lemma_documents_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.meineke_word_lemma_documents_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: meineke_word_lemma_documents_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.meineke_word_lemma_documents_id_seq OWNED BY public.meineke_word_lemma_documents.id;
+
+
+--
+-- Name: meineke_word_lemma_occurrences; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.meineke_word_lemma_occurrences (
+    id bigint NOT NULL,
+    document_id integer NOT NULL,
+    source_text_version_id integer NOT NULL,
+    source_lemma_id integer NOT NULL,
+    occurrence_index integer NOT NULL,
+    surface_form text NOT NULL,
+    normalized_word text NOT NULL,
+    mapped_lemma text NOT NULL,
+    normalized_lemma text NOT NULL,
+    char_start integer,
+    char_end integer,
+    left_context text,
+    right_context text,
+    confidence text,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT meineke_word_lemma_occurrences_confidence_check CHECK (((confidence IS NULL) OR (confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])))),
+    CONSTRAINT meineke_word_lemma_occurrences_occurrence_index_check CHECK ((occurrence_index > 0))
+);
+
+
+--
+-- Name: meineke_word_lemma_occurrences_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.meineke_word_lemma_occurrences_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: meineke_word_lemma_occurrences_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.meineke_word_lemma_occurrences_id_seq OWNED BY public.meineke_word_lemma_occurrences.id;
+
+
+--
 -- Name: ocr_generations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -781,6 +1309,123 @@ ALTER SEQUENCE public.pdf_files_id_seq OWNED BY public.pdf_files.id;
 
 
 --
+-- Name: place_cluster_candidates; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.place_cluster_candidates (
+    id integer NOT NULL,
+    place_cluster_id integer NOT NULL,
+    source_name text NOT NULL,
+    external_id text NOT NULL,
+    label text,
+    description text,
+    place_type text,
+    region text,
+    url text,
+    score double precision,
+    rank_order integer DEFAULT 0 NOT NULL,
+    metadata_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE place_cluster_candidates; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.place_cluster_candidates IS 'Ranked gazetteer candidates for a distinct place cluster.';
+
+
+--
+-- Name: place_cluster_candidates_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.place_cluster_candidates_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: place_cluster_candidates_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.place_cluster_candidates_id_seq OWNED BY public.place_cluster_candidates.id;
+
+
+--
+-- Name: place_cluster_mentions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.place_cluster_mentions (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    place_cluster_id integer,
+    text_form text NOT NULL,
+    normalized_form text,
+    mention_order integer DEFAULT 0 NOT NULL,
+    char_start integer,
+    char_end integer,
+    is_implicit boolean DEFAULT false NOT NULL,
+    extracted_place_type text,
+    extracted_region text,
+    evidence_text text,
+    machine_notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE place_cluster_mentions; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.place_cluster_mentions IS 'Surface or implicit mentions that support a place cluster within a lemma.';
+
+
+--
+-- Name: place_cluster_mentions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.place_cluster_mentions_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: place_cluster_mentions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.place_cluster_mentions_id_seq OWNED BY public.place_cluster_mentions.id;
+
+
+--
+-- Name: place_clusters_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.place_clusters_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: place_clusters_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.place_clusters_id_seq OWNED BY public.place_clusters.id;
+
+
+--
 -- Name: proper_noun_aliases; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -817,36 +1462,6 @@ ALTER SEQUENCE public.proper_noun_aliases_id_seq OWNED BY public.proper_noun_ali
 
 
 --
--- Name: proper_nouns; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.proper_nouns (
-    id integer NOT NULL,
-    lemma_id integer NOT NULL,
-    proper_noun text NOT NULL,
-    lemma_form text NOT NULL,
-    english_translation text,
-    created_at timestamp with time zone DEFAULT now(),
-    noun_type text,
-    role text DEFAULT 'entity'::text NOT NULL,
-    citation text,
-    work_title text,
-    wikidata_qid text,
-    wikidata_confidence text,
-    wikidata_linked_at timestamp with time zone,
-    wikidata_linked_by text,
-    human_wikidata_qid text,
-    human_resolution_status text,
-    human_resolution_notes text,
-    human_resolved_by text,
-    human_resolved_at timestamp with time zone,
-    CONSTRAINT proper_nouns_role_check CHECK ((role = ANY (ARRAY['entity'::text, 'source'::text]))),
-    CONSTRAINT proper_nouns_human_resolution_status_check CHECK ((human_resolution_status IS NULL) OR (human_resolution_status = ANY (ARRAY['approved'::text, 'corrected'::text, 'not_alignable'::text, 'removed'::text, 'added'::text]))),
-    CONSTRAINT proper_nouns_wikidata_confidence_check CHECK ((wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text])))
-);
-
-
---
 -- Name: proper_nouns_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -864,6 +1479,54 @@ CREATE SEQUENCE public.proper_nouns_id_seq
 --
 
 ALTER SEQUENCE public.proper_nouns_id_seq OWNED BY public.proper_nouns.id;
+
+
+--
+-- Name: source_citation_units; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.source_citation_units (
+    id integer NOT NULL,
+    unit_key text NOT NULL,
+    author_lemma_form text NOT NULL,
+    author_english text,
+    work_title text,
+    book_label text,
+    identifiers_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    raw_unit_text text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    author_wikidata_qid text,
+    author_wikidata_confidence text,
+    author_wikidata_linked_at timestamp with time zone,
+    author_wikidata_linked_by text,
+    work_wikidata_qid text,
+    work_wikidata_confidence text,
+    work_wikidata_linked_at timestamp with time zone,
+    work_wikidata_linked_by text,
+    CONSTRAINT source_citation_units_author_wikidata_confidence_check CHECK (((author_wikidata_confidence IS NULL) OR (author_wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text])))),
+    CONSTRAINT source_citation_units_work_wikidata_confidence_check CHECK (((work_wikidata_confidence IS NULL) OR (work_wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text]))))
+);
+
+
+--
+-- Name: source_citation_units_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.source_citation_units_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: source_citation_units_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.source_citation_units_id_seq OWNED BY public.source_citation_units.id;
 
 
 --
@@ -913,6 +1576,235 @@ ALTER SEQUENCE public.text_pair_differences_id_seq OWNED BY public.text_pair_dif
 
 
 --
+-- Name: translation_guidance_backlog_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_backlog_items (
+    id integer NOT NULL,
+    rule_id integer NOT NULL,
+    rule_revision_id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    source_text_version_id integer NOT NULL,
+    backlog_kind text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    translation_variant_kind text,
+    translation_variant_id text,
+    priority integer DEFAULT 100 NOT NULL,
+    created_by text,
+    assigned_to text,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    started_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT translation_guidance_backlog_items_kind_check CHECK ((backlog_kind = ANY (ARRAY['scan_rule'::text, 'rerun_translation'::text, 'review_translation'::text]))),
+    CONSTRAINT translation_guidance_backlog_items_priority_check CHECK ((priority >= 0)),
+    CONSTRAINT translation_guidance_backlog_items_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'in_progress'::text, 'completed'::text, 'dismissed'::text, 'cancelled'::text, 'failed'::text])))
+);
+
+
+--
+-- Name: translation_guidance_backlog_items_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_guidance_backlog_items_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_guidance_backlog_items_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_guidance_backlog_items_id_seq OWNED BY public.translation_guidance_backlog_items.id;
+
+
+--
+-- Name: translation_guidance_matches; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_matches (
+    id integer NOT NULL,
+    rule_id integer NOT NULL,
+    rule_revision_id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    source_text_version_id integer NOT NULL,
+    detector_kind text NOT NULL,
+    detector_version text,
+    match_status text NOT NULL,
+    occurrence_count integer DEFAULT 0 NOT NULL,
+    confidence text,
+    evidence_text text,
+    evidence_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    detected_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT translation_guidance_matches_confidence_check CHECK (((confidence IS NULL) OR (confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])))),
+    CONSTRAINT translation_guidance_matches_occurrence_count_check CHECK ((occurrence_count >= 0)),
+    CONSTRAINT translation_guidance_matches_status_check CHECK ((match_status = ANY (ARRAY['matched'::text, 'not_matched'::text, 'uncertain'::text, 'needs_review'::text, 'skipped'::text])))
+);
+
+
+--
+-- Name: translation_guidance_matches_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_guidance_matches_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_guidance_matches_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_guidance_matches_id_seq OWNED BY public.translation_guidance_matches.id;
+
+
+--
+-- Name: translation_guidance_rule_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_rule_revisions (
+    id integer NOT NULL,
+    rule_id integer NOT NULL,
+    revision_number integer NOT NULL,
+    action text NOT NULL,
+    changed_by text NOT NULL,
+    change_summary text,
+    source_context_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    snapshot_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT translation_guidance_rule_revisions_action_check CHECK ((action = ANY (ARRAY['create'::text, 'update'::text, 'retire'::text, 'reactivate'::text])))
+);
+
+
+--
+-- Name: translation_guidance_rule_revisions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_guidance_rule_revisions_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_guidance_rule_revisions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_guidance_rule_revisions_id_seq OWNED BY public.translation_guidance_rule_revisions.id;
+
+
+--
+-- Name: translation_guidance_rules; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_rules (
+    id integer NOT NULL,
+    rule_key text NOT NULL,
+    rule_code text,
+    kind text NOT NULL,
+    label text NOT NULL,
+    normalized_label text NOT NULL,
+    preferred_translation text,
+    word_class text,
+    status text DEFAULT 'in_progress'::text NOT NULL,
+    application_mode text NOT NULL,
+    citations_text text,
+    notes text,
+    source_workbook text,
+    source_sheet text,
+    source_row_number integer,
+    created_by text,
+    updated_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    retired_at timestamp with time zone,
+    CONSTRAINT translation_guidance_rules_application_mode_check CHECK ((application_mode = ANY (ARRAY['replace'::text, 'required'::text, 'advisory'::text]))),
+    CONSTRAINT translation_guidance_rules_kind_check CHECK ((kind = ANY (ARRAY['gloss'::text, 'formula'::text, 'proper_noun'::text]))),
+    CONSTRAINT translation_guidance_rules_status_check CHECK ((status = ANY (ARRAY['in_progress'::text, 'settled'::text, 'unsure'::text, 'retired'::text])))
+);
+
+
+--
+-- Name: translation_guidance_rules_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_guidance_rules_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_guidance_rules_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_guidance_rules_id_seq OWNED BY public.translation_guidance_rules.id;
+
+
+--
+-- Name: translation_guidance_scan_queue; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_scan_queue (
+    id integer NOT NULL,
+    rule_id integer NOT NULL,
+    rule_revision_id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    source_text_version_id integer NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    priority integer DEFAULT 100 NOT NULL,
+    detector_kind text,
+    attempts integer DEFAULT 0 NOT NULL,
+    requested_by text,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    started_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    error_message text,
+    CONSTRAINT translation_guidance_scan_queue_attempts_check CHECK ((attempts >= 0)),
+    CONSTRAINT translation_guidance_scan_queue_priority_check CHECK ((priority >= 0)),
+    CONSTRAINT translation_guidance_scan_queue_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])))
+);
+
+
+--
+-- Name: translation_guidance_scan_queue_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_guidance_scan_queue_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_guidance_scan_queue_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_guidance_scan_queue_id_seq OWNED BY public.translation_guidance_scan_queue.id;
+
+
+--
 -- Name: translation_prompt_profile_versions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -922,9 +1814,9 @@ CREATE TABLE public.translation_prompt_profile_versions (
     version integer NOT NULL,
     prompt_text text NOT NULL,
     notes text,
-    metadata_text text,
     active boolean DEFAULT true NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    metadata_text text
 );
 
 
@@ -1161,6 +2053,20 @@ ALTER TABLE ONLY public.assembled_lemmas ALTER COLUMN id SET DEFAULT nextval('pu
 
 
 --
+-- Name: billerbeck_german_pages id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billerbeck_german_pages ALTER COLUMN id SET DEFAULT nextval('public.billerbeck_german_pages_id_seq'::regclass);
+
+
+--
+-- Name: brady_entity_tags id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brady_entity_tags ALTER COLUMN id SET DEFAULT nextval('public.brady_entity_tags_id_seq'::regclass);
+
+
+--
 -- Name: epubs id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1203,10 +2109,24 @@ ALTER TABLE ONLY public.lemma_apparatus_entries ALTER COLUMN id SET DEFAULT next
 
 
 --
+-- Name: lemma_billerbeck_german_refs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_billerbeck_german_refs ALTER COLUMN id SET DEFAULT nextval('public.lemma_billerbeck_german_refs_id_seq'::regclass);
+
+
+--
 -- Name: lemma_commentary_entries id; Type: DEFAULT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.lemma_commentary_entries ALTER COLUMN id SET DEFAULT nextval('public.lemma_commentary_entries_id_seq'::regclass);
+
+
+--
+-- Name: lemma_source_citation_mentions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_source_citation_mentions ALTER COLUMN id SET DEFAULT nextval('public.lemma_source_citation_mentions_id_seq'::regclass);
 
 
 --
@@ -1238,6 +2158,20 @@ ALTER TABLE ONLY public.meineke_text_differences ALTER COLUMN id SET DEFAULT nex
 
 
 --
+-- Name: meineke_word_lemma_documents id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_documents ALTER COLUMN id SET DEFAULT nextval('public.meineke_word_lemma_documents_id_seq'::regclass);
+
+
+--
+-- Name: meineke_word_lemma_occurrences id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_occurrences ALTER COLUMN id SET DEFAULT nextval('public.meineke_word_lemma_occurrences_id_seq'::regclass);
+
+
+--
 -- Name: ocr_generations id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1249,6 +2183,27 @@ ALTER TABLE ONLY public.ocr_generations ALTER COLUMN id SET DEFAULT nextval('pub
 --
 
 ALTER TABLE ONLY public.pdf_files ALTER COLUMN id SET DEFAULT nextval('public.pdf_files_id_seq'::regclass);
+
+
+--
+-- Name: place_cluster_candidates id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_candidates ALTER COLUMN id SET DEFAULT nextval('public.place_cluster_candidates_id_seq'::regclass);
+
+
+--
+-- Name: place_cluster_mentions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_mentions ALTER COLUMN id SET DEFAULT nextval('public.place_cluster_mentions_id_seq'::regclass);
+
+
+--
+-- Name: place_clusters id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_clusters ALTER COLUMN id SET DEFAULT nextval('public.place_clusters_id_seq'::regclass);
 
 
 --
@@ -1266,10 +2221,52 @@ ALTER TABLE ONLY public.proper_nouns ALTER COLUMN id SET DEFAULT nextval('public
 
 
 --
+-- Name: source_citation_units id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_citation_units ALTER COLUMN id SET DEFAULT nextval('public.source_citation_units_id_seq'::regclass);
+
+
+--
 -- Name: text_pair_differences id; Type: DEFAULT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.text_pair_differences ALTER COLUMN id SET DEFAULT nextval('public.text_pair_differences_id_seq'::regclass);
+
+
+--
+-- Name: translation_guidance_backlog_items id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_backlog_items ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_backlog_items_id_seq'::regclass);
+
+
+--
+-- Name: translation_guidance_matches id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_matches ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_matches_id_seq'::regclass);
+
+
+--
+-- Name: translation_guidance_rule_revisions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_rule_revisions ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_rule_revisions_id_seq'::regclass);
+
+
+--
+-- Name: translation_guidance_rules id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_rules ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_rules_id_seq'::regclass);
+
+
+--
+-- Name: translation_guidance_scan_queue id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_queue ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_scan_queue_id_seq'::regclass);
 
 
 --
@@ -1328,6 +2325,22 @@ ALTER TABLE ONLY public.assembled_lemmas
 
 ALTER TABLE ONLY public.assembled_lemmas
     ADD CONSTRAINT assembled_lemmas_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: billerbeck_german_pages billerbeck_german_pages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billerbeck_german_pages
+    ADD CONSTRAINT billerbeck_german_pages_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: brady_entity_tags brady_entity_tags_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brady_entity_tags
+    ADD CONSTRAINT brady_entity_tags_pkey PRIMARY KEY (id);
 
 
 --
@@ -1411,11 +2424,11 @@ ALTER TABLE ONLY public.lemma_apparatus_entries
 
 
 --
--- Name: lemma_commentary_entries lemma_commentary_entries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: lemma_billerbeck_german_refs lemma_billerbeck_german_refs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.lemma_commentary_entries
-    ADD CONSTRAINT lemma_commentary_entries_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.lemma_billerbeck_german_refs
+    ADD CONSTRAINT lemma_billerbeck_german_refs_pkey PRIMARY KEY (id);
 
 
 --
@@ -1424,6 +2437,14 @@ ALTER TABLE ONLY public.lemma_commentary_entries
 
 ALTER TABLE ONLY public.lemma_canonical_variants
     ADD CONSTRAINT lemma_canonical_variants_pkey PRIMARY KEY (lemma_id, variant_kind, variant_id);
+
+
+--
+-- Name: lemma_commentary_entries lemma_commentary_entries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_commentary_entries
+    ADD CONSTRAINT lemma_commentary_entries_pkey PRIMARY KEY (id);
 
 
 --
@@ -1456,6 +2477,14 @@ ALTER TABLE ONLY public.lemma_headword_distances
 
 ALTER TABLE ONLY public.lemma_images
     ADD CONSTRAINT lemma_images_pkey PRIMARY KEY (lemma_id, image_id);
+
+
+--
+-- Name: lemma_source_citation_mentions lemma_source_citation_mentions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_source_citation_mentions
+    ADD CONSTRAINT lemma_source_citation_mentions_pkey PRIMARY KEY (id);
 
 
 --
@@ -1507,6 +2536,22 @@ ALTER TABLE ONLY public.meineke_text_differences
 
 
 --
+-- Name: meineke_word_lemma_documents meineke_word_lemma_documents_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_documents
+    ADD CONSTRAINT meineke_word_lemma_documents_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: meineke_word_lemma_occurrences meineke_word_lemma_occurrences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_occurrences
+    ADD CONSTRAINT meineke_word_lemma_occurrences_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: ocr_generations ocr_generations_name_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1539,6 +2584,46 @@ ALTER TABLE ONLY public.pdf_files
 
 
 --
+-- Name: place_cluster_candidates place_cluster_candidates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_candidates
+    ADD CONSTRAINT place_cluster_candidates_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: place_cluster_candidates place_cluster_candidates_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_candidates
+    ADD CONSTRAINT place_cluster_candidates_unique UNIQUE (place_cluster_id, source_name, external_id);
+
+
+--
+-- Name: place_cluster_mentions place_cluster_mentions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_mentions
+    ADD CONSTRAINT place_cluster_mentions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: place_clusters place_clusters_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_clusters
+    ADD CONSTRAINT place_clusters_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: place_clusters place_clusters_unique_per_lemma; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_clusters
+    ADD CONSTRAINT place_clusters_unique_per_lemma UNIQUE (lemma_id, cluster_index);
+
+
+--
 -- Name: proper_noun_aliases proper_noun_aliases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1563,11 +2648,67 @@ ALTER TABLE ONLY public.proper_nouns
 
 
 --
+-- Name: source_citation_units source_citation_units_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_citation_units
+    ADD CONSTRAINT source_citation_units_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: source_citation_units source_citation_units_unit_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_citation_units
+    ADD CONSTRAINT source_citation_units_unit_key_key UNIQUE (unit_key);
+
+
+--
 -- Name: text_pair_differences text_pair_differences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.text_pair_differences
     ADD CONSTRAINT text_pair_differences_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_backlog_items translation_guidance_backlog_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_backlog_items
+    ADD CONSTRAINT translation_guidance_backlog_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_matches translation_guidance_matches_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_matches
+    ADD CONSTRAINT translation_guidance_matches_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_rule_revisions translation_guidance_rule_revisions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_rule_revisions
+    ADD CONSTRAINT translation_guidance_rule_revisions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_rules translation_guidance_rules_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_rules
+    ADD CONSTRAINT translation_guidance_rules_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_scan_queue translation_guidance_scan_queue_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_queue
+    ADD CONSTRAINT translation_guidance_scan_queue_pkey PRIMARY KEY (id);
 
 
 --
@@ -1631,6 +2772,55 @@ ALTER TABLE ONLY public.translation_runs
 --
 
 CREATE UNIQUE INDEX assembled_lemmas_billerbeck_version_idx ON public.assembled_lemmas USING btree (billerbeck_id, version) WHERE (billerbeck_id IS NOT NULL);
+
+
+--
+-- Name: billerbeck_german_pages_image_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX billerbeck_german_pages_image_id_idx ON public.billerbeck_german_pages USING btree (image_id);
+
+
+--
+-- Name: billerbeck_german_pages_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX billerbeck_german_pages_status_idx ON public.billerbeck_german_pages USING btree (status, processed_at);
+
+
+--
+-- Name: brady_entity_tags_billerbeck_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX brady_entity_tags_billerbeck_idx ON public.brady_entity_tags USING btree (billerbeck_id);
+
+
+--
+-- Name: brady_entity_tags_re_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX brady_entity_tags_re_idx ON public.brady_entity_tags USING btree (re_identifier) WHERE (re_identifier IS NOT NULL);
+
+
+--
+-- Name: brady_entity_tags_row_fingerprint_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX brady_entity_tags_row_fingerprint_idx ON public.brady_entity_tags USING btree (row_fingerprint);
+
+
+--
+-- Name: brady_entity_tags_topostext_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX brady_entity_tags_topostext_idx ON public.brady_entity_tags USING btree (topostext_id) WHERE (topostext_id IS NOT NULL);
+
+
+--
+-- Name: brady_entity_tags_wikidata_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX brady_entity_tags_wikidata_idx ON public.brady_entity_tags USING btree (wikidata_qid) WHERE (wikidata_qid IS NOT NULL);
 
 
 --
@@ -1753,6 +2943,62 @@ CREATE INDEX idx_lemma_images_lemma_id ON public.lemma_images USING btree (lemma
 
 
 --
+-- Name: idx_place_cluster_candidates_cluster; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_cluster_candidates_cluster ON public.place_cluster_candidates USING btree (place_cluster_id, rank_order, id);
+
+
+--
+-- Name: idx_place_cluster_candidates_source; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_cluster_candidates_source ON public.place_cluster_candidates USING btree (source_name, external_id);
+
+
+--
+-- Name: idx_place_cluster_mentions_cluster; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_cluster_mentions_cluster ON public.place_cluster_mentions USING btree (place_cluster_id, mention_order, id);
+
+
+--
+-- Name: idx_place_cluster_mentions_lemma; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_cluster_mentions_lemma ON public.place_cluster_mentions USING btree (lemma_id, mention_order, id);
+
+
+--
+-- Name: idx_place_clusters_human_wikidata; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_clusters_human_wikidata ON public.place_clusters USING btree (human_wikidata_qid) WHERE (human_wikidata_qid IS NOT NULL);
+
+
+--
+-- Name: idx_place_clusters_lemma; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_clusters_lemma ON public.place_clusters USING btree (lemma_id, cluster_index);
+
+
+--
+-- Name: idx_place_clusters_resolution_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_clusters_resolution_status ON public.place_clusters USING btree (human_resolution_status) WHERE (human_resolution_status IS NOT NULL);
+
+
+--
+-- Name: idx_place_clusters_wikidata; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_clusters_wikidata ON public.place_clusters USING btree (wikidata_qid) WHERE (wikidata_qid IS NOT NULL);
+
+
+--
 -- Name: idx_proper_nouns_lemma_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1795,17 +3041,17 @@ CREATE INDEX lemma_apparatus_entries_source_idx ON public.lemma_apparatus_entrie
 
 
 --
--- Name: lemma_commentary_entries_lemma_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: lemma_billerbeck_german_refs_lemma_id_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX lemma_commentary_entries_lemma_idx ON public.lemma_commentary_entries USING btree (lemma_id);
+CREATE UNIQUE INDEX lemma_billerbeck_german_refs_lemma_id_idx ON public.lemma_billerbeck_german_refs USING btree (lemma_id);
 
 
 --
--- Name: lemma_commentary_entries_source_text_version_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: lemma_billerbeck_german_refs_translation_status_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX lemma_commentary_entries_source_text_version_idx ON public.lemma_commentary_entries USING btree (source_text_version_id) WHERE (source_text_version_id IS NOT NULL);
+CREATE INDEX lemma_billerbeck_german_refs_translation_status_idx ON public.lemma_billerbeck_german_refs USING btree (translation_status, updated_at);
 
 
 --
@@ -1820,6 +3066,20 @@ CREATE INDEX lemma_canonical_variants_active_idx ON public.lemma_canonical_varia
 --
 
 CREATE UNIQUE INDEX lemma_canonical_variants_primary_unique_idx ON public.lemma_canonical_variants USING btree (lemma_id) WHERE ((is_primary = true) AND (is_active = true));
+
+
+--
+-- Name: lemma_commentary_entries_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_commentary_entries_lemma_idx ON public.lemma_commentary_entries USING btree (lemma_id);
+
+
+--
+-- Name: lemma_commentary_entries_source_text_version_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_commentary_entries_source_text_version_idx ON public.lemma_commentary_entries USING btree (source_text_version_id) WHERE (source_text_version_id IS NOT NULL);
 
 
 --
@@ -1855,6 +3115,27 @@ CREATE INDEX lemma_headword_distances_a_idx ON public.lemma_headword_distances U
 --
 
 CREATE INDEX lemma_headword_distances_b_idx ON public.lemma_headword_distances USING btree (lemma_id_b, distance);
+
+
+--
+-- Name: lemma_source_citation_mentions_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_source_citation_mentions_lemma_idx ON public.lemma_source_citation_mentions USING btree (lemma_id);
+
+
+--
+-- Name: lemma_source_citation_mentions_unique_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX lemma_source_citation_mentions_unique_idx ON public.lemma_source_citation_mentions USING btree (lemma_id, unit_id, raw_citation_text);
+
+
+--
+-- Name: lemma_source_citation_mentions_unit_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_source_citation_mentions_unit_idx ON public.lemma_source_citation_mentions USING btree (unit_id);
 
 
 --
@@ -1914,10 +3195,171 @@ CREATE INDEX meineke_text_differences_status_idx ON public.meineke_text_differen
 
 
 --
+-- Name: meineke_word_lemma_documents_processed_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX meineke_word_lemma_documents_processed_idx ON public.meineke_word_lemma_documents USING btree (processed_at DESC NULLS LAST);
+
+
+--
+-- Name: meineke_word_lemma_documents_source_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX meineke_word_lemma_documents_source_lemma_idx ON public.meineke_word_lemma_documents USING btree (source_lemma_id);
+
+
+--
+-- Name: meineke_word_lemma_documents_source_text_version_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX meineke_word_lemma_documents_source_text_version_idx ON public.meineke_word_lemma_documents USING btree (source_text_version_id);
+
+
+--
+-- Name: meineke_word_lemma_documents_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX meineke_word_lemma_documents_status_idx ON public.meineke_word_lemma_documents USING btree (status, updated_at);
+
+
+--
+-- Name: meineke_word_lemma_occurrences_document_occurrence_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX meineke_word_lemma_occurrences_document_occurrence_idx ON public.meineke_word_lemma_occurrences USING btree (document_id, occurrence_index);
+
+
+--
+-- Name: meineke_word_lemma_occurrences_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX meineke_word_lemma_occurrences_lemma_idx ON public.meineke_word_lemma_occurrences USING btree (normalized_lemma, source_lemma_id);
+
+
+--
+-- Name: meineke_word_lemma_occurrences_source_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX meineke_word_lemma_occurrences_source_lemma_idx ON public.meineke_word_lemma_occurrences USING btree (source_lemma_id);
+
+
+--
+-- Name: meineke_word_lemma_occurrences_word_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX meineke_word_lemma_occurrences_word_idx ON public.meineke_word_lemma_occurrences USING btree (normalized_word, source_lemma_id);
+
+
+--
+-- Name: source_citation_units_author_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_citation_units_author_idx ON public.source_citation_units USING btree (author_lemma_form);
+
+
+--
+-- Name: source_citation_units_author_work_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_citation_units_author_work_idx ON public.source_citation_units USING btree (author_lemma_form, work_title);
+
+
+--
+-- Name: source_citation_units_work_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_citation_units_work_idx ON public.source_citation_units USING btree (work_title) WHERE (work_title IS NOT NULL);
+
+
+--
 -- Name: text_pair_differences_pair_unique_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX text_pair_differences_pair_unique_idx ON public.text_pair_differences USING btree (billerbeck_text_version_id, meineke_text_version_id);
+
+
+--
+-- Name: translation_guidance_backlog_items_active_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_guidance_backlog_items_active_idx ON public.translation_guidance_backlog_items USING btree (rule_revision_id, lemma_id, source_text_version_id, backlog_kind, COALESCE(translation_variant_kind, ''::text), COALESCE(translation_variant_id, ''::text)) WHERE (status = ANY (ARRAY['pending'::text, 'in_progress'::text]));
+
+
+--
+-- Name: translation_guidance_backlog_items_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_backlog_items_status_idx ON public.translation_guidance_backlog_items USING btree (status, priority, created_at);
+
+
+--
+-- Name: translation_guidance_matches_lemma_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_matches_lemma_status_idx ON public.translation_guidance_matches USING btree (lemma_id, match_status, updated_at);
+
+
+--
+-- Name: translation_guidance_matches_unique_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_guidance_matches_unique_idx ON public.translation_guidance_matches USING btree (rule_revision_id, lemma_id, source_text_version_id, detector_kind);
+
+
+--
+-- Name: translation_guidance_rule_revisions_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_rule_revisions_created_idx ON public.translation_guidance_rule_revisions USING btree (created_at DESC, rule_id);
+
+
+--
+-- Name: translation_guidance_rule_revisions_rule_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_guidance_rule_revisions_rule_revision_idx ON public.translation_guidance_rule_revisions USING btree (rule_id, revision_number);
+
+
+--
+-- Name: translation_guidance_rules_kind_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_rules_kind_status_idx ON public.translation_guidance_rules USING btree (kind, status, updated_at);
+
+
+--
+-- Name: translation_guidance_rules_normalized_label_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_rules_normalized_label_idx ON public.translation_guidance_rules USING btree (normalized_label);
+
+
+--
+-- Name: translation_guidance_rules_rule_code_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_guidance_rules_rule_code_idx ON public.translation_guidance_rules USING btree (rule_code) WHERE (rule_code IS NOT NULL);
+
+
+--
+-- Name: translation_guidance_rules_rule_key_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_guidance_rules_rule_key_idx ON public.translation_guidance_rules USING btree (rule_key);
+
+
+--
+-- Name: translation_guidance_scan_queue_active_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_guidance_scan_queue_active_idx ON public.translation_guidance_scan_queue USING btree (rule_revision_id, lemma_id, source_text_version_id) WHERE (status = ANY (ARRAY['pending'::text, 'running'::text]));
+
+
+--
+-- Name: translation_guidance_scan_queue_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_scan_queue_status_idx ON public.translation_guidance_scan_queue USING btree (status, priority, created_at);
 
 
 --
@@ -1975,6 +3417,14 @@ CREATE UNIQUE INDEX translation_runs_request_run_idx ON public.translation_runs 
 
 ALTER TABLE ONLY public.assembled_lemmas
     ADD CONSTRAINT assembled_lemmas_ocr_generation_id_fkey FOREIGN KEY (ocr_generation_id) REFERENCES public.ocr_generations(id) ON DELETE SET NULL;
+
+
+--
+-- Name: billerbeck_german_pages billerbeck_german_pages_image_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billerbeck_german_pages
+    ADD CONSTRAINT billerbeck_german_pages_image_id_fkey FOREIGN KEY (image_id) REFERENCES public.images(id) ON DELETE CASCADE;
 
 
 --
@@ -2066,6 +3516,22 @@ ALTER TABLE ONLY public.lemma_apparatus_entries
 
 
 --
+-- Name: lemma_billerbeck_german_refs lemma_billerbeck_german_refs_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_billerbeck_german_refs
+    ADD CONSTRAINT lemma_billerbeck_german_refs_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: lemma_canonical_variants lemma_canonical_variants_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_canonical_variants
+    ADD CONSTRAINT lemma_canonical_variants_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
 -- Name: lemma_commentary_entries lemma_commentary_entries_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2079,14 +3545,6 @@ ALTER TABLE ONLY public.lemma_commentary_entries
 
 ALTER TABLE ONLY public.lemma_commentary_entries
     ADD CONSTRAINT lemma_commentary_entries_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE SET NULL;
-
-
---
--- Name: lemma_canonical_variants lemma_canonical_variants_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_canonical_variants
-    ADD CONSTRAINT lemma_canonical_variants_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
 
 
 --
@@ -2154,6 +3612,22 @@ ALTER TABLE ONLY public.lemma_images
 
 
 --
+-- Name: lemma_source_citation_mentions lemma_source_citation_mentions_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_source_citation_mentions
+    ADD CONSTRAINT lemma_source_citation_mentions_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: lemma_source_citation_mentions lemma_source_citation_mentions_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_source_citation_mentions
+    ADD CONSTRAINT lemma_source_citation_mentions_unit_id_fkey FOREIGN KEY (unit_id) REFERENCES public.source_citation_units(id) ON DELETE CASCADE;
+
+
+--
 -- Name: lemma_source_lines lemma_source_lines_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2183,6 +3657,78 @@ ALTER TABLE ONLY public.lemma_source_text_versions
 
 ALTER TABLE ONLY public.meineke_text_differences
     ADD CONSTRAINT meineke_text_differences_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: meineke_word_lemma_documents meineke_word_lemma_documents_source_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_documents
+    ADD CONSTRAINT meineke_word_lemma_documents_source_lemma_id_fkey FOREIGN KEY (source_lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: meineke_word_lemma_documents meineke_word_lemma_documents_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_documents
+    ADD CONSTRAINT meineke_word_lemma_documents_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: meineke_word_lemma_occurrences meineke_word_lemma_occurrences_document_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_occurrences
+    ADD CONSTRAINT meineke_word_lemma_occurrences_document_id_fkey FOREIGN KEY (document_id) REFERENCES public.meineke_word_lemma_documents(id) ON DELETE CASCADE;
+
+
+--
+-- Name: meineke_word_lemma_occurrences meineke_word_lemma_occurrences_source_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_occurrences
+    ADD CONSTRAINT meineke_word_lemma_occurrences_source_lemma_id_fkey FOREIGN KEY (source_lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: meineke_word_lemma_occurrences meineke_word_lemma_occurrences_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_occurrences
+    ADD CONSTRAINT meineke_word_lemma_occurrences_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: place_cluster_candidates place_cluster_candidates_place_cluster_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_candidates
+    ADD CONSTRAINT place_cluster_candidates_place_cluster_id_fkey FOREIGN KEY (place_cluster_id) REFERENCES public.place_clusters(id) ON DELETE CASCADE;
+
+
+--
+-- Name: place_cluster_mentions place_cluster_mentions_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_mentions
+    ADD CONSTRAINT place_cluster_mentions_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: place_cluster_mentions place_cluster_mentions_place_cluster_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_cluster_mentions
+    ADD CONSTRAINT place_cluster_mentions_place_cluster_id_fkey FOREIGN KEY (place_cluster_id) REFERENCES public.place_clusters(id) ON DELETE SET NULL;
+
+
+--
+-- Name: place_clusters place_clusters_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_clusters
+    ADD CONSTRAINT place_clusters_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
 
 
 --
@@ -2231,6 +3777,110 @@ ALTER TABLE ONLY public.text_pair_differences
 
 ALTER TABLE ONLY public.text_pair_differences
     ADD CONSTRAINT text_pair_differences_meineke_text_version_id_fkey FOREIGN KEY (meineke_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_backlog_items translation_guidance_backlog_items_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_backlog_items
+    ADD CONSTRAINT translation_guidance_backlog_items_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_backlog_items translation_guidance_backlog_items_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_backlog_items
+    ADD CONSTRAINT translation_guidance_backlog_items_rule_id_fkey FOREIGN KEY (rule_id) REFERENCES public.translation_guidance_rules(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_backlog_items translation_guidance_backlog_items_rule_revision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_backlog_items
+    ADD CONSTRAINT translation_guidance_backlog_items_rule_revision_id_fkey FOREIGN KEY (rule_revision_id) REFERENCES public.translation_guidance_rule_revisions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_backlog_items translation_guidance_backlog_items_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_backlog_items
+    ADD CONSTRAINT translation_guidance_backlog_items_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_matches translation_guidance_matches_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_matches
+    ADD CONSTRAINT translation_guidance_matches_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_matches translation_guidance_matches_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_matches
+    ADD CONSTRAINT translation_guidance_matches_rule_id_fkey FOREIGN KEY (rule_id) REFERENCES public.translation_guidance_rules(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_matches translation_guidance_matches_rule_revision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_matches
+    ADD CONSTRAINT translation_guidance_matches_rule_revision_id_fkey FOREIGN KEY (rule_revision_id) REFERENCES public.translation_guidance_rule_revisions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_matches translation_guidance_matches_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_matches
+    ADD CONSTRAINT translation_guidance_matches_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_rule_revisions translation_guidance_rule_revisions_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_rule_revisions
+    ADD CONSTRAINT translation_guidance_rule_revisions_rule_id_fkey FOREIGN KEY (rule_id) REFERENCES public.translation_guidance_rules(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_scan_queue translation_guidance_scan_queue_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_queue
+    ADD CONSTRAINT translation_guidance_scan_queue_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_scan_queue translation_guidance_scan_queue_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_queue
+    ADD CONSTRAINT translation_guidance_scan_queue_rule_id_fkey FOREIGN KEY (rule_id) REFERENCES public.translation_guidance_rules(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_scan_queue translation_guidance_scan_queue_rule_revision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_queue
+    ADD CONSTRAINT translation_guidance_scan_queue_rule_revision_id_fkey FOREIGN KEY (rule_revision_id) REFERENCES public.translation_guidance_rule_revisions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_scan_queue translation_guidance_scan_queue_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_queue
+    ADD CONSTRAINT translation_guidance_scan_queue_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
 
 
 --
@@ -2322,665 +3972,7 @@ ALTER TABLE ONLY public.translation_runs
 
 
 --
--- Name: source_citation_units; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.source_citation_units (
-    id integer NOT NULL,
-    unit_key text NOT NULL,
-    author_lemma_form text NOT NULL,
-    author_english text,
-    work_title text,
-    book_label text,
-    identifiers_json jsonb DEFAULT '[]'::jsonb NOT NULL,
-    raw_unit_text text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    author_wikidata_qid text,
-    author_wikidata_confidence text,
-    author_wikidata_linked_at timestamp with time zone,
-    author_wikidata_linked_by text,
-    work_wikidata_qid text,
-    work_wikidata_confidence text,
-    work_wikidata_linked_at timestamp with time zone,
-    work_wikidata_linked_by text,
-    CONSTRAINT source_citation_units_author_wikidata_confidence_check CHECK ((author_wikidata_confidence IS NULL) OR (author_wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text]))),
-    CONSTRAINT source_citation_units_work_wikidata_confidence_check CHECK ((work_wikidata_confidence IS NULL) OR (work_wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text])))
-);
-
-
---
--- Name: source_citation_units_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.source_citation_units_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: source_citation_units_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.source_citation_units_id_seq OWNED BY public.source_citation_units.id;
-
-
---
--- Name: lemma_source_citation_mentions; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.lemma_source_citation_mentions (
-    id integer NOT NULL,
-    lemma_id integer NOT NULL,
-    unit_id integer NOT NULL,
-    raw_citation_text text DEFAULT ''::text NOT NULL,
-    extracted_confidence text,
-    extracted_by_model text,
-    extracted_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT lemma_source_citation_mentions_extracted_confidence_check CHECK ((extracted_confidence IS NULL) OR (extracted_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])))
-);
-
-
---
--- Name: lemma_source_citation_mentions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.lemma_source_citation_mentions_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: lemma_source_citation_mentions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.lemma_source_citation_mentions_id_seq OWNED BY public.lemma_source_citation_mentions.id;
-
-
---
--- Name: source_citation_units id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.source_citation_units ALTER COLUMN id SET DEFAULT nextval('public.source_citation_units_id_seq'::regclass);
-
-
---
--- Name: lemma_source_citation_mentions id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_source_citation_mentions ALTER COLUMN id SET DEFAULT nextval('public.lemma_source_citation_mentions_id_seq'::regclass);
-
-
---
--- Name: source_citation_units source_citation_units_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.source_citation_units
-    ADD CONSTRAINT source_citation_units_pkey PRIMARY KEY (id);
-
-
---
--- Name: source_citation_units source_citation_units_unit_key_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.source_citation_units
-    ADD CONSTRAINT source_citation_units_unit_key_key UNIQUE (unit_key);
-
-
---
--- Name: lemma_source_citation_mentions lemma_source_citation_mentions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_source_citation_mentions
-    ADD CONSTRAINT lemma_source_citation_mentions_pkey PRIMARY KEY (id);
-
-
---
--- Name: lemma_source_citation_mentions_lemma_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX lemma_source_citation_mentions_lemma_idx ON public.lemma_source_citation_mentions USING btree (lemma_id);
-
-
---
--- Name: lemma_source_citation_mentions_unit_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX lemma_source_citation_mentions_unit_idx ON public.lemma_source_citation_mentions USING btree (unit_id);
-
-
---
--- Name: lemma_source_citation_mentions_unique_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX lemma_source_citation_mentions_unique_idx ON public.lemma_source_citation_mentions USING btree (lemma_id, unit_id, raw_citation_text);
-
-
---
--- Name: source_citation_units_author_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX source_citation_units_author_idx ON public.source_citation_units USING btree (author_lemma_form);
-
-
---
--- Name: source_citation_units_author_work_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX source_citation_units_author_work_idx ON public.source_citation_units USING btree (author_lemma_form, work_title);
-
-
---
--- Name: source_citation_units_work_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX source_citation_units_work_idx ON public.source_citation_units USING btree (work_title) WHERE (work_title IS NOT NULL);
-
-
---
--- Name: lemma_source_citation_mentions lemma_source_citation_mentions_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_source_citation_mentions
-    ADD CONSTRAINT lemma_source_citation_mentions_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
-
-
---
--- Name: lemma_source_citation_mentions lemma_source_citation_mentions_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_source_citation_mentions
-    ADD CONSTRAINT lemma_source_citation_mentions_unit_id_fkey FOREIGN KEY (unit_id) REFERENCES public.source_citation_units(id) ON DELETE CASCADE;
-
-
---
--- Name: billerbeck_german_pages; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.billerbeck_german_pages (
-    id integer NOT NULL,
-    image_id integer NOT NULL,
-    image_filename text NOT NULL,
-    volume_number integer,
-    volume_label text,
-    page_number integer,
-    status text NOT NULL,
-    is_german boolean,
-    has_headword_entries boolean,
-    headword_hint_json jsonb NOT NULL,
-    ocr_payload jsonb NOT NULL,
-    ocr_notes text,
-    ocr_model text,
-    ocr_tokens integer NOT NULL,
-    processed_at timestamp with time zone,
-    created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL
-);
-
-
---
--- Name: lemma_billerbeck_german_refs; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.lemma_billerbeck_german_refs (
-    id integer NOT NULL,
-    lemma_id integer NOT NULL,
-    lemma_headword text,
-    billerbeck_id text,
-    german_text text NOT NULL,
-    german_hash text NOT NULL,
-    english_translation text,
-    source_page_ids jsonb NOT NULL,
-    source_image_ids jsonb NOT NULL,
-    source_image_filenames jsonb NOT NULL,
-    source_page_count integer NOT NULL,
-    ocr_confidence text,
-    translation_status text NOT NULL,
-    translation_model text,
-    translation_tokens integer NOT NULL,
-    translated_at timestamp with time zone,
-    created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    notes text
-);
-
-
---
--- Name: billerbeck_german_pages billerbeck_german_pages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.billerbeck_german_pages
-    ADD CONSTRAINT billerbeck_german_pages_pkey PRIMARY KEY (id);
-
-
---
--- Name: lemma_billerbeck_german_refs lemma_billerbeck_german_refs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_billerbeck_german_refs
-    ADD CONSTRAINT lemma_billerbeck_german_refs_pkey PRIMARY KEY (id);
-
-
---
--- Name: billerbeck_german_pages_image_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX billerbeck_german_pages_image_id_idx ON public.billerbeck_german_pages USING btree (image_id);
-
-
---
--- Name: billerbeck_german_pages_status_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX billerbeck_german_pages_status_idx ON public.billerbeck_german_pages USING btree (status, processed_at);
-
-
---
--- Name: lemma_billerbeck_german_refs_lemma_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX lemma_billerbeck_german_refs_lemma_id_idx ON public.lemma_billerbeck_german_refs USING btree (lemma_id);
-
-
---
--- Name: lemma_billerbeck_german_refs_translation_status_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX lemma_billerbeck_german_refs_translation_status_idx ON public.lemma_billerbeck_german_refs USING btree (translation_status, updated_at);
-
-
---
--- Name: billerbeck_german_pages billerbeck_german_pages_image_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.billerbeck_german_pages
-    ADD CONSTRAINT billerbeck_german_pages_image_id_fkey FOREIGN KEY (image_id) REFERENCES public.images(id) ON DELETE CASCADE;
-
-
---
--- Name: lemma_billerbeck_german_refs lemma_billerbeck_german_refs_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.lemma_billerbeck_german_refs
-    ADD CONSTRAINT lemma_billerbeck_german_refs_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
-
-
---
--- Name: translation_guidance_rules; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS public.translation_guidance_rules (
-    id SERIAL PRIMARY KEY,
-    rule_key TEXT NOT NULL,
-    rule_code TEXT,
-    kind TEXT NOT NULL,
-    label TEXT NOT NULL,
-    normalized_label TEXT NOT NULL,
-    preferred_translation TEXT,
-    word_class TEXT,
-    status TEXT NOT NULL DEFAULT 'in_progress',
-    application_mode TEXT NOT NULL,
-    citations_text TEXT,
-    notes TEXT,
-    source_workbook TEXT,
-    source_sheet TEXT,
-    source_row_number INTEGER,
-    created_by TEXT,
-    updated_by TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    retired_at TIMESTAMPTZ,
-    CONSTRAINT translation_guidance_rules_kind_check
-        CHECK (kind IN ('gloss', 'formula', 'proper_noun')),
-    CONSTRAINT translation_guidance_rules_status_check
-        CHECK (status IN ('in_progress', 'settled', 'unsure', 'retired')),
-    CONSTRAINT translation_guidance_rules_application_mode_check
-        CHECK (application_mode IN ('replace', 'required', 'advisory'))
-);
-
-
---
--- Name: translation_guidance_rule_revisions; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS public.translation_guidance_rule_revisions (
-    id SERIAL PRIMARY KEY,
-    rule_id INTEGER NOT NULL,
-    revision_number INTEGER NOT NULL,
-    action TEXT NOT NULL,
-    changed_by TEXT NOT NULL,
-    change_summary TEXT,
-    source_context_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT translation_guidance_rule_revisions_action_check
-        CHECK (action IN ('create', 'update', 'retire', 'reactivate'))
-);
-
-
---
--- Name: translation_guidance_scan_queue; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS public.translation_guidance_scan_queue (
-    id SERIAL PRIMARY KEY,
-    rule_id INTEGER NOT NULL,
-    rule_revision_id INTEGER NOT NULL,
-    lemma_id INTEGER NOT NULL,
-    source_text_version_id INTEGER NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    priority INTEGER NOT NULL DEFAULT 100,
-    detector_kind TEXT,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    requested_by TEXT,
-    notes TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    started_at TIMESTAMPTZ,
-    finished_at TIMESTAMPTZ,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    error_message TEXT,
-    CONSTRAINT translation_guidance_scan_queue_status_check
-        CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')),
-    CONSTRAINT translation_guidance_scan_queue_priority_check
-        CHECK (priority >= 0),
-    CONSTRAINT translation_guidance_scan_queue_attempts_check
-        CHECK (attempts >= 0)
-);
-
-
---
--- Name: translation_guidance_matches; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS public.translation_guidance_matches (
-    id SERIAL PRIMARY KEY,
-    rule_id INTEGER NOT NULL,
-    rule_revision_id INTEGER NOT NULL,
-    lemma_id INTEGER NOT NULL,
-    source_text_version_id INTEGER NOT NULL,
-    detector_kind TEXT NOT NULL,
-    detector_version TEXT,
-    match_status TEXT NOT NULL,
-    occurrence_count INTEGER NOT NULL DEFAULT 0,
-    confidence TEXT,
-    evidence_text TEXT,
-    evidence_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT translation_guidance_matches_status_check
-        CHECK (match_status IN ('matched', 'not_matched', 'uncertain', 'needs_review', 'skipped')),
-    CONSTRAINT translation_guidance_matches_confidence_check
-        CHECK (confidence IS NULL OR confidence IN ('high', 'medium', 'low')),
-    CONSTRAINT translation_guidance_matches_occurrence_count_check
-        CHECK (occurrence_count >= 0)
-);
-
-
---
--- Name: translation_guidance_backlog_items; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS public.translation_guidance_backlog_items (
-    id SERIAL PRIMARY KEY,
-    rule_id INTEGER NOT NULL,
-    rule_revision_id INTEGER NOT NULL,
-    lemma_id INTEGER NOT NULL,
-    source_text_version_id INTEGER NOT NULL,
-    backlog_kind TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    translation_variant_kind TEXT,
-    translation_variant_id TEXT,
-    priority INTEGER NOT NULL DEFAULT 100,
-    created_by TEXT,
-    assigned_to TEXT,
-    notes TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    started_at TIMESTAMPTZ,
-    finished_at TIMESTAMPTZ,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT translation_guidance_backlog_items_kind_check
-        CHECK (backlog_kind IN ('scan_rule', 'rerun_translation', 'review_translation')),
-    CONSTRAINT translation_guidance_backlog_items_status_check
-        CHECK (status IN ('pending', 'in_progress', 'completed', 'dismissed', 'cancelled', 'failed')),
-    CONSTRAINT translation_guidance_backlog_items_priority_check
-        CHECK (priority >= 0)
-);
-
-
---
--- Name: translation_guidance_rules_rule_key_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX IF NOT EXISTS translation_guidance_rules_rule_key_idx
-    ON public.translation_guidance_rules USING btree (rule_key);
-
-
---
--- Name: translation_guidance_rules_rule_code_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX IF NOT EXISTS translation_guidance_rules_rule_code_idx
-    ON public.translation_guidance_rules USING btree (rule_code)
-    WHERE (rule_code IS NOT NULL);
-
-
---
--- Name: translation_guidance_rules_kind_status_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS translation_guidance_rules_kind_status_idx
-    ON public.translation_guidance_rules USING btree (kind, status, updated_at);
-
-
---
--- Name: translation_guidance_rules_normalized_label_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS translation_guidance_rules_normalized_label_idx
-    ON public.translation_guidance_rules USING btree (normalized_label);
-
-
---
--- Name: translation_guidance_rule_revisions_rule_revision_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX IF NOT EXISTS translation_guidance_rule_revisions_rule_revision_idx
-    ON public.translation_guidance_rule_revisions USING btree (rule_id, revision_number);
-
-
---
--- Name: translation_guidance_rule_revisions_created_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS translation_guidance_rule_revisions_created_idx
-    ON public.translation_guidance_rule_revisions USING btree (created_at DESC, rule_id);
-
-
---
--- Name: translation_guidance_scan_queue_status_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS translation_guidance_scan_queue_status_idx
-    ON public.translation_guidance_scan_queue USING btree (status, priority, created_at);
-
-
---
--- Name: translation_guidance_scan_queue_active_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX IF NOT EXISTS translation_guidance_scan_queue_active_idx
-    ON public.translation_guidance_scan_queue USING btree (rule_revision_id, lemma_id, source_text_version_id)
-    WHERE (status = ANY (ARRAY['pending'::text, 'running'::text]));
-
-
---
--- Name: translation_guidance_matches_unique_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX IF NOT EXISTS translation_guidance_matches_unique_idx
-    ON public.translation_guidance_matches USING btree (rule_revision_id, lemma_id, source_text_version_id, detector_kind);
-
-
---
--- Name: translation_guidance_matches_lemma_status_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS translation_guidance_matches_lemma_status_idx
-    ON public.translation_guidance_matches USING btree (lemma_id, match_status, updated_at);
-
-
---
--- Name: translation_guidance_backlog_items_status_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS translation_guidance_backlog_items_status_idx
-    ON public.translation_guidance_backlog_items USING btree (status, priority, created_at);
-
-
---
--- Name: translation_guidance_backlog_items_active_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX IF NOT EXISTS translation_guidance_backlog_items_active_idx
-    ON public.translation_guidance_backlog_items USING btree (
-        rule_revision_id,
-        lemma_id,
-        source_text_version_id,
-        backlog_kind,
-        COALESCE(translation_variant_kind, ''::text),
-        COALESCE(translation_variant_id, ''::text)
-    )
-    WHERE (status = ANY (ARRAY['pending'::text, 'in_progress'::text]));
-
-
---
--- Name: translation_guidance_rule_revisions translation_guidance_rule_revisions_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.translation_guidance_rule_revisions
-    ADD CONSTRAINT translation_guidance_rule_revisions_rule_id_fkey
-    FOREIGN KEY (rule_id) REFERENCES public.translation_guidance_rules(id) ON DELETE CASCADE;
-
-
---
--- Name: translation_guidance_scan_queue translation_guidance_scan_queue_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.translation_guidance_scan_queue
-    ADD CONSTRAINT translation_guidance_scan_queue_rule_id_fkey
-    FOREIGN KEY (rule_id) REFERENCES public.translation_guidance_rules(id) ON DELETE CASCADE;
-
-
---
--- Name: translation_guidance_scan_queue translation_guidance_scan_queue_rule_revision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.translation_guidance_scan_queue
-    ADD CONSTRAINT translation_guidance_scan_queue_rule_revision_id_fkey
-    FOREIGN KEY (rule_revision_id) REFERENCES public.translation_guidance_rule_revisions(id) ON DELETE CASCADE;
-
-
---
--- Name: translation_guidance_scan_queue translation_guidance_scan_queue_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.translation_guidance_scan_queue
-    ADD CONSTRAINT translation_guidance_scan_queue_lemma_id_fkey
-    FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
-
-
---
--- Name: translation_guidance_scan_queue translation_guidance_scan_queue_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.translation_guidance_scan_queue
-    ADD CONSTRAINT translation_guidance_scan_queue_source_text_version_id_fkey
-    FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
-
-
---
--- Name: translation_guidance_matches translation_guidance_matches_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.translation_guidance_matches
-    ADD CONSTRAINT translation_guidance_matches_rule_id_fkey
-    FOREIGN KEY (rule_id) REFERENCES public.translation_guidance_rules(id) ON DELETE CASCADE;
-
-
---
--- Name: translation_guidance_matches translation_guidance_matches_rule_revision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.translation_guidance_matches
-    ADD CONSTRAINT translation_guidance_matches_rule_revision_id_fkey
-    FOREIGN KEY (rule_revision_id) REFERENCES public.translation_guidance_rule_revisions(id) ON DELETE CASCADE;
-
-
---
--- Name: translation_guidance_matches translation_guidance_matches_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.translation_guidance_matches
-    ADD CONSTRAINT translation_guidance_matches_lemma_id_fkey
-    FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
-
-
---
--- Name: translation_guidance_matches translation_guidance_matches_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.translation_guidance_matches
-    ADD CONSTRAINT translation_guidance_matches_source_text_version_id_fkey
-    FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
-
-
---
--- Name: translation_guidance_backlog_items translation_guidance_backlog_items_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.translation_guidance_backlog_items
-    ADD CONSTRAINT translation_guidance_backlog_items_rule_id_fkey
-    FOREIGN KEY (rule_id) REFERENCES public.translation_guidance_rules(id) ON DELETE CASCADE;
-
-
---
--- Name: translation_guidance_backlog_items translation_guidance_backlog_items_rule_revision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.translation_guidance_backlog_items
-    ADD CONSTRAINT translation_guidance_backlog_items_rule_revision_id_fkey
-    FOREIGN KEY (rule_revision_id) REFERENCES public.translation_guidance_rule_revisions(id) ON DELETE CASCADE;
-
-
---
--- Name: translation_guidance_backlog_items translation_guidance_backlog_items_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.translation_guidance_backlog_items
-    ADD CONSTRAINT translation_guidance_backlog_items_lemma_id_fkey
-    FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
-
-
---
--- Name: translation_guidance_backlog_items translation_guidance_backlog_items_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.translation_guidance_backlog_items
-    ADD CONSTRAINT translation_guidance_backlog_items_source_text_version_id_fkey
-    FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
-
-
---
 -- PostgreSQL database dump complete
 --
 
-\unrestrict EzdjPvp1XRoyZp5E2g5PDbFQXDhrpldUR5NDw3cg4CeG8sWa8EVQ58vXpJ4bCz2
+\unrestrict 4gxbFbaKUG4vV0G1mjVfFNgnUsomS4fR8qFUd0kDMOkmGagLyDrqCYezhQkORi8

@@ -1543,6 +1543,217 @@ def generate_legacy_anchor_redirect_script():
 """
 
 
+def render_search_widget(root_path: str = "") -> str:
+    """Render the static search widget. root_path should point from this page to site root."""
+    root_path = root_path or ""
+    search_base = f"{root_path}search-data"
+    script_src = f"{root_path}search-ui.js"
+    return f"""
+        <div class="site-search" data-search-base="{html_module.escape(search_base)}" data-site-root="{html_module.escape(root_path)}">
+            <div class="site-search-row">
+                <input class="site-search-input" type="search" placeholder="Search words, lemmas, or English text" autocomplete="off">
+                <select class="site-search-mode">
+                    <option value="word">Word forms</option>
+                    <option value="lemma">Lemmas</option>
+                    <option value="english">English</option>
+                </select>
+            </div>
+            <div class="site-search-results" hidden></div>
+        </div>
+        <script src="{html_module.escape(script_src)}" defer></script>
+    """
+
+
+def search_ui_script() -> str:
+    return r"""
+(function() {
+    const manifestCache = new Map();
+    const chunkCache = new Map();
+
+    function normalizeGreek(text) {
+        return Array.from((text || '').normalize('NFD').toLowerCase())
+            .filter(ch => !/[\u0300-\u036f]/u.test(ch))
+            .map(ch => ch === 'ς' ? 'σ' : ch)
+            .filter(ch => /[\u0370-\u03ff\u1f00-\u1fff]/u.test(ch))
+            .join('')
+            .normalize('NFC');
+    }
+
+    function normalizeEnglish(text) {
+        return (text || '')
+            .normalize('NFKD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .match(/[a-z0-9]+/g)?.join(' ') || '';
+    }
+
+    function greekPrefixKey(value) {
+        const chars = Array.from(normalizeGreek(value)).slice(0, 2);
+        return chars.length ? chars.map(ch => ch.codePointAt(0).toString(16).padStart(4, '0')).join('-') : 'misc';
+    }
+
+    function englishPrefixKey(value) {
+        const chars = normalizeEnglish(value).replace(/\s+/g, '').slice(0, 2);
+        return chars || 'misc';
+    }
+
+    async function fetchJson(url) {
+        if (chunkCache.has(url)) return chunkCache.get(url);
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        chunkCache.set(url, data);
+        return data;
+    }
+
+    async function loadManifest(base, mode) {
+        const path = mode === 'english' ? `${base}/english/manifest.json` : `${base}/greek/${mode}/manifest.json`;
+        if (manifestCache.has(path)) return manifestCache.get(path);
+        const data = await fetchJson(path);
+        manifestCache.set(path, data);
+        return data;
+    }
+
+    async function loadChunk(base, mode, key) {
+        const path = mode === 'english' ? `${base}/english/${key}.json` : `${base}/greek/${mode}/${key}.json`;
+        return fetchJson(path);
+    }
+
+    function resultHref(siteRoot, href) {
+        if (!href) return '#';
+        if (/^(?:https?:)?\/\//.test(href) || href.startsWith('/')) return href;
+        return `${siteRoot || ''}${href}`;
+    }
+
+    function escapeHtml(text) {
+        const node = document.createElement('div');
+        node.textContent = text || '';
+        return node.innerHTML;
+    }
+
+    function renderGreekResults(container, entries, mode, query, siteRoot) {
+        const norm = normalizeGreek(query);
+        const matches = entries
+            .filter(entry => (entry.term || '').includes(norm) || normalizeGreek(entry.display || '').includes(norm))
+            .sort((a, b) => (b.count || 0) - (a.count || 0) || (a.display || '').localeCompare(b.display || ''))
+            .slice(0, 25);
+
+        if (!matches.length) {
+            container.innerHTML = '<div class="site-search-empty">No matches in this index chunk.</div>';
+            container.hidden = false;
+            return;
+        }
+
+        container.innerHTML = matches.map(entry => {
+            const usages = (entry.usages || []).slice(0, 8).map(usage => {
+                const meta = [];
+                if (usage.entry_number) meta.push(`Entry ${usage.entry_number}`);
+                if (usage.meineke_id) meta.push(`Meineke ${usage.meineke_id}`);
+                if (usage.count) meta.push(`${usage.count} use${usage.count === 1 ? '' : 's'}`);
+                return `<li><a href="${escapeHtml(resultHref(siteRoot, usage.href))}">${escapeHtml(usage.headword || '')}</a><span>${escapeHtml(meta.join(' · '))}</span></li>`;
+            }).join('');
+            const more = (entry.usages || []).length > 8 ? `<div class="site-search-more">+${(entry.usages || []).length - 8} more; open the ${mode === 'word' ? 'word' : 'lemma'} index for the full list.</div>` : '';
+            return `<div class="site-search-hit">
+                <div class="site-search-hit-title" lang="el">${escapeHtml(entry.display || entry.term || '')}</div>
+                <div class="site-search-hit-meta">${escapeHtml(String(entry.count || 0))} uses in ${escapeHtml(String(entry.document_count || 0))} entries</div>
+                <ol>${usages}</ol>
+                ${more}
+            </div>`;
+        }).join('');
+        container.hidden = false;
+    }
+
+    function renderEnglishResults(container, entries, query, siteRoot) {
+        const terms = normalizeEnglish(query).split(/\s+/).filter(Boolean);
+        const seen = new Set();
+        const matches = [];
+        for (const entry of entries) {
+            if (seen.has(entry.lemma_id)) continue;
+            const text = entry.search_text || '';
+            if (terms.every(term => text.includes(term))) {
+                seen.add(entry.lemma_id);
+                matches.push(entry);
+            }
+            if (matches.length >= 25) break;
+        }
+
+        if (!matches.length) {
+            container.innerHTML = '<div class="site-search-empty">No English matches in this index chunk.</div>';
+            container.hidden = false;
+            return;
+        }
+
+        container.innerHTML = matches.map(entry => {
+            const meta = entry.entry_number ? `Entry ${entry.entry_number}` : '';
+            return `<div class="site-search-hit">
+                <div class="site-search-hit-title"><a href="${escapeHtml(resultHref(siteRoot, entry.href))}">${escapeHtml(entry.title || '')}</a></div>
+                <div class="site-search-hit-meta">${escapeHtml(meta)}</div>
+                <div class="site-search-snippet">${escapeHtml(entry.snippet || '')}</div>
+            </div>`;
+        }).join('');
+        container.hidden = false;
+    }
+
+    async function runSearch(widget) {
+        const input = widget.querySelector('.site-search-input');
+        const modeSelect = widget.querySelector('.site-search-mode');
+        const results = widget.querySelector('.site-search-results');
+        const base = widget.dataset.searchBase || 'search-data';
+        const siteRoot = widget.dataset.siteRoot || '';
+        const mode = modeSelect.value;
+        const rawQuery = input.value.trim();
+        const normalized = mode === 'english' ? normalizeEnglish(rawQuery) : normalizeGreek(rawQuery);
+
+        if (normalized.length < 2) {
+            results.innerHTML = '<div class="site-search-empty">Type at least two letters.</div>';
+            results.hidden = !rawQuery;
+            return;
+        }
+
+        results.innerHTML = '<div class="site-search-empty">Searching...</div>';
+        results.hidden = false;
+        try {
+            const manifest = await loadManifest(base, mode);
+            const key = mode === 'english' ? englishPrefixKey(rawQuery) : greekPrefixKey(rawQuery);
+            if (!manifest.prefixes || !manifest.prefixes[key]) {
+                results.innerHTML = '<div class="site-search-empty">No index chunk for this prefix.</div>';
+                return;
+            }
+            const chunk = await loadChunk(base, mode, key);
+            if (mode === 'english') {
+                renderEnglishResults(results, chunk.entries || [], rawQuery, siteRoot);
+            } else {
+                renderGreekResults(results, chunk.entries || [], mode, rawQuery, siteRoot);
+            }
+        } catch (err) {
+            results.innerHTML = `<div class="site-search-empty">Search data is not available yet.</div>`;
+            console.warn('Static search failed:', err);
+        }
+    }
+
+    function attach(widget) {
+        const input = widget.querySelector('.site-search-input');
+        const modeSelect = widget.querySelector('.site-search-mode');
+        let timer = null;
+        const schedule = () => {
+            window.clearTimeout(timer);
+            timer = window.setTimeout(() => runSearch(widget), 120);
+        };
+        input.addEventListener('input', schedule);
+        modeSelect.addEventListener('change', schedule);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('.site-search').forEach(attach);
+    });
+})();
+""".lstrip()
+
+
+def write_search_ui_asset(output_dir: Path) -> None:
+    (output_dir / "search-ui.js").write_text(search_ui_script(), encoding="utf-8")
+
+
 def common_styles():
     """Shared CSS for index and letter pages."""
     return """
@@ -1589,6 +1800,116 @@ def common_styles():
         }
         .nav-links a:hover {
             text-decoration: underline;
+        }
+        .site-search {
+            background: #fff;
+            border: 1px solid #d9e2f2;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            margin: 16px 0;
+            padding: 14px;
+        }
+        .site-search-row {
+            display: grid;
+            grid-template-columns: minmax(160px, 1fr) 160px;
+            gap: 10px;
+        }
+        .site-search-input,
+        .site-search-mode {
+            border: 1px solid #c7d2e5;
+            border-radius: 6px;
+            font: inherit;
+            min-width: 0;
+            padding: 10px 12px;
+        }
+        .site-search-input:focus,
+        .site-search-mode:focus {
+            border-color: #0d47a1;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(13,71,161,0.12);
+        }
+        .site-search-results {
+            border-top: 1px solid #eef2f8;
+            margin-top: 12px;
+            max-height: 480px;
+            overflow: auto;
+            padding-top: 12px;
+        }
+        .site-search-empty {
+            color: #666;
+            font-size: 0.95em;
+        }
+        .site-search-hit {
+            border-bottom: 1px solid #eef2f8;
+            padding: 10px 0;
+        }
+        .site-search-hit:last-child {
+            border-bottom: 0;
+        }
+        .site-search-hit-title {
+            color: #1a237e;
+            font-weight: 700;
+        }
+        .site-search-hit-meta,
+        .site-search-more,
+        .site-search-snippet {
+            color: #666;
+            font-size: 0.9em;
+        }
+        .site-search-hit ol {
+            margin: 8px 0 0 22px;
+        }
+        .site-search-hit li span {
+            color: #666;
+            font-size: 0.9em;
+            margin-left: 6px;
+        }
+        .index-term {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            margin: 10px 0;
+            padding: 0;
+        }
+        .index-term summary {
+            align-items: baseline;
+            cursor: pointer;
+            display: flex;
+            gap: 12px;
+            justify-content: space-between;
+            padding: 12px 14px;
+        }
+        .index-term-label {
+            color: #1a237e;
+            font-size: 1.08em;
+            font-weight: 700;
+        }
+        .index-term-meta,
+        .usage-context {
+            color: #666;
+            font-size: 0.9em;
+        }
+        .usage-list {
+            margin: 0;
+            padding: 0 18px 14px 42px;
+        }
+        .usage-item {
+            margin: 8px 0;
+        }
+        .usage-context {
+            margin-top: 2px;
+        }
+        @media (max-width: 640px) {
+            .site-search-row {
+                grid-template-columns: 1fr;
+            }
+            .index-term summary {
+                display: block;
+            }
+            .index-term-meta {
+                display: block;
+                margin-top: 4px;
+            }
         }
         .letter-grid {
             display: grid;
@@ -2189,6 +2510,16 @@ def generate_index_html(letter_counts, stats):
             "Open the generated translation volume, including verse-aware layout for poetic entries.",
         ),
         (
+            "word_index.html",
+            "Word Index",
+            "Browse observed Meineke word forms and jump to every indexed passage.",
+        ),
+        (
+            "lemma_index.html",
+            "Lemma Index",
+            "Browse model-assigned lexical lemmas and their passage-level usage links.",
+        ),
+        (
             "protected/",
             "Page Scans",
             "Inspect the protected page-image wrappers and compare public text against the scans.",
@@ -2224,6 +2555,8 @@ def generate_index_html(letter_counts, stats):
 	        <div class="nav-links">
 	            <a href="sources.html">Ancient Sources</a>
 	            <a href="works.html">Works Cited</a>
+	            <a href="word_index.html">Word Index</a>
+	            <a href="lemma_index.html">Lemma Index</a>
 	            <a href="fgrhist.html">FGrHist Index</a>
 	            <a href="entities.html">People &amp; Deities</a>
 	            <a href="peoples.html">Ethnic Groups</a>
@@ -2243,6 +2576,7 @@ def generate_index_html(letter_counts, stats):
             <a href="downloads.html">Downloads</a>
             <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
         </div>
+        {render_search_widget()}
         <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
             <div class="stat-card">
                 <div class="stat-value">{stats['total_lemmas']:,}</div>
@@ -2384,6 +2718,8 @@ def generate_prompt_detail_page(item: dict):
         <div class="nav-links">
             <a href="../index.html">All Letters</a>
             <a href="../prompts.html">Translation Prompts</a>
+            <a href="../word_index.html">Word Index</a>
+            <a href="../lemma_index.html">Lemma Index</a>
             <a href="../statistics.html">Statistics</a>
             <a href="../pipeline.html">Pipeline Status</a>
             <a href="../cgi-bin/review.cgi">Human Review</a>
@@ -2393,6 +2729,7 @@ def generate_prompt_detail_page(item: dict):
             / <a href="../prompts.html">Translation Prompts</a>
             / {html_module.escape(title)}
         </div>
+        {render_search_widget("../")}
         <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
             <div class="stat-card">
                 <div class="stat-value">{item['headword_count']:,}</div>
@@ -2529,6 +2866,8 @@ def generate_prompts_page(prompt_versions):
             <a href="index.html">All Letters</a>
             <a href="sources.html">Ancient Sources</a>
             <a href="works.html">Works Cited</a>
+            <a href="word_index.html">Word Index</a>
+            <a href="lemma_index.html">Lemma Index</a>
             <a href="fgrhist.html">FGrHist Index</a>
             <a href="entities.html">People &amp; Deities</a>
             <a href="peoples.html">Ethnic Groups</a>
@@ -2546,6 +2885,7 @@ def generate_prompts_page(prompt_versions):
             <a href="downloads.html">Downloads</a>
             <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
         </div>
+        {render_search_widget()}
         <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
             <div class="stat-card">
                 <div class="stat-value">{len(active_versions):,}</div>
@@ -2665,6 +3005,8 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
 	            <a href="index.html">All Letters</a>
 	            <a href="sources.html">Ancient Sources</a>
 	            <a href="works.html">Works Cited</a>
+	            <a href="word_index.html">Word Index</a>
+	            <a href="lemma_index.html">Lemma Index</a>
 	            <a href="fgrhist.html">FGrHist Index</a>
 	            <a href="entities.html">People &amp; Deities</a>
 	            <a href="peoples.html">Ethnic Groups</a>
@@ -2681,6 +3023,7 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
 		            <a href="downloads.html">Downloads</a>
 		            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
 	        </div>
+        {render_search_widget()}
         {body}
         <div class="footer">
             <p>Legacy links of the form <code>letter_*.html#lemma-ID</code> automatically redirect to canonical headword pages.</p>
@@ -2738,6 +3081,8 @@ def generate_headword_page(lemma: dict, overlaps: list[dict], overlap_run_id: in
 	            <a href="letter_{html_module.escape(letter_slug)}.html">{letter_char} {letter_name}</a>
 	            <a href="sources.html">Ancient Sources</a>
 	            <a href="works.html">Works Cited</a>
+	            <a href="word_index.html">Word Index</a>
+	            <a href="lemma_index.html">Lemma Index</a>
 	            <a href="fgrhist.html">FGrHist Index</a>
 	            <a href="entities.html">People &amp; Deities</a>
 	            <a href="peoples.html">Ethnic Groups</a>
@@ -2754,6 +3099,7 @@ def generate_headword_page(lemma: dict, overlaps: list[dict], overlap_run_id: in
 	            <a href="downloads.html">Downloads</a>
 	            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
 	        </div>
+        {render_search_widget()}
         {body}
         <div class="footer">
             <p>Canonical URL: <code>{html_module.escape(headword_page_filename(int(lemma.get("lemma_id") or 0)))}</code></p>
@@ -3209,6 +3555,7 @@ def main():
     output_dir = Path(OUTPUT_DIR)
     output_dir.mkdir(exist_ok=True)
     (output_dir / "prompts").mkdir(exist_ok=True)
+    write_search_ui_asset(output_dir)
 
     # Extract images from database to protected directory
     images_extracted = extract_images_from_database(cur, output_dir)

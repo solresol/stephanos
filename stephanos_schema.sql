@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict HleLC5VKVITZLE5miiTGvwvNy4jPl4KPwkO3o2IPqeFvO1nfryFqJw3vrS599Ua
+\restrict foqdm0M0Wzp9vxATD2g7byFPqk6iCmw7JXBCKEsMgcCDlPvKJ3EgBiqWmJGppti
 
 -- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
@@ -1154,6 +1154,95 @@ ALTER SEQUENCE public.meineke_text_differences_id_seq OWNED BY public.meineke_te
 
 
 --
+-- Name: meineke_word_lemma_documents; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.meineke_word_lemma_documents (
+    id integer NOT NULL,
+    source_text_version_id integer NOT NULL,
+    source_lemma_id integer NOT NULL,
+    source_text_hash text NOT NULL,
+    passage_text text NOT NULL,
+    token_count integer DEFAULT 0 NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    model text,
+    tokens_used integer DEFAULT 0 NOT NULL,
+    error_message text,
+    processed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT meineke_word_lemma_documents_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'processing'::text, 'completed'::text, 'skipped'::text, 'error'::text]))),
+    CONSTRAINT meineke_word_lemma_documents_token_count_check CHECK ((token_count >= 0)),
+    CONSTRAINT meineke_word_lemma_documents_tokens_used_check CHECK ((tokens_used >= 0))
+);
+
+
+--
+-- Name: meineke_word_lemma_documents_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.meineke_word_lemma_documents_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: meineke_word_lemma_documents_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.meineke_word_lemma_documents_id_seq OWNED BY public.meineke_word_lemma_documents.id;
+
+
+--
+-- Name: meineke_word_lemma_occurrences; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.meineke_word_lemma_occurrences (
+    id bigint NOT NULL,
+    document_id integer NOT NULL,
+    source_text_version_id integer NOT NULL,
+    source_lemma_id integer NOT NULL,
+    occurrence_index integer NOT NULL,
+    surface_form text NOT NULL,
+    normalized_word text NOT NULL,
+    mapped_lemma text NOT NULL,
+    normalized_lemma text NOT NULL,
+    char_start integer,
+    char_end integer,
+    left_context text,
+    right_context text,
+    confidence text,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT meineke_word_lemma_occurrences_confidence_check CHECK (((confidence IS NULL) OR (confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])))),
+    CONSTRAINT meineke_word_lemma_occurrences_occurrence_index_check CHECK ((occurrence_index > 0))
+);
+
+
+--
+-- Name: meineke_word_lemma_occurrences_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.meineke_word_lemma_occurrences_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: meineke_word_lemma_occurrences_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.meineke_word_lemma_occurrences_id_seq OWNED BY public.meineke_word_lemma_occurrences.id;
+
+
+--
 -- Name: ocr_generations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2069,6 +2158,20 @@ ALTER TABLE ONLY public.meineke_text_differences ALTER COLUMN id SET DEFAULT nex
 
 
 --
+-- Name: meineke_word_lemma_documents id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_documents ALTER COLUMN id SET DEFAULT nextval('public.meineke_word_lemma_documents_id_seq'::regclass);
+
+
+--
+-- Name: meineke_word_lemma_occurrences id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_occurrences ALTER COLUMN id SET DEFAULT nextval('public.meineke_word_lemma_occurrences_id_seq'::regclass);
+
+
+--
 -- Name: ocr_generations id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -2430,6 +2533,22 @@ ALTER TABLE ONLY public.meineke_text_differences
 
 ALTER TABLE ONLY public.meineke_text_differences
     ADD CONSTRAINT meineke_text_differences_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: meineke_word_lemma_documents meineke_word_lemma_documents_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_documents
+    ADD CONSTRAINT meineke_word_lemma_documents_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: meineke_word_lemma_occurrences meineke_word_lemma_occurrences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_occurrences
+    ADD CONSTRAINT meineke_word_lemma_occurrences_pkey PRIMARY KEY (id);
 
 
 --
@@ -3076,6 +3195,62 @@ CREATE INDEX meineke_text_differences_status_idx ON public.meineke_text_differen
 
 
 --
+-- Name: meineke_word_lemma_documents_processed_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX meineke_word_lemma_documents_processed_idx ON public.meineke_word_lemma_documents USING btree (processed_at DESC NULLS LAST);
+
+
+--
+-- Name: meineke_word_lemma_documents_source_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX meineke_word_lemma_documents_source_lemma_idx ON public.meineke_word_lemma_documents USING btree (source_lemma_id);
+
+
+--
+-- Name: meineke_word_lemma_documents_source_text_version_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX meineke_word_lemma_documents_source_text_version_idx ON public.meineke_word_lemma_documents USING btree (source_text_version_id);
+
+
+--
+-- Name: meineke_word_lemma_documents_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX meineke_word_lemma_documents_status_idx ON public.meineke_word_lemma_documents USING btree (status, updated_at);
+
+
+--
+-- Name: meineke_word_lemma_occurrences_document_occurrence_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX meineke_word_lemma_occurrences_document_occurrence_idx ON public.meineke_word_lemma_occurrences USING btree (document_id, occurrence_index);
+
+
+--
+-- Name: meineke_word_lemma_occurrences_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX meineke_word_lemma_occurrences_lemma_idx ON public.meineke_word_lemma_occurrences USING btree (normalized_lemma, source_lemma_id);
+
+
+--
+-- Name: meineke_word_lemma_occurrences_source_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX meineke_word_lemma_occurrences_source_lemma_idx ON public.meineke_word_lemma_occurrences USING btree (source_lemma_id);
+
+
+--
+-- Name: meineke_word_lemma_occurrences_word_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX meineke_word_lemma_occurrences_word_idx ON public.meineke_word_lemma_occurrences USING btree (normalized_word, source_lemma_id);
+
+
+--
 -- Name: source_citation_units_author_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3485,6 +3660,46 @@ ALTER TABLE ONLY public.meineke_text_differences
 
 
 --
+-- Name: meineke_word_lemma_documents meineke_word_lemma_documents_source_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_documents
+    ADD CONSTRAINT meineke_word_lemma_documents_source_lemma_id_fkey FOREIGN KEY (source_lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: meineke_word_lemma_documents meineke_word_lemma_documents_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_documents
+    ADD CONSTRAINT meineke_word_lemma_documents_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: meineke_word_lemma_occurrences meineke_word_lemma_occurrences_document_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_occurrences
+    ADD CONSTRAINT meineke_word_lemma_occurrences_document_id_fkey FOREIGN KEY (document_id) REFERENCES public.meineke_word_lemma_documents(id) ON DELETE CASCADE;
+
+
+--
+-- Name: meineke_word_lemma_occurrences meineke_word_lemma_occurrences_source_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_occurrences
+    ADD CONSTRAINT meineke_word_lemma_occurrences_source_lemma_id_fkey FOREIGN KEY (source_lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: meineke_word_lemma_occurrences meineke_word_lemma_occurrences_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.meineke_word_lemma_occurrences
+    ADD CONSTRAINT meineke_word_lemma_occurrences_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
 -- Name: place_cluster_candidates place_cluster_candidates_place_cluster_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3760,5 +3975,5 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict HleLC5VKVITZLE5miiTGvwvNy4jPl4KPwkO3o2IPqeFvO1nfryFqJw3vrS599Ua
+\unrestrict foqdm0M0Wzp9vxATD2g7byFPqk6iCmw7JXBCKEsMgcCDlPvKJ3EgBiqWmJGppti
 

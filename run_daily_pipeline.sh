@@ -239,6 +239,23 @@ uv run analyze_meineke_differences.py --limit 20 --daily-token-limit "$MEINEKE_D
 echo "Step 5g2: Syncing text-pair differences..." | tee -a "$LOGFILE"
 uv run sync_text_pair_differences.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: text-pair differences sync failed" | tee -a "$LOGFILE"
 
+# Step 5g3: Lemmatize Meineke word forms into word/lemma indexes
+echo "Step 5g3: Lemmatizing Meineke word forms..." | tee -a "$LOGFILE"
+MEINEKE_WORD_LEMMA_DAILY_TOKEN_LIMIT="${MEINEKE_WORD_LEMMA_DAILY_TOKEN_LIMIT:-250000}"
+MEINEKE_WORD_LEMMA_DELAY="${MEINEKE_WORD_LEMMA_DELAY:-1}"
+if [ -n "${MEINEKE_WORD_LEMMA_LIMIT:-}" ]; then
+    uv run lemmatize_meineke_words.py \
+        --daily-token-limit "$MEINEKE_WORD_LEMMA_DAILY_TOKEN_LIMIT" \
+        --limit "$MEINEKE_WORD_LEMMA_LIMIT" \
+        --delay "$MEINEKE_WORD_LEMMA_DELAY" \
+        2>&1 | tee -a "$LOGFILE"
+else
+    uv run lemmatize_meineke_words.py \
+        --daily-token-limit "$MEINEKE_WORD_LEMMA_DAILY_TOKEN_LIMIT" \
+        --delay "$MEINEKE_WORD_LEMMA_DELAY" \
+        2>&1 | tee -a "$LOGFILE"
+fi
+
 # Step 5h: Sync translation risk flags (blocks likely translation-changing Billerbeck-dependent rows)
 echo "Step 5h: Syncing translation risk flags..." | tee -a "$LOGFILE"
 uv run sync_translation_risk_flags.py 2>&1 | tee -a "$LOGFILE"
@@ -255,6 +272,38 @@ echo "Step 5j: Syncing review database from merah..." | tee -a "$LOGFILE"
 echo "Step 5k: Importing reviews into PostgreSQL..." | tee -a "$LOGFILE"
 uv run import_reviews.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 5k1: Incrementally queue translation-guidance scans against current source texts
+TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT="${TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT:-1000}"
+TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT="${TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT:-}"
+if [ "$TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT" -gt 0 ]; then
+    echo "Step 5k1: Queueing translation-guidance scans..." | tee -a "$LOGFILE"
+    guidance_enqueue_args=(
+        --all-active-rules
+        --source-document billerbeck
+        --max-queue-rows "$TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT"
+        --created-by "run_daily_pipeline.sh"
+        --notes "daily pipeline incremental scan"
+    )
+    if [ -n "$TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT" ]; then
+        guidance_enqueue_args+=(--limit "$TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT")
+    fi
+    uv run enqueue_translation_guidance_scans.py "${guidance_enqueue_args[@]}" \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation-guidance enqueue step failed" | tee -a "$LOGFILE"
+fi
+
+# Step 5k2: Process a bounded translation-guidance scan batch
+TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT="${TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT:-500}"
+TRANSLATION_GUIDANCE_SCAN_FORMULA_AI_LIMIT="${TRANSLATION_GUIDANCE_SCAN_FORMULA_AI_LIMIT:-5}"
+TRANSLATION_GUIDANCE_SCAN_DELAY="${TRANSLATION_GUIDANCE_SCAN_DELAY:-0}"
+if [ "$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT" -gt 0 ]; then
+    echo "Step 5k2: Processing translation-guidance scans..." | tee -a "$LOGFILE"
+    uv run process_translation_guidance_scans.py \
+        --limit "$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT" \
+        --formula-ai-limit "$TRANSLATION_GUIDANCE_SCAN_FORMULA_AI_LIMIT" \
+        --delay "$TRANSLATION_GUIDANCE_SCAN_DELAY" \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation-guidance scan step failed" | tee -a "$LOGFILE"
+fi
+
 # Step 5l: Sync with nodegoat before progress/site generation
 echo "Step 5l: Syncing with nodegoat..." | tee -a "$LOGFILE"
 uv run sync_nodegoat.py --push --catch-up --limit 20 2>&1 | tee -a "$LOGFILE" || echo "  Warning: nodegoat sync failed" | tee -a "$LOGFILE"
@@ -266,6 +315,10 @@ uv run generate_progress_site.py 2>&1 | tee -a "$LOGFILE"
 # Step 7: Generate reference website
 echo "Step 7: Generating reference website..." | tee -a "$LOGFILE"
 uv run generate_reference_site.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 7a0: Generate word/lemma indexes and static search data
+echo "Step 7a0: Generating word/lemma indexes and search data..." | tee -a "$LOGFILE"
+uv run generate_word_lemma_indexes.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 7a: Generate statistics website
 echo "Step 7a: Generating statistics website..." | tee -a "$LOGFILE"

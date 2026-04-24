@@ -12,6 +12,7 @@ import os
 import subprocess
 import tempfile
 import shutil
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -287,6 +288,87 @@ def fetch_index_data(lemma_ids):
     return persons, places, peoples, deities, sources
 
 
+def table_exists(cur, table_name: str) -> bool:
+    cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table_name}",))
+    return bool(cur.fetchone()[0])
+
+
+def fetch_word_lemma_index_data(lemma_ids):
+    """
+    Fetch Greek word/lemma index terms for the PDF.
+
+    Terms whose document frequency is more than 10% of processed Meineke
+    passages are omitted to keep the printed indexes useful.
+    """
+    if not lemma_ids:
+        return {}, {}, {"processed_documents": 0, "word_terms": 0, "lemma_terms": 0}
+
+    conn = get_connection()
+    cur = conn.cursor()
+    if not table_exists(cur, "meineke_word_lemma_documents") or not table_exists(cur, "meineke_word_lemma_occurrences"):
+        conn.close()
+        return {}, {}, {"processed_documents": 0, "word_terms": 0, "lemma_terms": 0}
+
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM meineke_word_lemma_documents
+        WHERE status = 'completed'
+        """
+    )
+    processed_documents = int(cur.fetchone()[0] or 0)
+    if processed_documents <= 0:
+        conn.close()
+        return {}, {}, {"processed_documents": 0, "word_terms": 0, "lemma_terms": 0}
+
+    def build_index(term_column: str, display_column: str):
+        cur.execute(
+            f"""
+            WITH allowed_terms AS (
+                SELECT {term_column} AS term_key
+                FROM meineke_word_lemma_occurrences
+                WHERE COALESCE({term_column}, '') != ''
+                GROUP BY {term_column}
+                HAVING COUNT(DISTINCT source_lemma_id) * 10 <= %s
+            )
+            SELECT o.source_lemma_id, o.{term_column}, o.{display_column}, COUNT(*) AS use_count
+            FROM meineke_word_lemma_occurrences o
+            JOIN allowed_terms allowed ON allowed.term_key = o.{term_column}
+            WHERE o.source_lemma_id = ANY(%s)
+            GROUP BY o.source_lemma_id, o.{term_column}, o.{display_column}
+            ORDER BY o.{term_column}, o.source_lemma_id
+            """,
+            (processed_documents, lemma_ids),
+        )
+        display_counts: dict[str, Counter] = defaultdict(Counter)
+        terms_by_lemma_key: dict[int, set[str]] = defaultdict(set)
+        for source_lemma_id, term_key, display_value, use_count in cur.fetchall():
+            if not term_key or not display_value:
+                continue
+            display_counts[term_key][display_value] += int(use_count or 0)
+            terms_by_lemma_key[int(source_lemma_id)].add(term_key)
+
+        display_by_key = {
+            term_key: counts.most_common(1)[0][0]
+            for term_key, counts in display_counts.items()
+            if counts
+        }
+        return {
+            lemma_id: sorted(display_by_key[key] for key in keys if key in display_by_key)
+            for lemma_id, keys in terms_by_lemma_key.items()
+        }
+
+    word_terms_by_lemma = build_index("normalized_word", "surface_form")
+    lemma_terms_by_lemma = build_index("normalized_lemma", "mapped_lemma")
+    stats = {
+        "processed_documents": processed_documents,
+        "word_terms": sum(len(items) for items in word_terms_by_lemma.values()),
+        "lemma_terms": sum(len(items) for items in lemma_terms_by_lemma.values()),
+    }
+    conn.close()
+    return word_terms_by_lemma, lemma_terms_by_lemma, stats
+
+
 def escape_latex(text):
     """Escape LaTeX special characters."""
     if not text:
@@ -453,8 +535,20 @@ def generate_overview_map(lemmas, output_path):
     return output_path
 
 
-def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=None):
+def generate_latex(
+    lemmas,
+    persons,
+    places,
+    peoples,
+    deities,
+    sources,
+    word_terms_by_lemma=None,
+    lemma_terms_by_lemma=None,
+    map_path=None,
+):
     """Generate LaTeX content for the PDF."""
+    word_terms_by_lemma = word_terms_by_lemma or {}
+    lemma_terms_by_lemma = lemma_terms_by_lemma or {}
 
     # Build lemma_id to headword mapping for index generation
     id_to_headword = {l['id']: l['lemma'] for l in lemmas}
@@ -531,6 +625,12 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
                 if lemma_id in ids:
                     index_entries.append(f"\\index[sources]{{{escape_index_term(source)}}}")
 
+            for word_form in word_terms_by_lemma.get(lemma_id, []):
+                index_entries.append(f"\\index[greekwords]{{{escape_index_term(word_form)}}}")
+
+            for lexical_lemma in lemma_terms_by_lemma.get(lemma_id, []):
+                index_entries.append(f"\\index[greeklemmas]{{{escape_index_term(lexical_lemma)}}}")
+
             index_str = ''.join(index_entries)
 
             # Build geodata block if coordinates are available
@@ -593,6 +693,8 @@ def generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=
 \makeindex[name=peoples,title=Index of Peoples and Ethnic Groups,intoc]
 \makeindex[name=deities,title=Index of Deities,intoc]
 \makeindex[name=sources,title=Index of Ancient Sources,intoc]
+\makeindex[name=greekwords,title=Index of Meineke Word Forms,intoc]
+\makeindex[name=greeklemmas,title=Index of Meineke Lexical Lemmas,intoc]
 
 % Colors
 \usepackage{xcolor}
@@ -716,6 +818,8 @@ where available.
 \backmatter
 
 % Print all indices
+\printindex[greeklemmas]
+\printindex[greekwords]
 \printindex[sources]
 \printindex[persons]
 \printindex[places]
@@ -741,6 +845,13 @@ def generate_pdf():
     lemma_ids = [l['id'] for l in lemmas]
     persons, places, peoples, deities, sources = fetch_index_data(lemma_ids)
     print(f"  Persons: {len(persons)}, Places: {len(places)}, Peoples: {len(peoples)}, Deities: {len(deities)}, Sources: {len(sources)}")
+    word_terms_by_lemma, lemma_terms_by_lemma, word_lemma_stats = fetch_word_lemma_index_data(lemma_ids)
+    print(
+        "  Meineke word/lemma index: "
+        f"{word_lemma_stats['word_terms']:,} word terms, "
+        f"{word_lemma_stats['lemma_terms']:,} lemma terms "
+        f"from {word_lemma_stats['processed_documents']:,} processed passages"
+    )
 
     # Generate overview map
     print("Generating overview map...")
@@ -749,7 +860,17 @@ def generate_pdf():
     map_result = generate_overview_map(lemmas, map_path)
 
     print("Generating LaTeX...")
-    latex_content = generate_latex(lemmas, persons, places, peoples, deities, sources, map_path=map_result)
+    latex_content = generate_latex(
+        lemmas,
+        persons,
+        places,
+        peoples,
+        deities,
+        sources,
+        word_terms_by_lemma=word_terms_by_lemma,
+        lemma_terms_by_lemma=lemma_terms_by_lemma,
+        map_path=map_result,
+    )
 
     # Save .tex file for reference
     tex_path = OUTPUT_DIR / TEX_FILENAME
@@ -781,7 +902,7 @@ def generate_pdf():
 
         # Run makeindex for each index
         print("  Building indices...")
-        for idx_name in ['persons', 'places', 'peoples', 'deities', 'sources']:
+        for idx_name in ['persons', 'places', 'peoples', 'deities', 'sources', 'greekwords', 'greeklemmas']:
             idx_file = Path(tmpdir) / f"book-{idx_name}.idx"
             if idx_file.exists():
                 subprocess.run(

@@ -24,6 +24,7 @@ def ensure_required_tables(cur) -> None:
         "translation_guidance_rules",
         "translation_guidance_rule_revisions",
         "translation_guidance_scan_queue",
+        "translation_guidance_matches",
         "lemma_source_text_versions",
         "assembled_lemmas",
     ]
@@ -115,6 +116,7 @@ def enqueue_one(
     requested_by: str,
     priority: int,
     notes: str | None,
+    rescan_existing_matches: bool,
 ) -> bool:
     cur.execute(
         """
@@ -150,6 +152,17 @@ def enqueue_one(
               AND q.source_text_version_id = %s
               AND q.status IN ('pending', 'running')
         )
+          AND (
+              %s
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM translation_guidance_matches m
+                  WHERE m.rule_revision_id = %s
+                    AND m.lemma_id = %s
+                    AND m.source_text_version_id = %s
+                    AND m.detector_kind = %s
+              )
+          )
         """,
         (
             rule_id,
@@ -163,6 +176,11 @@ def enqueue_one(
             rule_revision_id,
             lemma_id,
             source_text_version_id,
+            rescan_existing_matches,
+            rule_revision_id,
+            lemma_id,
+            source_text_version_id,
+            detector_kind,
         ),
     )
     return cur.rowcount > 0
@@ -177,10 +195,16 @@ def main() -> None:
     parser.add_argument("--lemma-id", type=int, action="append", help="Restrict to one or more lemma ids")
     parser.add_argument("--source-document", default="billerbeck", choices=["billerbeck", "meineke"])
     parser.add_argument("--limit", type=int, help="Max source lemmas to enqueue per run")
+    parser.add_argument("--max-queue-rows", type=int, help="Stop after inserting this many queue rows")
     parser.add_argument("--priority", type=int, default=100)
     parser.add_argument("--created-by", default="enqueue_translation_guidance_scans.py")
     parser.add_argument("--notes", help="Optional note stored on each queue row")
     parser.add_argument("--include-quarantined", action="store_true")
+    parser.add_argument(
+        "--rescan-existing-matches",
+        action="store_true",
+        help="Queue work even when this rule revision/source text already has a stored match.",
+    )
     args = parser.parse_args()
 
     from db import get_connection
@@ -199,9 +223,13 @@ def main() -> None:
 
     inserted = 0
     skipped = 0
-    for rule_id, kind, revision_id in rules:
-        detector_kind = DETECTOR_BY_KIND[kind]
-        for lemma_id, source_text_version_id in source_rows:
+    reached_queue_limit = False
+    for lemma_id, source_text_version_id in source_rows:
+        for rule_id, kind, revision_id in rules:
+            if args.max_queue_rows is not None and inserted >= args.max_queue_rows:
+                reached_queue_limit = True
+                break
+            detector_kind = DETECTOR_BY_KIND[kind]
             added = enqueue_one(
                 cur,
                 rule_id=rule_id,
@@ -212,11 +240,14 @@ def main() -> None:
                 requested_by=args.created_by,
                 priority=args.priority,
                 notes=args.notes,
+                rescan_existing_matches=args.rescan_existing_matches,
             )
             if added:
                 inserted += 1
             else:
                 skipped += 1
+        if reached_queue_limit:
+            break
 
     conn.commit()
     conn.close()
@@ -225,6 +256,8 @@ def main() -> None:
     print(f"Source rows selected: {len(source_rows)}")
     print(f"Queue rows inserted: {inserted}")
     print(f"Queue rows skipped: {skipped}")
+    if reached_queue_limit:
+        print(f"Stopped after reaching max queue rows: {args.max_queue_rows}")
 
 
 if __name__ == "__main__":
