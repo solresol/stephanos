@@ -60,6 +60,17 @@ func main() {
 	commentaryPhraseText := strings.TrimSpace(formData.Get("commentary_phrase_text"))
 	commentaryText := strings.TrimSpace(formData.Get("commentary_text"))
 	commentarySourceTextVersionID := strings.TrimSpace(formData.Get("commentary_source_text_version_id"))
+	guidanceAction := strings.TrimSpace(strings.ToLower(formData.Get("guidance_action")))
+	guidanceTargetRuleKey := strings.TrimSpace(formData.Get("guidance_target_rule_key"))
+	guidanceKind := strings.TrimSpace(formData.Get("guidance_kind"))
+	guidanceLabel := strings.TrimSpace(formData.Get("guidance_label"))
+	guidancePreferredTranslation := strings.TrimSpace(formData.Get("guidance_preferred_translation"))
+	guidanceWordClass := strings.TrimSpace(formData.Get("guidance_word_class"))
+	guidanceStatus := strings.TrimSpace(formData.Get("guidance_status"))
+	guidanceApplicationMode := strings.TrimSpace(formData.Get("guidance_application_mode"))
+	guidanceCitationsText := strings.TrimSpace(formData.Get("guidance_citations_text"))
+	guidanceRuleCode := strings.TrimSpace(formData.Get("guidance_rule_code"))
+	guidanceFilterKind := strings.TrimSpace(formData.Get("guidance_filter_kind"))
 	entityAction := strings.TrimSpace(strings.ToLower(formData.Get("entity_action")))
 	properNounIDStr := strings.TrimSpace(formData.Get("proper_noun_id"))
 	entityQID := strings.TrimSpace(formData.Get("entity_qid"))
@@ -85,6 +96,42 @@ func main() {
 	remoteUser := os.Getenv("REMOTE_USER")
 	setCanonical := setCanonicalRaw == "1" || strings.EqualFold(setCanonicalRaw, "true") || strings.EqualFold(setCanonicalRaw, "on")
 	clearCanonical := clearCanonicalRaw == "1" || strings.EqualFold(clearCanonicalRaw, "true") || strings.EqualFold(clearCanonicalRaw, "on")
+
+	if formMode == "guidance" {
+		config := GetConfig()
+		db, err := OpenDatabase(config.DBPath)
+		if err != nil {
+			showGuidanceErrorAndExit(fmt.Sprintf("Failed to open database: %v", err), guidanceFilterKind)
+			return
+		}
+		defer db.Close()
+
+		targetRuleKey, err := InsertTranslationGuidanceAction(
+			db,
+			TranslationGuidanceAction{
+				TargetRuleKey:        guidanceTargetRuleKey,
+				Action:               guidanceAction,
+				Kind:                 guidanceKind,
+				Label:                guidanceLabel,
+				PreferredTranslation: guidancePreferredTranslation,
+				WordClass:            guidanceWordClass,
+				Status:               guidanceStatus,
+				ApplicationMode:      guidanceApplicationMode,
+				CitationsText:        guidanceCitationsText,
+				Notes:                notes,
+				RuleCode:             guidanceRuleCode,
+			},
+			remoteUser,
+		)
+		if err != nil {
+			showGuidanceErrorAndExit(fmt.Sprintf("Failed to save guidance action: %v", err), guidanceFilterKind)
+			return
+		}
+
+		writeGuidanceRedirect(guidanceFilterKind, targetRuleKey)
+		log.Printf("Guidance action saved: action=%s, rule_key=%s, user=%s", guidanceAction, targetRuleKey, remoteUser)
+		return
+	}
 
 	// Validate required fields
 	if lemmaIDStr == "" {
@@ -440,6 +487,8 @@ func normalizeReturnView(returnView string) string {
 	switch strings.TrimSpace(strings.ToLower(returnView)) {
 	case "entities", "entity":
 		return "entities"
+	case "guidance":
+		return "guidance"
 	default:
 		return "translation"
 	}
@@ -451,6 +500,9 @@ func redirectPath(returnView string, redirectID int) string {
 			return "/cgi-bin/entities.cgi"
 		}
 		return fmt.Sprintf("/cgi-bin/entities.cgi?id=%d", redirectID)
+	}
+	if normalizeReturnView(returnView) == "guidance" {
+		return "/cgi-bin/guidance.cgi"
 	}
 	if redirectID <= 0 {
 		return "/cgi-bin/review.cgi"
@@ -506,6 +558,76 @@ func showErrorAndExit(message string, returnView string) {
         <h1>Error Saving Review</h1>
         <p>%s</p>
         <p><a href="%s">← Return to review system</a></p>
+    </div>
+</body>
+</html>`, HTMLEscape(message), location)
+
+	log.Printf("Error: %s", message)
+}
+
+func guidanceRedirectPath(filterKind string, targetRuleKey string) string {
+	params := url.Values{}
+	if normalized := normalizeGuidanceKind(filterKind); normalized != "" {
+		params.Set("kind", normalized)
+	}
+	path := "/cgi-bin/guidance.cgi"
+	if encoded := params.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	if strings.TrimSpace(targetRuleKey) != "" {
+		path += "#rule-" + strings.TrimSpace(targetRuleKey)
+	}
+	return path
+}
+
+func writeGuidanceRedirect(filterKind string, targetRuleKey string) {
+	location := guidanceRedirectPath(filterKind, targetRuleKey)
+	fmt.Println("Status: 303 See Other")
+	fmt.Printf("Location: %s\n", location)
+	fmt.Println("Content-Type: text/html; charset=utf-8")
+	fmt.Println()
+	fmt.Printf(`<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="refresh" content="0;url=%s">
+    <title>Redirecting...</title>
+</head>
+<body>
+    <p>Guidance saved. Redirecting...</p>
+    <p><a href="%s">Click here if not redirected</a></p>
+</body>
+</html>`, location, location)
+}
+
+func showGuidanceErrorAndExit(message string, filterKind string) {
+	location := guidanceRedirectPath(filterKind, "")
+	fmt.Println("Content-Type: text/html; charset=utf-8")
+	fmt.Println()
+	fmt.Printf(`<!DOCTYPE html>
+<html>
+<head>
+    <title>Error - Save Guidance</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .error {
+            background: #fee;
+            border: 2px solid #c00;
+            padding: 20px;
+            border-radius: 8px;
+        }
+        h1 { color: #c00; }
+    </style>
+</head>
+<body>
+    <div class="error">
+        <h1>Error Saving Guidance</h1>
+        <p>%s</p>
+        <p><a href="%s">← Return to guidance editor</a></p>
     </div>
 </body>
 </html>`, HTMLEscape(message), location)

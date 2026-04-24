@@ -292,6 +292,7 @@ uv run generate_peoples_page.py 2>&1 | tee -a "$LOGFILE"
 uv run generate_fgrhist_page.py 2>&1 | tee -a "$LOGFILE"
 uv run generate_aliases_page.py 2>&1 | tee -a "$LOGFILE"
 uv run generate_meineke_difference_analysis_page.py 2>&1 | tee -a "$LOGFILE"
+uv run generate_translation_guidance_page.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 7c: Generate protected pages
 echo "Step 7c: Generating protected pages..." | tee -a "$LOGFILE"

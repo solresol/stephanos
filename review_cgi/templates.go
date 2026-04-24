@@ -739,6 +739,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
             <div class="view-tabs">
                 <span class="view-tab active">Translation review</span>
                 <a class="view-tab" href="/cgi-bin/entities.cgi?id={{.Lemma.ID}}">Entity resolution ({{.PlaceClusterCount}} places, {{.OtherEntityCount}} others)</a>
+                <a class="view-tab" href="/cgi-bin/guidance.cgi">Translation guidance</a>
             </div>
             <div class="metadata">
                 Entry {{.CurrentPosition}} of {{.TotalCount}}
@@ -1362,6 +1363,7 @@ const entityResolutionTemplate = `<!DOCTYPE html>
             <div class="view-tabs">
                 <a class="view-tab" href="/cgi-bin/review.cgi?id={{.Lemma.ID}}">Translation review</a>
                 <span class="view-tab active">Entity resolution</span>
+                <a class="view-tab" href="/cgi-bin/guidance.cgi">Translation guidance</a>
             </div>
             <div class="metadata">Entry {{.CurrentPosition}} of {{.TotalCount}}</div>
         </div>

@@ -9,16 +9,27 @@ and updates the assembled_lemmas table in PostgreSQL with human corrections.
 import sqlite3
 import sys
 from datetime import datetime
+import json
 from pathlib import Path
 
 from db import get_connection
 import canonical_variants
+from import_translation_guidance_spreadsheets import (
+    comparable_state as guidance_comparable_state,
+    fetch_existing as fetch_existing_guidance_rule,
+    insert_revision as insert_guidance_revision,
+    insert_rule as insert_guidance_rule,
+    make_rule_key as make_guidance_rule_key,
+    normalize_label as normalize_guidance_label,
+    update_rule as update_guidance_rule,
+)
 
 SQLITE_DB = Path.home() / "stephanos" / "review_data" / "reviews.db"
 LOG_FILE = Path.home() / "stephanos" / "logs" / "review_import.log"
 CANONICAL_ACTION_SOURCE = "merah_reviews"
 ENTITY_ACTION_SOURCE = "merah_entity_actions"
 COMMENTARY_UPDATED_BY_PREFIX = "merah_review:"
+GUIDANCE_ACTION_SOURCE = "merah_translation_guidance_actions"
 
 
 def log(message):
@@ -149,6 +160,56 @@ def set_last_imported_entity_action_id(pg_cur, last_action_id: int):
     )
 
 
+def get_last_imported_guidance_action_id(pg_cur) -> int:
+    ensure_canonical_import_state_table(pg_cur)
+    pg_cur.execute(
+        """
+        INSERT INTO canonical_action_import_state (source, last_action_id, updated_at)
+        VALUES (%s, 0, NOW())
+        ON CONFLICT (source) DO NOTHING
+        """,
+        (GUIDANCE_ACTION_SOURCE,),
+    )
+    pg_cur.execute(
+        """
+        SELECT COALESCE(last_action_id, 0)
+        FROM canonical_action_import_state
+        WHERE source = %s
+        LIMIT 1
+        """,
+        (GUIDANCE_ACTION_SOURCE,),
+    )
+    row = pg_cur.fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def set_last_imported_guidance_action_id(pg_cur, last_action_id: int):
+    ensure_canonical_import_state_table(pg_cur)
+    pg_cur.execute(
+        """
+        INSERT INTO canonical_action_import_state (source, last_action_id, updated_at)
+        VALUES (%s, %s, NOW())
+        ON CONFLICT (source) DO UPDATE SET
+            last_action_id = EXCLUDED.last_action_id,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (GUIDANCE_ACTION_SOURCE, int(last_action_id or 0)),
+    )
+
+
+def ensure_guidance_import_map_table(pg_cur):
+    pg_cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS translation_guidance_action_import_map (
+            source_key TEXT PRIMARY KEY,
+            rule_id BIGINT NOT NULL,
+            rule_key TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+
+
 def canonical_actions_preflight(sqlite_cur, pg_cur) -> None:
     """
     Abort early if the SQLite canonical action log appears to have been reset/rewound.
@@ -178,6 +239,20 @@ def entity_actions_preflight(sqlite_cur, pg_cur) -> None:
     if sqlite_max_id < pg_last_id:
         raise RuntimeError(
             "SQLite entity action log appears to be reset/rewound: "
+            f"max_id={sqlite_max_id} < last_imported_id={pg_last_id}"
+        )
+
+
+def guidance_actions_preflight(sqlite_cur, pg_cur) -> None:
+    if not sqlite_table_exists(sqlite_cur, "translation_guidance_actions"):
+        return
+    sqlite_cur.execute("SELECT COALESCE(MAX(id), 0) AS max_id FROM translation_guidance_actions")
+    sqlite_max_id = int(sqlite_cur.fetchone()["max_id"] or 0)
+
+    pg_last_id = get_last_imported_guidance_action_id(pg_cur)
+    if sqlite_max_id < pg_last_id:
+        raise RuntimeError(
+            "SQLite guidance action log appears to be reset/rewound: "
             f"max_id={sqlite_max_id} < last_imported_id={pg_last_id}"
         )
 
@@ -491,6 +566,205 @@ def import_commentary_entries(sqlite_cur, pg_cur) -> tuple[int, int]:
         inserted += 1
 
     return inserted, cleared
+
+
+def default_guidance_status(kind: str) -> str:
+    return "settled" if (kind or "").strip() == "proper_noun" else "in_progress"
+
+
+def default_guidance_application_mode(kind: str) -> str:
+    if (kind or "").strip() == "formula":
+        return "required"
+    if (kind or "").strip() == "proper_noun":
+        return "replace"
+    return "advisory"
+
+
+def build_guidance_rule_payload(sqlite_row, *, rule_key: str, status_override: str | None = None) -> dict[str, object]:
+    kind = (sqlite_row["kind"] or "").strip()
+    label = (sqlite_row["label"] or "").strip()
+    return {
+        "rule_key": rule_key,
+        "rule_code": (sqlite_row["rule_code"] or "").strip() or None,
+        "kind": kind,
+        "label": label,
+        "normalized_label": normalize_guidance_label(label),
+        "preferred_translation": (sqlite_row["preferred_translation"] or "").strip() or None,
+        "word_class": (sqlite_row["word_class"] or "").strip() or None,
+        "status": (status_override or (sqlite_row["status"] or "").strip() or default_guidance_status(kind)).strip(),
+        "application_mode": ((sqlite_row["application_mode"] or "").strip() or default_guidance_application_mode(kind)).strip(),
+        "citations_text": (sqlite_row["citations_text"] or "").strip() or None,
+        "notes": (sqlite_row["notes"] or "").strip() or None,
+        "source_workbook": "merah",
+        "source_sheet": "guidance.cgi",
+        "source_row_number": int(sqlite_row["id"] or 0),
+    }
+
+
+def store_guidance_import_map(pg_cur, source_key: str, rule_id: int, rule_key: str) -> None:
+    ensure_guidance_import_map_table(pg_cur)
+    pg_cur.execute(
+        """
+        INSERT INTO translation_guidance_action_import_map (source_key, rule_id, rule_key, updated_at)
+        VALUES (%s, %s, %s, NOW())
+        ON CONFLICT (source_key) DO UPDATE SET
+            rule_id = EXCLUDED.rule_id,
+            rule_key = EXCLUDED.rule_key,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (source_key, int(rule_id), rule_key),
+    )
+
+
+def lookup_guidance_import_map(pg_cur, source_key: str) -> tuple[int, str] | None:
+    ensure_guidance_import_map_table(pg_cur)
+    pg_cur.execute(
+        """
+        SELECT rule_id, rule_key
+        FROM translation_guidance_action_import_map
+        WHERE source_key = %s
+        LIMIT 1
+        """,
+        (source_key,),
+    )
+    row = pg_cur.fetchone()
+    if not row:
+        return None
+    return int(row[0]), row[1]
+
+
+def import_translation_guidance_actions(sqlite_cur, pg_cur) -> tuple[int, int, int]:
+    if not sqlite_table_exists(sqlite_cur, "translation_guidance_actions"):
+        return 0, 0, 0
+
+    required_tables = [
+        "translation_guidance_rules",
+        "translation_guidance_rule_revisions",
+    ]
+    missing = []
+    for table in required_tables:
+        pg_cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table}",))
+        if not bool(pg_cur.fetchone()[0]):
+            missing.append(table)
+    if missing:
+        log(
+            "WARNING: translation guidance target tables missing; skipping guidance import: "
+            + ", ".join(missing)
+        )
+        return 0, 0, 0
+
+    last_id = get_last_imported_guidance_action_id(pg_cur)
+    sqlite_cur.execute(
+        """
+        SELECT
+            id,
+            COALESCE(target_rule_key, '') AS target_rule_key,
+            COALESCE(action, '') AS action,
+            COALESCE(kind, '') AS kind,
+            COALESCE(label, '') AS label,
+            COALESCE(preferred_translation, '') AS preferred_translation,
+            COALESCE(word_class, '') AS word_class,
+            COALESCE(status, '') AS status,
+            COALESCE(application_mode, '') AS application_mode,
+            COALESCE(citations_text, '') AS citations_text,
+            COALESCE(notes, '') AS notes,
+            COALESCE(rule_code, '') AS rule_code,
+            COALESCE(reviewer_username, '') AS reviewer_username,
+            reviewed_at
+        FROM translation_guidance_actions
+        WHERE id > ?
+        ORDER BY reviewed_at ASC, id ASC
+        """,
+        (last_id,),
+    )
+    rows = sqlite_cur.fetchall()
+    if not rows:
+        return 0, 0, 0
+
+    applied = skipped = errors = 0
+    max_seen_id = last_id
+
+    for row in rows:
+        action_id = int(row["id"] or 0)
+        max_seen_id = max(max_seen_id, action_id)
+        action = (row["action"] or "").strip().lower()
+        target_rule_key = (row["target_rule_key"] or "").strip()
+        reviewer = (row["reviewer_username"] or "").strip() or "import_reviews.py"
+        reviewed_at = row["reviewed_at"] or None
+        kind = (row["kind"] or "").strip()
+        label = (row["label"] or "").strip()
+
+        if not kind or not label:
+            skipped += 1
+            continue
+
+        status_override = "retired" if action == "retire" else None
+        canonical_rule_key = make_guidance_rule_key(kind, normalize_guidance_label(label))
+        rule = build_guidance_rule_payload(row, rule_key=canonical_rule_key, status_override=status_override)
+
+        try:
+            existing = None
+            existing_rule_id = None
+            existing_rule_key = ""
+
+            if target_rule_key.startswith("local:"):
+                mapped = lookup_guidance_import_map(pg_cur, target_rule_key)
+                if mapped:
+                    existing_rule_id, existing_rule_key = mapped
+                    existing = fetch_existing_guidance_rule(pg_cur, existing_rule_key)
+                if existing is None:
+                    existing = fetch_existing_guidance_rule(pg_cur, canonical_rule_key)
+                    if existing:
+                        existing_rule_id = int(existing["id"])
+                        existing_rule_key = str(existing["rule_key"])
+            elif target_rule_key:
+                existing = fetch_existing_guidance_rule(pg_cur, target_rule_key)
+                if existing:
+                    existing_rule_id = int(existing["id"])
+                    existing_rule_key = str(existing["rule_key"])
+                if existing is None:
+                    existing = fetch_existing_guidance_rule(pg_cur, canonical_rule_key)
+                    if existing:
+                        existing_rule_id = int(existing["id"])
+                        existing_rule_key = str(existing["rule_key"])
+
+            if existing and existing_rule_id:
+                rule["rule_key"] = existing_rule_key
+                update_guidance_rule(pg_cur, existing_rule_id, rule, reviewer)
+                revision_action = action if action in {"update", "retire", "reactivate"} else "update"
+                rule_id = existing_rule_id
+                final_rule_key = existing_rule_key
+            else:
+                rule_id = insert_guidance_rule(pg_cur, rule, reviewer)
+                revision_action = "create"
+                final_rule_key = str(rule["rule_key"])
+
+            insert_guidance_revision(
+                pg_cur,
+                rule_id=rule_id,
+                action=revision_action,
+                changed_by=reviewer,
+                change_summary=f"Imported guidance {action or revision_action} action from protected review site",
+                source_context={
+                    "source": "merah_guidance_actions",
+                    "sqlite_action_id": action_id,
+                    "target_rule_key": target_rule_key,
+                    "reviewed_at": str(reviewed_at) if reviewed_at else "",
+                    "reviewer_username": reviewer,
+                },
+                snapshot=guidance_comparable_state(rule),
+            )
+
+            if target_rule_key.startswith("local:"):
+                store_guidance_import_map(pg_cur, target_rule_key, rule_id, final_rule_key)
+
+            applied += 1
+        except Exception as exc:
+            log(f"  ERROR importing guidance action ID {action_id}: {exc}")
+            errors += 1
+
+    set_last_imported_guidance_action_id(pg_cur, max_seen_id)
+    return applied, skipped, errors
 
 
 def import_place_cluster_reviews(sqlite_cur, pg_cur) -> tuple[int, int, int]:
@@ -1089,6 +1363,13 @@ def import_reviews():
         sqlite_conn.close()
         pg_conn.close()
         return 1
+    try:
+        guidance_actions_preflight(sqlite_cur, pg_cur)
+    except Exception as e:
+        log(f"ERROR: guidance action preflight failed: {e}")
+        sqlite_conn.close()
+        pg_conn.close()
+        return 1
 
     pg_cur.execute("SELECT to_regclass('public.human_translations') IS NOT NULL")
     has_human_translations = bool(pg_cur.fetchone()[0])
@@ -1279,6 +1560,21 @@ def import_reviews():
         pg_conn.close()
         return 1
 
+    guidance_applied = guidance_skipped = guidance_errors = 0
+    try:
+        guidance_applied, guidance_skipped, guidance_errors = import_translation_guidance_actions(sqlite_cur, pg_cur)
+        if guidance_applied or guidance_errors:
+            log(
+                "Translation guidance import: "
+                f"applied={guidance_applied}, skipped={guidance_skipped}, errors={guidance_errors}"
+            )
+    except Exception as e:
+        log(f"ERROR: Translation guidance import failed: {e}")
+        pg_conn.rollback()
+        sqlite_conn.close()
+        pg_conn.close()
+        return 1
+
     place_cluster_applied = place_cluster_skipped = place_cluster_errors = 0
     try:
         place_cluster_applied, place_cluster_skipped, place_cluster_errors = import_place_cluster_reviews(sqlite_cur, pg_cur)
@@ -1324,12 +1620,16 @@ def import_reviews():
     if commentary_imported or commentary_cleared:
         log(f"  Commentary imported: {commentary_imported}")
         log(f"  Commentary cleared previous: {commentary_cleared}")
+    if guidance_applied or guidance_errors:
+        log(f"  Translation guidance actions applied: {guidance_applied}")
+        log(f"  Translation guidance actions skipped: {guidance_skipped}")
+        log(f"  Translation guidance action errors: {guidance_errors}")
     if place_cluster_applied or place_cluster_errors:
         log(f"  Place-cluster reviews applied: {place_cluster_applied}")
         log(f"  Place-cluster reviews skipped: {place_cluster_skipped}")
         log(f"  Place-cluster review errors: {place_cluster_errors}")
 
-    if error_count > 0 or variant_errors > 0 or human_sync_errors > 0 or entity_errors > 0 or place_cluster_errors > 0:
+    if error_count > 0 or variant_errors > 0 or human_sync_errors > 0 or entity_errors > 0 or guidance_errors > 0 or place_cluster_errors > 0:
         return 1
 
     return 0

@@ -1046,6 +1046,109 @@ def export_lemmas():
                 }
             )
 
+    translation_guidance_rules = []
+    cur.execute("SELECT to_regclass('public.translation_guidance_rules') IS NOT NULL")
+    has_guidance_rules = bool(cur.fetchone()[0])
+    if has_guidance_rules:
+        cur.execute("SELECT to_regclass('public.translation_guidance_matches') IS NOT NULL")
+        has_guidance_matches = bool(cur.fetchone()[0])
+        cur.execute("SELECT to_regclass('public.translation_guidance_backlog_items') IS NOT NULL")
+        has_guidance_backlog = bool(cur.fetchone()[0])
+
+        guidance_match_join = ""
+        guidance_match_select = "0 AS match_count, 0 AS uncertain_count"
+        if has_guidance_matches:
+            guidance_match_join = """
+            LEFT JOIN LATERAL (
+                SELECT
+                    COUNT(*) FILTER (WHERE match_status = 'matched') AS match_count,
+                    COUNT(*) FILTER (WHERE match_status = 'uncertain') AS uncertain_count
+                FROM translation_guidance_matches gm
+                WHERE gm.rule_id = r.id
+            ) m ON TRUE
+            """
+            guidance_match_select = """
+            COALESCE(m.match_count, 0) AS match_count,
+            COALESCE(m.uncertain_count, 0) AS uncertain_count
+            """
+
+        guidance_backlog_join = ""
+        guidance_backlog_select = "0 AS backlog_count"
+        if has_guidance_backlog:
+            guidance_backlog_join = """
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) AS backlog_count
+                FROM translation_guidance_backlog_items gb
+                WHERE gb.rule_id = r.id
+                  AND gb.status IN ('pending', 'in_progress')
+            ) b ON TRUE
+            """
+            guidance_backlog_select = "COALESCE(b.backlog_count, 0) AS backlog_count"
+
+        cur.execute(
+            f"""
+            WITH latest_revisions AS (
+                SELECT DISTINCT ON (rule_id)
+                    rule_id,
+                    revision_number
+                FROM translation_guidance_rule_revisions
+                ORDER BY rule_id, revision_number DESC
+            )
+            SELECT
+                r.id,
+                COALESCE(r.rule_key, '') AS rule_key,
+                COALESCE(r.rule_code, '') AS rule_code,
+                COALESCE(r.kind, '') AS kind,
+                COALESCE(r.label, '') AS label,
+                COALESCE(r.normalized_label, '') AS normalized_label,
+                COALESCE(r.preferred_translation, '') AS preferred_translation,
+                COALESCE(r.word_class, '') AS word_class,
+                COALESCE(r.status, '') AS status,
+                COALESCE(r.application_mode, '') AS application_mode,
+                COALESCE(r.citations_text, '') AS citations_text,
+                COALESCE(r.notes, '') AS notes,
+                COALESCE(r.updated_at::text, '') AS updated_at,
+                COALESCE(lr.revision_number, 0) AS revision_number,
+                {guidance_match_select},
+                {guidance_backlog_select}
+            FROM translation_guidance_rules r
+            LEFT JOIN latest_revisions lr ON lr.rule_id = r.id
+            {guidance_match_join}
+            {guidance_backlog_join}
+            ORDER BY
+                CASE r.kind
+                    WHEN 'gloss' THEN 0
+                    WHEN 'formula' THEN 1
+                    WHEN 'proper_noun' THEN 2
+                    ELSE 3
+                END,
+                r.status = 'retired',
+                r.label
+            """
+        )
+        for row in cur.fetchall():
+            translation_guidance_rules.append(
+                {
+                    "id": int(row[0]),
+                    "rule_key": row[1] or "",
+                    "rule_code": row[2] or "",
+                    "kind": row[3] or "",
+                    "label": row[4] or "",
+                    "normalized_label": row[5] or "",
+                    "preferred_translation": row[6] or "",
+                    "word_class": row[7] or "",
+                    "status": row[8] or "",
+                    "application_mode": row[9] or "",
+                    "citations_text": row[10] or "",
+                    "notes": row[11] or "",
+                    "updated_at": row[12] or "",
+                    "revision_number": int(row[13] or 0),
+                    "match_count": int(row[14] or 0),
+                    "uncertain_count": int(row[15] or 0),
+                    "backlog_count": int(row[16] or 0),
+                }
+            )
+
     lemmas = []
     for row in rows:
         (lemma_id, lemma, entry_number, version, greek_text, human_greek_text, english_translation,
@@ -1209,7 +1312,8 @@ def export_lemmas():
     output = {
         "lemmas": lemmas,
         "total_count": len(lemmas),
-        "exported_at": datetime.now(timezone.utc).isoformat()
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "translation_guidance_rules": translation_guidance_rules,
     }
 
     # Write to file

@@ -141,3 +141,25 @@ CREATE TABLE IF NOT EXISTS commentary_entries (
 
 CREATE INDEX IF NOT EXISTS idx_commentary_entries_lemma
 ON commentary_entries(lemma_id, updated_at, id);
+
+-- Local translation-guidance CRUD action log.
+-- PostgreSQL remains authoritative after import.
+CREATE TABLE IF NOT EXISTS translation_guidance_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_rule_key TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('create', 'update', 'retire', 'reactivate')),
+    kind TEXT NOT NULL CHECK (kind IN ('gloss', 'formula', 'proper_noun')),
+    label TEXT NOT NULL,
+    preferred_translation TEXT,
+    word_class TEXT,
+    status TEXT NOT NULL CHECK (status IN ('in_progress', 'settled', 'unsure', 'retired')),
+    application_mode TEXT NOT NULL CHECK (application_mode IN ('advisory', 'required', 'replace')),
+    citations_text TEXT,
+    notes TEXT,
+    rule_code TEXT,
+    reviewer_username TEXT,
+    reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_translation_guidance_actions_rule
+ON translation_guidance_actions(target_rule_key, reviewed_at, id);

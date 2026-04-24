@@ -6,7 +6,8 @@ Go-based CGI programs for reviewing lemma entries from the Stephanos of Byzantiu
 
 - `review.cgi` - Translation review interface
 - `entities.cgi` - Named-entity and place-resolution interface
-- `save.cgi` - Handles saving review data (translations, commentary, entity actions)
+- `guidance.cgi` - Translation guidance CRUD interface
+- `save.cgi` - Handles saving review data (translations, commentary, entity actions, guidance rules)
 - `common.go` - Shared database and data loading functions
 - `page.go` - Shared page assembly and view-model helpers
 - `templates.go` - Translation and entity HTML templates
@@ -25,18 +26,19 @@ The solution is to use `github.com/mattn/go-sqlite3` which requires CGO but work
 ### Build Steps
 
 1. Copy source files to the server:
-   ```bash
-   scp *.go go.mod go.sum stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/cgi-bin/
-   ```
+  ```bash
+  scp *.go go.mod go.sum stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/cgi-bin/
+  ```
 
 2. SSH to the server and build with CGO enabled:
-   ```bash
-   ssh stephanos@merah.cassia.ifost.org.au
-   cd /var/www/vhosts/stephanos.symmachus.org/cgi-bin
-   CGO_ENABLED=1 go build -o review.cgi review.go common.go page.go templates.go shared_helpers.go
-   CGO_ENABLED=1 go build -o entities.cgi entities.go common.go page.go templates.go shared_helpers.go
-   CGO_ENABLED=1 go build -o save.cgi save.go common.go
-   ```
+  ```bash
+  ssh stephanos@merah.cassia.ifost.org.au
+  cd /var/www/vhosts/stephanos.symmachus.org/cgi-bin
+  CGO_ENABLED=1 go build -o review.cgi review.go common.go page.go templates.go shared_helpers.go
+  CGO_ENABLED=1 go build -o entities.cgi entities.go common.go page.go templates.go shared_helpers.go
+  CGO_ENABLED=1 go build -o guidance.cgi guidance.go common.go guidance_common.go templates.go shared_helpers.go
+  CGO_ENABLED=1 go build -o save.cgi save.go common.go guidance_common.go
+  ```
 
 3. Ensure binaries are executable:
    ```bash
@@ -97,6 +99,7 @@ Additional local review tables:
 | `commentary_entries` | Local commentary edits before nightly import |
 | `entity_resolution_actions` | Proper-noun resolution actions and missed-entity additions |
 | `place_cluster_reviews` | Human overrides for distinct same-named place clusters |
+| `translation_guidance_actions` | Local append-only guidance CRUD actions before PostgreSQL import |
 
 ### Deprecated Fields
 
@@ -110,7 +113,8 @@ For local development on Linux, you can build normally:
 ```bash
 go build -o review.cgi review.go common.go page.go templates.go shared_helpers.go
 go build -o entities.cgi entities.go common.go page.go templates.go shared_helpers.go
-go build -o save.cgi save.go common.go
+go build -o guidance.cgi guidance.go common.go guidance_common.go templates.go shared_helpers.go
+go build -o save.cgi save.go common.go guidance_common.go
 ```
 
 Cross-compilation to OpenBSD does NOT work due to the CGO requirement for the SQLite driver.
