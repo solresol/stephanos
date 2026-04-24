@@ -14,6 +14,7 @@ import json
 import re
 import time
 import unicodedata
+from datetime import datetime, timezone
 
 from openai import OpenAI
 
@@ -21,7 +22,9 @@ from api_keys import load_api_key
 from db import get_connection
 
 
-DEFAULT_MODEL = "gpt-5.2"
+DEFAULT_MODEL = "gpt-5.4-mini"
+DEFAULT_DAILY_TOKEN_LIMIT = 250_000
+DEFAULT_FORMULA_AI_LIMIT = 500
 DETECTOR_VERSION = "translation_guidance_scan_v1"
 
 
@@ -263,6 +266,54 @@ def claim_jobs(cur, limit: int) -> list[tuple]:
     return cur.fetchall()
 
 
+def ensure_token_accounting_columns(cur) -> None:
+    cur.execute("ALTER TABLE public.translation_guidance_scan_queue ADD COLUMN IF NOT EXISTS model TEXT")
+    cur.execute(
+        """
+        ALTER TABLE public.translation_guidance_scan_queue
+        ADD COLUMN IF NOT EXISTS tokens_used INTEGER NOT NULL DEFAULT 0
+        """
+    )
+    cur.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'translation_guidance_scan_queue_tokens_used_check'
+            ) THEN
+                ALTER TABLE ONLY public.translation_guidance_scan_queue
+                    ADD CONSTRAINT translation_guidance_scan_queue_tokens_used_check
+                    CHECK (tokens_used >= 0);
+            END IF;
+        END $$;
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS translation_guidance_scan_queue_token_usage_idx
+        ON public.translation_guidance_scan_queue (model, finished_at)
+        WHERE tokens_used > 0
+        """
+    )
+
+
+def get_tokens_used_today(cur, model: str) -> int:
+    today = datetime.now(timezone.utc).date().isoformat()
+    cur.execute(
+        """
+        SELECT COALESCE(SUM(tokens_used), 0)
+        FROM translation_guidance_scan_queue
+        WHERE model = %s
+          AND tokens_used > 0
+          AND DATE(finished_at AT TIME ZONE 'UTC') = %s
+        """,
+        (model, today),
+    )
+    return int(cur.fetchone()[0] or 0)
+
+
 def upsert_match(cur, job: tuple, result: dict[str, object]) -> None:
     (
         _queue_id,
@@ -318,17 +369,41 @@ def upsert_match(cur, job: tuple, result: dict[str, object]) -> None:
     )
 
 
-def mark_job(cur, queue_id: int, *, status: str, error_message: str | None = None) -> None:
+def mark_job(
+    cur,
+    queue_id: int,
+    *,
+    status: str,
+    error_message: str | None = None,
+    model: str | None = None,
+    tokens_used: int = 0,
+) -> None:
     cur.execute(
         """
         UPDATE translation_guidance_scan_queue
         SET status = %s,
             finished_at = NOW(),
             updated_at = NOW(),
+            error_message = %s,
+            model = %s,
+            tokens_used = %s
+        WHERE id = %s
+        """,
+        (status, error_message, model, int(tokens_used or 0), queue_id),
+    )
+
+
+def defer_job(cur, queue_id: int, reason: str) -> None:
+    cur.execute(
+        """
+        UPDATE translation_guidance_scan_queue
+        SET status = 'pending',
+            finished_at = NULL,
+            updated_at = NOW(),
             error_message = %s
         WHERE id = %s
         """,
-        (status, error_message, queue_id),
+        (reason, queue_id),
     )
 
 
@@ -337,7 +412,8 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--delay", type=float, default=0.0)
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--formula-ai-limit", type=int, default=5)
+    parser.add_argument("--daily-token-limit", type=int, default=DEFAULT_DAILY_TOKEN_LIMIT)
+    parser.add_argument("--formula-ai-limit", type=int, default=DEFAULT_FORMULA_AI_LIMIT)
     args = parser.parse_args()
 
     client = None
@@ -349,18 +425,26 @@ def main() -> None:
 
     conn = get_connection()
     cur = conn.cursor()
+    ensure_token_accounting_columns(cur)
+    conn.commit()
+    tokens_today = get_tokens_used_today(cur, args.model)
     jobs = claim_jobs(cur, args.limit)
     conn.commit()
 
     if not jobs:
         conn.close()
         print("No pending guidance scans.")
+        print(f"Formula AI model: {args.model}")
+        print(f"Formula AI tokens used today: {tokens_today:,} / {args.daily_token_limit:,}")
         return
 
     completed = failed = 0
+    deferred = 0
     ai_tokens = 0
 
     for job in jobs:
+        job_model = None
+        job_tokens = 0
         (
             queue_id,
             _rule_id,
@@ -377,15 +461,33 @@ def main() -> None:
         ) = job
         try:
             result = find_deterministic_match(source_text, rule_label)
-            if (
+            needs_formula_ai = (
                 rule_kind == "formula"
                 and (
                     result["match_status"] == "not_matched"
                     or re.search(r"\bX\b|\bY\b|\[", rule_label or "")
                 )
-                and formula_ai_used < args.formula_ai_limit
                 and should_escalate_formula(rule_label, source_text)
-            ):
+            )
+            if needs_formula_ai:
+                if formula_ai_used >= args.formula_ai_limit:
+                    defer_job(
+                        cur,
+                        int(queue_id),
+                        f"Formula AI call limit reached for this run: {formula_ai_used} >= {args.formula_ai_limit}",
+                    )
+                    conn.commit()
+                    deferred += 1
+                    continue
+                if tokens_today + ai_tokens >= args.daily_token_limit:
+                    defer_job(
+                        cur,
+                        int(queue_id),
+                        f"Daily token limit reached for {args.model}: {tokens_today + ai_tokens} >= {args.daily_token_limit}",
+                    )
+                    conn.commit()
+                    deferred += 1
+                    continue
                 if client is not None:
                     ai_result, tokens_used = call_formula_model(
                         client,
@@ -397,8 +499,10 @@ def main() -> None:
                         notes=rule_notes,
                     )
                     result = ai_result
+                    job_model = args.model
+                    job_tokens = int(tokens_used or 0)
                     formula_ai_used += 1
-                    ai_tokens += tokens_used
+                    ai_tokens += job_tokens
                 else:
                     result = {
                         "match_status": "uncertain",
@@ -412,12 +516,19 @@ def main() -> None:
                     }
 
             upsert_match(cur, job, result)
-            mark_job(cur, int(queue_id), status="completed")
+            mark_job(cur, int(queue_id), status="completed", model=job_model, tokens_used=job_tokens)
             conn.commit()
             completed += 1
         except Exception as exc:
             conn.rollback()
-            mark_job(cur, int(queue_id), status="failed", error_message=str(exc))
+            mark_job(
+                cur,
+                int(queue_id),
+                status="failed",
+                error_message=str(exc),
+                model=job_model,
+                tokens_used=job_tokens,
+            )
             conn.commit()
             failed += 1
 
@@ -428,8 +539,11 @@ def main() -> None:
     print(f"Jobs claimed: {len(jobs)}")
     print(f"Jobs completed: {completed}")
     print(f"Jobs failed: {failed}")
+    print(f"Jobs deferred by AI limits: {deferred}")
+    print(f"Formula AI model: {args.model}")
     print(f"Formula AI calls used: {formula_ai_used}")
-    print(f"Formula AI tokens used: {ai_tokens}")
+    print(f"Formula AI tokens used this run: {ai_tokens:,}")
+    print(f"Formula AI tokens used today: {tokens_today + ai_tokens:,} / {args.daily_token_limit:,}")
 
 
 if __name__ == "__main__":

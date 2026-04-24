@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict 4gxbFbaKUG4vV0G1mjVfFNgnUsomS4fR8qFUd0kDMOkmGagLyDrqCYezhQkORi8
+\restrict baiVjii2gN8UNe868dqVI08IPGfEu2r053mdZAXSUWQuzRgGOSyJdWFc9h8VMyW
 
 -- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
@@ -1778,9 +1778,12 @@ CREATE TABLE public.translation_guidance_scan_queue (
     finished_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     error_message text,
+    model text,
+    tokens_used integer DEFAULT 0 NOT NULL,
     CONSTRAINT translation_guidance_scan_queue_attempts_check CHECK ((attempts >= 0)),
     CONSTRAINT translation_guidance_scan_queue_priority_check CHECK ((priority >= 0)),
-    CONSTRAINT translation_guidance_scan_queue_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])))
+    CONSTRAINT translation_guidance_scan_queue_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text]))),
+    CONSTRAINT translation_guidance_scan_queue_tokens_used_check CHECK ((tokens_used >= 0))
 );
 
 
@@ -3363,6 +3366,13 @@ CREATE INDEX translation_guidance_scan_queue_status_idx ON public.translation_gu
 
 
 --
+-- Name: translation_guidance_scan_queue_token_usage_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_scan_queue_token_usage_idx ON public.translation_guidance_scan_queue USING btree (model, finished_at) WHERE (tokens_used > 0);
+
+
+--
 -- Name: translation_prompt_profile_versions_active_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3975,4 +3985,4 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 4gxbFbaKUG4vV0G1mjVfFNgnUsomS4fR8qFUd0kDMOkmGagLyDrqCYezhQkORi8
+\unrestrict baiVjii2gN8UNe868dqVI08IPGfEu2r053mdZAXSUWQuzRgGOSyJdWFc9h8VMyW
