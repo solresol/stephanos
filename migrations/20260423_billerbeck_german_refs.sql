@@ -18,8 +18,17 @@ CREATE TABLE IF NOT EXISTS public.billerbeck_german_pages (
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
-ALTER TABLE ONLY public.billerbeck_german_pages
-    ADD CONSTRAINT billerbeck_german_pages_pkey PRIMARY KEY (id);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'billerbeck_german_pages_pkey'
+    ) THEN
+        ALTER TABLE ONLY public.billerbeck_german_pages
+            ADD CONSTRAINT billerbeck_german_pages_pkey PRIMARY KEY (id);
+    END IF;
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS billerbeck_german_pages_image_id_idx
     ON public.billerbeck_german_pages (image_id);
@@ -27,9 +36,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS billerbeck_german_pages_image_id_idx
 CREATE INDEX IF NOT EXISTS billerbeck_german_pages_status_idx
     ON public.billerbeck_german_pages (status, processed_at);
 
-ALTER TABLE ONLY public.billerbeck_german_pages
-    ADD CONSTRAINT billerbeck_german_pages_image_id_fkey
-    FOREIGN KEY (image_id) REFERENCES public.images(id) ON DELETE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'billerbeck_german_pages_image_id_fkey'
+    ) THEN
+        ALTER TABLE ONLY public.billerbeck_german_pages
+            ADD CONSTRAINT billerbeck_german_pages_image_id_fkey
+            FOREIGN KEY (image_id) REFERENCES public.images(id) ON DELETE CASCADE;
+    END IF;
+END $$;
 
 
 CREATE TABLE IF NOT EXISTS public.lemma_billerbeck_german_refs (
@@ -54,8 +72,17 @@ CREATE TABLE IF NOT EXISTS public.lemma_billerbeck_german_refs (
     notes TEXT
 );
 
-ALTER TABLE ONLY public.lemma_billerbeck_german_refs
-    ADD CONSTRAINT lemma_billerbeck_german_refs_pkey PRIMARY KEY (id);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'lemma_billerbeck_german_refs_pkey'
+    ) THEN
+        ALTER TABLE ONLY public.lemma_billerbeck_german_refs
+            ADD CONSTRAINT lemma_billerbeck_german_refs_pkey PRIMARY KEY (id);
+    END IF;
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS lemma_billerbeck_german_refs_lemma_id_idx
     ON public.lemma_billerbeck_german_refs (lemma_id);
@@ -63,6 +90,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS lemma_billerbeck_german_refs_lemma_id_idx
 CREATE INDEX IF NOT EXISTS lemma_billerbeck_german_refs_translation_status_idx
     ON public.lemma_billerbeck_german_refs (translation_status, updated_at);
 
-ALTER TABLE ONLY public.lemma_billerbeck_german_refs
-    ADD CONSTRAINT lemma_billerbeck_german_refs_lemma_id_fkey
-    FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'lemma_billerbeck_german_refs_lemma_id_fkey'
+    ) THEN
+        ALTER TABLE ONLY public.lemma_billerbeck_german_refs
+            ADD CONSTRAINT lemma_billerbeck_german_refs_lemma_id_fkey
+            FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+    END IF;
+END $$;
