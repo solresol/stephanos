@@ -17,6 +17,9 @@ from db import get_connection
 from translation_run_utils import DEFAULT_TRANSLATION_MODEL, lookup_public_block
 
 DEFAULT_DAILY_TOKEN_LIMIT = 100_000
+MAX_GUIDANCE_CONTEXT_ROWS = 8
+MAX_SOURCE_PASSAGE_CONTEXT_ROWS = 4
+MAX_CONTEXT_FIELD_CHARS = 900
 
 TRANSLATE_TOOL = {
     "type": "function",
@@ -47,6 +50,175 @@ def get_tokens_today(cur):
     )
     row = cur.fetchone()
     return row[0] if row else 0
+
+
+def table_exists(cur, table_name: str) -> bool:
+    cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table_name}",))
+    return bool(cur.fetchone()[0])
+
+
+def truncate_field(text: str | None, max_chars: int = MAX_CONTEXT_FIELD_CHARS) -> str:
+    cleaned = " ".join(str(text or "").split())
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return cleaned[: max_chars - 1].rstrip() + "..."
+
+
+def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, limit: int = MAX_GUIDANCE_CONTEXT_ROWS):
+    if not table_exists(cur, "translation_guidance_rules") or not table_exists(cur, "translation_guidance_matches"):
+        return []
+    cur.execute(
+        """
+        SELECT
+            COALESCE(r.kind, '') AS kind,
+            COALESCE(r.label, '') AS label,
+            COALESCE(r.preferred_translation, '') AS preferred_translation,
+            COALESCE(r.application_mode, '') AS application_mode,
+            COALESCE(r.notes, '') AS notes,
+            COALESCE(m.evidence_text, '') AS evidence_text,
+            COALESCE(m.confidence, '') AS confidence
+        FROM translation_guidance_matches m
+        JOIN translation_guidance_rules r ON r.id = m.rule_id
+        WHERE m.lemma_id = %s
+          AND m.source_text_version_id = %s
+          AND m.match_status = 'matched'
+          AND r.status <> 'retired'
+          AND r.kind IN ('formula', 'gloss')
+        ORDER BY
+            CASE r.application_mode
+                WHEN 'required' THEN 0
+                WHEN 'replace' THEN 1
+                ELSE 2
+            END,
+            CASE r.kind
+                WHEN 'formula' THEN 0
+                WHEN 'gloss' THEN 1
+                WHEN 'proper_noun' THEN 2
+                ELSE 3
+            END,
+            m.confidence = 'high' DESC,
+            r.label
+        LIMIT %s
+        """,
+        (lemma_id, source_text_version_id, int(limit)),
+    )
+    return [
+        {
+            "kind": row[0] or "",
+            "label": row[1] or "",
+            "preferred_translation": row[2] or "",
+            "application_mode": row[3] or "",
+            "notes": row[4] or "",
+            "evidence_text": row[5] or "",
+            "confidence": row[6] or "",
+        }
+        for row in cur.fetchall()
+    ]
+
+
+def fetch_source_passage_context(
+    cur,
+    *,
+    lemma_id: int,
+    source_text_version_id: int,
+    limit: int = MAX_SOURCE_PASSAGE_CONTEXT_ROWS,
+):
+    if not table_exists(cur, "source_quote_passages"):
+        return []
+    cur.execute(
+        """
+        SELECT
+            COALESCE(author_english, author_lemma_form, '') AS author,
+            COALESCE(work_title, '') AS work_title,
+            COALESCE(passage_ref, '') AS passage_ref,
+            COALESCE(quote_text, '') AS quote_text,
+            COALESCE(greek_text, '') AS greek_text,
+            COALESCE(translation_text, '') AS translation_text,
+            COALESCE(translation_source, '') AS translation_source,
+            COALESCE(cts_urn, '') AS cts_urn,
+            COALESCE(scaife_url, '') AS scaife_url,
+            COALESCE(match_confidence, '') AS match_confidence
+        FROM source_quote_passages
+        WHERE lemma_id = %s
+          AND (source_text_version_id = %s OR source_text_version_id IS NULL)
+          AND match_status IN ('resolved', 'matched')
+          AND COALESCE(translation_text, '') <> ''
+        ORDER BY
+            match_confidence = 'high' DESC,
+            retrieved_at DESC NULLS LAST,
+            id
+        LIMIT %s
+        """,
+        (lemma_id, source_text_version_id, int(limit)),
+    )
+    return [
+        {
+            "author": row[0] or "",
+            "work_title": row[1] or "",
+            "passage_ref": row[2] or "",
+            "quote_text": row[3] or "",
+            "greek_text": row[4] or "",
+            "translation_text": row[5] or "",
+            "translation_source": row[6] or "",
+            "cts_urn": row[7] or "",
+            "scaife_url": row[8] or "",
+            "match_confidence": row[9] or "",
+        }
+        for row in cur.fetchall()
+    ]
+
+
+def format_context_sections(guidance_rows, source_passage_rows) -> str:
+    sections = []
+
+    if guidance_rows:
+        lines = [
+            "Matched translation guidance:",
+            "Use these rules where the cited Greek evidence is relevant; do not force them if the local syntax contradicts the rule.",
+        ]
+        for row in guidance_rows:
+            bits = [
+                f"- {row['kind'] or 'guidance'}",
+                f"mode={row['application_mode'] or 'advisory'}",
+            ]
+            if row["confidence"]:
+                bits.append(f"confidence={row['confidence']}")
+            line = " ".join(bits) + f": {truncate_field(row['label'], 260)}"
+            if row["preferred_translation"]:
+                line += f" -> {truncate_field(row['preferred_translation'], 260)}"
+            if row["evidence_text"]:
+                line += f" | evidence: {truncate_field(row['evidence_text'], 320)}"
+            if row["notes"]:
+                line += f" | notes: {truncate_field(row['notes'], 260)}"
+            lines.append(line)
+        sections.append("\n".join(lines))
+
+    if source_passage_rows:
+        lines = [
+            "Relevant external source passages:",
+            "Use these only for quoted or allusive material. Do not replace Stephanos' own wording with the source translation.",
+        ]
+        for row in source_passage_rows:
+            heading = " ".join(
+                part for part in [row["author"], row["work_title"], row["passage_ref"]] if part
+            )
+            line_parts = [f"- {heading or 'source passage'}"]
+            if row["match_confidence"]:
+                line_parts.append(f"(confidence={row['match_confidence']})")
+            lines.append(" ".join(line_parts))
+            if row["quote_text"]:
+                lines.append(f"  Stephanos citation/quote: {truncate_field(row['quote_text'], 420)}")
+            if row["greek_text"]:
+                lines.append(f"  Source Greek: {truncate_field(row['greek_text'], 500)}")
+            if row["translation_text"]:
+                lines.append(f"  Archaic English: {truncate_field(row['translation_text'], 700)}")
+            if row["translation_source"]:
+                lines.append(f"  Translation source: {truncate_field(row['translation_source'], 220)}")
+            if row["cts_urn"]:
+                lines.append(f"  CTS: {row['cts_urn']}")
+        sections.append("\n".join(lines))
+
+    return "\n\n".join(sections)
 
 
 def fetch_requests(cur, request_limit: int | None):
@@ -231,7 +403,10 @@ def call_model(
     lemma: str,
     entry_number: int | None,
     source_text: str,
+    guidance_context=None,
+    source_passage_context=None,
 ):
+    context_sections = format_context_sections(guidance_context or [], source_passage_context or [])
     prompt = f"""Translate this Stephanos entry.
 
 Headword: {lemma}
@@ -239,6 +414,11 @@ Entry number: {entry_number or 0}
 
 Source Greek text:
 {source_text}
+"""
+    if context_sections:
+        prompt += f"""
+Additional translation context:
+{context_sections}
 """
     response = client.chat.completions.create(
         model=model,
@@ -264,6 +444,8 @@ def main():
     parser.add_argument("--run-limit", type=int, help="Max generated runs in this invocation")
     parser.add_argument("--daily-token-limit", type=int, default=DEFAULT_DAILY_TOKEN_LIMIT)
     parser.add_argument("--delay", type=float, default=1.0)
+    parser.add_argument("--no-guidance-context", action="store_true", help="Do not add matched translation-guidance rows to prompts")
+    parser.add_argument("--no-source-passage-context", action="store_true", help="Do not add resolved external source passages to prompts")
     args = parser.parse_args()
 
     conn = get_connection()
@@ -353,6 +535,20 @@ def main():
 
             run_index = existing_count + run_offset
             try:
+                guidance_context = []
+                source_passage_context = []
+                if not args.no_guidance_context:
+                    guidance_context = fetch_guidance_context(
+                        cur,
+                        lemma_id=lemma_id,
+                        source_text_version_id=source_text_version_id,
+                    )
+                if not args.no_source_passage_context:
+                    source_passage_context = fetch_source_passage_context(
+                        cur,
+                        lemma_id=lemma_id,
+                        source_text_version_id=source_text_version_id,
+                    )
                 translation, tokens_used = call_model(
                     client,
                     model=model_name,
@@ -362,6 +558,8 @@ def main():
                     lemma=lemma or "",
                     entry_number=entry_number,
                     source_text=source_text or "",
+                    guidance_context=guidance_context,
+                    source_passage_context=source_passage_context,
                 )
                 if not translation:
                     raise RuntimeError("Empty translation result")

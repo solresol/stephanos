@@ -34,17 +34,17 @@ rsync -az \
     "${SOURCE_FILES[@]/#/${SCRIPT_DIR}/}" \
     "${REMOTE_HOST}:${REMOTE_BUILD_DIR}/"
 
-echo "Building review CGI on ${REMOTE_HOST}..."
+echo "Building static review CGI binaries on ${REMOTE_HOST}..."
 ssh "$REMOTE_HOST" "
     set -euo pipefail
     cd '$REMOTE_BUILD_DIR'
     export CGO_ENABLED=1
     export CC=/usr/bin/cc
-    /usr/local/bin/go build -o review.cgi review.go common.go page.go templates.go shared_helpers.go
-    /usr/local/bin/go build -o entities.cgi entities.go common.go page.go templates.go shared_helpers.go
-    /usr/local/bin/go build -o guidance.cgi guidance.go common.go guidance_common.go templates.go shared_helpers.go
-    /usr/local/bin/go build -o save.cgi save.go common.go guidance_common.go
-    /usr/local/bin/go build -o status.cgi status.go common.go
+    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o review.cgi review.go common.go page.go templates.go shared_helpers.go
+    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o entities.cgi entities.go common.go page.go templates.go shared_helpers.go
+    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance.cgi guidance.go common.go guidance_common.go templates.go shared_helpers.go
+    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o save.cgi save.go common.go guidance_common.go
+    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o status.cgi status.go common.go
     install -m 755 review.cgi '$REMOTE_CGI_DIR/review.cgi'
     install -m 755 entities.cgi '$REMOTE_CGI_DIR/entities.cgi'
     install -m 755 guidance.cgi '$REMOTE_CGI_DIR/guidance.cgi'

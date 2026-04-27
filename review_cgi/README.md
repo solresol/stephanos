@@ -30,14 +30,14 @@ The solution is to use `github.com/mattn/go-sqlite3` which requires CGO but work
   scp *.go go.mod go.sum stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/cgi-bin/
   ```
 
-2. SSH to the server and build with CGO enabled:
+2. SSH to the server and build with CGO enabled and static external linking:
   ```bash
   ssh stephanos@merah.cassia.ifost.org.au
   cd /var/www/vhosts/stephanos.symmachus.org/cgi-bin
-  CGO_ENABLED=1 go build -o review.cgi review.go common.go page.go templates.go shared_helpers.go
-  CGO_ENABLED=1 go build -o entities.cgi entities.go common.go page.go templates.go shared_helpers.go
-  CGO_ENABLED=1 go build -o guidance.cgi guidance.go common.go guidance_common.go templates.go shared_helpers.go
-  CGO_ENABLED=1 go build -o save.cgi save.go common.go guidance_common.go
+  CGO_ENABLED=1 go build -ldflags '-linkmode external -extldflags -static' -o review.cgi review.go common.go page.go templates.go shared_helpers.go
+  CGO_ENABLED=1 go build -ldflags '-linkmode external -extldflags -static' -o entities.cgi entities.go common.go page.go templates.go shared_helpers.go
+  CGO_ENABLED=1 go build -ldflags '-linkmode external -extldflags -static' -o guidance.cgi guidance.go common.go guidance_common.go templates.go shared_helpers.go
+  CGO_ENABLED=1 go build -ldflags '-linkmode external -extldflags -static' -o save.cgi save.go common.go guidance_common.go
   ```
 
 3. Ensure binaries are executable:
@@ -71,6 +71,7 @@ location "/cgi-bin/*" {
 ## Operational note: OpenBSD httpd chroot
 
 - CGI runs under httpd/slowcgi chroot semantics, but admin SSH sessions are not chrooted.
+- Static linking avoids 500 errors after OpenBSD upgrades when the `/var/www` chroot has stale `libc` or `libpthread` copies.
 - `canonical_translation.cgi` must resolve canonicals from local `../db/reviews.db` plus `../db/review_data.json`; do not implement SSH proxy calls from CGI.
 - Do not create or manage `/var/www/home/...` manually for this workflow.
 

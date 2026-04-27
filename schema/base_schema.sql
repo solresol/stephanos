@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict baiVjii2gN8UNe868dqVI08IPGfEu2r053mdZAXSUWQuzRgGOSyJdWFc9h8VMyW
+\restrict Iat6ATMoODTg31fWhSKyZqusQKREUzpxhC4R9AhOSebmEeqGqxx8xMu0lWhQA14
 
 -- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
@@ -1530,6 +1530,59 @@ ALTER SEQUENCE public.source_citation_units_id_seq OWNED BY public.source_citati
 
 
 --
+-- Name: source_quote_passages; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.source_quote_passages (
+    id integer NOT NULL,
+    source_citation_mention_id integer NOT NULL,
+    source_citation_unit_id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    source_text_version_id integer,
+    author_lemma_form text NOT NULL,
+    author_english text,
+    work_title text,
+    passage_ref text NOT NULL,
+    cts_urn text NOT NULL,
+    scaife_url text,
+    perseus_url text,
+    quote_text text,
+    greek_text text,
+    translation_text text,
+    translation_source text,
+    match_status text DEFAULT 'resolved'::text NOT NULL,
+    match_confidence text,
+    evidence_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    resolver_version text,
+    retrieved_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT source_quote_passages_match_confidence_check CHECK (((match_confidence IS NULL) OR (match_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])))),
+    CONSTRAINT source_quote_passages_match_status_check CHECK ((match_status = ANY (ARRAY['resolved'::text, 'matched'::text, 'not_found'::text, 'ambiguous'::text, 'failed'::text])))
+);
+
+
+--
+-- Name: source_quote_passages_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.source_quote_passages_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: source_quote_passages_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.source_quote_passages_id_seq OWNED BY public.source_quote_passages.id;
+
+
+--
 -- Name: text_pair_differences; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2231,6 +2284,13 @@ ALTER TABLE ONLY public.source_citation_units ALTER COLUMN id SET DEFAULT nextva
 
 
 --
+-- Name: source_quote_passages id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_quote_passages ALTER COLUMN id SET DEFAULT nextval('public.source_quote_passages_id_seq'::regclass);
+
+
+--
 -- Name: text_pair_differences id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -2664,6 +2724,14 @@ ALTER TABLE ONLY public.source_citation_units
 
 ALTER TABLE ONLY public.source_citation_units
     ADD CONSTRAINT source_citation_units_unit_key_key UNIQUE (unit_key);
+
+
+--
+-- Name: source_quote_passages source_quote_passages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_quote_passages
+    ADD CONSTRAINT source_quote_passages_pkey PRIMARY KEY (id);
 
 
 --
@@ -3275,6 +3343,34 @@ CREATE INDEX source_citation_units_work_idx ON public.source_citation_units USIN
 
 
 --
+-- Name: source_quote_passages_cts_urn_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_quote_passages_cts_urn_idx ON public.source_quote_passages USING btree (cts_urn);
+
+
+--
+-- Name: source_quote_passages_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_quote_passages_lemma_idx ON public.source_quote_passages USING btree (lemma_id, match_status, retrieved_at DESC);
+
+
+--
+-- Name: source_quote_passages_mention_urn_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX source_quote_passages_mention_urn_idx ON public.source_quote_passages USING btree (source_citation_mention_id, cts_urn);
+
+
+--
+-- Name: source_quote_passages_source_text_version_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_quote_passages_source_text_version_idx ON public.source_quote_passages USING btree (source_text_version_id) WHERE (source_text_version_id IS NOT NULL);
+
+
+--
 -- Name: text_pair_differences_pair_unique_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3766,6 +3862,38 @@ ALTER TABLE ONLY public.proper_nouns
 
 
 --
+-- Name: source_quote_passages source_quote_passages_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_quote_passages
+    ADD CONSTRAINT source_quote_passages_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: source_quote_passages source_quote_passages_source_citation_mention_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_quote_passages
+    ADD CONSTRAINT source_quote_passages_source_citation_mention_id_fkey FOREIGN KEY (source_citation_mention_id) REFERENCES public.lemma_source_citation_mentions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: source_quote_passages source_quote_passages_source_citation_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_quote_passages
+    ADD CONSTRAINT source_quote_passages_source_citation_unit_id_fkey FOREIGN KEY (source_citation_unit_id) REFERENCES public.source_citation_units(id) ON DELETE CASCADE;
+
+
+--
+-- Name: source_quote_passages source_quote_passages_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_quote_passages
+    ADD CONSTRAINT source_quote_passages_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE SET NULL;
+
+
+--
 -- Name: text_pair_differences text_pair_differences_billerbeck_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3985,4 +4113,5 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict baiVjii2gN8UNe868dqVI08IPGfEu2r053mdZAXSUWQuzRgGOSyJdWFc9h8VMyW
+\unrestrict Iat6ATMoODTg31fWhSKyZqusQKREUzpxhC4R9AhOSebmEeqGqxx8xMu0lWhQA14
+

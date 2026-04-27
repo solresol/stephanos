@@ -142,6 +142,17 @@ uv run seed_translation_styles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: s
 echo "Step 4d3: Backfilling authoritative translation runs..." | tee -a "$LOGFILE"
 uv run backfill_legacy_translation_runs.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation backfill failed" | tee -a "$LOGFILE"
 
+# Step 4d4: Resolve already-detected Homeric citations into source-passage prompt context
+HOMERIC_SOURCE_RESOLVE_LIMIT="${HOMERIC_SOURCE_RESOLVE_LIMIT:-25}"
+HOMERIC_SOURCE_RESOLVE_DELAY="${HOMERIC_SOURCE_RESOLVE_DELAY:-0.25}"
+if [ "$HOMERIC_SOURCE_RESOLVE_LIMIT" -gt 0 ]; then
+    echo "Step 4d4: Resolving Homeric source passages..." | tee -a "$LOGFILE"
+    uv run resolve_homeric_source_passages.py \
+        --limit "$HOMERIC_SOURCE_RESOLVE_LIMIT" \
+        --delay "$HOMERIC_SOURCE_RESOLVE_DELAY" \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: Homeric source passage resolution failed" | tee -a "$LOGFILE"
+fi
+
 # Step 4e: Enqueue translation run requests (set TRANSLATION_ENQUEUE_LIMIT=0 to disable)
 TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-20}"
 if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
