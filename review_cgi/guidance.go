@@ -208,17 +208,17 @@ const guidanceTemplate = `<!DOCTYPE html>
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
             gap: 14px;
-            margin-bottom: 18px;
+            margin-bottom: 12px;
         }
         .summary-card {
             background: white;
             border-radius: 14px;
             box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
-            padding: 18px;
+            padding: 12px 14px;
         }
         .summary-count {
             color: #15324c;
-            font-size: 1.9em;
+            font-size: 1.45em;
             font-weight: 800;
             margin-top: 6px;
         }
@@ -230,7 +230,7 @@ const guidanceTemplate = `<!DOCTYPE html>
             display: flex;
             flex-wrap: wrap;
             gap: 10px;
-            margin-bottom: 14px;
+            margin-bottom: 10px;
         }
         .guidance-view-toggle button {
             background: #e7eff8;
@@ -248,24 +248,24 @@ const guidanceTemplate = `<!DOCTYPE html>
         }
         .guidance-table-panel {
             background: white;
-            border-radius: 14px;
+            border-radius: 10px;
             box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
             margin-bottom: 18px;
-            padding: 18px;
+            padding: 12px;
         }
         .guidance-table-controls {
             align-items: end;
             display: grid;
-            gap: 12px;
-            grid-template-columns: minmax(240px, 2fr) repeat(5, minmax(130px, 1fr));
-            margin-bottom: 14px;
+            gap: 8px;
+            grid-template-columns: minmax(220px, 1.7fr) repeat(5, minmax(118px, 1fr));
+            margin-bottom: 8px;
         }
         .guidance-table-controls label {
             color: #334155;
             display: block;
-            font-size: 0.78em;
+            font-size: 0.72em;
             font-weight: 800;
-            margin-bottom: 4px;
+            margin-bottom: 3px;
             text-transform: uppercase;
         }
         .guidance-table-controls input,
@@ -273,31 +273,37 @@ const guidanceTemplate = `<!DOCTYPE html>
             border: 1px solid #cbd5e1;
             border-radius: 8px;
             font: inherit;
-            padding: 8px 10px;
+            padding: 6px 8px;
             width: 100%;
         }
         .guidance-table-meta {
             color: #5b7287;
-            font-size: 0.9em;
+            font-size: 0.82em;
             margin-bottom: 8px;
         }
         .guidance-table-wrap {
-            max-height: 680px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            max-height: calc(100vh - 290px);
+            min-height: 500px;
             overflow: auto;
         }
-		.guidance-table {
-			border-collapse: collapse;
-			font-size: 0.88em;
-			min-width: 1840px;
-			table-layout: fixed;
-			width: 100%;
-		}
+        .guidance-table {
+            border-collapse: collapse;
+            font-size: 0.82em;
+            min-width: 1840px;
+            table-layout: fixed;
+            width: 100%;
+        }
         .guidance-table th,
         .guidance-table td {
             border-bottom: 1px solid #e2e8f0;
-            padding: 8px 10px;
+            overflow: hidden;
+            padding: 5px 8px;
             text-align: left;
-            vertical-align: top;
+            text-overflow: ellipsis;
+            vertical-align: middle;
+            white-space: nowrap;
         }
         .guidance-table th {
             background: #f8fafc;
@@ -340,50 +346,46 @@ const guidanceTemplate = `<!DOCTYPE html>
             text-align: right;
             white-space: nowrap;
         }
-		.guidance-table .compact {
-			overflow-wrap: break-word;
-			word-break: normal;
-		}
-		.guidance-table th:nth-child(1),
-		.guidance-table td:nth-child(1) {
-			width: 92px;
-		}
-		.guidance-table th:nth-child(2),
-		.guidance-table td:nth-child(2) {
-			width: 96px;
-		}
-		.guidance-table th:nth-child(3),
-		.guidance-table td:nth-child(3) {
-			width: 96px;
-		}
-		.guidance-table th:nth-child(4),
-		.guidance-table td:nth-child(4) {
-			width: 120px;
-		}
-		.guidance-table th:nth-child(5),
-		.guidance-table td:nth-child(5) {
-			width: 330px;
-		}
-		.guidance-table th:nth-child(6),
-		.guidance-table td:nth-child(6) {
-			width: 220px;
-		}
-		.guidance-table th:nth-child(7),
-		.guidance-table td:nth-child(7) {
-			width: 140px;
-		}
-		.guidance-table th:nth-child(8),
-		.guidance-table td:nth-child(8) {
-			width: 230px;
-		}
-		.guidance-table th:nth-child(12),
-		.guidance-table td:nth-child(12) {
-			width: 210px;
-		}
-		.guidance-table th:nth-child(13),
-		.guidance-table td:nth-child(13) {
-			width: 120px;
-		}
+        .guidance-table th:nth-child(1),
+        .guidance-table td:nth-child(1) {
+            width: 92px;
+        }
+        .guidance-table th:nth-child(2),
+        .guidance-table td:nth-child(2) {
+            width: 96px;
+        }
+        .guidance-table th:nth-child(3),
+        .guidance-table td:nth-child(3) {
+            width: 96px;
+        }
+        .guidance-table th:nth-child(4),
+        .guidance-table td:nth-child(4) {
+            width: 120px;
+        }
+        .guidance-table th:nth-child(5),
+        .guidance-table td:nth-child(5) {
+            width: 330px;
+        }
+        .guidance-table th:nth-child(6),
+        .guidance-table td:nth-child(6) {
+            width: 220px;
+        }
+        .guidance-table th:nth-child(7),
+        .guidance-table td:nth-child(7) {
+            width: 140px;
+        }
+        .guidance-table th:nth-child(8),
+        .guidance-table td:nth-child(8) {
+            width: 230px;
+        }
+        .guidance-table th:nth-child(12),
+        .guidance-table td:nth-child(12) {
+            width: 210px;
+        }
+        .guidance-table th:nth-child(13),
+        .guidance-table td:nth-child(13) {
+            width: 120px;
+        }
         .guidance-table .table-action {
             color: #14528a;
             font-weight: 700;
@@ -399,6 +401,42 @@ const guidanceTemplate = `<!DOCTYPE html>
             border-radius: 14px;
             box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
             padding: 20px;
+        }
+        .guidance-create-details {
+            margin-bottom: 10px;
+            padding: 0;
+        }
+        .guidance-create-details summary {
+            align-items: baseline;
+            color: #15324c;
+            cursor: pointer;
+            display: flex;
+            gap: 10px;
+            list-style: none;
+            padding: 12px 14px;
+        }
+        .guidance-create-details summary::-webkit-details-marker {
+            display: none;
+        }
+        .guidance-create-details summary span:first-child {
+            font-weight: 800;
+        }
+        .guidance-create-details summary span:last-child {
+            color: #5b7287;
+            font-size: 0.88em;
+            margin-left: auto;
+        }
+        .guidance-create-details summary::after {
+            color: #14528a;
+            content: "+";
+            font-weight: 800;
+        }
+        .guidance-create-details[open] summary::after {
+            content: "-";
+        }
+        .guidance-create-body {
+            border-top: 1px solid #e2e8f0;
+            padding: 14px;
         }
         .guidance-header {
             align-items: flex-start;
@@ -567,9 +605,10 @@ const guidanceTemplate = `<!DOCTYPE html>
             </div>
         </div>
 
-        <div class="guidance-create-card">
-            <div class="section-title">Add Rule</div>
-            <div class="section-note">New rows are written locally first on the protected site, then imported back into PostgreSQL by the existing review-sync flow.</div>
+        <details class="guidance-create-card guidance-create-details">
+            <summary><span>Add Rule</span><span>Occasional create flow</span></summary>
+            <div class="guidance-create-body">
+                <div class="section-note">New rows are written locally first on the protected site, then imported back into PostgreSQL by the existing review-sync flow.</div>
             <form method="POST" action="/cgi-bin/save.cgi">
                 <input type="hidden" name="form_mode" value="guidance">
                 <input type="hidden" name="return_view" value="guidance">
@@ -634,7 +673,8 @@ const guidanceTemplate = `<!DOCTYPE html>
                     <button type="submit" class="btn-save">Create Rule</button>
                 </div>
             </form>
-        </div>
+            </div>
+        </details>
 
         <div class="guidance-view-toggle" aria-label="Guidance view">
             <button type="button" class="active" data-guidance-view="table">Table</button>
@@ -687,7 +727,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                 </div>
             </div>
             <div class="guidance-table-meta">
-                <span id="guidance_table_visible_count">{{len .Rules}}</span> visible of {{len .Rules}} rules. Pending local changes are shaded.
+                <span id="guidance_table_visible_count">{{len .Rules}}</span> visible of {{len .Rules}} rules. Sort by any column header; click a row to open edit controls. Pending local changes are shaded.
             </div>
             <div class="guidance-table-wrap">
                 <table class="guidance-table" id="guidance_rule_table">
@@ -726,19 +766,19 @@ const guidanceTemplate = `<!DOCTYPE html>
                             data-backlog="{{.Rule.BacklogCount}}"
                             data-updated="{{.Rule.UpdatedAt}}"
                             data-search="{{.Rule.RuleCode}} {{.Rule.Label}} {{.Rule.PreferredTranslation}} {{.Rule.WordClass}} {{.Rule.SemanticDomain}} {{.Rule.CitationsText}} {{.Rule.Notes}}">
-                            <td>{{.KindLabel}}</td>
-                            <td>{{.StatusLabel}}</td>
-                            <td>{{.ModeLabel}}</td>
-                            <td class="compact">{{.Rule.RuleCode}}</td>
-                            <td class="compact"><a class="table-action" href="#rule-{{.Rule.RuleKey}}">{{.Rule.Label}}</a></td>
-                            <td class="compact">{{.Rule.PreferredTranslation}}</td>
-                            <td>{{.Rule.WordClass}}</td>
-                            <td>{{.Rule.SemanticDomain}}</td>
+                            <td title="{{.KindLabel}}">{{.KindLabel}}</td>
+                            <td title="{{.StatusLabel}}">{{.StatusLabel}}</td>
+                            <td title="{{.ModeLabel}}">{{.ModeLabel}}</td>
+                            <td class="compact" title="{{.Rule.RuleCode}}">{{.Rule.RuleCode}}</td>
+                            <td class="compact" title="{{.Rule.Label}}"><a class="table-action" href="#rule-{{.Rule.RuleKey}}">{{.Rule.Label}}</a></td>
+                            <td class="compact" title="{{.Rule.PreferredTranslation}}">{{.Rule.PreferredTranslation}}</td>
+                            <td title="{{.Rule.WordClass}}">{{.Rule.WordClass}}</td>
+                            <td title="{{.Rule.SemanticDomain}}">{{.Rule.SemanticDomain}}</td>
                             <td class="numeric">{{.Rule.RevisionNumber}}</td>
                             <td class="numeric">{{.Rule.MatchCount}}</td>
                             <td class="numeric">{{.Rule.BacklogCount}}</td>
-                            <td>{{.Rule.UpdatedAt}}</td>
-                            <td>{{if .Rule.PendingImport}}Pending import{{else}}Imported{{end}}</td>
+                            <td title="{{.Rule.UpdatedAt}}">{{.Rule.UpdatedAt}}</td>
+                            <td title="{{if .Rule.PendingImport}}Pending import{{else}}Imported{{end}}">{{if .Rule.PendingImport}}Pending import{{else}}Imported{{end}}</td>
                         </tr>
                         {{end}}
                     </tbody>
@@ -935,11 +975,22 @@ const guidanceTemplate = `<!DOCTYPE html>
                 viewButtons.forEach(function (button) {
                     button.classList.toggle("active", button.getAttribute("data-guidance-view") === view);
                 });
-                try {
-                    window.localStorage.setItem("guidanceView", view);
-                } catch (error) {
+            }
+
+            function openRuleCard(targetId) {
+                var target = document.getElementById(targetId || "");
+                if (!target) {
                     return;
                 }
+                activateView("cards");
+                if (targetId) {
+                    window.location.hash = targetId;
+                }
+                target.classList.add("highlighted");
+                target.scrollIntoView({ behavior: "smooth", block: "start" });
+                window.setTimeout(function () {
+                    target.classList.remove("highlighted");
+                }, 1800);
             }
 
 			function getSortValue(row, key) {
@@ -1057,32 +1108,26 @@ const guidanceTemplate = `<!DOCTYPE html>
                         if (event.target && event.target.closest && event.target.closest("a")) {
                             event.preventDefault();
                         }
-                        var target = document.getElementById(row.dataset.targetId || "");
-                        if (!target) {
-                            return;
-                        }
-                        activateView("cards");
-                        target.classList.add("highlighted");
-                        target.scrollIntoView({ behavior: "smooth", block: "start" });
-                        window.setTimeout(function () {
-                            target.classList.remove("highlighted");
-                        }, 1800);
+                        openRuleCard(row.dataset.targetId || "");
                     });
                 });
             }
 
-            var initialView = "table";
-            try {
-                initialView = window.localStorage.getItem("guidanceView") || "table";
-            } catch (error) {
-                initialView = "table";
+            var initialTargetId = "";
+            if (window.location.hash) {
+                try {
+                    initialTargetId = decodeURIComponent(window.location.hash.slice(1));
+                } catch (error) {
+                    initialTargetId = window.location.hash.slice(1);
+                }
             }
-            if (initialView !== "cards") {
-                initialView = "table";
-            }
+            var initialView = initialTargetId ? "cards" : "table";
             activateView(initialView);
             applySort();
             applyFilters();
+            if (initialTargetId) {
+                openRuleCard(initialTargetId);
+            }
         }());
     </script>
 </body>
