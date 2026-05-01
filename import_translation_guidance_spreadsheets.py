@@ -159,6 +159,11 @@ def normalized_status(kind: str, raw_status: str) -> str:
     return mapped or "in_progress"
 
 
+def looks_like_semantic_domain(text: str) -> bool:
+    value = (text or "").strip()
+    return bool(value and value == value.upper() and re.search(r"[A-Z]", value))
+
+
 def parse_rules(kind: str, workbook_path: Path) -> list[dict[str, object]]:
     spec = SPECS[kind]
     sheet_name, rows = load_first_sheet_rows(workbook_path)
@@ -185,6 +190,11 @@ def parse_rules(kind: str, workbook_path: Path) -> list[dict[str, object]]:
         seen_keys.add(rule_key)
 
         raw_status = get_cell(row, header_map, spec.get("status_header", ""))
+        word_class = get_cell(row, header_map, spec.get("word_class_header", "")) or None
+        semantic_domain = get_cell(row, header_map, spec.get("semantic_domain_header", "")) or None
+        if not semantic_domain and word_class and looks_like_semantic_domain(word_class):
+            semantic_domain = word_class
+            word_class = None
         rule = {
             "rule_key": rule_key,
             "rule_code": None,
@@ -192,8 +202,8 @@ def parse_rules(kind: str, workbook_path: Path) -> list[dict[str, object]]:
             "label": label,
             "normalized_label": normalized,
             "preferred_translation": preferred_translation or None,
-            "word_class": get_cell(row, header_map, spec.get("word_class_header", "")) or None,
-            "semantic_domain": get_cell(row, header_map, spec.get("semantic_domain_header", "")) or None,
+            "word_class": word_class,
+            "semantic_domain": semantic_domain,
             "status": normalized_status(kind, raw_status),
             "application_mode": APPLICATION_MODE[kind],
             "citations_text": get_cell(row, header_map, spec.get("citations_header", "")) or None,

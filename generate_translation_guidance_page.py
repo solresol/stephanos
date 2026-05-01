@@ -37,6 +37,16 @@ def fetch_rules() -> list[dict[str, object]]:
     has_matches = bool(cur.fetchone()[0])
     cur.execute("SELECT to_regclass('public.translation_guidance_backlog_items') IS NOT NULL")
     has_backlog = bool(cur.fetchone()[0])
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'translation_guidance_rules'
+          AND column_name = 'semantic_domain'
+        """
+    )
+    has_semantic_domain = cur.fetchone() is not None
 
     match_join = ""
     match_select = "0 AS match_count, 0 AS uncertain_count"
@@ -68,6 +78,12 @@ def fetch_rules() -> list[dict[str, object]]:
         """
         backlog_select = "COALESCE(b.backlog_count, 0) AS backlog_count"
 
+    semantic_domain_select = (
+        "COALESCE(r.semantic_domain, '') AS semantic_domain"
+        if has_semantic_domain
+        else "'' AS semantic_domain"
+    )
+
     cur.execute(
         f"""
         WITH latest_revisions AS (
@@ -85,6 +101,7 @@ def fetch_rules() -> list[dict[str, object]]:
             COALESCE(r.label, '') AS label,
             COALESCE(r.preferred_translation, '') AS preferred_translation,
             COALESCE(r.word_class, '') AS word_class,
+            {semantic_domain_select},
             COALESCE(r.status, '') AS status,
             COALESCE(r.application_mode, '') AS application_mode,
             COALESCE(r.citations_text, '') AS citations_text,
@@ -122,15 +139,16 @@ def fetch_rules() -> list[dict[str, object]]:
                 "label": row[4] or "",
                 "preferred_translation": row[5] or "",
                 "word_class": row[6] or "",
-                "status": row[7] or "",
-                "application_mode": row[8] or "",
-                "citations_text": row[9] or "",
-                "notes": row[10] or "",
-                "updated_at": row[11] or "",
-                "revision_number": int(row[12] or 0),
-                "match_count": int(row[13] or 0),
-                "uncertain_count": int(row[14] or 0),
-                "backlog_count": int(row[15] or 0),
+                "semantic_domain": row[7] or "",
+                "status": row[8] or "",
+                "application_mode": row[9] or "",
+                "citations_text": row[10] or "",
+                "notes": row[11] or "",
+                "updated_at": row[12] or "",
+                "revision_number": int(row[13] or 0),
+                "match_count": int(row[14] or 0),
+                "uncertain_count": int(row[15] or 0),
+                "backlog_count": int(row[16] or 0),
             }
         )
     return rules
@@ -157,6 +175,10 @@ def render_rule_card(rule: dict[str, object]) -> str:
         meta_bits.append(f"Updated: {html.escape(str(rule['updated_at']))}")
 
     detail_rows = []
+    if rule["semantic_domain"]:
+        detail_rows.append(
+            f"<div class='detail-row'><strong>Semantic domain</strong><span>{html.escape(str(rule['semantic_domain']))}</span></div>"
+        )
     if rule["word_class"]:
         detail_rows.append(
             f"<div class='detail-row'><strong>Word class</strong><span>{html.escape(str(rule['word_class']))}</span></div>"
