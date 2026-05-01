@@ -67,6 +67,7 @@ func main() {
 	guidancePreferredTranslation := strings.TrimSpace(formData.Get("guidance_preferred_translation"))
 	guidanceWordClass := strings.TrimSpace(formData.Get("guidance_word_class"))
 	guidanceSemanticDomain := strings.TrimSpace(formData.Get("guidance_semantic_domain"))
+	guidanceLifecycleStage := strings.TrimSpace(formData.Get("guidance_lifecycle_stage"))
 	guidanceStatus := strings.TrimSpace(formData.Get("guidance_status"))
 	guidanceApplicationMode := strings.TrimSpace(formData.Get("guidance_application_mode"))
 	guidanceCitationsText := strings.TrimSpace(formData.Get("guidance_citations_text"))
@@ -118,6 +119,7 @@ func main() {
 				PreferredTranslation: guidancePreferredTranslation,
 				WordClass:            guidanceWordClass,
 				SemanticDomain:       guidanceSemanticDomain,
+				LifecycleStage:       guidanceLifecycleStage,
 				Status:               guidanceStatus,
 				ApplicationMode:      guidanceApplicationMode,
 				CitationsText:        guidanceCitationsText,

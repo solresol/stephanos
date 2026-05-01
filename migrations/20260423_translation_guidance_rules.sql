@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS public.translation_guidance_rules (
     preferred_translation TEXT,
     word_class TEXT,
     semantic_domain TEXT,
+    lifecycle_stage TEXT NOT NULL DEFAULT 'guidance',
     status TEXT NOT NULL DEFAULT 'in_progress',
     application_mode TEXT NOT NULL,
     citations_text TEXT,
@@ -22,6 +23,8 @@ CREATE TABLE IF NOT EXISTS public.translation_guidance_rules (
     retired_at TIMESTAMPTZ,
     CONSTRAINT translation_guidance_rules_kind_check
         CHECK (kind IN ('gloss', 'formula', 'proper_noun')),
+    CONSTRAINT translation_guidance_rules_lifecycle_stage_check
+        CHECK (lifecycle_stage IN ('investigate', 'recognizer', 'guidance', 'inactive')),
     CONSTRAINT translation_guidance_rules_status_check
         CHECK (status IN ('in_progress', 'settled', 'unsure', 'retired')),
     CONSTRAINT translation_guidance_rules_application_mode_check
@@ -44,6 +47,10 @@ CREATE INDEX IF NOT EXISTS translation_guidance_rules_normalized_label_idx
 CREATE INDEX IF NOT EXISTS translation_guidance_rules_semantic_domain_idx
     ON public.translation_guidance_rules (semantic_domain)
     WHERE semantic_domain IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS translation_guidance_rules_lifecycle_stage_idx
+    ON public.translation_guidance_rules (lifecycle_stage)
+    WHERE lifecycle_stage <> 'inactive';
 
 
 CREATE TABLE IF NOT EXISTS public.translation_guidance_rule_revisions (

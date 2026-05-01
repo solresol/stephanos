@@ -159,6 +159,27 @@ def normalized_status(kind: str, raw_status: str) -> str:
     return mapped or "in_progress"
 
 
+def default_lifecycle_stage(status: str, preferred_translation: object) -> str:
+    status = (status or "").strip()
+    preferred = str(preferred_translation or "").strip()
+    if status == "retired":
+        return "inactive"
+    if status == "unsure":
+        return "investigate"
+    if not preferred:
+        return "recognizer"
+    return "guidance"
+
+
+def normalize_lifecycle_stage(status: str, preferred_translation: object, raw_stage: object = "") -> str:
+    stage = str(raw_stage or "").strip().lower()
+    if status == "retired":
+        return "inactive"
+    if stage in {"investigate", "recognizer", "guidance", "inactive"}:
+        return stage
+    return default_lifecycle_stage(status, preferred_translation)
+
+
 def looks_like_semantic_domain(text: str) -> bool:
     value = (text or "").strip()
     return bool(value and value == value.upper() and re.search(r"[A-Z]", value))
@@ -195,6 +216,7 @@ def parse_rules(kind: str, workbook_path: Path) -> list[dict[str, object]]:
         if not semantic_domain and word_class and looks_like_semantic_domain(word_class):
             semantic_domain = word_class
             word_class = None
+        status = normalized_status(kind, raw_status)
         rule = {
             "rule_key": rule_key,
             "rule_code": None,
@@ -204,7 +226,8 @@ def parse_rules(kind: str, workbook_path: Path) -> list[dict[str, object]]:
             "preferred_translation": preferred_translation or None,
             "word_class": word_class,
             "semantic_domain": semantic_domain,
-            "status": normalized_status(kind, raw_status),
+            "lifecycle_stage": normalize_lifecycle_stage(status, preferred_translation),
+            "status": status,
             "application_mode": APPLICATION_MODE[kind],
             "citations_text": get_cell(row, header_map, spec.get("citations_header", "")) or None,
             "notes": get_cell(row, header_map, spec.get("notes_header", "")) or None,
@@ -229,6 +252,7 @@ def fetch_existing(cur, rule_key: str) -> dict[str, object] | None:
             preferred_translation,
             word_class,
             semantic_domain,
+            lifecycle_stage,
             status,
             application_mode,
             citations_text,
@@ -255,6 +279,7 @@ def fetch_existing(cur, rule_key: str) -> dict[str, object] | None:
         "preferred_translation",
         "word_class",
         "semantic_domain",
+        "lifecycle_stage",
         "status",
         "application_mode",
         "citations_text",
@@ -276,6 +301,7 @@ def comparable_state(rule: dict[str, object]) -> dict[str, object]:
         "preferred_translation": rule["preferred_translation"],
         "word_class": rule["word_class"],
         "semantic_domain": rule.get("semantic_domain"),
+        "lifecycle_stage": rule.get("lifecycle_stage"),
         "status": rule["status"],
         "application_mode": rule["application_mode"],
         "citations_text": rule["citations_text"],
@@ -298,6 +324,7 @@ def insert_rule(cur, rule: dict[str, object], username: str) -> int:
             preferred_translation,
             word_class,
             semantic_domain,
+            lifecycle_stage,
             status,
             application_mode,
             citations_text,
@@ -309,7 +336,7 @@ def insert_rule(cur, rule: dict[str, object], username: str) -> int:
             updated_by
         )
         VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         RETURNING id
         """,
@@ -322,6 +349,7 @@ def insert_rule(cur, rule: dict[str, object], username: str) -> int:
             rule["preferred_translation"],
             rule["word_class"],
             rule.get("semantic_domain"),
+            rule["lifecycle_stage"],
             rule["status"],
             rule["application_mode"],
             rule["citations_text"],
@@ -348,6 +376,7 @@ def update_rule(cur, rule_id: int, rule: dict[str, object], username: str) -> No
             preferred_translation = %s,
             word_class = %s,
             semantic_domain = %s,
+            lifecycle_stage = %s,
             status = %s,
             application_mode = %s,
             citations_text = %s,
@@ -368,6 +397,7 @@ def update_rule(cur, rule_id: int, rule: dict[str, object], username: str) -> No
             rule["preferred_translation"],
             rule["word_class"],
             rule.get("semantic_domain"),
+            rule["lifecycle_stage"],
             rule["status"],
             rule["application_mode"],
             rule["citations_text"],
@@ -453,6 +483,20 @@ def ensure_required_tables(cur) -> None:
         raise RuntimeError(
             "Missing translation_guidance_rules.semantic_domain. "
             "Apply migrations/20260501_translation_guidance_semantic_domain.sql first."
+        )
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'translation_guidance_rules'
+          AND column_name = 'lifecycle_stage'
+        """
+    )
+    if not cur.fetchone():
+        raise RuntimeError(
+            "Missing translation_guidance_rules.lifecycle_stage. "
+            "Apply migrations/20260501_translation_guidance_lifecycle_stage.sql first."
         )
 
 

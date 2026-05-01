@@ -57,6 +57,20 @@ def table_exists(cur, table_name: str) -> bool:
     return bool(cur.fetchone()[0])
 
 
+def column_exists(cur, table_name: str, column_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s
+          AND column_name = %s
+        """,
+        (table_name, column_name),
+    )
+    return cur.fetchone() is not None
+
+
 def truncate_field(text: str | None, max_chars: int = MAX_CONTEXT_FIELD_CHARS) -> str:
     cleaned = " ".join(str(text or "").split())
     if len(cleaned) <= max_chars:
@@ -67,8 +81,13 @@ def truncate_field(text: str | None, max_chars: int = MAX_CONTEXT_FIELD_CHARS) -
 def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, limit: int = MAX_GUIDANCE_CONTEXT_ROWS):
     if not table_exists(cur, "translation_guidance_rules") or not table_exists(cur, "translation_guidance_matches"):
         return []
+    lifecycle_filter = (
+        "AND COALESCE(r.lifecycle_stage, 'guidance') = 'guidance'"
+        if column_exists(cur, "translation_guidance_rules", "lifecycle_stage")
+        else ""
+    )
     cur.execute(
-        """
+        f"""
         SELECT
             COALESCE(r.kind, '') AS kind,
             COALESCE(r.label, '') AS label,
@@ -83,6 +102,7 @@ def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, l
           AND m.source_text_version_id = %s
           AND m.match_status = 'matched'
           AND r.status <> 'retired'
+          {lifecycle_filter}
           AND r.kind IN ('formula', 'gloss')
         ORDER BY
             CASE r.application_mode

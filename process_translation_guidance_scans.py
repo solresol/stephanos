@@ -28,6 +28,20 @@ DEFAULT_FORMULA_AI_LIMIT = 500
 DETECTOR_VERSION = "translation_guidance_scan_v1"
 
 
+def column_exists(cur, table_name: str, column_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s
+          AND column_name = %s
+        """,
+        (table_name, column_name),
+    )
+    return cur.fetchone() is not None
+
+
 def normalize_text_with_map(text: str) -> tuple[str, list[int]]:
     chars: list[str] = []
     index_map: list[int] = []
@@ -214,8 +228,13 @@ def call_formula_model(
 
 
 def claim_jobs(cur, limit: int) -> list[tuple]:
+    lifecycle_filter = (
+        "AND COALESCE(r.lifecycle_stage, 'guidance') <> 'inactive'"
+        if column_exists(cur, "translation_guidance_rules", "lifecycle_stage")
+        else ""
+    )
     cur.execute(
-        """
+        f"""
         WITH next_jobs AS (
             SELECT
                 q.id,
@@ -235,6 +254,7 @@ def claim_jobs(cur, limit: int) -> list[tuple]:
             JOIN lemma_source_text_versions stv ON stv.id = q.source_text_version_id
             JOIN assembled_lemmas a ON a.id = q.lemma_id
             WHERE q.status = 'pending'
+              {lifecycle_filter}
             ORDER BY q.priority, q.created_at, q.id
             LIMIT %s
             FOR UPDATE SKIP LOCKED

@@ -1773,6 +1773,7 @@ CREATE TABLE public.translation_guidance_rules (
     preferred_translation text,
     word_class text,
     semantic_domain text,
+    lifecycle_stage text DEFAULT 'guidance'::text NOT NULL,
     status text DEFAULT 'in_progress'::text NOT NULL,
     application_mode text NOT NULL,
     citations_text text,
@@ -1787,6 +1788,7 @@ CREATE TABLE public.translation_guidance_rules (
     retired_at timestamp with time zone,
     CONSTRAINT translation_guidance_rules_application_mode_check CHECK ((application_mode = ANY (ARRAY['replace'::text, 'required'::text, 'advisory'::text]))),
     CONSTRAINT translation_guidance_rules_kind_check CHECK ((kind = ANY (ARRAY['gloss'::text, 'formula'::text, 'proper_noun'::text]))),
+    CONSTRAINT translation_guidance_rules_lifecycle_stage_check CHECK ((lifecycle_stage = ANY (ARRAY['investigate'::text, 'recognizer'::text, 'guidance'::text, 'inactive'::text]))),
     CONSTRAINT translation_guidance_rules_status_check CHECK ((status = ANY (ARRAY['in_progress'::text, 'settled'::text, 'unsure'::text, 'retired'::text])))
 );
 
@@ -3439,6 +3441,13 @@ CREATE INDEX translation_guidance_rules_normalized_label_idx ON public.translati
 --
 
 CREATE INDEX translation_guidance_rules_semantic_domain_idx ON public.translation_guidance_rules USING btree (semantic_domain) WHERE (semantic_domain IS NOT NULL);
+
+
+--
+-- Name: translation_guidance_rules_lifecycle_stage_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_rules_lifecycle_stage_idx ON public.translation_guidance_rules USING btree (lifecycle_stage) WHERE (lifecycle_stage <> 'inactive'::text);
 
 
 --

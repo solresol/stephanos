@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS translation_guidance_actions (
     preferred_translation TEXT,
     word_class TEXT,
     semantic_domain TEXT,
+    lifecycle_stage TEXT NOT NULL DEFAULT 'guidance' CHECK (lifecycle_stage IN ('investigate', 'recognizer', 'guidance', 'inactive')),
     status TEXT NOT NULL CHECK (status IN ('in_progress', 'settled', 'unsure', 'retired')),
     application_mode TEXT NOT NULL CHECK (application_mode IN ('advisory', 'required', 'replace')),
     citations_text TEXT,

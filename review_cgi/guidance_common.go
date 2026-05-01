@@ -19,6 +19,7 @@ type TranslationGuidanceRule struct {
 	PreferredTranslation string `json:"preferred_translation"`
 	WordClass            string `json:"word_class"`
 	SemanticDomain       string `json:"semantic_domain"`
+	LifecycleStage       string `json:"lifecycle_stage"`
 	Status               string `json:"status"`
 	ApplicationMode      string `json:"application_mode"`
 	CitationsText        string `json:"citations_text"`
@@ -47,6 +48,7 @@ type TranslationGuidanceAction struct {
 	PreferredTranslation string
 	WordClass            string
 	SemanticDomain       string
+	LifecycleStage       string
 	Status               string
 	ApplicationMode      string
 	CitationsText        string
@@ -69,6 +71,12 @@ func LoadGuidanceRules(filepath string) ([]TranslationGuidanceRule, error) {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 
+	for i := range data.TranslationGuidanceRules {
+		rule := &data.TranslationGuidanceRules[i]
+		rule.Status = normalizeGuidanceStatus(rule.Kind, rule.Status)
+		rule.ApplicationMode = normalizeGuidanceApplicationMode(rule.Kind, rule.ApplicationMode)
+		rule.LifecycleStage = normalizeGuidanceLifecycleStage(rule.Status, rule.PreferredTranslation, rule.LifecycleStage)
+	}
 	sortGuidanceRules(data.TranslationGuidanceRules)
 	return data.TranslationGuidanceRules, nil
 }
@@ -87,6 +95,7 @@ func EnsureGuidanceSchema(db *sql.DB) error {
 			preferred_translation TEXT,
 			word_class TEXT,
 			semantic_domain TEXT,
+			lifecycle_stage TEXT NOT NULL DEFAULT 'guidance' CHECK (lifecycle_stage IN ('investigate', 'recognizer', 'guidance', 'inactive')),
 			status TEXT NOT NULL CHECK (status IN ('in_progress', 'settled', 'unsure', 'retired')),
 			application_mode TEXT NOT NULL CHECK (application_mode IN ('advisory', 'required', 'replace')),
 			citations_text TEXT,
@@ -103,6 +112,9 @@ func EnsureGuidanceSchema(db *sql.DB) error {
 		}
 	}
 	if err := ensureSQLiteColumn(db, "translation_guidance_actions", "semantic_domain", "TEXT"); err != nil {
+		return err
+	}
+	if err := ensureSQLiteColumn(db, "translation_guidance_actions", "lifecycle_stage", "TEXT NOT NULL DEFAULT 'guidance'"); err != nil {
 		return err
 	}
 	return nil
@@ -197,6 +209,38 @@ func normalizeGuidanceApplicationMode(kind string, mode string) string {
 	}
 }
 
+func deriveGuidanceLifecycleStage(status string, preferredTranslation string) string {
+	status = strings.TrimSpace(status)
+	preferredTranslation = strings.TrimSpace(preferredTranslation)
+	switch status {
+	case "retired":
+		return "inactive"
+	case "unsure":
+		return "investigate"
+	}
+	if preferredTranslation == "" {
+		return "recognizer"
+	}
+	return "guidance"
+}
+
+func normalizeGuidanceLifecycleStage(status string, preferredTranslation string, stage string) string {
+	stage = strings.TrimSpace(strings.ToLower(stage))
+	status = strings.TrimSpace(status)
+	if status == "retired" {
+		return "inactive"
+	}
+	if status != "retired" && stage == "inactive" {
+		return "inactive"
+	}
+	switch stage {
+	case "investigate", "recognizer", "guidance":
+		return stage
+	default:
+		return deriveGuidanceLifecycleStage(status, preferredTranslation)
+	}
+}
+
 func normalizeGuidanceAction(action string) string {
 	switch strings.TrimSpace(strings.ToLower(action)) {
 	case "create":
@@ -233,6 +277,10 @@ func InsertTranslationGuidanceAction(
 	action.RuleCode = strings.TrimSpace(action.RuleCode)
 	action.ApplicationMode = normalizeGuidanceApplicationMode(action.Kind, action.ApplicationMode)
 	action.Status = normalizeGuidanceStatus(action.Kind, action.Status)
+	if action.Action == "reactivate" && strings.TrimSpace(action.LifecycleStage) == "inactive" {
+		action.LifecycleStage = ""
+	}
+	action.LifecycleStage = normalizeGuidanceLifecycleStage(action.Status, action.PreferredTranslation, action.LifecycleStage)
 
 	if action.Action == "" {
 		return "", fmt.Errorf("missing guidance action")
@@ -245,11 +293,15 @@ func InsertTranslationGuidanceAction(
 		if action.Label == "" {
 			return "", fmt.Errorf("missing guidance label")
 		}
+		if action.LifecycleStage == "guidance" && action.PreferredTranslation == "" {
+			return "", fmt.Errorf("translation-guidance lifecycle requires a preferred English translation")
+		}
 	case "retire":
 		if action.TargetRuleKey == "" {
 			return "", fmt.Errorf("missing target rule key")
 		}
 		action.Status = "retired"
+		action.LifecycleStage = "inactive"
 	}
 	if action.Action != "create" && action.TargetRuleKey == "" {
 		return "", fmt.Errorf("missing target rule key")
@@ -271,6 +323,7 @@ func InsertTranslationGuidanceAction(
 			preferred_translation,
 			word_class,
 			semantic_domain,
+			lifecycle_stage,
 			status,
 			application_mode,
 			citations_text,
@@ -278,7 +331,7 @@ func InsertTranslationGuidanceAction(
 			rule_code,
 			reviewer_username
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
 		action.TargetRuleKey,
 		action.Action,
@@ -287,6 +340,7 @@ func InsertTranslationGuidanceAction(
 		action.PreferredTranslation,
 		action.WordClass,
 		action.SemanticDomain,
+		action.LifecycleStage,
 		action.Status,
 		action.ApplicationMode,
 		action.CitationsText,
@@ -335,6 +389,7 @@ func FetchTranslationGuidanceActions(db *sql.DB) ([]TranslationGuidanceAction, e
 			COALESCE(preferred_translation, ''),
 			COALESCE(word_class, ''),
 			COALESCE(semantic_domain, ''),
+			COALESCE(lifecycle_stage, ''),
 			COALESCE(status, ''),
 			COALESCE(application_mode, ''),
 			COALESCE(citations_text, ''),
@@ -363,6 +418,7 @@ func FetchTranslationGuidanceActions(db *sql.DB) ([]TranslationGuidanceAction, e
 			&action.PreferredTranslation,
 			&action.WordClass,
 			&action.SemanticDomain,
+			&action.LifecycleStage,
 			&action.Status,
 			&action.ApplicationMode,
 			&action.CitationsText,
@@ -417,6 +473,7 @@ func ApplyTranslationGuidanceActions(
 			rule.SemanticDomain = action.SemanticDomain
 			rule.Status = normalizeGuidanceStatus(rule.Kind, action.Status)
 			rule.ApplicationMode = normalizeGuidanceApplicationMode(rule.Kind, action.ApplicationMode)
+			rule.LifecycleStage = normalizeGuidanceLifecycleStage(rule.Status, rule.PreferredTranslation, action.LifecycleStage)
 			rule.CitationsText = action.CitationsText
 			rule.Notes = action.Notes
 			rule.RuleCode = action.RuleCode
@@ -439,6 +496,9 @@ func ApplyTranslationGuidanceActions(
 			if action.ApplicationMode != "" {
 				rule.ApplicationMode = action.ApplicationMode
 			}
+			if action.LifecycleStage != "" {
+				rule.LifecycleStage = action.LifecycleStage
+			}
 			if action.CitationsText != "" {
 				rule.CitationsText = action.CitationsText
 			}
@@ -456,6 +516,7 @@ func ApplyTranslationGuidanceActions(
 		if rule.Status == "" {
 			rule.Status = normalizeGuidanceStatus(rule.Kind, "")
 		}
+		rule.LifecycleStage = normalizeGuidanceLifecycleStage(rule.Status, rule.PreferredTranslation, rule.LifecycleStage)
 		rule.PendingImport = true
 		rule.LastChangedBy = strings.TrimSpace(action.Reviewer)
 		rule.LastChangedAt = strings.TrimSpace(action.ReviewedAt)
@@ -470,6 +531,9 @@ func ApplyTranslationGuidanceActions(
 		if strings.TrimSpace(rule.RuleKey) == "" || strings.TrimSpace(rule.Label) == "" {
 			continue
 		}
+		rule.Status = normalizeGuidanceStatus(rule.Kind, rule.Status)
+		rule.ApplicationMode = normalizeGuidanceApplicationMode(rule.Kind, rule.ApplicationMode)
+		rule.LifecycleStage = normalizeGuidanceLifecycleStage(rule.Status, rule.PreferredTranslation, rule.LifecycleStage)
 		result = append(result, rule)
 	}
 	sortGuidanceRules(result)

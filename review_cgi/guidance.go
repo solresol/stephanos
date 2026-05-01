@@ -19,6 +19,7 @@ type GuidanceKindTab struct {
 type GuidanceRuleView struct {
 	Rule        TranslationGuidanceRule
 	KindLabel   string
+	StageLabel  string
 	StatusLabel string
 	ModeLabel   string
 }
@@ -118,6 +119,7 @@ func buildGuidancePageData(rules []TranslationGuidanceRule, params url.Values) *
 		filtered = append(filtered, GuidanceRuleView{
 			Rule:        rule,
 			KindLabel:   guidanceKindLabel(rule.Kind),
+			StageLabel:  guidanceLifecycleLabel(rule.LifecycleStage),
 			StatusLabel: guidanceStatusLabel(rule.Status),
 			ModeLabel:   guidanceModeLabel(rule.ApplicationMode),
 		})
@@ -173,6 +175,21 @@ func guidanceStatusLabel(status string) string {
 		return "Retired"
 	default:
 		return status
+	}
+}
+
+func guidanceLifecycleLabel(stage string) string {
+	switch strings.TrimSpace(stage) {
+	case "investigate":
+		return "Investigate"
+	case "recognizer":
+		return "Recognizer"
+	case "guidance":
+		return "Translation guidance"
+	case "inactive":
+		return "Inactive"
+	default:
+		return stage
 	}
 }
 
@@ -257,7 +274,7 @@ const guidanceTemplate = `<!DOCTYPE html>
             align-items: end;
             display: grid;
             gap: 8px;
-            grid-template-columns: minmax(220px, 1.7fr) repeat(5, minmax(118px, 1fr));
+            grid-template-columns: minmax(220px, 1.7fr) repeat(6, minmax(118px, 1fr));
             margin-bottom: 8px;
         }
         .guidance-table-controls label {
@@ -291,7 +308,7 @@ const guidanceTemplate = `<!DOCTYPE html>
         .guidance-table {
             border-collapse: collapse;
             font-size: 0.82em;
-            min-width: 1840px;
+            min-width: 1980px;
             table-layout: fixed;
             width: 100%;
         }
@@ -352,7 +369,7 @@ const guidanceTemplate = `<!DOCTYPE html>
         }
         .guidance-table th:nth-child(2),
         .guidance-table td:nth-child(2) {
-            width: 96px;
+            width: 150px;
         }
         .guidance-table th:nth-child(3),
         .guidance-table td:nth-child(3) {
@@ -360,30 +377,34 @@ const guidanceTemplate = `<!DOCTYPE html>
         }
         .guidance-table th:nth-child(4),
         .guidance-table td:nth-child(4) {
-            width: 120px;
+            width: 96px;
         }
         .guidance-table th:nth-child(5),
         .guidance-table td:nth-child(5) {
-            width: 330px;
+            width: 120px;
         }
         .guidance-table th:nth-child(6),
         .guidance-table td:nth-child(6) {
-            width: 220px;
+            width: 330px;
         }
         .guidance-table th:nth-child(7),
         .guidance-table td:nth-child(7) {
-            width: 140px;
+            width: 220px;
         }
         .guidance-table th:nth-child(8),
         .guidance-table td:nth-child(8) {
-            width: 230px;
+            width: 140px;
         }
-        .guidance-table th:nth-child(12),
-        .guidance-table td:nth-child(12) {
-            width: 210px;
+        .guidance-table th:nth-child(9),
+        .guidance-table td:nth-child(9) {
+            width: 230px;
         }
         .guidance-table th:nth-child(13),
         .guidance-table td:nth-child(13) {
+            width: 210px;
+        }
+        .guidance-table th:nth-child(14),
+        .guidance-table td:nth-child(14) {
             width: 120px;
         }
         .guidance-table .table-action {
@@ -477,6 +498,10 @@ const guidanceTemplate = `<!DOCTYPE html>
         .guidance-badge.kind {
             background: #ddeefe;
             color: #14528a;
+        }
+        .guidance-badge.stage {
+            background: #ede9fe;
+            color: #5b21b6;
         }
         .guidance-badge.status {
             background: #e9f7ed;
@@ -644,6 +669,15 @@ const guidanceTemplate = `<!DOCTYPE html>
                         <input type="text" name="guidance_semantic_domain" id="guidance_semantic_domain_new" placeholder="terrain, settlements, political terms">
                     </div>
                     <div>
+                        <label for="guidance_lifecycle_stage_new">Lifecycle stage</label>
+                        <select name="guidance_lifecycle_stage" id="guidance_lifecycle_stage_new">
+                            <option value="investigate">Investigate — detect only</option>
+                            <option value="recognizer" selected>Recognizer — detect and show</option>
+                            <option value="guidance">Translation guidance — detect and prompt</option>
+                            <option value="inactive">Inactive</option>
+                        </select>
+                    </div>
+                    <div>
                         <label for="guidance_status_new">Status</label>
                         <select name="guidance_status" id="guidance_status_new">
                             <option value="in_progress">In progress</option>
@@ -709,6 +743,16 @@ const guidanceTemplate = `<!DOCTYPE html>
                     </select>
                 </div>
                 <div>
+                    <label for="guidance_table_stage">Lifecycle</label>
+                    <select id="guidance_table_stage">
+                        <option value="">All stages</option>
+                        <option value="investigate">Investigate</option>
+                        <option value="recognizer">Recognizer</option>
+                        <option value="guidance">Translation guidance</option>
+                        <option value="inactive">Inactive</option>
+                    </select>
+                </div>
+                <div>
                     <label for="guidance_table_mode">Mode</label>
                     <select id="guidance_table_mode">
                         <option value="">All modes</option>
@@ -734,6 +778,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                     <thead>
                         <tr>
                             <th class="sortable" data-sort="kind">Kind</th>
+                            <th class="sortable" data-sort="stage">Lifecycle</th>
                             <th class="sortable" data-sort="status">Status</th>
                             <th class="sortable" data-sort="mode">Mode</th>
                             <th class="sortable" data-sort="rule-code">Rule code</th>
@@ -754,6 +799,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                             class="{{if .Rule.PendingImport}}pending-import {{end}}{{if eq .Rule.Status "retired"}}is-retired{{end}}"
                             data-target-id="rule-{{.Rule.RuleKey}}"
                             data-kind="{{.Rule.Kind}}"
+                            data-stage="{{.Rule.LifecycleStage}}"
                             data-status="{{.Rule.Status}}"
                             data-mode="{{.Rule.ApplicationMode}}"
                             data-rule-code="{{.Rule.RuleCode}}"
@@ -765,8 +811,9 @@ const guidanceTemplate = `<!DOCTYPE html>
                             data-matched="{{.Rule.MatchCount}}"
                             data-backlog="{{.Rule.BacklogCount}}"
                             data-updated="{{.Rule.UpdatedAt}}"
-                            data-search="{{.Rule.RuleCode}} {{.Rule.Label}} {{.Rule.PreferredTranslation}} {{.Rule.WordClass}} {{.Rule.SemanticDomain}} {{.Rule.CitationsText}} {{.Rule.Notes}}">
+                            data-search="{{.Rule.RuleCode}} {{.Rule.Label}} {{.Rule.PreferredTranslation}} {{.Rule.WordClass}} {{.Rule.SemanticDomain}} {{.StageLabel}} {{.Rule.CitationsText}} {{.Rule.Notes}}">
                             <td title="{{.KindLabel}}">{{.KindLabel}}</td>
+                            <td title="{{.StageLabel}}">{{.StageLabel}}</td>
                             <td title="{{.StatusLabel}}">{{.StatusLabel}}</td>
                             <td title="{{.ModeLabel}}">{{.ModeLabel}}</td>
                             <td class="compact" title="{{.Rule.RuleCode}}">{{.Rule.RuleCode}}</td>
@@ -797,6 +844,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                         </div>
                         <div class="guidance-badges">
                             <span class="guidance-badge kind">{{.KindLabel}}</span>
+                            <span class="guidance-badge stage">{{.StageLabel}}</span>
                             <span class="guidance-badge status">{{.StatusLabel}}</span>
                             <span class="guidance-badge mode">{{.ModeLabel}}</span>
                             {{if .Rule.PendingImport}}<span class="guidance-badge pending">Pending import</span>{{end}}
@@ -814,6 +862,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                         {{if .Rule.SemanticDomain}}
                         <div class="guidance-detail"><strong>Semantic domain</strong><div>{{.Rule.SemanticDomain}}</div></div>
                         {{end}}
+                        <div class="guidance-detail"><strong>Lifecycle</strong><div>{{.StageLabel}}</div></div>
                         {{if .Rule.CitationsText}}
                         <div class="guidance-detail"><strong>Citations</strong><div>{{.Rule.CitationsText}}</div></div>
                         {{end}}
@@ -865,6 +914,15 @@ const guidanceTemplate = `<!DOCTYPE html>
                                 <input type="text" name="guidance_semantic_domain" id="guidance_semantic_domain_{{.Rule.RuleKey}}" value="{{.Rule.SemanticDomain}}">
                             </div>
                             <div>
+                                <label for="guidance_lifecycle_stage_{{.Rule.RuleKey}}">Lifecycle stage</label>
+                                <select name="guidance_lifecycle_stage" id="guidance_lifecycle_stage_{{.Rule.RuleKey}}">
+                                    <option value="investigate" {{if eq .Rule.LifecycleStage "investigate"}}selected{{end}}>Investigate — detect only</option>
+                                    <option value="recognizer" {{if eq .Rule.LifecycleStage "recognizer"}}selected{{end}}>Recognizer — detect and show</option>
+                                    <option value="guidance" {{if eq .Rule.LifecycleStage "guidance"}}selected{{end}}>Translation guidance — detect and prompt</option>
+                                    <option value="inactive" {{if eq .Rule.LifecycleStage "inactive"}}selected{{end}}>Inactive</option>
+                                </select>
+                            </div>
+                            <div>
                                 <label for="guidance_status_{{.Rule.RuleKey}}">Status</label>
                                 <select name="guidance_status" id="guidance_status_{{.Rule.RuleKey}}">
                                     <option value="in_progress" {{if eq .Rule.Status "in_progress"}}selected{{end}}>In progress</option>
@@ -908,6 +966,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                             <input type="hidden" name="guidance_preferred_translation" value="{{.Rule.PreferredTranslation}}">
                             <input type="hidden" name="guidance_word_class" value="{{.Rule.WordClass}}">
                             <input type="hidden" name="guidance_semantic_domain" value="{{.Rule.SemanticDomain}}">
+                            <input type="hidden" name="guidance_lifecycle_stage" value="{{.Rule.LifecycleStage}}">
                             <input type="hidden" name="guidance_status" value="in_progress">
                             <input type="hidden" name="guidance_application_mode" value="{{.Rule.ApplicationMode}}">
                             <input type="hidden" name="guidance_citations_text" value="{{.Rule.CitationsText}}">
@@ -928,6 +987,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                             <input type="hidden" name="guidance_preferred_translation" value="{{.Rule.PreferredTranslation}}">
                             <input type="hidden" name="guidance_word_class" value="{{.Rule.WordClass}}">
                             <input type="hidden" name="guidance_semantic_domain" value="{{.Rule.SemanticDomain}}">
+                            <input type="hidden" name="guidance_lifecycle_stage" value="{{.Rule.LifecycleStage}}">
                             <input type="hidden" name="guidance_application_mode" value="{{.Rule.ApplicationMode}}">
                             <input type="hidden" name="guidance_citations_text" value="{{.Rule.CitationsText}}">
                             <input type="hidden" name="guidance_notes" value="{{.Rule.Notes}}">
@@ -954,6 +1014,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                 search: document.getElementById("guidance_table_search"),
                 kind: document.getElementById("guidance_table_kind"),
                 status: document.getElementById("guidance_table_status"),
+                stage: document.getElementById("guidance_table_stage"),
                 mode: document.getElementById("guidance_table_mode"),
                 wordClass: document.getElementById("guidance_table_word_class"),
                 domain: document.getElementById("guidance_table_domain")
@@ -993,18 +1054,23 @@ const guidanceTemplate = `<!DOCTYPE html>
                 }, 1800);
             }
 
-			function getSortValue(row, key) {
-				if (key === "revision" || key === "matched" || key === "backlog") {
-					return Number(row.dataset[key] || 0);
-				}
-				if (key === "kind") {
-					var kindOrder = { gloss: 0, formula: 1, proper_noun: 2, contextual_bias: 3 };
-					var kind = text(row.dataset.kind);
-					return Object.prototype.hasOwnProperty.call(kindOrder, kind) ? kindOrder[kind] : 99;
-				}
-				if (key === "rule-code") {
-					return text(row.dataset.ruleCode);
-				}
+            function getSortValue(row, key) {
+                if (key === "revision" || key === "matched" || key === "backlog") {
+                    return Number(row.dataset[key] || 0);
+                }
+                if (key === "kind") {
+                    var kindOrder = { gloss: 0, formula: 1, proper_noun: 2, contextual_bias: 3 };
+                    var kind = text(row.dataset.kind);
+                    return Object.prototype.hasOwnProperty.call(kindOrder, kind) ? kindOrder[kind] : 99;
+                }
+                if (key === "stage") {
+                    var stageOrder = { investigate: 0, recognizer: 1, guidance: 2, inactive: 3 };
+                    var stage = text(row.dataset.stage);
+                    return Object.prototype.hasOwnProperty.call(stageOrder, stage) ? stageOrder[stage] : 99;
+                }
+                if (key === "rule-code") {
+                    return text(row.dataset.ruleCode);
+                }
                 if (key === "word-class") {
                     return text(row.dataset.wordClass);
                 }
@@ -1040,6 +1106,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                 var search = text(controls.search && controls.search.value);
                 var kind = text(controls.kind && controls.kind.value);
                 var status = text(controls.status && controls.status.value);
+                var stage = text(controls.stage && controls.stage.value);
                 var mode = text(controls.mode && controls.mode.value);
                 var wordClass = text(controls.wordClass && controls.wordClass.value);
                 var domain = text(controls.domain && controls.domain.value);
@@ -1054,6 +1121,9 @@ const guidanceTemplate = `<!DOCTYPE html>
                         matches = false;
                     }
                     if (status && text(row.dataset.status) !== status) {
+                        matches = false;
+                    }
+                    if (stage && text(row.dataset.stage) !== stage) {
                         matches = false;
                     }
                     if (mode && text(row.dataset.mode) !== mode) {

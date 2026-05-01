@@ -34,6 +34,13 @@ STATUS_LABELS = {
     "retired": "Retired",
 }
 
+LIFECYCLE_STAGE_LABELS = {
+    "investigate": "Investigate",
+    "recognizer": "Recognizer",
+    "guidance": "Translation guidance",
+    "inactive": "Inactive",
+}
+
 APPLICATION_MODE_LABELS = {
     "advisory": "Advisory",
     "required": "Required",
@@ -63,6 +70,16 @@ def fetch_rules() -> list[dict[str, object]]:
         """
     )
     has_semantic_domain = cur.fetchone() is not None
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'translation_guidance_rules'
+          AND column_name = 'lifecycle_stage'
+        """
+    )
+    has_lifecycle_stage = cur.fetchone() is not None
 
     match_join = ""
     match_select = "0 AS match_count, 0 AS uncertain_count"
@@ -99,6 +116,18 @@ def fetch_rules() -> list[dict[str, object]]:
         if has_semantic_domain
         else "'' AS semantic_domain"
     )
+    lifecycle_select = (
+        "COALESCE(r.lifecycle_stage, '') AS lifecycle_stage"
+        if has_lifecycle_stage
+        else """
+            CASE
+                WHEN r.status = 'retired' THEN 'inactive'
+                WHEN r.status = 'unsure' THEN 'investigate'
+                WHEN COALESCE(BTRIM(r.preferred_translation), '') = '' THEN 'recognizer'
+                ELSE 'guidance'
+            END AS lifecycle_stage
+        """
+    )
 
     cur.execute(
         f"""
@@ -118,6 +147,7 @@ def fetch_rules() -> list[dict[str, object]]:
             COALESCE(r.preferred_translation, '') AS preferred_translation,
             COALESCE(r.word_class, '') AS word_class,
             {semantic_domain_select},
+            {lifecycle_select},
             COALESCE(r.status, '') AS status,
             COALESCE(r.application_mode, '') AS application_mode,
             COALESCE(r.citations_text, '') AS citations_text,
@@ -156,15 +186,16 @@ def fetch_rules() -> list[dict[str, object]]:
                 "preferred_translation": row[5] or "",
                 "word_class": row[6] or "",
                 "semantic_domain": row[7] or "",
-                "status": row[8] or "",
-                "application_mode": row[9] or "",
-                "citations_text": row[10] or "",
-                "notes": row[11] or "",
-                "updated_at": row[12] or "",
-                "revision_number": int(row[13] or 0),
-                "match_count": int(row[14] or 0),
-                "uncertain_count": int(row[15] or 0),
-                "backlog_count": int(row[16] or 0),
+                "lifecycle_stage": row[8] or "",
+                "status": row[9] or "",
+                "application_mode": row[10] or "",
+                "citations_text": row[11] or "",
+                "notes": row[12] or "",
+                "updated_at": row[13] or "",
+                "revision_number": int(row[14] or 0),
+                "match_count": int(row[15] or 0),
+                "uncertain_count": int(row[16] or 0),
+                "backlog_count": int(row[17] or 0),
             }
         )
     return rules
@@ -182,6 +213,11 @@ def status_label(status: object) -> str:
     return STATUS_LABELS.get(key, key.replace("_", " ").title())
 
 
+def lifecycle_label(stage: object) -> str:
+    key = str(stage or "")
+    return LIFECYCLE_STAGE_LABELS.get(key, key.replace("_", " ").title())
+
+
 def mode_label(mode: object) -> str:
     key = str(mode or "")
     return APPLICATION_MODE_LABELS.get(key, key.replace("_", " ").title())
@@ -197,21 +233,27 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
     for rule in rules:
         kind = str(rule["kind"])
         status = str(rule["status"])
+        lifecycle = str(rule["lifecycle_stage"])
         mode = str(rule["application_mode"])
         kind_display = kind_label(kind)
         status_display = status_label(status)
+        lifecycle_display = lifecycle_label(lifecycle)
         mode_display = mode_label(mode)
         search_text = " ".join(
-            str(rule.get(key, "") or "")
-            for key in (
-                "rule_code",
-                "label",
-                "preferred_translation",
-                "word_class",
-                "semantic_domain",
-                "citations_text",
-                "notes",
-            )
+            [
+                str(rule.get(key, "") or "")
+                for key in (
+                    "rule_code",
+                    "label",
+                    "preferred_translation",
+                    "word_class",
+                    "semantic_domain",
+                    "lifecycle_stage",
+                    "citations_text",
+                    "notes",
+                )
+            ]
+            + [lifecycle_display]
         )
         row_class = "is-retired" if status == "retired" else ""
         rows.append(
@@ -221,6 +263,7 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                 id="rule-{esc(rule['rule_key'])}"
                 data-kind="{esc(kind)}"
                 data-status="{esc(status)}"
+                data-stage="{esc(lifecycle)}"
                 data-mode="{esc(mode)}"
                 data-rule-code="{esc(rule['rule_code'])}"
                 data-label="{esc(rule['label'])}"
@@ -235,6 +278,7 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                 data-updated="{esc(rule['updated_at'])}"
                 data-search="{esc(search_text)}">
                 {render_table_cell(kind_display)}
+                {render_table_cell(lifecycle_display)}
                 {render_table_cell(status_display)}
                 {render_table_cell(mode_display)}
                 {render_table_cell(rule["rule_code"], css_class="compact")}
@@ -285,6 +329,16 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                     </select>
                 </div>
                 <div>
+                    <label for="guidance_table_stage">Lifecycle</label>
+                    <select id="guidance_table_stage">
+                        <option value="">All stages</option>
+                        <option value="investigate">Investigate</option>
+                        <option value="recognizer">Recognizer</option>
+                        <option value="guidance">Translation guidance</option>
+                        <option value="inactive">Inactive</option>
+                    </select>
+                </div>
+                <div>
                     <label for="guidance_table_mode">Mode</label>
                     <select id="guidance_table_mode">
                         <option value="">All modes</option>
@@ -307,6 +361,7 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                     <thead>
                         <tr>
                             <th class="sortable" data-sort="kind">Kind</th>
+                            <th class="sortable" data-sort="stage">Lifecycle</th>
                             <th class="sortable" data-sort="status">Status</th>
                             <th class="sortable" data-sort="mode">Mode</th>
                             <th class="sortable" data-sort="rule-code">Rule code</th>
@@ -444,7 +499,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
             align-items: end;
             display: grid;
             gap: 8px;
-            grid-template-columns: minmax(220px, 1.7fr) repeat(5, minmax(118px, 1fr));
+            grid-template-columns: minmax(220px, 1.7fr) repeat(6, minmax(118px, 1fr));
             margin-bottom: 8px;
         }}
         .guidance-table-controls label {{
@@ -473,7 +528,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
         .guidance-table {{
             border-collapse: collapse;
             font-size: 0.82rem;
-            min-width: 2120px;
+            min-width: 2260px;
             table-layout: fixed;
             width: 100%;
         }}
@@ -532,7 +587,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
         }}
         .guidance-table th:nth-child(2),
         .guidance-table td:nth-child(2) {{
-            width: 96px;
+            width: 150px;
         }}
         .guidance-table th:nth-child(3),
         .guidance-table td:nth-child(3) {{
@@ -540,34 +595,38 @@ def build_html(rules: list[dict[str, object]]) -> str:
         }}
         .guidance-table th:nth-child(4),
         .guidance-table td:nth-child(4) {{
-            width: 120px;
+            width: 96px;
         }}
         .guidance-table th:nth-child(5),
         .guidance-table td:nth-child(5) {{
-            width: 300px;
+            width: 120px;
         }}
         .guidance-table th:nth-child(6),
         .guidance-table td:nth-child(6) {{
-            width: 220px;
+            width: 300px;
         }}
         .guidance-table th:nth-child(7),
         .guidance-table td:nth-child(7) {{
-            width: 140px;
+            width: 220px;
         }}
         .guidance-table th:nth-child(8),
         .guidance-table td:nth-child(8) {{
-            width: 230px;
+            width: 140px;
         }}
         .guidance-table th:nth-child(9),
         .guidance-table td:nth-child(9) {{
-            width: 180px;
+            width: 230px;
         }}
         .guidance-table th:nth-child(10),
         .guidance-table td:nth-child(10) {{
+            width: 180px;
+        }}
+        .guidance-table th:nth-child(11),
+        .guidance-table td:nth-child(11) {{
             width: 320px;
         }}
-        .guidance-table th:nth-child(14),
-        .guidance-table td:nth-child(14) {{
+        .guidance-table th:nth-child(15),
+        .guidance-table td:nth-child(15) {{
             width: 210px;
         }}
         .empty-state,
@@ -645,6 +704,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
                 search: document.getElementById("guidance_table_search"),
                 kind: document.getElementById("guidance_table_kind"),
                 status: document.getElementById("guidance_table_status"),
+                stage: document.getElementById("guidance_table_stage"),
                 mode: document.getElementById("guidance_table_mode"),
                 wordClass: document.getElementById("guidance_table_word_class"),
                 domain: document.getElementById("guidance_table_domain")
@@ -663,6 +723,11 @@ def build_html(rules: list[dict[str, object]]) -> str:
                     var kindOrder = {{ gloss: 0, formula: 1, proper_noun: 2 }};
                     var kind = text(row.dataset.kind);
                     return Object.prototype.hasOwnProperty.call(kindOrder, kind) ? kindOrder[kind] : 99;
+                }}
+                if (key === "stage") {{
+                    var stageOrder = {{ investigate: 0, recognizer: 1, guidance: 2, inactive: 3 }};
+                    var stage = text(row.dataset.stage);
+                    return Object.prototype.hasOwnProperty.call(stageOrder, stage) ? stageOrder[stage] : 99;
                 }}
                 if (key === "rule-code") {{
                     return text(row.dataset.ruleCode);
@@ -702,6 +767,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
                 var search = text(controls.search && controls.search.value);
                 var kind = text(controls.kind && controls.kind.value);
                 var status = text(controls.status && controls.status.value);
+                var stage = text(controls.stage && controls.stage.value);
                 var mode = text(controls.mode && controls.mode.value);
                 var wordClass = text(controls.wordClass && controls.wordClass.value);
                 var domain = text(controls.domain && controls.domain.value);
@@ -716,6 +782,9 @@ def build_html(rules: list[dict[str, object]]) -> str:
                         matches = false;
                     }}
                     if (status && text(row.dataset.status) !== status) {{
+                        matches = false;
+                    }}
+                    if (stage && text(row.dataset.stage) !== stage) {{
                         matches = false;
                     }}
                     if (mode && text(row.dataset.mode) !== mode) {{

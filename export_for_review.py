@@ -1064,6 +1064,16 @@ def export_lemmas():
             """
         )
         has_guidance_semantic_domain = cur.fetchone() is not None
+        cur.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'translation_guidance_rules'
+              AND column_name = 'lifecycle_stage'
+            """
+        )
+        has_guidance_lifecycle_stage = cur.fetchone() is not None
 
         guidance_match_join = ""
         guidance_match_select = "0 AS match_count, 0 AS uncertain_count"
@@ -1100,6 +1110,18 @@ def export_lemmas():
             if has_guidance_semantic_domain
             else "'' AS semantic_domain"
         )
+        guidance_lifecycle_select = (
+            "COALESCE(r.lifecycle_stage, '') AS lifecycle_stage"
+            if has_guidance_lifecycle_stage
+            else """
+                CASE
+                    WHEN r.status = 'retired' THEN 'inactive'
+                    WHEN r.status = 'unsure' THEN 'investigate'
+                    WHEN COALESCE(BTRIM(r.preferred_translation), '') = '' THEN 'recognizer'
+                    ELSE 'guidance'
+                END AS lifecycle_stage
+            """
+        )
 
         cur.execute(
             f"""
@@ -1120,6 +1142,7 @@ def export_lemmas():
                 COALESCE(r.preferred_translation, '') AS preferred_translation,
                 COALESCE(r.word_class, '') AS word_class,
                 {guidance_semantic_domain_select},
+                {guidance_lifecycle_select},
                 COALESCE(r.status, '') AS status,
                 COALESCE(r.application_mode, '') AS application_mode,
                 COALESCE(r.citations_text, '') AS citations_text,
@@ -1155,15 +1178,16 @@ def export_lemmas():
                     "preferred_translation": row[6] or "",
                     "word_class": row[7] or "",
                     "semantic_domain": row[8] or "",
-                    "status": row[9] or "",
-                    "application_mode": row[10] or "",
-                    "citations_text": row[11] or "",
-                    "notes": row[12] or "",
-                    "updated_at": row[13] or "",
-                    "revision_number": int(row[14] or 0),
-                    "match_count": int(row[15] or 0),
-                    "uncertain_count": int(row[16] or 0),
-                    "backlog_count": int(row[17] or 0),
+                    "lifecycle_stage": row[9] or "",
+                    "status": row[10] or "",
+                    "application_mode": row[11] or "",
+                    "citations_text": row[12] or "",
+                    "notes": row[13] or "",
+                    "updated_at": row[14] or "",
+                    "revision_number": int(row[15] or 0),
+                    "match_count": int(row[16] or 0),
+                    "uncertain_count": int(row[17] or 0),
+                    "backlog_count": int(row[18] or 0),
                 }
             )
 

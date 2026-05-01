@@ -16,10 +16,12 @@ from db import get_connection
 import canonical_variants
 from import_translation_guidance_spreadsheets import (
     comparable_state as guidance_comparable_state,
+    default_lifecycle_stage as default_guidance_lifecycle_stage,
     fetch_existing as fetch_existing_guidance_rule,
     insert_revision as insert_guidance_revision,
     insert_rule as insert_guidance_rule,
     make_rule_key as make_guidance_rule_key,
+    normalize_lifecycle_stage as normalize_guidance_lifecycle_stage,
     normalize_label as normalize_guidance_label,
     update_rule as update_guidance_rule,
 )
@@ -583,16 +585,24 @@ def default_guidance_application_mode(kind: str) -> str:
 def build_guidance_rule_payload(sqlite_row, *, rule_key: str, status_override: str | None = None) -> dict[str, object]:
     kind = (sqlite_row["kind"] or "").strip()
     label = (sqlite_row["label"] or "").strip()
+    status = (status_override or (sqlite_row["status"] or "").strip() or default_guidance_status(kind)).strip()
+    preferred_translation = (sqlite_row["preferred_translation"] or "").strip() or None
+    lifecycle_stage = (sqlite_row["lifecycle_stage"] or "").strip() or default_guidance_lifecycle_stage(
+        status,
+        preferred_translation,
+    )
+    lifecycle_stage = normalize_guidance_lifecycle_stage(status, preferred_translation, lifecycle_stage)
     return {
         "rule_key": rule_key,
         "rule_code": (sqlite_row["rule_code"] or "").strip() or None,
         "kind": kind,
         "label": label,
         "normalized_label": normalize_guidance_label(label),
-        "preferred_translation": (sqlite_row["preferred_translation"] or "").strip() or None,
+        "preferred_translation": preferred_translation,
         "word_class": (sqlite_row["word_class"] or "").strip() or None,
         "semantic_domain": (sqlite_row["semantic_domain"] or "").strip() or None,
-        "status": (status_override or (sqlite_row["status"] or "").strip() or default_guidance_status(kind)).strip(),
+        "lifecycle_stage": lifecycle_stage,
+        "status": status,
         "application_mode": ((sqlite_row["application_mode"] or "").strip() or default_guidance_application_mode(kind)).strip(),
         "citations_text": (sqlite_row["citations_text"] or "").strip() or None,
         "notes": (sqlite_row["notes"] or "").strip() or None,
@@ -668,12 +678,31 @@ def import_translation_guidance_actions(sqlite_cur, pg_cur) -> tuple[int, int, i
             "apply the semantic-domain migration before importing guidance actions."
         )
         return 0, 0, 0
+    pg_cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'translation_guidance_rules'
+          AND column_name = 'lifecycle_stage'
+        """
+    )
+    if not pg_cur.fetchone():
+        log(
+            "WARNING: translation_guidance_rules.lifecycle_stage missing; "
+            "apply the lifecycle-stage migration before importing guidance actions."
+        )
+        return 0, 0, 0
 
     last_id = get_last_imported_guidance_action_id(pg_cur)
     if sqlite_column_exists(sqlite_cur, "translation_guidance_actions", "semantic_domain"):
         semantic_domain_select = "COALESCE(semantic_domain, '') AS semantic_domain"
     else:
         semantic_domain_select = "'' AS semantic_domain"
+    if sqlite_column_exists(sqlite_cur, "translation_guidance_actions", "lifecycle_stage"):
+        lifecycle_stage_select = "COALESCE(lifecycle_stage, '') AS lifecycle_stage"
+    else:
+        lifecycle_stage_select = "'' AS lifecycle_stage"
 
     sqlite_cur.execute(
         f"""
@@ -686,6 +715,7 @@ def import_translation_guidance_actions(sqlite_cur, pg_cur) -> tuple[int, int, i
             COALESCE(preferred_translation, '') AS preferred_translation,
             COALESCE(word_class, '') AS word_class,
             {semantic_domain_select},
+            {lifecycle_stage_select},
             COALESCE(status, '') AS status,
             COALESCE(application_mode, '') AS application_mode,
             COALESCE(citations_text, '') AS citations_text,
@@ -723,6 +753,11 @@ def import_translation_guidance_actions(sqlite_cur, pg_cur) -> tuple[int, int, i
         status_override = "retired" if action == "retire" else None
         canonical_rule_key = make_guidance_rule_key(kind, normalize_guidance_label(label))
         rule = build_guidance_rule_payload(row, rule_key=canonical_rule_key, status_override=status_override)
+        if action == "reactivate" and rule.get("lifecycle_stage") == "inactive":
+            rule["lifecycle_stage"] = default_guidance_lifecycle_stage(
+                str(rule.get("status") or ""),
+                rule.get("preferred_translation"),
+            )
 
         try:
             existing = None
@@ -757,6 +792,7 @@ def import_translation_guidance_actions(sqlite_cur, pg_cur) -> tuple[int, int, i
                         "preferred_translation",
                         "word_class",
                         "semantic_domain",
+                        "lifecycle_stage",
                         "application_mode",
                         "citations_text",
                         "notes",

@@ -19,6 +19,20 @@ DETECTOR_BY_KIND = {
 }
 
 
+def column_exists(cur, table_name: str, column_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s
+          AND column_name = %s
+        """,
+        (table_name, column_name),
+    )
+    return cur.fetchone() is not None
+
+
 def ensure_required_tables(cur) -> None:
     required = [
         "translation_guidance_rules",
@@ -43,6 +57,8 @@ def ensure_required_tables(cur) -> None:
 def resolve_rules(cur, args) -> list[tuple[int, str, int]]:
     where = ["r.status <> 'retired'"]
     params: list[object] = []
+    if column_exists(cur, "translation_guidance_rules", "lifecycle_stage"):
+        where.append("COALESCE(r.lifecycle_stage, 'guidance') <> 'inactive'")
 
     if args.rule_id:
         where.append("r.id = ANY(%s)")
