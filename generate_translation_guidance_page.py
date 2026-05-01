@@ -21,12 +21,28 @@ KIND_LABELS = {
     "proper_noun": "Proper Nouns",
 }
 
+KIND_TABLE_LABELS = {
+    "gloss": "Gloss",
+    "formula": "Formula",
+    "proper_noun": "Proper noun",
+}
+
 STATUS_LABELS = {
     "in_progress": "In progress",
     "settled": "Settled",
     "unsure": "Unsure",
     "retired": "Retired",
 }
+
+APPLICATION_MODE_LABELS = {
+    "advisory": "Advisory",
+    "required": "Required",
+    "replace": "Replace",
+}
+
+
+def esc(value: object) -> str:
+    return html.escape(str(value or ""), quote=True)
 
 
 def fetch_rules() -> list[dict[str, object]]:
@@ -154,62 +170,164 @@ def fetch_rules() -> list[dict[str, object]]:
     return rules
 
 
-def render_rule_card(rule: dict[str, object]) -> str:
-    badges = [
-        f"<span class='badge kind'>{html.escape(KIND_LABELS.get(str(rule['kind']), str(rule['kind'])))}</span>",
-        f"<span class='badge status'>{html.escape(STATUS_LABELS.get(str(rule['status']), str(rule['status']).replace('_', ' ').title()))}</span>",
-        f"<span class='badge mode'>{html.escape(str(rule['application_mode']).replace('_', ' '))}</span>",
-    ]
-    if rule["match_count"]:
-        badges.append(f"<span class='badge meta'>{int(rule['match_count'])} matches</span>")
-    if rule["uncertain_count"]:
-        badges.append(f"<span class='badge meta'>{int(rule['uncertain_count'])} uncertain</span>")
-    if rule["backlog_count"]:
-        badges.append(f"<span class='badge meta'>{int(rule['backlog_count'])} backlog</span>")
+def kind_label(kind: object, *, plural: bool = False) -> str:
+    key = str(kind or "")
+    if plural:
+        return KIND_LABELS.get(key, key)
+    return KIND_TABLE_LABELS.get(key, key)
 
-    meta_bits = []
-    if rule["rule_code"]:
-        meta_bits.append(f"Code: {html.escape(str(rule['rule_code']))}")
-    meta_bits.append(f"Revision: {int(rule['revision_number'])}")
-    if rule["updated_at"]:
-        meta_bits.append(f"Updated: {html.escape(str(rule['updated_at']))}")
 
-    detail_rows = []
-    if rule["semantic_domain"]:
-        detail_rows.append(
-            f"<div class='detail-row'><strong>Semantic domain</strong><span>{html.escape(str(rule['semantic_domain']))}</span></div>"
-        )
-    if rule["word_class"]:
-        detail_rows.append(
-            f"<div class='detail-row'><strong>Word class</strong><span>{html.escape(str(rule['word_class']))}</span></div>"
-        )
-    if rule["citations_text"]:
-        detail_rows.append(
-            f"<div class='detail-row'><strong>Citations</strong><span>{html.escape(str(rule['citations_text']))}</span></div>"
-        )
-    if rule["notes"]:
-        detail_rows.append(
-            f"<div class='detail-row'><strong>Notes</strong><span>{html.escape(str(rule['notes']))}</span></div>"
-        )
+def status_label(status: object) -> str:
+    key = str(status or "")
+    return STATUS_LABELS.get(key, key.replace("_", " ").title())
 
-    preferred_translation = html.escape(str(rule["preferred_translation"] or ""))
-    if not preferred_translation:
-        preferred_translation = "<span class='muted'>No preferred translation recorded</span>"
+
+def mode_label(mode: object) -> str:
+    key = str(mode or "")
+    return APPLICATION_MODE_LABELS.get(key, key.replace("_", " ").title())
+
+
+def render_table_cell(value: object, *, css_class: str = "") -> str:
+    class_attr = f' class="{css_class}"' if css_class else ""
+    return f"<td{class_attr} title=\"{esc(value)}\">{esc(value)}</td>"
+
+
+def render_rule_table(rules: list[dict[str, object]]) -> str:
+    rows = []
+    for rule in rules:
+        kind = str(rule["kind"])
+        status = str(rule["status"])
+        mode = str(rule["application_mode"])
+        kind_display = kind_label(kind)
+        status_display = status_label(status)
+        mode_display = mode_label(mode)
+        search_text = " ".join(
+            str(rule.get(key, "") or "")
+            for key in (
+                "rule_code",
+                "label",
+                "preferred_translation",
+                "word_class",
+                "semantic_domain",
+                "citations_text",
+                "notes",
+            )
+        )
+        row_class = "is-retired" if status == "retired" else ""
+        rows.append(
+            f"""
+            <tr
+                class="{row_class}"
+                id="rule-{esc(rule['rule_key'])}"
+                data-kind="{esc(kind)}"
+                data-status="{esc(status)}"
+                data-mode="{esc(mode)}"
+                data-rule-code="{esc(rule['rule_code'])}"
+                data-label="{esc(rule['label'])}"
+                data-preferred="{esc(rule['preferred_translation'])}"
+                data-word-class="{esc(rule['word_class'])}"
+                data-domain="{esc(rule['semantic_domain'])}"
+                data-citations="{esc(rule['citations_text'])}"
+                data-notes="{esc(rule['notes'])}"
+                data-revision="{int(rule['revision_number'])}"
+                data-matched="{int(rule['match_count'])}"
+                data-backlog="{int(rule['backlog_count'])}"
+                data-updated="{esc(rule['updated_at'])}"
+                data-search="{esc(search_text)}">
+                {render_table_cell(kind_display)}
+                {render_table_cell(status_display)}
+                {render_table_cell(mode_display)}
+                {render_table_cell(rule["rule_code"], css_class="compact")}
+                {render_table_cell(rule["label"], css_class="compact strong")}
+                {render_table_cell(rule["preferred_translation"], css_class="compact")}
+                {render_table_cell(rule["word_class"], css_class="compact")}
+                {render_table_cell(rule["semantic_domain"], css_class="compact")}
+                {render_table_cell(rule["citations_text"], css_class="compact")}
+                {render_table_cell(rule["notes"], css_class="compact wide")}
+                <td class="numeric">{int(rule['revision_number'])}</td>
+                <td class="numeric">{int(rule['match_count'])}</td>
+                <td class="numeric">{int(rule['backlog_count'])}</td>
+                {render_table_cell(rule["updated_at"], css_class="compact")}
+            </tr>
+            """
+        )
 
     return f"""
-    <article class="rule-card" id="{html.escape(str(rule['rule_key']))}">
-        <div class="rule-header">
-            <div>
-                <h3>{html.escape(str(rule['label']))}</h3>
-                <div class="rule-meta">{' · '.join(meta_bits)}</div>
+        <section class="guidance-table-panel" aria-labelledby="guidance_table_heading">
+            <div class="table-head">
+                <div>
+                    <h2 id="guidance_table_heading">Guidance Rules</h2>
+                    <p><span id="guidance_table_visible_count">{len(rules)}</span> visible of {len(rules)} rules.</p>
+                </div>
             </div>
-            <div class="badge-row">{''.join(badges)}</div>
-        </div>
-        <div class="preferred-translation">{preferred_translation}</div>
-        <div class="detail-grid">
-            {''.join(detail_rows) if detail_rows else "<div class='muted'>No extra notes recorded.</div>"}
-        </div>
-    </article>
+            <div class="guidance-table-controls">
+                <div>
+                    <label for="guidance_table_search">Search</label>
+                    <input type="search" id="guidance_table_search" placeholder="Label, translation, notes, citations">
+                </div>
+                <div>
+                    <label for="guidance_table_kind">Kind</label>
+                    <select id="guidance_table_kind">
+                        <option value="">All kinds</option>
+                        <option value="gloss">Gloss</option>
+                        <option value="formula">Formula</option>
+                        <option value="proper_noun">Proper noun</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="guidance_table_status">Status</label>
+                    <select id="guidance_table_status">
+                        <option value="">All statuses</option>
+                        <option value="in_progress">In progress</option>
+                        <option value="settled">Settled</option>
+                        <option value="unsure">Unsure</option>
+                        <option value="retired">Retired</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="guidance_table_mode">Mode</label>
+                    <select id="guidance_table_mode">
+                        <option value="">All modes</option>
+                        <option value="advisory">Advisory</option>
+                        <option value="required">Required</option>
+                        <option value="replace">Replace</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="guidance_table_word_class">Word class</label>
+                    <input type="text" id="guidance_table_word_class" placeholder="noun, phrase">
+                </div>
+                <div>
+                    <label for="guidance_table_domain">Semantic domain</label>
+                    <input type="text" id="guidance_table_domain" placeholder="terrain, political">
+                </div>
+            </div>
+            <div class="guidance-table-wrap">
+                <table class="guidance-table" id="guidance_rule_table">
+                    <thead>
+                        <tr>
+                            <th class="sortable" data-sort="kind">Kind</th>
+                            <th class="sortable" data-sort="status">Status</th>
+                            <th class="sortable" data-sort="mode">Mode</th>
+                            <th class="sortable" data-sort="rule-code">Rule code</th>
+                            <th class="sortable" data-sort="label">Label</th>
+                            <th class="sortable" data-sort="preferred">Preferred</th>
+                            <th class="sortable" data-sort="word-class">Word class</th>
+                            <th class="sortable" data-sort="domain">Semantic domain</th>
+                            <th class="sortable" data-sort="citations">Citations</th>
+                            <th class="sortable" data-sort="notes">Notes</th>
+                            <th class="sortable numeric" data-sort="revision">Revision</th>
+                            <th class="sortable numeric" data-sort="matched">Matched</th>
+                            <th class="sortable numeric" data-sort="backlog">Backlog</th>
+                            <th class="sortable" data-sort="updated">Updated</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {''.join(rows)}
+                    </tbody>
+                </table>
+            </div>
+        </section>
     """
 
 
@@ -227,26 +345,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
         for kind in KIND_LABELS
     }
 
-    sections = []
-    for kind, label in KIND_LABELS.items():
-        active_cards = "".join(render_rule_card(rule) for rule in grouped[kind]["active"])
-        retired_cards = "".join(render_rule_card(rule) for rule in grouped[kind]["retired"])
-        sections.append(
-            f"""
-            <section class="kind-section" id="{kind}">
-                <div class="section-head">
-                    <div>
-                        <h2>{html.escape(label)}</h2>
-                        <p>{summary[kind]['active']} active, {summary[kind]['retired']} retired.</p>
-                    </div>
-                </div>
-                <div class="rule-list">
-                    {active_cards or "<div class='empty-state'>No active rules recorded.</div>"}
-                </div>
-                {f"<details class='retired-block'><summary>Show retired {html.escape(label.lower())}</summary><div class='rule-list'>{retired_cards}</div></details>" if retired_cards else ""}
-            </section>
-            """
-        )
+    table_html = render_rule_table(rules)
 
     generated_at = datetime.now(timezone.utc).isoformat()
     total_rules = len(rules)
@@ -308,10 +407,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
             gap: 14px;
             margin: 20px 0 26px;
         }}
-        .summary-card,
-        .kind-section,
-        .rule-card,
-        .retired-block {{
+        .summary-card {{
             background: white;
             border-radius: 16px;
             box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
@@ -323,96 +419,156 @@ def build_html(rules: list[dict[str, object]]) -> str:
             font-size: 2rem;
             font-weight: 800;
         }}
-        .kind-section {{
-            padding: 20px;
-            margin-bottom: 20px;
+        .guidance-table-panel {{
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+            padding: 14px;
         }}
-        .section-head h2 {{
-            margin: 0 0 4px;
-            font-size: 1.4rem;
-        }}
-        .section-head p {{
-            margin: 0;
-            color: #5b7287;
-        }}
-        .rule-list {{
-            display: grid;
-            gap: 14px;
-            margin-top: 16px;
-        }}
-        .rule-card {{
-            padding: 18px;
-            border: 1px solid #d8e3ec;
-        }}
-        .rule-header {{
+        .table-head {{
             display: flex;
             justify-content: space-between;
-            gap: 12px;
-            align-items: flex-start;
+            gap: 16px;
+            margin-bottom: 10px;
         }}
-        .rule-header h3 {{
+        .table-head h2 {{
+            margin: 0 0 4px;
+            font-size: 1.35rem;
+        }}
+        .table-head p {{
+            color: #5b7287;
+            font-size: 0.88rem;
             margin: 0;
-            font-size: 1.2rem;
         }}
-        .rule-meta {{
-            margin-top: 6px;
-            color: #6b7f92;
-            font-size: 0.92rem;
-        }}
-        .preferred-translation {{
-            margin-top: 14px;
-            font-size: 1.05rem;
-            font-weight: 650;
-            color: #11324e;
-        }}
-        .detail-grid {{
+        .guidance-table-controls {{
+            align-items: end;
             display: grid;
-            gap: 10px;
-            margin-top: 14px;
-        }}
-        .detail-row {{
-            display: grid;
-            grid-template-columns: 140px 1fr;
-            gap: 12px;
-            font-size: 0.96rem;
-        }}
-        .badge-row {{
-            display: flex;
-            flex-wrap: wrap;
             gap: 8px;
-            justify-content: flex-end;
+            grid-template-columns: minmax(220px, 1.7fr) repeat(5, minmax(118px, 1fr));
+            margin-bottom: 8px;
         }}
-        .badge {{
-            display: inline-flex;
-            align-items: center;
-            padding: 5px 10px;
-            border-radius: 999px;
-            font-size: 0.8rem;
-            font-weight: 700;
+        .guidance-table-controls label {{
+            color: #334155;
+            display: block;
+            font-size: 0.72rem;
+            font-weight: 800;
+            margin-bottom: 3px;
+            text-transform: uppercase;
         }}
-        .badge.kind {{
-            background: #ddeefe;
-            color: #14528a;
+        .guidance-table-controls input,
+        .guidance-table-controls select {{
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            font: inherit;
+            padding: 6px 8px;
+            width: 100%;
         }}
-        .badge.status {{
-            background: #e9f7ed;
-            color: #17603a;
+        .guidance-table-wrap {{
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            max-height: calc(100vh - 280px);
+            min-height: 500px;
+            overflow: auto;
         }}
-        .badge.mode {{
-            background: #fdf3dc;
-            color: #8a5b00;
+        .guidance-table {{
+            border-collapse: collapse;
+            font-size: 0.82rem;
+            min-width: 2120px;
+            table-layout: fixed;
+            width: 100%;
         }}
-        .badge.meta {{
-            background: #eef2f6;
-            color: #526375;
+        .guidance-table th,
+        .guidance-table td {{
+            border-bottom: 1px solid #e2e8f0;
+            overflow: hidden;
+            padding: 5px 8px;
+            text-align: left;
+            text-overflow: ellipsis;
+            vertical-align: middle;
+            white-space: nowrap;
         }}
-        .retired-block {{
-            margin-top: 16px;
-            padding: 14px 16px;
+        .guidance-table th {{
+            background: #f8fafc;
+            color: #334155;
+            font-size: 0.72rem;
+            letter-spacing: 0;
+            position: sticky;
+            text-transform: uppercase;
+            top: 0;
+            z-index: 1;
         }}
-        .retired-block summary {{
+        .guidance-table th.sortable {{
             cursor: pointer;
+            user-select: none;
+        }}
+        .guidance-table th.sortable::after {{
+            color: #94a3b8;
+            content: "+";
+            margin-left: 6px;
+        }}
+        .guidance-table th.sortable.sort-asc::after {{
+            content: "^";
+        }}
+        .guidance-table th.sortable.sort-desc::after {{
+            content: "v";
+        }}
+        .guidance-table tbody tr:hover {{
+            background: #f1f7fd;
+        }}
+        .guidance-table tbody tr.is-retired {{
+            color: #64748b;
+        }}
+        .guidance-table .numeric {{
+            text-align: right;
+            white-space: nowrap;
+        }}
+        .guidance-table .strong {{
+            color: #14528a;
             font-weight: 700;
+        }}
+        .guidance-table th:nth-child(1),
+        .guidance-table td:nth-child(1) {{
+            width: 92px;
+        }}
+        .guidance-table th:nth-child(2),
+        .guidance-table td:nth-child(2) {{
+            width: 96px;
+        }}
+        .guidance-table th:nth-child(3),
+        .guidance-table td:nth-child(3) {{
+            width: 96px;
+        }}
+        .guidance-table th:nth-child(4),
+        .guidance-table td:nth-child(4) {{
+            width: 120px;
+        }}
+        .guidance-table th:nth-child(5),
+        .guidance-table td:nth-child(5) {{
+            width: 300px;
+        }}
+        .guidance-table th:nth-child(6),
+        .guidance-table td:nth-child(6) {{
+            width: 220px;
+        }}
+        .guidance-table th:nth-child(7),
+        .guidance-table td:nth-child(7) {{
+            width: 140px;
+        }}
+        .guidance-table th:nth-child(8),
+        .guidance-table td:nth-child(8) {{
+            width: 230px;
+        }}
+        .guidance-table th:nth-child(9),
+        .guidance-table td:nth-child(9) {{
+            width: 180px;
+        }}
+        .guidance-table th:nth-child(10),
+        .guidance-table td:nth-child(10) {{
+            width: 320px;
+        }}
+        .guidance-table th:nth-child(14),
+        .guidance-table td:nth-child(14) {{
+            width: 210px;
         }}
         .empty-state,
         .muted {{
@@ -425,15 +581,15 @@ def build_html(rules: list[dict[str, object]]) -> str:
             text-align: center;
         }}
         @media (max-width: 800px) {{
-            .rule-header {{
-                flex-direction: column;
+            .wrap {{
+                padding: 14px;
             }}
-            .badge-row {{
-                justify-content: flex-start;
+            .hero {{
+                border-radius: 12px;
+                padding: 20px;
             }}
-            .detail-row {{
-                grid-template-columns: 1fr;
-                gap: 4px;
+            .guidance-table-controls {{
+                grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
             }}
         }}
     </style>
@@ -474,12 +630,141 @@ def build_html(rules: list[dict[str, object]]) -> str:
             </div>
         </section>
 
-        {''.join(sections)}
+        {table_html}
 
         <div class="footer">
             Generated {html.escape(generated_at)} UTC.
         </div>
     </div>
+    <script>
+        (function () {{
+            var table = document.getElementById("guidance_rule_table");
+            var rows = table ? Array.prototype.slice.call(table.querySelectorAll("tbody tr")) : [];
+            var visibleCount = document.getElementById("guidance_table_visible_count");
+            var controls = {{
+                search: document.getElementById("guidance_table_search"),
+                kind: document.getElementById("guidance_table_kind"),
+                status: document.getElementById("guidance_table_status"),
+                mode: document.getElementById("guidance_table_mode"),
+                wordClass: document.getElementById("guidance_table_word_class"),
+                domain: document.getElementById("guidance_table_domain")
+            }};
+            var sortState = {{ key: "kind", direction: "asc" }};
+
+            function text(value) {{
+                return (value || "").toString().trim().toLowerCase();
+            }}
+
+            function getSortValue(row, key) {{
+                if (key === "revision" || key === "matched" || key === "backlog") {{
+                    return Number(row.dataset[key] || 0);
+                }}
+                if (key === "kind") {{
+                    var kindOrder = {{ gloss: 0, formula: 1, proper_noun: 2 }};
+                    var kind = text(row.dataset.kind);
+                    return Object.prototype.hasOwnProperty.call(kindOrder, kind) ? kindOrder[kind] : 99;
+                }}
+                if (key === "rule-code") {{
+                    return text(row.dataset.ruleCode);
+                }}
+                if (key === "word-class") {{
+                    return text(row.dataset.wordClass);
+                }}
+                return text(row.dataset[key]);
+            }}
+
+            function applySort() {{
+                if (!table) {{
+                    return;
+                }}
+                var tbody = table.querySelector("tbody");
+                rows.sort(function (left, right) {{
+                    var leftValue = getSortValue(left, sortState.key);
+                    var rightValue = getSortValue(right, sortState.key);
+                    if (typeof leftValue === "number" || typeof rightValue === "number") {{
+                        return sortState.direction === "asc" ? leftValue - rightValue : rightValue - leftValue;
+                    }}
+                    return sortState.direction === "asc"
+                        ? String(leftValue).localeCompare(String(rightValue))
+                        : String(rightValue).localeCompare(String(leftValue));
+                }});
+                rows.forEach(function (row) {{
+                    tbody.appendChild(row);
+                }});
+                Array.prototype.slice.call(table.querySelectorAll("th.sortable")).forEach(function (header) {{
+                    var isActive = header.getAttribute("data-sort") === sortState.key;
+                    header.classList.toggle("sort-asc", isActive && sortState.direction === "asc");
+                    header.classList.toggle("sort-desc", isActive && sortState.direction === "desc");
+                }});
+            }}
+
+            function applyFilters() {{
+                var search = text(controls.search && controls.search.value);
+                var kind = text(controls.kind && controls.kind.value);
+                var status = text(controls.status && controls.status.value);
+                var mode = text(controls.mode && controls.mode.value);
+                var wordClass = text(controls.wordClass && controls.wordClass.value);
+                var domain = text(controls.domain && controls.domain.value);
+                var shown = 0;
+
+                rows.forEach(function (row) {{
+                    var matches = true;
+                    if (search && text(row.dataset.search).indexOf(search) === -1) {{
+                        matches = false;
+                    }}
+                    if (kind && text(row.dataset.kind) !== kind) {{
+                        matches = false;
+                    }}
+                    if (status && text(row.dataset.status) !== status) {{
+                        matches = false;
+                    }}
+                    if (mode && text(row.dataset.mode) !== mode) {{
+                        matches = false;
+                    }}
+                    if (wordClass && text(row.dataset.wordClass).indexOf(wordClass) === -1) {{
+                        matches = false;
+                    }}
+                    if (domain && text(row.dataset.domain).indexOf(domain) === -1) {{
+                        matches = false;
+                    }}
+                    row.hidden = !matches;
+                    if (matches) {{
+                        shown += 1;
+                    }}
+                }});
+                if (visibleCount) {{
+                    visibleCount.textContent = String(shown);
+                }}
+            }}
+
+            Object.keys(controls).forEach(function (key) {{
+                var control = controls[key];
+                if (!control) {{
+                    return;
+                }}
+                control.addEventListener("input", applyFilters);
+                control.addEventListener("change", applyFilters);
+            }});
+
+            if (table) {{
+                Array.prototype.slice.call(table.querySelectorAll("th.sortable")).forEach(function (header) {{
+                    header.addEventListener("click", function () {{
+                        var key = header.getAttribute("data-sort");
+                        if (sortState.key === key) {{
+                            sortState.direction = sortState.direction === "asc" ? "desc" : "asc";
+                        }} else {{
+                            sortState.key = key;
+                            sortState.direction = "asc";
+                        }}
+                        applySort();
+                    }});
+                }});
+            }}
+
+            applySort();
+            applyFilters();
+        }}());
+    </script>
 </body>
 </html>"""
 
