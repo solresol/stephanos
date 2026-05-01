@@ -1054,6 +1054,16 @@ def export_lemmas():
         has_guidance_matches = bool(cur.fetchone()[0])
         cur.execute("SELECT to_regclass('public.translation_guidance_backlog_items') IS NOT NULL")
         has_guidance_backlog = bool(cur.fetchone()[0])
+        cur.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'translation_guidance_rules'
+              AND column_name = 'semantic_domain'
+            """
+        )
+        has_guidance_semantic_domain = cur.fetchone() is not None
 
         guidance_match_join = ""
         guidance_match_select = "0 AS match_count, 0 AS uncertain_count"
@@ -1085,6 +1095,12 @@ def export_lemmas():
             """
             guidance_backlog_select = "COALESCE(b.backlog_count, 0) AS backlog_count"
 
+        guidance_semantic_domain_select = (
+            "COALESCE(r.semantic_domain, '') AS semantic_domain"
+            if has_guidance_semantic_domain
+            else "'' AS semantic_domain"
+        )
+
         cur.execute(
             f"""
             WITH latest_revisions AS (
@@ -1103,6 +1119,7 @@ def export_lemmas():
                 COALESCE(r.normalized_label, '') AS normalized_label,
                 COALESCE(r.preferred_translation, '') AS preferred_translation,
                 COALESCE(r.word_class, '') AS word_class,
+                {guidance_semantic_domain_select},
                 COALESCE(r.status, '') AS status,
                 COALESCE(r.application_mode, '') AS application_mode,
                 COALESCE(r.citations_text, '') AS citations_text,
@@ -1137,15 +1154,16 @@ def export_lemmas():
                     "normalized_label": row[5] or "",
                     "preferred_translation": row[6] or "",
                     "word_class": row[7] or "",
-                    "status": row[8] or "",
-                    "application_mode": row[9] or "",
-                    "citations_text": row[10] or "",
-                    "notes": row[11] or "",
-                    "updated_at": row[12] or "",
-                    "revision_number": int(row[13] or 0),
-                    "match_count": int(row[14] or 0),
-                    "uncertain_count": int(row[15] or 0),
-                    "backlog_count": int(row[16] or 0),
+                    "semantic_domain": row[8] or "",
+                    "status": row[9] or "",
+                    "application_mode": row[10] or "",
+                    "citations_text": row[11] or "",
+                    "notes": row[12] or "",
+                    "updated_at": row[13] or "",
+                    "revision_number": int(row[14] or 0),
+                    "match_count": int(row[15] or 0),
+                    "uncertain_count": int(row[16] or 0),
+                    "backlog_count": int(row[17] or 0),
                 }
             )
 

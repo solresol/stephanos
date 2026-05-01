@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS public.translation_guidance_rules (
     normalized_label TEXT NOT NULL,
     preferred_translation TEXT,
     word_class TEXT,
+    semantic_domain TEXT,
     status TEXT NOT NULL DEFAULT 'in_progress',
     application_mode TEXT NOT NULL,
     citations_text TEXT,
@@ -39,6 +40,10 @@ CREATE INDEX IF NOT EXISTS translation_guidance_rules_kind_status_idx
 
 CREATE INDEX IF NOT EXISTS translation_guidance_rules_normalized_label_idx
     ON public.translation_guidance_rules (normalized_label);
+
+CREATE INDEX IF NOT EXISTS translation_guidance_rules_semantic_domain_idx
+    ON public.translation_guidance_rules (semantic_domain)
+    WHERE semantic_domain IS NOT NULL;
 
 
 CREATE TABLE IF NOT EXISTS public.translation_guidance_rule_revisions (

@@ -18,6 +18,7 @@ type TranslationGuidanceRule struct {
 	NormalizedLabel      string `json:"normalized_label"`
 	PreferredTranslation string `json:"preferred_translation"`
 	WordClass            string `json:"word_class"`
+	SemanticDomain       string `json:"semantic_domain"`
 	Status               string `json:"status"`
 	ApplicationMode      string `json:"application_mode"`
 	CitationsText        string `json:"citations_text"`
@@ -45,6 +46,7 @@ type TranslationGuidanceAction struct {
 	Label                string
 	PreferredTranslation string
 	WordClass            string
+	SemanticDomain       string
 	Status               string
 	ApplicationMode      string
 	CitationsText        string
@@ -84,6 +86,7 @@ func EnsureGuidanceSchema(db *sql.DB) error {
 			label TEXT NOT NULL,
 			preferred_translation TEXT,
 			word_class TEXT,
+			semantic_domain TEXT,
 			status TEXT NOT NULL CHECK (status IN ('in_progress', 'settled', 'unsure', 'retired')),
 			application_mode TEXT NOT NULL CHECK (application_mode IN ('advisory', 'required', 'replace')),
 			citations_text TEXT,
@@ -99,7 +102,38 @@ func EnsureGuidanceSchema(db *sql.DB) error {
 			return err
 		}
 	}
+	if err := ensureSQLiteColumn(db, "translation_guidance_actions", "semantic_domain", "TEXT"); err != nil {
+		return err
+	}
 	return nil
+}
+
+func ensureSQLiteColumn(db *sql.DB, tableName string, columnName string, columnType string) error {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, dataType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if strings.EqualFold(strings.TrimSpace(name), columnName) {
+			return rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	_, err = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tableName, columnName, columnType))
+	return err
 }
 
 func normalizeGuidanceKind(kind string) string {
@@ -193,6 +227,7 @@ func InsertTranslationGuidanceAction(
 	action.Label = strings.TrimSpace(action.Label)
 	action.PreferredTranslation = strings.TrimSpace(action.PreferredTranslation)
 	action.WordClass = strings.TrimSpace(action.WordClass)
+	action.SemanticDomain = strings.TrimSpace(action.SemanticDomain)
 	action.CitationsText = strings.TrimSpace(action.CitationsText)
 	action.Notes = strings.TrimSpace(action.Notes)
 	action.RuleCode = strings.TrimSpace(action.RuleCode)
@@ -235,6 +270,7 @@ func InsertTranslationGuidanceAction(
 			label,
 			preferred_translation,
 			word_class,
+			semantic_domain,
 			status,
 			application_mode,
 			citations_text,
@@ -242,7 +278,7 @@ func InsertTranslationGuidanceAction(
 			rule_code,
 			reviewer_username
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
 		action.TargetRuleKey,
 		action.Action,
@@ -250,6 +286,7 @@ func InsertTranslationGuidanceAction(
 		action.Label,
 		action.PreferredTranslation,
 		action.WordClass,
+		action.SemanticDomain,
 		action.Status,
 		action.ApplicationMode,
 		action.CitationsText,
@@ -297,6 +334,7 @@ func FetchTranslationGuidanceActions(db *sql.DB) ([]TranslationGuidanceAction, e
 			COALESCE(label, ''),
 			COALESCE(preferred_translation, ''),
 			COALESCE(word_class, ''),
+			COALESCE(semantic_domain, ''),
 			COALESCE(status, ''),
 			COALESCE(application_mode, ''),
 			COALESCE(citations_text, ''),
@@ -324,6 +362,7 @@ func FetchTranslationGuidanceActions(db *sql.DB) ([]TranslationGuidanceAction, e
 			&action.Label,
 			&action.PreferredTranslation,
 			&action.WordClass,
+			&action.SemanticDomain,
 			&action.Status,
 			&action.ApplicationMode,
 			&action.CitationsText,
@@ -375,6 +414,7 @@ func ApplyTranslationGuidanceActions(
 			rule.Label = action.Label
 			rule.PreferredTranslation = action.PreferredTranslation
 			rule.WordClass = action.WordClass
+			rule.SemanticDomain = action.SemanticDomain
 			rule.Status = normalizeGuidanceStatus(rule.Kind, action.Status)
 			rule.ApplicationMode = normalizeGuidanceApplicationMode(rule.Kind, action.ApplicationMode)
 			rule.CitationsText = action.CitationsText
@@ -386,6 +426,21 @@ func ApplyTranslationGuidanceActions(
 			}
 			if action.RuleCode != "" {
 				rule.RuleCode = action.RuleCode
+			}
+			if action.PreferredTranslation != "" {
+				rule.PreferredTranslation = action.PreferredTranslation
+			}
+			if action.WordClass != "" {
+				rule.WordClass = action.WordClass
+			}
+			if action.SemanticDomain != "" {
+				rule.SemanticDomain = action.SemanticDomain
+			}
+			if action.ApplicationMode != "" {
+				rule.ApplicationMode = action.ApplicationMode
+			}
+			if action.CitationsText != "" {
+				rule.CitationsText = action.CitationsText
 			}
 			if action.Notes != "" {
 				rule.Notes = action.Notes

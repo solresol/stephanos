@@ -48,6 +48,7 @@ SPECS = {
         "translation_header": "Proposed English Translation",
         "citations_header": "Stephanos citations",
         "word_class_header": "WORD CLASS",
+        "semantic_domain_header": "SEMANTIC DOMAIN",
         "notes_header": "Notes",
         "status_header": "STATUS",
     },
@@ -56,6 +57,7 @@ SPECS = {
         "translation_header": "Proposed English Translation",
         "citations_header": "Stephos citations",
         "word_class_header": "WORD CLASS",
+        "semantic_domain_header": "SEMANTIC DOMAIN",
         "notes_header": "Notes",
         "status_header": "STATUS",
     },
@@ -63,6 +65,7 @@ SPECS = {
         "label_header": "Greek Name",
         "translation_header": "Transliteration",
         "word_class_header": "WORD CLASS",
+        "semantic_domain_header": "SEMANTIC DOMAIN",
     },
 }
 
@@ -190,6 +193,7 @@ def parse_rules(kind: str, workbook_path: Path) -> list[dict[str, object]]:
             "normalized_label": normalized,
             "preferred_translation": preferred_translation or None,
             "word_class": get_cell(row, header_map, spec.get("word_class_header", "")) or None,
+            "semantic_domain": get_cell(row, header_map, spec.get("semantic_domain_header", "")) or None,
             "status": normalized_status(kind, raw_status),
             "application_mode": APPLICATION_MODE[kind],
             "citations_text": get_cell(row, header_map, spec.get("citations_header", "")) or None,
@@ -214,6 +218,7 @@ def fetch_existing(cur, rule_key: str) -> dict[str, object] | None:
             normalized_label,
             preferred_translation,
             word_class,
+            semantic_domain,
             status,
             application_mode,
             citations_text,
@@ -239,6 +244,7 @@ def fetch_existing(cur, rule_key: str) -> dict[str, object] | None:
         "normalized_label",
         "preferred_translation",
         "word_class",
+        "semantic_domain",
         "status",
         "application_mode",
         "citations_text",
@@ -259,6 +265,7 @@ def comparable_state(rule: dict[str, object]) -> dict[str, object]:
         "normalized_label": rule["normalized_label"],
         "preferred_translation": rule["preferred_translation"],
         "word_class": rule["word_class"],
+        "semantic_domain": rule.get("semantic_domain"),
         "status": rule["status"],
         "application_mode": rule["application_mode"],
         "citations_text": rule["citations_text"],
@@ -280,6 +287,7 @@ def insert_rule(cur, rule: dict[str, object], username: str) -> int:
             normalized_label,
             preferred_translation,
             word_class,
+            semantic_domain,
             status,
             application_mode,
             citations_text,
@@ -291,7 +299,7 @@ def insert_rule(cur, rule: dict[str, object], username: str) -> int:
             updated_by
         )
         VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         RETURNING id
         """,
@@ -303,6 +311,7 @@ def insert_rule(cur, rule: dict[str, object], username: str) -> int:
             rule["normalized_label"],
             rule["preferred_translation"],
             rule["word_class"],
+            rule.get("semantic_domain"),
             rule["status"],
             rule["application_mode"],
             rule["citations_text"],
@@ -328,6 +337,7 @@ def update_rule(cur, rule_id: int, rule: dict[str, object], username: str) -> No
             normalized_label = %s,
             preferred_translation = %s,
             word_class = %s,
+            semantic_domain = %s,
             status = %s,
             application_mode = %s,
             citations_text = %s,
@@ -347,6 +357,7 @@ def update_rule(cur, rule_id: int, rule: dict[str, object], username: str) -> No
             rule["normalized_label"],
             rule["preferred_translation"],
             rule["word_class"],
+            rule.get("semantic_domain"),
             rule["status"],
             rule["application_mode"],
             rule["citations_text"],
@@ -419,6 +430,20 @@ def ensure_required_tables(cur) -> None:
             "Missing required tables. Apply the guidance migration first:\n"
             + "\n".join(f"  - {table}" for table in missing)
         )
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'translation_guidance_rules'
+          AND column_name = 'semantic_domain'
+        """
+    )
+    if not cur.fetchone():
+        raise RuntimeError(
+            "Missing translation_guidance_rules.semantic_domain. "
+            "Apply migrations/20260501_translation_guidance_semantic_domain.sql first."
+        )
 
 
 def load_all_rules(args) -> list[dict[str, object]]:
@@ -476,6 +501,8 @@ def main() -> None:
 
     for rule in rules:
         existing = fetch_existing(cur, str(rule["rule_key"]))
+        if existing is not None and not rule.get("semantic_domain"):
+            rule = {**rule, "semantic_domain": existing.get("semantic_domain")}
         snapshot = comparable_state(rule)
         source_context = {
             "source": "spreadsheet_seed",

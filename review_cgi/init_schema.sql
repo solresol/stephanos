@@ -152,6 +152,7 @@ CREATE TABLE IF NOT EXISTS translation_guidance_actions (
     label TEXT NOT NULL,
     preferred_translation TEXT,
     word_class TEXT,
+    semantic_domain TEXT,
     status TEXT NOT NULL CHECK (status IN ('in_progress', 'settled', 'unsure', 'retired')),
     application_mode TEXT NOT NULL CHECK (application_mode IN ('advisory', 'required', 'replace')),
     citations_text TEXT,

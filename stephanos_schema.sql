@@ -1772,6 +1772,7 @@ CREATE TABLE public.translation_guidance_rules (
     normalized_label text NOT NULL,
     preferred_translation text,
     word_class text,
+    semantic_domain text,
     status text DEFAULT 'in_progress'::text NOT NULL,
     application_mode text NOT NULL,
     citations_text text,
@@ -3434,6 +3435,13 @@ CREATE INDEX translation_guidance_rules_normalized_label_idx ON public.translati
 
 
 --
+-- Name: translation_guidance_rules_semantic_domain_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_rules_semantic_domain_idx ON public.translation_guidance_rules USING btree (semantic_domain) WHERE (semantic_domain IS NOT NULL);
+
+
+--
 -- Name: translation_guidance_rules_rule_code_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4114,4 +4122,3 @@ ALTER TABLE ONLY public.translation_runs
 --
 
 \unrestrict Iat6ATMoODTg31fWhSKyZqusQKREUzpxhC4R9AhOSebmEeqGqxx8xMu0lWhQA14
-

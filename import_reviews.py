@@ -591,6 +591,7 @@ def build_guidance_rule_payload(sqlite_row, *, rule_key: str, status_override: s
         "normalized_label": normalize_guidance_label(label),
         "preferred_translation": (sqlite_row["preferred_translation"] or "").strip() or None,
         "word_class": (sqlite_row["word_class"] or "").strip() or None,
+        "semantic_domain": (sqlite_row["semantic_domain"] or "").strip() or None,
         "status": (status_override or (sqlite_row["status"] or "").strip() or default_guidance_status(kind)).strip(),
         "application_mode": ((sqlite_row["application_mode"] or "").strip() or default_guidance_application_mode(kind)).strip(),
         "citations_text": (sqlite_row["citations_text"] or "").strip() or None,
@@ -652,10 +653,30 @@ def import_translation_guidance_actions(sqlite_cur, pg_cur) -> tuple[int, int, i
             + ", ".join(missing)
         )
         return 0, 0, 0
+    pg_cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'translation_guidance_rules'
+          AND column_name = 'semantic_domain'
+        """
+    )
+    if not pg_cur.fetchone():
+        log(
+            "WARNING: translation_guidance_rules.semantic_domain missing; "
+            "apply the semantic-domain migration before importing guidance actions."
+        )
+        return 0, 0, 0
 
     last_id = get_last_imported_guidance_action_id(pg_cur)
+    if sqlite_column_exists(sqlite_cur, "translation_guidance_actions", "semantic_domain"):
+        semantic_domain_select = "COALESCE(semantic_domain, '') AS semantic_domain"
+    else:
+        semantic_domain_select = "'' AS semantic_domain"
+
     sqlite_cur.execute(
-        """
+        f"""
         SELECT
             id,
             COALESCE(target_rule_key, '') AS target_rule_key,
@@ -664,6 +685,7 @@ def import_translation_guidance_actions(sqlite_cur, pg_cur) -> tuple[int, int, i
             COALESCE(label, '') AS label,
             COALESCE(preferred_translation, '') AS preferred_translation,
             COALESCE(word_class, '') AS word_class,
+            {semantic_domain_select},
             COALESCE(status, '') AS status,
             COALESCE(application_mode, '') AS application_mode,
             COALESCE(citations_text, '') AS citations_text,
@@ -730,6 +752,17 @@ def import_translation_guidance_actions(sqlite_cur, pg_cur) -> tuple[int, int, i
 
             if existing and existing_rule_id:
                 rule["rule_key"] = existing_rule_key
+                if action in {"retire", "reactivate"}:
+                    for field in (
+                        "preferred_translation",
+                        "word_class",
+                        "semantic_domain",
+                        "application_mode",
+                        "citations_text",
+                        "notes",
+                    ):
+                        if not rule.get(field):
+                            rule[field] = existing.get(field)
                 update_guidance_rule(pg_cur, existing_rule_id, rule, reviewer)
                 revision_action = action if action in {"update", "retire", "reactivate"} else "update"
                 rule_id = existing_rule_id

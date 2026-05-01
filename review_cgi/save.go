@@ -66,9 +66,11 @@ func main() {
 	guidanceLabel := strings.TrimSpace(formData.Get("guidance_label"))
 	guidancePreferredTranslation := strings.TrimSpace(formData.Get("guidance_preferred_translation"))
 	guidanceWordClass := strings.TrimSpace(formData.Get("guidance_word_class"))
+	guidanceSemanticDomain := strings.TrimSpace(formData.Get("guidance_semantic_domain"))
 	guidanceStatus := strings.TrimSpace(formData.Get("guidance_status"))
 	guidanceApplicationMode := strings.TrimSpace(formData.Get("guidance_application_mode"))
 	guidanceCitationsText := strings.TrimSpace(formData.Get("guidance_citations_text"))
+	guidanceNotes := strings.TrimSpace(formData.Get("guidance_notes"))
 	guidanceRuleCode := strings.TrimSpace(formData.Get("guidance_rule_code"))
 	guidanceFilterKind := strings.TrimSpace(formData.Get("guidance_filter_kind"))
 	entityAction := strings.TrimSpace(strings.ToLower(formData.Get("entity_action")))
@@ -115,10 +117,11 @@ func main() {
 				Label:                guidanceLabel,
 				PreferredTranslation: guidancePreferredTranslation,
 				WordClass:            guidanceWordClass,
+				SemanticDomain:       guidanceSemanticDomain,
 				Status:               guidanceStatus,
 				ApplicationMode:      guidanceApplicationMode,
 				CitationsText:        guidanceCitationsText,
-				Notes:                notes,
+				Notes:                guidanceNotes,
 				RuleCode:             guidanceRuleCode,
 			},
 			remoteUser,
