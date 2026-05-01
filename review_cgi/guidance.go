@@ -285,12 +285,13 @@ const guidanceTemplate = `<!DOCTYPE html>
             max-height: 680px;
             overflow: auto;
         }
-        .guidance-table {
-            border-collapse: collapse;
-            font-size: 0.88em;
-            min-width: 1260px;
-            width: 100%;
-        }
+		.guidance-table {
+			border-collapse: collapse;
+			font-size: 0.88em;
+			min-width: 1840px;
+			table-layout: fixed;
+			width: 100%;
+		}
         .guidance-table th,
         .guidance-table td {
             border-bottom: 1px solid #e2e8f0;
@@ -339,10 +340,50 @@ const guidanceTemplate = `<!DOCTYPE html>
             text-align: right;
             white-space: nowrap;
         }
-        .guidance-table .compact {
-            max-width: 230px;
-            overflow-wrap: anywhere;
-        }
+		.guidance-table .compact {
+			overflow-wrap: break-word;
+			word-break: normal;
+		}
+		.guidance-table th:nth-child(1),
+		.guidance-table td:nth-child(1) {
+			width: 92px;
+		}
+		.guidance-table th:nth-child(2),
+		.guidance-table td:nth-child(2) {
+			width: 96px;
+		}
+		.guidance-table th:nth-child(3),
+		.guidance-table td:nth-child(3) {
+			width: 96px;
+		}
+		.guidance-table th:nth-child(4),
+		.guidance-table td:nth-child(4) {
+			width: 120px;
+		}
+		.guidance-table th:nth-child(5),
+		.guidance-table td:nth-child(5) {
+			width: 330px;
+		}
+		.guidance-table th:nth-child(6),
+		.guidance-table td:nth-child(6) {
+			width: 220px;
+		}
+		.guidance-table th:nth-child(7),
+		.guidance-table td:nth-child(7) {
+			width: 140px;
+		}
+		.guidance-table th:nth-child(8),
+		.guidance-table td:nth-child(8) {
+			width: 230px;
+		}
+		.guidance-table th:nth-child(12),
+		.guidance-table td:nth-child(12) {
+			width: 210px;
+		}
+		.guidance-table th:nth-child(13),
+		.guidance-table td:nth-child(13) {
+			width: 120px;
+		}
         .guidance-table .table-action {
             color: #14528a;
             font-weight: 700;
@@ -901,13 +942,18 @@ const guidanceTemplate = `<!DOCTYPE html>
                 }
             }
 
-            function getSortValue(row, key) {
-                if (key === "revision" || key === "matched" || key === "backlog") {
-                    return Number(row.dataset[key] || 0);
-                }
-                if (key === "rule-code") {
-                    return text(row.dataset.ruleCode);
-                }
+			function getSortValue(row, key) {
+				if (key === "revision" || key === "matched" || key === "backlog") {
+					return Number(row.dataset[key] || 0);
+				}
+				if (key === "kind") {
+					var kindOrder = { gloss: 0, formula: 1, proper_noun: 2, contextual_bias: 3 };
+					var kind = text(row.dataset.kind);
+					return Object.prototype.hasOwnProperty.call(kindOrder, kind) ? kindOrder[kind] : 99;
+				}
+				if (key === "rule-code") {
+					return text(row.dataset.ruleCode);
+				}
                 if (key === "word-class") {
                     return text(row.dataset.wordClass);
                 }
