@@ -565,9 +565,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
         .guidance-table-wrap {{
             border: 1px solid #e2e8f0;
             border-radius: 8px;
-            max-height: calc(100vh - 280px);
-            min-height: 500px;
-            overflow: auto;
+            overflow: visible;
         }}
         .guidance-table {{
             border-collapse: collapse;
