@@ -292,6 +292,7 @@ if [ "$TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT" -gt 0 ]; then
         --all-active-rules
         --source-document meineke
         --max-queue-rows "$TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT"
+        --prioritize-kappa-untranslated
         --created-by "run_daily_pipeline.sh"
         --notes "daily pipeline incremental scan"
     )

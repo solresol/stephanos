@@ -95,16 +95,32 @@ def resolve_rules(cur, args) -> list[tuple[int, str, int]]:
     return [(int(row[0]), str(row[1]), int(row[2])) for row in cur.fetchall()]
 
 
-def resolve_source_rows(cur, args) -> list[tuple[int, int]]:
+def kappa_untranslated_priority_sql() -> str:
+    return """
+        CASE
+            WHEN (a.lemma LIKE 'Κ%' OR a.lemma LIKE 'κ%')
+             AND COALESCE(a.translation, '') = ''
+            THEN 0
+            ELSE 1
+        END
+    """
+
+
+def resolve_source_rows(cur, args) -> list[tuple[int, int, bool]]:
+    priority_select = (
+        kappa_untranslated_priority_sql()
+        if args.prioritize_kappa_untranslated
+        else "1"
+    )
     query = """
-        SELECT a.id, stv.id
+        SELECT a.id, stv.id, {priority_select} AS source_priority
         FROM assembled_lemmas a
         JOIN lemma_source_text_versions stv
           ON stv.lemma_id = a.id
          AND stv.source_document = %s
          AND stv.is_current = TRUE
         WHERE COALESCE(stv.text_body, '') <> ''
-    """
+    """.format(priority_select=priority_select)
     params: list[object] = [args.source_document]
 
     if not args.include_quarantined:
@@ -114,12 +130,12 @@ def resolve_source_rows(cur, args) -> list[tuple[int, int]]:
         query += " AND a.id = ANY(%s)"
         params.append(args.lemma_id)
 
-    query += " ORDER BY a.id"
+    query += " ORDER BY source_priority, a.id"
     if args.limit is not None:
         query += f" LIMIT {int(args.limit)}"
 
     cur.execute(query, params)
-    return [(int(row[0]), int(row[1])) for row in cur.fetchall()]
+    return [(int(row[0]), int(row[1]), int(row[2]) == 0) for row in cur.fetchall()]
 
 
 def enqueue_one(
@@ -214,6 +230,17 @@ def main() -> None:
     parser.add_argument("--limit", type=int, help="Max source lemmas to enqueue per run")
     parser.add_argument("--max-queue-rows", type=int, help="Stop after inserting this many queue rows")
     parser.add_argument("--priority", type=int, default=100)
+    parser.add_argument(
+        "--prioritize-kappa-untranslated",
+        action="store_true",
+        help="Select untranslated Kappa headwords first and enqueue them at a lower numeric priority.",
+    )
+    parser.add_argument(
+        "--kappa-untranslated-priority",
+        type=int,
+        default=10,
+        help="Queue priority for untranslated Kappa headwords when --prioritize-kappa-untranslated is set.",
+    )
     parser.add_argument("--created-by", default="enqueue_translation_guidance_scans.py")
     parser.add_argument("--notes", help="Optional note stored on each queue row")
     parser.add_argument("--include-quarantined", action="store_true")
@@ -241,12 +268,15 @@ def main() -> None:
     inserted = 0
     skipped = 0
     reached_queue_limit = False
-    for lemma_id, source_text_version_id in source_rows:
+    for lemma_id, source_text_version_id, is_kappa_untranslated in source_rows:
         for rule_id, kind, revision_id in rules:
             if args.max_queue_rows is not None and inserted >= args.max_queue_rows:
                 reached_queue_limit = True
                 break
             detector_kind = DETECTOR_BY_KIND[kind]
+            priority = args.priority
+            if args.prioritize_kappa_untranslated and is_kappa_untranslated:
+                priority = min(args.priority, args.kappa_untranslated_priority)
             added = enqueue_one(
                 cur,
                 rule_id=rule_id,
@@ -255,7 +285,7 @@ def main() -> None:
                 source_text_version_id=source_text_version_id,
                 detector_kind=detector_kind,
                 requested_by=args.created_by,
-                priority=args.priority,
+                priority=priority,
                 notes=args.notes,
                 rescan_existing_matches=args.rescan_existing_matches,
             )

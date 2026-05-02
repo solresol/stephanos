@@ -503,6 +503,23 @@ def get_progress_stats(conn) -> dict:
             WHERE updated_at > NOW() - INTERVAL '7 days'
         """)
         guidance_checked_rate = cur.fetchone()[0]
+        guidance_token_detail = ""
+        if pg_table_exists(cur, "translation_guidance_scan_queue") and pg_column_exists(
+            cur, "translation_guidance_scan_queue", "tokens_used"
+        ):
+            cur.execute("""
+                SELECT
+                    COALESCE(SUM(tokens_used), 0),
+                    COALESCE(SUM(tokens_used) FILTER (
+                        WHERE finished_at > NOW() - INTERVAL '7 days'
+                    ), 0)
+                FROM translation_guidance_scan_queue
+            """)
+            total_tokens, recent_tokens = cur.fetchone()
+            guidance_token_detail = (
+                f"; {int(total_tokens or 0):,} guidance AI tokens recorded, "
+                f"{int(recent_tokens or 0):,} in the last 7 days"
+            )
 
         stats["translation_guidance_checks"] = {
             "name": "Translation Guidance Checks",
@@ -511,7 +528,7 @@ def get_progress_stats(conn) -> dict:
             "pending": max(guidance_potential_total - guidance_checked_total, 0),
             "unit": "rule/headword checks",
             "rate_7d": guidance_checked_rate,
-            "detail": f"{guidance_headword_total:,} headwords x {guidance_rule_total:,} guidance rules",
+            "detail": f"{guidance_headword_total:,} headwords x {guidance_rule_total:,} guidance rules{guidance_token_detail}",
         }
 
     # 14. nodegoat sync
