@@ -98,7 +98,7 @@ def resolve_rules(cur, args) -> list[tuple[int, str, int]]:
 def kappa_untranslated_priority_sql() -> str:
     return """
         CASE
-            WHEN (a.lemma LIKE 'Κ%' OR a.lemma LIKE 'κ%')
+            WHEN LEFT(a.lemma, 1) IN ('Κ', 'κ')
              AND COALESCE(a.translation, '') = ''
             THEN 0
             ELSE 1
