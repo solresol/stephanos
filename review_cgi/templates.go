@@ -309,6 +309,74 @@ const sharedPageStyles = `
             margin-top: 10px;
             max-height: none;
         }
+        .guidance-hit-panel {
+            margin-top: 18px;
+        }
+        .guidance-hit-list {
+            display: grid;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .guidance-hit-row {
+            background: white;
+            border: 1px solid #e1e8f0;
+            border-radius: 10px;
+            padding: 10px 12px;
+        }
+        .guidance-hit-row summary {
+            cursor: pointer;
+            list-style-position: outside;
+        }
+        .guidance-hit-summary {
+            align-items: baseline;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .guidance-hit-code {
+            color: #15324c;
+            font-weight: 800;
+        }
+        .guidance-hit-label {
+            color: #334155;
+            font-weight: 700;
+        }
+        .guidance-hit-meta {
+            color: #64748b;
+            font-size: 0.85em;
+        }
+        .guidance-hit-subheading {
+            color: #334155;
+            font-size: 0.9em;
+            font-weight: 800;
+            margin-top: 12px;
+        }
+        .guidance-hit-detail-grid {
+            display: grid;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .guidance-hit-detail-grid strong {
+            color: #15324c;
+        }
+        .guidance-hit-evidence,
+        .guidance-hit-prompt-excerpt {
+            background: #f8fafc;
+            border: 1px solid #e5edf5;
+            border-radius: 8px;
+            color: #334155;
+            margin-top: 4px;
+            padding: 8px 10px;
+            white-space: pre-wrap;
+        }
+        .guidance-hit-prompt-included {
+            color: #166534;
+            font-weight: 700;
+        }
+        .guidance-hit-prompt-missing {
+            color: #9a3412;
+            font-weight: 700;
+        }
         .commentary-source {
             cursor: text;
             user-select: text;
@@ -911,6 +979,97 @@ const translationReviewTemplate = `<!DOCTYPE html>
                 <input type="hidden" name="source_text_version_id" id="source_text_version_id" value="">
                 <input type="hidden" id="canonical_kind" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "kind"}}{{end}}">
                 <input type="hidden" id="canonical_id" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "id"}}{{end}}">
+
+                <div class="guidance-hit-panel context-panel">
+                    <div class="section-title">Translation Guidance Hits</div>
+                    <div class="context-note">Current guidance detections for this source text, with prompt provenance for the displayed AI run when recorded.</div>
+
+                    {{if .GuidanceStrongHits}}
+                    <div class="guidance-hit-subheading">Matched guidance</div>
+                    <div class="guidance-hit-list">
+                        {{range .GuidanceStrongHits}}
+                        <details class="guidance-hit-row" {{if .IncludedInDisplayedPrompt}}open{{end}}>
+                            <summary>
+                                <span class="guidance-hit-summary">
+                                    <span class="guidance-hit-code">{{.RuleDisplay}}</span>
+                                    <span class="status-pill">{{.KindLabel}}</span>
+                                    <span class="guidance-hit-label">{{.Hit.Label}}</span>
+                                    <span class="guidance-hit-meta">{{.StatusLabel}} · {{.ConfidenceLabel}}</span>
+                                </span>
+                            </summary>
+                            <div class="guidance-hit-detail-grid">
+                                <div><strong>Preferred/advisory:</strong> {{.PreferredLabel}}</div>
+                                <div><strong>Rule revision:</strong> {{.RevisionLabel}}</div>
+                                <div><strong>Source:</strong> {{.SourceLabel}}</div>
+                                <div><strong>Prompt use:</strong> <span class="{{if .IncludedInDisplayedPrompt}}guidance-hit-prompt-included{{else}}guidance-hit-prompt-missing{{end}}">{{.PromptStatusLabel}}</span></div>
+                                {{if .PromptTextExcerpt}}<div><strong>Prompt excerpt:</strong><div class="guidance-hit-prompt-excerpt">{{.PromptTextExcerpt}}</div></div>{{end}}
+                                <div><strong>Evidence:</strong>{{if .Hit.EvidenceText}}<div class="guidance-hit-evidence">{{.Hit.EvidenceText}}</div>{{else}} <span class="empty-state">No evidence excerpt recorded.</span>{{end}}</div>
+                                <div class="guidance-hit-meta">Detector: {{if .Hit.DetectorKind}}{{.Hit.DetectorKind}}{{else}}unknown{{end}}{{if .Hit.UpdatedAt}} · updated {{.Hit.UpdatedAt}}{{end}} · <a href="{{.EditorURL}}">Open rule in guidance editor</a></div>
+                            </div>
+                        </details>
+                        {{end}}
+                    </div>
+                    {{end}}
+
+                    {{if .GuidanceUncertainHits}}
+                    <div class="guidance-hit-subheading">Uncertain or low-confidence guidance</div>
+                    <div class="guidance-hit-list">
+                        {{range .GuidanceUncertainHits}}
+                        <details class="guidance-hit-row">
+                            <summary>
+                                <span class="guidance-hit-summary">
+                                    <span class="guidance-hit-code">{{.RuleDisplay}}</span>
+                                    <span class="status-pill">{{.KindLabel}}</span>
+                                    <span class="guidance-hit-label">{{.Hit.Label}}</span>
+                                    <span class="guidance-hit-meta">{{.StatusLabel}} · {{.ConfidenceLabel}}</span>
+                                </span>
+                            </summary>
+                            <div class="guidance-hit-detail-grid">
+                                <div><strong>Preferred/advisory:</strong> {{.PreferredLabel}}</div>
+                                <div><strong>Rule revision:</strong> {{.RevisionLabel}}</div>
+                                <div><strong>Source:</strong> {{.SourceLabel}}</div>
+                                <div><strong>Prompt use:</strong> <span class="{{if .IncludedInDisplayedPrompt}}guidance-hit-prompt-included{{else}}guidance-hit-prompt-missing{{end}}">{{.PromptStatusLabel}}</span></div>
+                                {{if .PromptTextExcerpt}}<div><strong>Prompt excerpt:</strong><div class="guidance-hit-prompt-excerpt">{{.PromptTextExcerpt}}</div></div>{{end}}
+                                <div><strong>Evidence:</strong>{{if .Hit.EvidenceText}}<div class="guidance-hit-evidence">{{.Hit.EvidenceText}}</div>{{else}} <span class="empty-state">No evidence excerpt recorded.</span>{{end}}</div>
+                                <div class="guidance-hit-meta">Detector: {{if .Hit.DetectorKind}}{{.Hit.DetectorKind}}{{else}}unknown{{end}}{{if .Hit.UpdatedAt}} · updated {{.Hit.UpdatedAt}}{{end}} · <a href="{{.EditorURL}}">Open rule in guidance editor</a></div>
+                            </div>
+                        </details>
+                        {{end}}
+                    </div>
+                    {{end}}
+
+                    {{if .GuidanceProperNounHits}}
+                    <details class="context-details" style="margin-top: 12px;">
+                        <summary>Show proper-noun guidance hits ({{len .GuidanceProperNounHits}})</summary>
+                        <div class="guidance-hit-list">
+                            {{range .GuidanceProperNounHits}}
+                            <details class="guidance-hit-row">
+                                <summary>
+                                    <span class="guidance-hit-summary">
+                                        <span class="guidance-hit-code">{{.RuleDisplay}}</span>
+                                        <span class="status-pill">{{.KindLabel}}</span>
+                                        <span class="guidance-hit-label">{{.Hit.Label}}</span>
+                                        <span class="guidance-hit-meta">{{.StatusLabel}} · {{.ConfidenceLabel}}</span>
+                                    </span>
+                                </summary>
+                                <div class="guidance-hit-detail-grid">
+                                    <div><strong>Preferred/advisory:</strong> {{.PreferredLabel}}</div>
+                                    <div><strong>Rule revision:</strong> {{.RevisionLabel}}</div>
+                                    <div><strong>Source:</strong> {{.SourceLabel}}</div>
+                                    <div><strong>Prompt use:</strong> <span class="{{if .IncludedInDisplayedPrompt}}guidance-hit-prompt-included{{else}}guidance-hit-prompt-missing{{end}}">{{.PromptStatusLabel}}</span></div>
+                                    <div><strong>Evidence:</strong>{{if .Hit.EvidenceText}}<div class="guidance-hit-evidence">{{.Hit.EvidenceText}}</div>{{else}} <span class="empty-state">No evidence excerpt recorded.</span>{{end}}</div>
+                                    <div class="guidance-hit-meta">Detector: {{if .Hit.DetectorKind}}{{.Hit.DetectorKind}}{{else}}unknown{{end}}{{if .Hit.UpdatedAt}} · updated {{.Hit.UpdatedAt}}{{end}} · <a href="{{.EditorURL}}">Open rule in guidance editor</a></div>
+                                </div>
+                            </details>
+                            {{end}}
+                        </div>
+                    </details>
+                    {{end}}
+
+                    {{if not (or .GuidanceStrongHits .GuidanceUncertainHits .GuidanceProperNounHits)}}
+                    <div class="empty-state" style="margin-top: 10px;">No guidance matches are currently exported for this entry.</div>
+                    {{end}}
+                </div>
 
                 <div class="translation-edit-grid" style="margin-top: 18px;">
                     <div class="form-group context-panel">

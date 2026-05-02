@@ -71,11 +71,113 @@ def column_exists(cur, table_name: str, column_name: str) -> bool:
     return cur.fetchone() is not None
 
 
+def ensure_translation_run_guidance_matches(cur) -> bool:
+    if not (
+        table_exists(cur, "translation_guidance_matches")
+        and table_exists(cur, "translation_guidance_rule_revisions")
+    ):
+        return False
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS translation_run_guidance_matches (
+            id SERIAL PRIMARY KEY,
+            run_id INTEGER NOT NULL,
+            match_id INTEGER NOT NULL,
+            rule_revision_id INTEGER NOT NULL,
+            included_in_prompt BOOLEAN NOT NULL DEFAULT TRUE,
+            prompt_text_excerpt TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS translation_run_guidance_matches_run_match_idx
+        ON translation_run_guidance_matches (run_id, match_id)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS translation_run_guidance_matches_match_idx
+        ON translation_run_guidance_matches (match_id)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS translation_run_guidance_matches_revision_idx
+        ON translation_run_guidance_matches (rule_revision_id)
+        """
+    )
+    constraints = [
+        (
+            "translation_run_guidance_matches_run_id_fkey",
+            """
+            ALTER TABLE ONLY translation_run_guidance_matches
+                ADD CONSTRAINT translation_run_guidance_matches_run_id_fkey
+                FOREIGN KEY (run_id) REFERENCES translation_runs(id) ON DELETE CASCADE
+            """,
+        ),
+        (
+            "translation_run_guidance_matches_match_id_fkey",
+            """
+            ALTER TABLE ONLY translation_run_guidance_matches
+                ADD CONSTRAINT translation_run_guidance_matches_match_id_fkey
+                FOREIGN KEY (match_id) REFERENCES translation_guidance_matches(id) ON DELETE CASCADE
+            """,
+        ),
+        (
+            "translation_run_guidance_matches_rule_revision_id_fkey",
+            """
+            ALTER TABLE ONLY translation_run_guidance_matches
+                ADD CONSTRAINT translation_run_guidance_matches_rule_revision_id_fkey
+                FOREIGN KEY (rule_revision_id) REFERENCES translation_guidance_rule_revisions(id) ON DELETE CASCADE
+            """,
+        ),
+    ]
+    for constraint_name, ddl in constraints:
+        cur.execute(
+            """
+            SELECT 1
+            FROM pg_constraint
+            WHERE conname = %s
+            """,
+            (constraint_name,),
+        )
+        if cur.fetchone() is None:
+            cur.execute(ddl)
+    return True
+
+
 def truncate_field(text: str | None, max_chars: int = MAX_CONTEXT_FIELD_CHARS) -> str:
     cleaned = " ".join(str(text or "").split())
     if len(cleaned) <= max_chars:
         return cleaned
     return cleaned[: max_chars - 1].rstrip() + "..."
+
+
+def guidance_prompt_excerpt(row: dict) -> str:
+    kind = row.get("kind") or "guidance"
+    confidence = row.get("confidence") or "unknown"
+    if kind == "contextual_bias":
+        bits = [
+            f"vocabulary bias strength={row.get('bias_strength') or 'normal'} confidence={confidence}",
+            f"label={truncate_field(row.get('label'), 180)}",
+        ]
+        if row.get("context_condition"):
+            bits.append(f"context={truncate_field(row.get('context_condition'), 220)}")
+        if row.get("preferred_translation"):
+            bits.append(f"preferred={truncate_field(row.get('preferred_translation'), 180)}")
+    else:
+        bits = [
+            f"{kind} mode={row.get('application_mode') or 'advisory'} confidence={confidence}",
+            truncate_field(row.get("label"), 220),
+        ]
+        if row.get("preferred_translation"):
+            bits.append(f"preferred={truncate_field(row.get('preferred_translation'), 180)}")
+    if row.get("evidence_text"):
+        bits.append(f"evidence={truncate_field(row.get('evidence_text'), 260)}")
+    return truncate_field(" | ".join(bit for bit in bits if bit), 900)
 
 
 def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, limit: int = MAX_GUIDANCE_CONTEXT_ROWS):
@@ -99,6 +201,10 @@ def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, l
     cur.execute(
         f"""
         SELECT
+            m.id AS match_id,
+            m.rule_revision_id,
+            COALESCE(r.rule_key, '') AS rule_key,
+            COALESCE(r.rule_code, '') AS rule_code,
             COALESCE(r.kind, '') AS kind,
             COALESCE(r.label, '') AS label,
             COALESCE(r.preferred_translation, '') AS preferred_translation,
@@ -107,7 +213,8 @@ def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, l
             {context_condition_select},
             {bias_strength_select},
             COALESCE(m.evidence_text, '') AS evidence_text,
-            COALESCE(m.confidence, '') AS confidence
+            COALESCE(m.confidence, '') AS confidence,
+            COALESCE(m.match_status, '') AS match_status
         FROM translation_guidance_matches m
         JOIN translation_guidance_rules r ON r.id = m.rule_id
         WHERE m.lemma_id = %s
@@ -137,18 +244,52 @@ def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, l
     )
     return [
         {
-            "kind": row[0] or "",
-            "label": row[1] or "",
-            "preferred_translation": row[2] or "",
-            "application_mode": row[3] or "",
-            "notes": row[4] or "",
-            "context_condition": row[5] or "",
-            "bias_strength": row[6] or "normal",
-            "evidence_text": row[7] or "",
-            "confidence": row[8] or "",
+            "match_id": int(row[0] or 0),
+            "rule_revision_id": int(row[1] or 0),
+            "rule_key": row[2] or "",
+            "rule_code": row[3] or "",
+            "kind": row[4] or "",
+            "label": row[5] or "",
+            "preferred_translation": row[6] or "",
+            "application_mode": row[7] or "",
+            "notes": row[8] or "",
+            "context_condition": row[9] or "",
+            "bias_strength": row[10] or "normal",
+            "evidence_text": row[11] or "",
+            "confidence": row[12] or "",
+            "match_status": row[13] or "",
         }
         for row in cur.fetchall()
     ]
+
+
+def record_translation_run_guidance_matches(cur, run_id: int, guidance_context: list[dict]):
+    if not run_id or not guidance_context:
+        return
+    for row in guidance_context:
+        match_id = int(row.get("match_id") or 0)
+        rule_revision_id = int(row.get("rule_revision_id") or 0)
+        if match_id <= 0 or rule_revision_id <= 0:
+            continue
+        cur.execute(
+            """
+            INSERT INTO translation_run_guidance_matches (
+                run_id, match_id, rule_revision_id, included_in_prompt, prompt_text_excerpt, updated_at
+            )
+            VALUES (%s, %s, %s, TRUE, %s, NOW())
+            ON CONFLICT (run_id, match_id) DO UPDATE SET
+                rule_revision_id = EXCLUDED.rule_revision_id,
+                included_in_prompt = EXCLUDED.included_in_prompt,
+                prompt_text_excerpt = EXCLUDED.prompt_text_excerpt,
+                updated_at = EXCLUDED.updated_at
+            """,
+            (
+                int(run_id),
+                match_id,
+                rule_revision_id,
+                guidance_prompt_excerpt(row),
+            ),
+        )
 
 
 def fetch_source_passage_context(
@@ -376,6 +517,7 @@ def insert_run(
             public_eligible, public_block_reason, created_at, completed_at, error_message
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW(), %s)
+        RETURNING id
         """,
         (
             request_id,
@@ -395,6 +537,8 @@ def insert_run(
             error_message,
         ),
     )
+    row = cur.fetchone()
+    return int(row[0]) if row else 0
 
 
 def project_legacy_translation(
@@ -531,6 +675,11 @@ def main():
         conn.close()
         return
 
+    guidance_provenance_enabled = False
+    if not args.no_guidance_context:
+        guidance_provenance_enabled = ensure_translation_run_guidance_matches(cur)
+        conn.commit()
+
     requests = fetch_requests(cur, args.request_limit)
     print(f"Queued requests: {len(requests)}")
     if not requests:
@@ -622,7 +771,7 @@ def main():
                 if int(requested_runs or 0) == 1:
                     public_eligible, public_block_reason = lookup_public_block(cur, lemma_id=lemma_id)
 
-                insert_run(
+                run_id = insert_run(
                     cur,
                     request_id=request_id,
                     lemma_id=lemma_id,
@@ -639,6 +788,8 @@ def main():
                     public_eligible=public_eligible,
                     public_block_reason=public_block_reason,
                 )
+                if guidance_provenance_enabled:
+                    record_translation_run_guidance_matches(cur, run_id, guidance_context)
 
                 # Back-compat projection: only for single-run requests so we don't
                 # accidentally "pick a winner" among multiple variants.

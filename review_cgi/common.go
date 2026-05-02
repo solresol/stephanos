@@ -75,6 +75,42 @@ type ProperNoun struct {
 	PendingImport                bool   `json:"pending_import,omitempty"`
 }
 
+type GuidancePromptRun struct {
+	RunID             int    `json:"run_id"`
+	IncludedInPrompt  bool   `json:"included_in_prompt"`
+	PromptTextExcerpt string `json:"prompt_text_excerpt"`
+	CreatedAt         string `json:"created_at"`
+}
+
+type GuidanceHit struct {
+	MatchID              int                 `json:"match_id"`
+	LemmaID              int                 `json:"lemma_id"`
+	SourceTextVersionID  string              `json:"source_text_version_id"`
+	SourceDocument       string              `json:"source_document"`
+	SourceVariant        string              `json:"source_variant"`
+	SourceIsCurrent      bool                `json:"source_is_current"`
+	RuleID               int                 `json:"rule_id"`
+	RuleKey              string              `json:"rule_key"`
+	RuleCode             string              `json:"rule_code"`
+	Kind                 string              `json:"kind"`
+	Label                string              `json:"label"`
+	PreferredTranslation string              `json:"preferred_translation"`
+	ContextCondition     string              `json:"context_condition"`
+	BiasStrength         string              `json:"bias_strength"`
+	LifecycleStage       string              `json:"lifecycle_stage"`
+	ApplicationMode      string              `json:"application_mode"`
+	MatchStatus          string              `json:"match_status"`
+	Confidence           string              `json:"confidence"`
+	OccurrenceCount      int                 `json:"occurrence_count"`
+	EvidenceText         string              `json:"evidence_text"`
+	DetectorKind         string              `json:"detector_kind"`
+	DetectedAt           string              `json:"detected_at"`
+	UpdatedAt            string              `json:"updated_at"`
+	RuleRevisionID       int                 `json:"rule_revision_id"`
+	RuleRevisionNumber   int                 `json:"rule_revision_number"`
+	PromptRuns           []GuidancePromptRun `json:"prompt_runs"`
+}
+
 type PlaceMention struct {
 	ID                 int    `json:"id"`
 	TextForm           string `json:"text_form"`
@@ -205,6 +241,7 @@ type Lemma struct {
 	TranslationBlockReason        string                   `json:"translation_block_reason"`
 	TranslationDifferenceEvidence string                   `json:"translation_difference_evidence"`
 	TranslationVariants           []map[string]interface{} `json:"translation_variants"`
+	GuidanceHits                  []GuidanceHit            `json:"guidance_hits"`
 	SourceTextVersions            []map[string]interface{} `json:"source_text_versions"`
 	CanonicalVariants             []map[string]interface{} `json:"canonical_variants"`
 	CanonicalVariantRef           map[string]interface{}   `json:"canonical_variant_ref"`

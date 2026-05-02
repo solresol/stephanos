@@ -15,6 +15,21 @@ type SourceLookupLink struct {
 	Note  string
 }
 
+type GuidanceHitView struct {
+	Hit                       GuidanceHit
+	RuleDisplay               string
+	KindLabel                 string
+	StatusLabel               string
+	ConfidenceLabel           string
+	PreferredLabel            string
+	RevisionLabel             string
+	SourceLabel               string
+	IncludedInDisplayedPrompt bool
+	PromptStatusLabel         string
+	PromptTextExcerpt         string
+	EditorURL                 string
+}
+
 type PageData struct {
 	Lemma                           *Lemma
 	Review                          *Review
@@ -37,6 +52,7 @@ type PageData struct {
 	WorkingGreekSourceTextVersionID string
 	LatestAITranslation             string
 	LatestAITranslationLabel        string
+	LatestAITranslationRunID        int
 	EntityContextTranslation        string
 	EntityContextTranslationLabel   string
 	SourceLookupLinks               []SourceLookupLink
@@ -45,6 +61,9 @@ type PageData struct {
 	PrimaryEntities                 []ProperNoun
 	SecondaryEntities               []ProperNoun
 	LegacyPlaceEntities             []ProperNoun
+	GuidanceStrongHits              []GuidanceHitView
+	GuidanceUncertainHits           []GuidanceHitView
+	GuidanceProperNounHits          []GuidanceHitView
 }
 
 func workingGreekLabel(lemma *Lemma) (string, string) {
@@ -218,9 +237,9 @@ func latestAILegacyLabel(variant map[string]interface{}) string {
 	return "Showing the legacy assembled AI baseline."
 }
 
-func chooseLatestAITranslation(lemma *Lemma) (string, string) {
+func chooseLatestAITranslation(lemma *Lemma) (string, string, int) {
 	if lemma == nil {
-		return "", "No stored AI translation available."
+		return "", "No stored AI translation available.", 0
 	}
 
 	var latestRun map[string]interface{}
@@ -246,12 +265,195 @@ func chooseLatestAITranslation(lemma *Lemma) (string, string) {
 	}
 
 	if latestRun != nil {
-		return strings.TrimSpace(mapStringValue(latestRun, "text")), latestAITranslationRunLabel(latestRun)
+		runID, _ := strconv.Atoi(mapStringValue(latestRun, "id"))
+		return strings.TrimSpace(mapStringValue(latestRun, "text")), latestAITranslationRunLabel(latestRun), runID
 	}
 	if legacyVariant != nil {
-		return strings.TrimSpace(mapStringValue(legacyVariant, "text")), latestAILegacyLabel(legacyVariant)
+		return strings.TrimSpace(mapStringValue(legacyVariant, "text")), latestAILegacyLabel(legacyVariant), 0
 	}
-	return "", "No stored AI translation available."
+	return "", "No stored AI translation available.", 0
+}
+
+func reviewGuidanceKindLabel(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case "contextual_bias":
+		return "Contextual bias"
+	case "proper_noun":
+		return "Proper noun"
+	case "formula":
+		return "Formula"
+	case "gloss":
+		return "Gloss"
+	default:
+		return "Guidance"
+	}
+}
+
+func reviewGuidanceStatusLabel(status string) string {
+	switch strings.TrimSpace(status) {
+	case "matched":
+		return "Matched"
+	case "uncertain":
+		return "Uncertain"
+	case "needs_review":
+		return "Needs review"
+	default:
+		if strings.TrimSpace(status) == "" {
+			return "Unknown"
+		}
+		return strings.ReplaceAll(status, "_", " ")
+	}
+}
+
+func reviewGuidanceConfidenceLabel(confidence string) string {
+	if strings.TrimSpace(confidence) == "" {
+		return "confidence unknown"
+	}
+	return strings.TrimSpace(confidence) + " confidence"
+}
+
+func reviewGuidanceRuleDisplay(hit GuidanceHit) string {
+	code := strings.TrimSpace(hit.RuleCode)
+	key := strings.TrimSpace(hit.RuleKey)
+	if code != "" && key != "" {
+		return code + " / " + key
+	}
+	if code != "" {
+		return code
+	}
+	if key != "" {
+		return key
+	}
+	if hit.RuleID > 0 {
+		return fmt.Sprintf("rule #%d", hit.RuleID)
+	}
+	return "guidance rule"
+}
+
+func reviewGuidancePreferredLabel(hit GuidanceHit) string {
+	if strings.TrimSpace(hit.Kind) == "contextual_bias" {
+		bits := []string{}
+		if strength := strings.TrimSpace(hit.BiasStrength); strength != "" {
+			bits = append(bits, "bias: "+strength)
+		}
+		if preferred := strings.TrimSpace(hit.PreferredTranslation); preferred != "" {
+			bits = append(bits, "toward "+preferred)
+		}
+		if context := strings.TrimSpace(hit.ContextCondition); context != "" {
+			bits = append(bits, "when "+context)
+		}
+		if len(bits) > 0 {
+			return strings.Join(bits, " · ")
+		}
+		return "Advisory vocabulary bias"
+	}
+	if preferred := strings.TrimSpace(hit.PreferredTranslation); preferred != "" {
+		return preferred
+	}
+	if mode := strings.TrimSpace(hit.ApplicationMode); mode != "" {
+		return "Mode: " + mode
+	}
+	return "No preferred wording recorded"
+}
+
+func reviewGuidanceRevisionLabel(hit GuidanceHit) string {
+	if hit.RuleRevisionNumber > 0 {
+		return fmt.Sprintf("revision %d", hit.RuleRevisionNumber)
+	}
+	if hit.RuleRevisionID > 0 {
+		return fmt.Sprintf("revision id %d", hit.RuleRevisionID)
+	}
+	return "revision unknown"
+}
+
+func reviewGuidanceSourceLabel(hit GuidanceHit) string {
+	parts := []string{}
+	if document := strings.TrimSpace(hit.SourceDocument); document != "" {
+		parts = append(parts, document)
+	}
+	if variant := strings.TrimSpace(hit.SourceVariant); variant != "" {
+		parts = append(parts, variant)
+	}
+	if hit.SourceIsCurrent {
+		parts = append(parts, "current source")
+	} else if strings.TrimSpace(hit.SourceTextVersionID) != "" {
+		parts = append(parts, "older source")
+	}
+	if len(parts) == 0 {
+		return "source unknown"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func reviewGuidancePromptStatus(hit GuidanceHit, latestRunID int) (bool, string, string) {
+	if latestRunID <= 0 {
+		if len(hit.PromptRuns) > 0 {
+			return false, "Prompt provenance exists for another AI run; displayed translation is legacy.", ""
+		}
+		return false, "Displayed translation has no run-level guidance provenance.", ""
+	}
+	for _, usage := range hit.PromptRuns {
+		if usage.RunID == latestRunID {
+			if usage.IncludedInPrompt {
+				return true, "Included in displayed AI prompt.", strings.TrimSpace(usage.PromptTextExcerpt)
+			}
+			return false, "Recorded for displayed AI run but not included in prompt.", strings.TrimSpace(usage.PromptTextExcerpt)
+		}
+	}
+	if len(hit.PromptRuns) > 0 {
+		return false, "Used in another AI run, not the displayed run.", ""
+	}
+	return false, "Not recorded for displayed AI run.", ""
+}
+
+func buildGuidanceHitView(hit GuidanceHit, latestRunID int) GuidanceHitView {
+	included, promptStatus, promptExcerpt := reviewGuidancePromptStatus(hit, latestRunID)
+	kind := strings.TrimSpace(hit.Kind)
+	editorURL := "/cgi-bin/guidance.cgi"
+	if kind != "" {
+		editorURL += "?kind=" + url.QueryEscape(kind)
+	}
+	if key := strings.TrimSpace(hit.RuleKey); key != "" {
+		editorURL += "#rule-" + url.PathEscape(key)
+	}
+	return GuidanceHitView{
+		Hit:                       hit,
+		RuleDisplay:               reviewGuidanceRuleDisplay(hit),
+		KindLabel:                 reviewGuidanceKindLabel(hit.Kind),
+		StatusLabel:               reviewGuidanceStatusLabel(hit.MatchStatus),
+		ConfidenceLabel:           reviewGuidanceConfidenceLabel(hit.Confidence),
+		PreferredLabel:            reviewGuidancePreferredLabel(hit),
+		RevisionLabel:             reviewGuidanceRevisionLabel(hit),
+		SourceLabel:               reviewGuidanceSourceLabel(hit),
+		IncludedInDisplayedPrompt: included,
+		PromptStatusLabel:         promptStatus,
+		PromptTextExcerpt:         promptExcerpt,
+		EditorURL:                 editorURL,
+	}
+}
+
+func splitGuidanceHitViews(lemma *Lemma, latestRunID int) ([]GuidanceHitView, []GuidanceHitView, []GuidanceHitView) {
+	if lemma == nil {
+		return nil, nil, nil
+	}
+	strong := []GuidanceHitView{}
+	uncertain := []GuidanceHitView{}
+	proper := []GuidanceHitView{}
+	for _, hit := range lemma.GuidanceHits {
+		view := buildGuidanceHitView(hit, latestRunID)
+		if strings.TrimSpace(hit.Kind) == "proper_noun" {
+			proper = append(proper, view)
+			continue
+		}
+		status := strings.TrimSpace(hit.MatchStatus)
+		confidence := strings.TrimSpace(hit.Confidence)
+		if status != "matched" || confidence == "low" {
+			uncertain = append(uncertain, view)
+			continue
+		}
+		strong = append(strong, view)
+	}
+	return strong, uncertain, proper
 }
 
 func buildSourceLookupLinks(lemma *Lemma) []SourceLookupLink {
@@ -435,9 +637,10 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		len(currentLemma.Apparatus) > 0 ||
 		len(currentLemma.MeinekeScanFilenames) > 0
 	workingGreekTitle, sourceTextVersionID := workingGreekLabel(currentLemma)
-	latestAITranslation, latestAITranslationLabel := chooseLatestAITranslation(currentLemma)
+	latestAITranslation, latestAITranslationLabel, latestAITranslationRunID := chooseLatestAITranslation(currentLemma)
 	entityTranslation, entityTranslationLabel := chooseEntityContextTranslation(review, currentLemma)
 	primaryEntities, secondaryEntities, legacyPlaceEntities := splitEntityBuckets(currentLemma)
+	guidanceStrongHits, guidanceUncertainHits, guidanceProperNounHits := splitGuidanceHitViews(currentLemma, latestAITranslationRunID)
 
 	pageData := &PageData{
 		Lemma:                           currentLemma,
@@ -459,6 +662,7 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		WorkingGreekSourceTextVersionID: sourceTextVersionID,
 		LatestAITranslation:             latestAITranslation,
 		LatestAITranslationLabel:        latestAITranslationLabel,
+		LatestAITranslationRunID:        latestAITranslationRunID,
 		EntityContextTranslation:        entityTranslation,
 		EntityContextTranslationLabel:   entityTranslationLabel,
 		SourceLookupLinks:               buildSourceLookupLinks(currentLemma),
@@ -467,6 +671,9 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		PrimaryEntities:                 primaryEntities,
 		SecondaryEntities:               secondaryEntities,
 		LegacyPlaceEntities:             legacyPlaceEntities,
+		GuidanceStrongHits:              guidanceStrongHits,
+		GuidanceUncertainHits:           guidanceUncertainHits,
+		GuidanceProperNounHits:          guidanceProperNounHits,
 	}
 	if prevLemma != nil {
 		pageData.PreviousID = prevLemma.ID

@@ -2058,6 +2058,42 @@ ALTER SEQUENCE public.translation_risk_flags_id_seq OWNED BY public.translation_
 
 
 --
+-- Name: translation_run_guidance_matches; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_run_guidance_matches (
+    id integer NOT NULL,
+    run_id integer NOT NULL,
+    match_id integer NOT NULL,
+    rule_revision_id integer NOT NULL,
+    included_in_prompt boolean DEFAULT true NOT NULL,
+    prompt_text_excerpt text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: translation_run_guidance_matches_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_run_guidance_matches_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_run_guidance_matches_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_run_guidance_matches_id_seq OWNED BY public.translation_run_guidance_matches.id;
+
+
+--
 -- Name: translation_run_requests; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2419,6 +2455,13 @@ ALTER TABLE ONLY public.translation_prompts ALTER COLUMN version SET DEFAULT nex
 --
 
 ALTER TABLE ONLY public.translation_risk_flags ALTER COLUMN id SET DEFAULT nextval('public.translation_risk_flags_id_seq'::regclass);
+
+
+--
+-- Name: translation_run_guidance_matches id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_run_guidance_matches ALTER COLUMN id SET DEFAULT nextval('public.translation_run_guidance_matches_id_seq'::regclass);
 
 
 --
@@ -2889,6 +2932,14 @@ ALTER TABLE ONLY public.translation_prompts
 
 ALTER TABLE ONLY public.translation_risk_flags
     ADD CONSTRAINT translation_risk_flags_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_run_guidance_matches translation_run_guidance_matches_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_run_guidance_matches
+    ADD CONSTRAINT translation_run_guidance_matches_pkey PRIMARY KEY (id);
 
 
 --
@@ -3615,6 +3666,27 @@ CREATE UNIQUE INDEX translation_risk_flags_unique_idx ON public.translation_risk
 
 
 --
+-- Name: translation_run_guidance_matches_match_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_run_guidance_matches_match_idx ON public.translation_run_guidance_matches USING btree (match_id);
+
+
+--
+-- Name: translation_run_guidance_matches_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_run_guidance_matches_revision_idx ON public.translation_run_guidance_matches USING btree (rule_revision_id);
+
+
+--
+-- Name: translation_run_guidance_matches_run_match_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_run_guidance_matches_run_match_idx ON public.translation_run_guidance_matches USING btree (run_id, match_id);
+
+
+--
 -- Name: translation_run_requests_status_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4177,6 +4249,30 @@ ALTER TABLE ONLY public.translation_prompt_profile_versions
 
 ALTER TABLE ONLY public.translation_risk_flags
     ADD CONSTRAINT translation_risk_flags_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_run_guidance_matches translation_run_guidance_matches_match_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_run_guidance_matches
+    ADD CONSTRAINT translation_run_guidance_matches_match_id_fkey FOREIGN KEY (match_id) REFERENCES public.translation_guidance_matches(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_run_guidance_matches translation_run_guidance_matches_rule_revision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_run_guidance_matches
+    ADD CONSTRAINT translation_run_guidance_matches_rule_revision_id_fkey FOREIGN KEY (rule_revision_id) REFERENCES public.translation_guidance_rule_revisions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_run_guidance_matches translation_run_guidance_matches_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_run_guidance_matches
+    ADD CONSTRAINT translation_run_guidance_matches_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.translation_runs(id) ON DELETE CASCADE;
 
 
 --

@@ -94,6 +94,18 @@ def preview_text(text: str, limit: int = 180) -> str:
     return preview
 
 
+def coerce_json_list(value) -> list:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
 def fetch_guidance_scan_batches(cur, rule_id: int) -> list[dict]:
     cur.execute(
         """
@@ -1413,6 +1425,183 @@ def export_lemmas():
                 }
             )
 
+    guidance_hits_by_lemma = {}
+    cur.execute("SELECT to_regclass('public.translation_guidance_matches') IS NOT NULL")
+    has_guidance_matches = bool(cur.fetchone()[0])
+    if has_guidance_rules and has_guidance_matches:
+        cur.execute("SELECT to_regclass('public.translation_run_guidance_matches') IS NOT NULL")
+        has_run_guidance_matches = bool(cur.fetchone()[0])
+        cur.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'translation_guidance_rules'
+              AND column_name = 'context_condition'
+            """
+        )
+        has_hit_context_condition = cur.fetchone() is not None
+        cur.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'translation_guidance_rules'
+              AND column_name = 'bias_strength'
+            """
+        )
+        has_hit_bias_strength = cur.fetchone() is not None
+        cur.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'translation_guidance_rules'
+              AND column_name = 'lifecycle_stage'
+            """
+        )
+        has_hit_lifecycle_stage = cur.fetchone() is not None
+
+        hit_context_condition_select = (
+            "COALESCE(r.context_condition, '') AS context_condition"
+            if has_hit_context_condition
+            else "'' AS context_condition"
+        )
+        hit_bias_strength_select = (
+            "COALESCE(r.bias_strength, 'normal') AS bias_strength"
+            if has_hit_bias_strength
+            else "'normal' AS bias_strength"
+        )
+        hit_lifecycle_stage_select = (
+            "COALESCE(r.lifecycle_stage, '') AS lifecycle_stage"
+            if has_hit_lifecycle_stage
+            else """
+                CASE
+                    WHEN r.status = 'retired' THEN 'inactive'
+                    WHEN r.status = 'unsure' THEN 'investigate'
+                    WHEN COALESCE(BTRIM(r.preferred_translation), '') = '' THEN 'recognizer'
+                    ELSE 'guidance'
+                END AS lifecycle_stage
+            """
+        )
+        hit_lifecycle_condition = (
+            "AND COALESCE(r.lifecycle_stage, 'guidance') <> 'inactive'"
+            if has_hit_lifecycle_stage
+            else ""
+        )
+        prompt_usage_join = ""
+        prompt_usage_select = "'[]'::jsonb AS prompt_runs"
+        if has_run_guidance_matches:
+            prompt_usage_join = """
+            LEFT JOIN LATERAL (
+                SELECT jsonb_agg(
+                    jsonb_build_object(
+                        'run_id', trgm.run_id,
+                        'included_in_prompt', trgm.included_in_prompt,
+                        'prompt_text_excerpt', COALESCE(trgm.prompt_text_excerpt, ''),
+                        'created_at', COALESCE(trgm.created_at::text, '')
+                    )
+                    ORDER BY trgm.created_at DESC, trgm.id DESC
+                ) AS prompt_runs
+                FROM translation_run_guidance_matches trgm
+                WHERE trgm.match_id = m.id
+            ) usage ON TRUE
+            """
+            prompt_usage_select = "COALESCE(usage.prompt_runs, '[]'::jsonb) AS prompt_runs"
+
+        cur.execute(
+            f"""
+            SELECT
+                m.id AS match_id,
+                m.lemma_id,
+                m.source_text_version_id,
+                COALESCE(stv.source_document, '') AS source_document,
+                COALESCE(stv.source_variant, '') AS source_variant,
+                COALESCE(stv.is_current, FALSE) AS source_is_current,
+                r.id AS rule_id,
+                COALESCE(r.rule_key, '') AS rule_key,
+                COALESCE(r.rule_code, '') AS rule_code,
+                COALESCE(r.kind, '') AS kind,
+                COALESCE(r.label, '') AS label,
+                COALESCE(r.preferred_translation, '') AS preferred_translation,
+                {hit_context_condition_select},
+                {hit_bias_strength_select},
+                {hit_lifecycle_stage_select},
+                COALESCE(r.application_mode, '') AS application_mode,
+                COALESCE(m.match_status, '') AS match_status,
+                COALESCE(m.confidence, '') AS confidence,
+                COALESCE(m.occurrence_count, 0) AS occurrence_count,
+                COALESCE(m.evidence_text, '') AS evidence_text,
+                COALESCE(m.detector_kind, '') AS detector_kind,
+                COALESCE(m.detected_at::text, '') AS detected_at,
+                COALESCE(m.updated_at::text, '') AS updated_at,
+                m.rule_revision_id,
+                COALESCE(rr.revision_number, 0) AS rule_revision_number,
+                {prompt_usage_select}
+            FROM translation_guidance_matches m
+            JOIN translation_guidance_rules r ON r.id = m.rule_id
+            LEFT JOIN translation_guidance_rule_revisions rr ON rr.id = m.rule_revision_id
+            LEFT JOIN lemma_source_text_versions stv ON stv.id = m.source_text_version_id
+            {prompt_usage_join}
+            WHERE m.match_status IN ('matched', 'uncertain', 'needs_review')
+              AND COALESCE(r.status, '') <> 'retired'
+              {hit_lifecycle_condition}
+              AND r.kind IN ('formula', 'gloss', 'contextual_bias', 'proper_noun')
+            ORDER BY
+                m.lemma_id,
+                COALESCE(stv.is_current, FALSE) DESC,
+                CASE m.match_status
+                    WHEN 'matched' THEN 0
+                    WHEN 'uncertain' THEN 1
+                    WHEN 'needs_review' THEN 2
+                    ELSE 3
+                END,
+                CASE r.kind
+                    WHEN 'formula' THEN 0
+                    WHEN 'contextual_bias' THEN 1
+                    WHEN 'gloss' THEN 2
+                    WHEN 'proper_noun' THEN 3
+                    ELSE 4
+                END,
+                r.label,
+                m.updated_at DESC
+            """
+        )
+        for row in cur.fetchall():
+            lemma_id = int(row[1] or 0)
+            if lemma_id <= 0:
+                continue
+            guidance_hits_by_lemma.setdefault(lemma_id, []).append(
+                {
+                    "match_id": int(row[0] or 0),
+                    "lemma_id": lemma_id,
+                    "source_text_version_id": str(row[2] or ""),
+                    "source_document": row[3] or "",
+                    "source_variant": row[4] or "",
+                    "source_is_current": bool(row[5]),
+                    "rule_id": int(row[6] or 0),
+                    "rule_key": row[7] or "",
+                    "rule_code": row[8] or "",
+                    "kind": row[9] or "",
+                    "label": row[10] or "",
+                    "preferred_translation": row[11] or "",
+                    "context_condition": row[12] or "",
+                    "bias_strength": row[13] or "normal",
+                    "lifecycle_stage": row[14] or "",
+                    "application_mode": row[15] or "",
+                    "match_status": row[16] or "",
+                    "confidence": row[17] or "",
+                    "occurrence_count": int(row[18] or 0),
+                    "evidence_text": row[19] or "",
+                    "detector_kind": row[20] or "",
+                    "detected_at": row[21] or "",
+                    "updated_at": row[22] or "",
+                    "rule_revision_id": int(row[23] or 0),
+                    "rule_revision_number": int(row[24] or 0),
+                    "prompt_runs": coerce_json_list(row[25]),
+                }
+            )
+
     lemmas = []
     for row in rows:
         (lemma_id, lemma, entry_number, version, greek_text, human_greek_text, english_translation,
@@ -1540,6 +1729,7 @@ def export_lemmas():
             "translation_block_reason": risk_by_lemma.get(lemma_id, {}).get("translation_block_reason", ""),
             "translation_difference_evidence": risk_by_lemma.get(lemma_id, {}).get("translation_difference_evidence", "{}"),
             "translation_variants": variants,
+            "guidance_hits": guidance_hits_by_lemma.get(lemma_id, []),
             "source_text_versions": source_versions_by_lemma.get(lemma_id, []),
             "canonical_variants": canonical_variants_by_lemma.get(lemma_id, []),
             "canonical_variant_ref": selected_variant_ref,
