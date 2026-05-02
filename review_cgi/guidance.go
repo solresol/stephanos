@@ -91,7 +91,10 @@ func main() {
 		defer scanDB.Close()
 		attachGuidanceScanEvidence(pageData, scanDB)
 	}
-	tmpl, err := template.New("guidance").Parse(guidanceTemplate)
+	tmpl, err := template.New("guidance").Funcs(template.FuncMap{
+		"scanBatchFinishedCount":   scanBatchFinishedCount,
+		"scanBatchProgressPercent": scanBatchProgressPercent,
+	}).Parse(guidanceTemplate)
 	if err != nil {
 		showError(fmt.Sprintf("Template error: %v", err))
 		return
@@ -130,6 +133,28 @@ func attachGuidanceScanEvidence(pageData *GuidancePageData, scanDB *sql.DB) {
 		}
 		pageData.Rules[index].ScanEvidence = evidence
 	}
+}
+
+func scanBatchFinishedCount(batch TranslationGuidanceScanBatch) int {
+	return batch.StatusCounts.Completed + batch.StatusCounts.Failed + batch.StatusCounts.Cancelled
+}
+
+func scanBatchProgressPercent(batch TranslationGuidanceScanBatch) int {
+	total := batch.SelectedCount
+	if total <= 0 {
+		total = batch.StatusCounts.Total
+	}
+	if total <= 0 {
+		return 0
+	}
+	finished := scanBatchFinishedCount(batch)
+	if finished < 0 {
+		finished = 0
+	}
+	if finished > total {
+		finished = total
+	}
+	return (finished * 100) / total
 }
 
 func buildGuidancePageData(rules []TranslationGuidanceRule, params url.Values) *GuidancePageData {
@@ -707,6 +732,47 @@ const guidanceTemplate = `<!DOCTYPE html>
             color: #334155;
             padding: 6px 8px;
         }
+        .guidance-progress {
+            display: grid;
+            gap: 6px;
+            margin-top: 10px;
+        }
+        .guidance-progress-head {
+            align-items: baseline;
+            color: #334155;
+            display: flex;
+            flex-wrap: wrap;
+            font-size: 0.85em;
+            gap: 8px;
+            justify-content: space-between;
+        }
+        .guidance-progress-head strong {
+            color: #15324c;
+        }
+        .guidance-progress-track {
+            background: #e2e8f0;
+            border-radius: 999px;
+            height: 12px;
+            overflow: hidden;
+            width: 100%;
+        }
+        .guidance-progress-fill {
+            background: #2563eb;
+            border-radius: inherit;
+            height: 100%;
+            min-width: 0;
+            transition: width 0.2s ease;
+        }
+        .guidance-progress-fill.waiting {
+            background: repeating-linear-gradient(
+                45deg,
+                #f59e0b,
+                #f59e0b 8px,
+                #fbbf24 8px,
+                #fbbf24 16px
+            );
+            min-width: 8px;
+        }
         .guidance-scan-summary {
             background: #f8fafc;
             border: 1px solid #e2e8f0;
@@ -1142,13 +1208,19 @@ const guidanceTemplate = `<!DOCTYPE html>
                                     <span>Scanned headwords <strong data-scan-total-count>{{.ScanEvidence.TotalScannedCount}}</strong></span>
                                     <span>Zero occurrences <strong data-scan-zero-count>{{.ScanEvidence.ZeroScannedCount}}</strong></span>
                                     <span>Non-zero hits <strong data-scan-nonzero-count>{{.ScanEvidence.NonzeroCount}}</strong></span>
-                                    <span data-scan-last-scanned>{{if .ScanEvidence.LastScannedAt}}Last scan {{.ScanEvidence.LastScannedAt}}{{else}}No exported scan results yet{{end}}</span>
+                                    <span data-scan-last-scanned>{{if .Rule.LocalScanRequests}}Waiting for raksasa sync{{else}}{{if .ScanEvidence.LastScannedAt}}Last scan {{.ScanEvidence.LastScannedAt}}{{else}}No exported scan results yet{{end}}{{end}}</span>
                                 </div>
                                 <div data-scan-pending>
                                 {{range .Rule.LocalScanRequests}}
                                 <div class="guidance-scan-row pending">
                                     <strong>Pending sync to raksasa</strong>
                                     <div class="guidance-scan-meta">{{.SampleSize}} random {{.SourceDocument}} entries{{if .Reviewer}} · requested by {{.Reviewer}}{{end}}{{if .RequestedAt}} · {{.RequestedAt}}{{end}}</div>
+                                    <div class="guidance-progress">
+                                        <div class="guidance-progress-head"><strong>Waiting for sync</strong><span>0 / {{.SampleSize}} queued on raksasa</span></div>
+                                        <div class="guidance-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="{{.SampleSize}}" aria-valuenow="0" aria-label="Waiting for raksasa sync">
+                                            <div class="guidance-progress-fill waiting" style="width: 0%"></div>
+                                        </div>
+                                    </div>
                                     {{if .Notes}}<div class="guidance-scan-meta">{{.Notes}}</div>{{end}}
                                 </div>
                                 {{end}}
@@ -1160,6 +1232,12 @@ const guidanceTemplate = `<!DOCTYPE html>
                                     <summary><strong>Batch {{.ID}}</strong> · {{.StatusCounts.Completed}} / {{.SelectedCount}} completed · {{.ResultCounts.Matched}} matched · {{.ResultCounts.Uncertain}} uncertain</summary>
                                     <div class="guidance-scan-meta">{{.SampleSize}} random {{.SourceDocument}} entries{{if .RequestedBy}} · requested by {{.RequestedBy}}{{end}}{{if .RequestedAt}} · {{.RequestedAt}}{{end}}</div>
                                     {{if .Notes}}<div class="guidance-scan-meta">{{.Notes}}</div>{{end}}
+                                    <div class="guidance-progress">
+                                        <div class="guidance-progress-head"><strong>{{scanBatchProgressPercent .}}% finished</strong><span>{{scanBatchFinishedCount .}} / {{.SelectedCount}} finished on raksasa</span></div>
+                                        <div class="guidance-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="{{.SelectedCount}}" aria-valuenow="{{scanBatchFinishedCount .}}" aria-label="Scan batch progress">
+                                            <div class="guidance-progress-fill" style="width: {{scanBatchProgressPercent .}}%"></div>
+                                        </div>
+                                    </div>
                                     <div class="guidance-scan-counts">
                                         <span>Queued {{.StatusCounts.Pending}}</span>
                                         <span>Running {{.StatusCounts.Running}}</span>
@@ -1560,6 +1638,47 @@ const guidanceTemplate = `<!DOCTYPE html>
                 return node;
             }
 
+            function clampPercent(value) {
+                var percent = Number(value || 0);
+                if (!Number.isFinite(percent) || percent < 0) {
+                    return 0;
+                }
+                if (percent > 100) {
+                    return 100;
+                }
+                return Math.floor(percent);
+            }
+
+            function createProgress(label, detail, percent, className, maxValue, currentValue) {
+                var wrapper = document.createElement("div");
+                wrapper.className = "guidance-progress";
+
+                var head = document.createElement("div");
+                head.className = "guidance-progress-head";
+                var strong = document.createElement("strong");
+                appendText(strong, label || "");
+                var detailNode = document.createElement("span");
+                appendText(detailNode, detail || "");
+                head.appendChild(strong);
+                head.appendChild(detailNode);
+                wrapper.appendChild(head);
+
+                var track = document.createElement("div");
+                track.className = "guidance-progress-track";
+                track.setAttribute("role", "progressbar");
+                track.setAttribute("aria-valuemin", "0");
+                track.setAttribute("aria-valuemax", String(maxValue || 100));
+                track.setAttribute("aria-valuenow", String(currentValue || 0));
+                track.setAttribute("aria-label", label || "Scan progress");
+
+                var fill = document.createElement("div");
+                fill.className = "guidance-progress-fill" + (className ? " " + className : "");
+                fill.style.width = String(clampPercent(percent)) + "%";
+                track.appendChild(fill);
+                wrapper.appendChild(track);
+                return wrapper;
+            }
+
             function renderPendingRequests(container, requests) {
                 if (!container) {
                     return;
@@ -1582,6 +1701,14 @@ const guidanceTemplate = `<!DOCTYPE html>
                         bits.push(request.requested_at);
                     }
                     row.appendChild(scanMeta(bits.join(" · ")));
+                    row.appendChild(createProgress(
+                        "Waiting for sync",
+                        "0 / " + String(request.sample_size || 100) + " queued on raksasa",
+                        0,
+                        "waiting",
+                        request.sample_size || 100,
+                        0
+                    ));
                     if (request.notes) {
                         row.appendChild(scanMeta(request.notes));
                     }
@@ -1626,6 +1753,20 @@ const guidanceTemplate = `<!DOCTYPE html>
                     if (batch.notes) {
                         details.appendChild(scanMeta(batch.notes));
                     }
+
+                    var selectedCount = Number(batch.selected_count || statusCounts.total || batch.sample_size || 0);
+                    var finishedCount = Number(statusCounts.completed || 0) +
+                        Number(statusCounts.failed || 0) +
+                        Number(statusCounts.cancelled || 0);
+                    var progressPercent = selectedCount > 0 ? (finishedCount * 100 / selectedCount) : 0;
+                    details.appendChild(createProgress(
+                        String(clampPercent(progressPercent)) + "% finished",
+                        String(finishedCount) + " / " + String(selectedCount) + " finished on raksasa",
+                        progressPercent,
+                        "",
+                        selectedCount || 100,
+                        finishedCount
+                    ));
 
                     var counts = document.createElement("div");
                     counts.className = "guidance-scan-counts";
@@ -1701,6 +1842,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                     return;
                 }
                 var evidence = payload.evidence || {};
+                var pendingRequests = payload.pending_requests || [];
                 var total = panel.querySelector("[data-scan-total-count]");
                 var zero = panel.querySelector("[data-scan-zero-count]");
                 var nonzero = panel.querySelector("[data-scan-nonzero-count]");
@@ -1715,14 +1857,18 @@ const guidanceTemplate = `<!DOCTYPE html>
                     nonzero.textContent = String(evidence.nonzero_count || 0);
                 }
                 if (last) {
-                    last.textContent = evidence.last_scanned_at ? "Last scan " + evidence.last_scanned_at : "No exported scan results yet";
+                    if (pendingRequests.length && !evidence.has_active_batch) {
+                        last.textContent = "Waiting for raksasa sync";
+                    } else {
+                        last.textContent = evidence.last_scanned_at ? "Last scan " + evidence.last_scanned_at : "No exported scan results yet";
+                    }
                 }
-                renderPendingRequests(panel.querySelector("[data-scan-pending]"), payload.pending_requests || []);
+                renderPendingRequests(panel.querySelector("[data-scan-pending]"), pendingRequests);
                 renderBatches(panel.querySelector("[data-scan-batches]"), evidence.batches || []);
                 renderNonzeroRows(panel, evidence);
                 panel.setAttribute(
                     "data-scan-active",
-                    ((payload.pending_requests || []).length || evidence.has_active_batch) ? "1" : ""
+                    (pendingRequests.length || evidence.has_active_batch) ? "1" : ""
                 );
             }
 
