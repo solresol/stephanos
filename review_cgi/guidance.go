@@ -881,6 +881,14 @@ const guidanceTemplate = `<!DOCTYPE html>
             color: #334155;
             font-size: 0.88em;
         }
+        .guidance-scan-table a {
+            color: #0f5e9c;
+            font-weight: 700;
+            text-decoration: none;
+        }
+        .guidance-scan-table a:hover {
+            text-decoration: underline;
+        }
         .guidance-scan-table tr:last-child td {
             border-bottom: 0;
         }
@@ -1361,7 +1369,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                                     <tbody data-scan-nonzero-body>
                                         {{range .ScanEvidence.NonzeroRows}}
                                         <tr>
-                                            <td>{{.Lemma}}{{if .EntryNumber}} <span class="guidance-scan-meta">#{{.EntryNumber}}</span>{{end}}</td>
+                                            <td><a href="/cgi-bin/review.cgi?id={{.LemmaID}}">{{.Lemma}}</a>{{if .EntryNumber}} <span class="guidance-scan-meta">#{{.EntryNumber}}</span>{{end}}</td>
                                             <td>{{.PatternText}}</td>
                                             <td class="numeric">{{.OccurrenceCount}}</td>
                                             <td>{{.EvidenceText}}</td>
@@ -1974,7 +1982,14 @@ const guidanceTemplate = `<!DOCTYPE html>
                 rows.forEach(function (result) {
                     var tr = document.createElement("tr");
                     var headword = document.createElement("td");
-                    appendText(headword, result.lemma || "");
+                    if (result.lemma_id) {
+                        var link = document.createElement("a");
+                        link.href = "/cgi-bin/review.cgi?id=" + encodeURIComponent(String(result.lemma_id));
+                        appendText(link, result.lemma || "");
+                        headword.appendChild(link);
+                    } else {
+                        appendText(headword, result.lemma || "");
+                    }
                     if (result.entry_number) {
                         var entry = document.createElement("span");
                         entry.className = "guidance-scan-meta";
