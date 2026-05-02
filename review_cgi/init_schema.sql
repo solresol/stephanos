@@ -169,7 +169,7 @@ CREATE INDEX IF NOT EXISTS idx_translation_guidance_actions_rule
 ON translation_guidance_actions(target_rule_key, reviewed_at, id);
 
 -- Local protected formula-discovery requests.
--- PostgreSQL imports these into durable scan batches during review sync.
+-- save.cgi also creates urgent local jobs for immediate translator feedback.
 CREATE TABLE IF NOT EXISTS translation_guidance_scan_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     target_rule_key TEXT NOT NULL,
@@ -184,3 +184,74 @@ CREATE TABLE IF NOT EXISTS translation_guidance_scan_requests (
 
 CREATE INDEX IF NOT EXISTS idx_translation_guidance_scan_requests_rule
 ON translation_guidance_scan_requests(target_rule_key, requested_at, id);
+
+CREATE TABLE IF NOT EXISTS translation_guidance_urgent_scan_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_request_id INTEGER,
+    target_rule_key TEXT NOT NULL,
+    rule_label TEXT,
+    scope_kind TEXT NOT NULL DEFAULT 'urgent_sample' CHECK (scope_kind IN ('urgent_sample', 'background_daily')),
+    sample_size INTEGER NOT NULL DEFAULT 100,
+    source_document TEXT NOT NULL DEFAULT 'meineke' CHECK (source_document = 'meineke'),
+    include_quarantined INTEGER NOT NULL DEFAULT 0 CHECK (include_quarantined IN (0, 1)),
+    notes TEXT,
+    requested_by TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')),
+    pid INTEGER,
+    worker_started_at TIMESTAMP,
+    heartbeat_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_translation_guidance_urgent_jobs_request
+ON translation_guidance_urgent_scan_jobs(scan_request_id)
+WHERE scan_request_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_translation_guidance_urgent_jobs_rule
+ON translation_guidance_urgent_scan_jobs(target_rule_key, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_translation_guidance_urgent_jobs_status
+ON translation_guidance_urgent_scan_jobs(status, heartbeat_at, id);
+
+CREATE TABLE IF NOT EXISTS translation_guidance_urgent_scan_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    target_rule_key TEXT NOT NULL,
+    rule_id INTEGER NOT NULL DEFAULT 0,
+    rule_revision_id INTEGER NOT NULL DEFAULT 0,
+    rule_key TEXT NOT NULL,
+    rule_label TEXT NOT NULL,
+    preferred_translation TEXT,
+    rule_notes TEXT,
+    lemma_id INTEGER NOT NULL,
+    lemma TEXT NOT NULL,
+    entry_number INTEGER,
+    source_text_version_id INTEGER NOT NULL,
+    source_document TEXT NOT NULL DEFAULT 'meineke',
+    source_variant TEXT,
+    source_text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')),
+    match_status TEXT,
+    occurrence_count INTEGER NOT NULL DEFAULT 0,
+    confidence TEXT,
+    evidence_text TEXT,
+    model TEXT,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (job_id) REFERENCES translation_guidance_urgent_scan_jobs(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_translation_guidance_urgent_items_job_source
+ON translation_guidance_urgent_scan_items(job_id, source_text_version_id);
+
+CREATE INDEX IF NOT EXISTS idx_translation_guidance_urgent_items_rule_status
+ON translation_guidance_urgent_scan_items(target_rule_key, status, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_translation_guidance_urgent_items_source
+ON translation_guidance_urgent_scan_items(target_rule_key, source_text_version_id);

@@ -36,7 +36,8 @@ type TranslationGuidanceRule struct {
 	LastChangedBy        string `json:"last_changed_by,omitempty"`
 	LastChangedAt        string `json:"last_changed_at,omitempty"`
 	LocalScanRequests    []TranslationGuidanceScanRequest
-	ScanBatches          []TranslationGuidanceScanBatch `json:"scan_batches,omitempty"`
+	UrgentScanJobs       []TranslationGuidanceUrgentScanJob `json:"urgent_scan_jobs,omitempty"`
+	ScanBatches          []TranslationGuidanceScanBatch     `json:"scan_batches,omitempty"`
 }
 
 type guidanceDataFile struct {
@@ -130,6 +131,32 @@ type GuidanceScanEvidence struct {
 	NonzeroRows       []GuidanceScanEvidenceRow      `json:"nonzero_rows"`
 }
 
+type TranslationGuidanceUrgentScanJob struct {
+	ID                 int                                 `json:"id"`
+	ScanRequestID      int                                 `json:"scan_request_id"`
+	TargetRuleKey      string                              `json:"target_rule_key"`
+	RuleLabel          string                              `json:"rule_label"`
+	ScopeKind          string                              `json:"scope_kind"`
+	SampleSize         int                                 `json:"sample_size"`
+	SelectedCount      int                                 `json:"selected_count"`
+	SourceDocument     string                              `json:"source_document"`
+	IncludeQuarantined bool                                `json:"include_quarantined"`
+	Notes              string                              `json:"notes"`
+	RequestedBy        string                              `json:"requested_by"`
+	Status             string                              `json:"status"`
+	PID                int                                 `json:"pid"`
+	WorkerStartedAt    string                              `json:"worker_started_at"`
+	HeartbeatAt        string                              `json:"heartbeat_at"`
+	FinishedAt         string                              `json:"finished_at"`
+	CreatedAt          string                              `json:"created_at"`
+	UpdatedAt          string                              `json:"updated_at"`
+	ErrorMessage       string                              `json:"error_message"`
+	StatusCounts       TranslationGuidanceScanStatusCounts `json:"status_counts"`
+	ResultCounts       TranslationGuidanceScanResultCounts `json:"result_counts"`
+	Models             []string                            `json:"models"`
+	TokensUsed         int                                 `json:"tokens_used"`
+}
+
 type TranslationGuidanceAction struct {
 	ID                   int
 	TargetRuleKey        string
@@ -213,6 +240,62 @@ func EnsureGuidanceSchema(db *sql.DB) error {
 			requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
 		"CREATE INDEX IF NOT EXISTS idx_translation_guidance_scan_requests_rule ON translation_guidance_scan_requests(target_rule_key, requested_at, id)",
+		`CREATE TABLE IF NOT EXISTS translation_guidance_urgent_scan_jobs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			scan_request_id INTEGER,
+			target_rule_key TEXT NOT NULL,
+			rule_label TEXT,
+			scope_kind TEXT NOT NULL DEFAULT 'urgent_sample' CHECK (scope_kind IN ('urgent_sample', 'background_daily')),
+			sample_size INTEGER NOT NULL DEFAULT 100,
+			source_document TEXT NOT NULL DEFAULT 'meineke' CHECK (source_document = 'meineke'),
+			include_quarantined INTEGER NOT NULL DEFAULT 0 CHECK (include_quarantined IN (0, 1)),
+			notes TEXT,
+			requested_by TEXT,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')),
+			pid INTEGER,
+			worker_started_at TIMESTAMP,
+			heartbeat_at TIMESTAMP,
+			finished_at TIMESTAMP,
+			error_message TEXT,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_translation_guidance_urgent_jobs_request ON translation_guidance_urgent_scan_jobs(scan_request_id) WHERE scan_request_id IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS idx_translation_guidance_urgent_jobs_rule ON translation_guidance_urgent_scan_jobs(target_rule_key, created_at, id)",
+		"CREATE INDEX IF NOT EXISTS idx_translation_guidance_urgent_jobs_status ON translation_guidance_urgent_scan_jobs(status, heartbeat_at, id)",
+		`CREATE TABLE IF NOT EXISTS translation_guidance_urgent_scan_items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id INTEGER NOT NULL,
+			target_rule_key TEXT NOT NULL,
+			rule_id INTEGER NOT NULL DEFAULT 0,
+			rule_revision_id INTEGER NOT NULL DEFAULT 0,
+			rule_key TEXT NOT NULL,
+			rule_label TEXT NOT NULL,
+			preferred_translation TEXT,
+			rule_notes TEXT,
+			lemma_id INTEGER NOT NULL,
+			lemma TEXT NOT NULL,
+			entry_number INTEGER,
+			source_text_version_id INTEGER NOT NULL,
+			source_document TEXT NOT NULL DEFAULT 'meineke',
+			source_variant TEXT,
+			source_text TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')),
+			match_status TEXT,
+			occurrence_count INTEGER NOT NULL DEFAULT 0,
+			confidence TEXT,
+			evidence_text TEXT,
+			model TEXT,
+			tokens_used INTEGER NOT NULL DEFAULT 0,
+			error_message TEXT,
+			started_at TIMESTAMP,
+			finished_at TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (job_id) REFERENCES translation_guidance_urgent_scan_jobs(id) ON DELETE CASCADE
+		)`,
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_translation_guidance_urgent_items_job_source ON translation_guidance_urgent_scan_items(job_id, source_text_version_id)",
+		"CREATE INDEX IF NOT EXISTS idx_translation_guidance_urgent_items_rule_status ON translation_guidance_urgent_scan_items(target_rule_key, status, updated_at)",
+		"CREATE INDEX IF NOT EXISTS idx_translation_guidance_urgent_items_source ON translation_guidance_urgent_scan_items(target_rule_key, source_text_version_id)",
 	}
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
@@ -238,6 +321,18 @@ func EnsureGuidanceSchema(db *sql.DB) error {
 		return err
 	}
 	if err := ensureSQLiteColumn(db, "translation_guidance_scan_requests", "include_quarantined", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := ensureSQLiteColumn(db, "translation_guidance_urgent_scan_jobs", "scope_kind", "TEXT NOT NULL DEFAULT 'urgent_sample'"); err != nil {
+		return err
+	}
+	if err := ensureSQLiteColumn(db, "translation_guidance_urgent_scan_items", "rule_label", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := ensureSQLiteColumn(db, "translation_guidance_urgent_scan_items", "preferred_translation", "TEXT"); err != nil {
+		return err
+	}
+	if err := ensureSQLiteColumn(db, "translation_guidance_urgent_scan_items", "rule_notes", "TEXT"); err != nil {
 		return err
 	}
 	return nil
@@ -509,9 +604,9 @@ func InsertTranslationGuidanceScanRequest(
 	db *sql.DB,
 	request TranslationGuidanceScanRequest,
 	username string,
-) error {
+) (int64, error) {
 	if err := EnsureGuidanceSchema(db); err != nil {
-		return err
+		return 0, err
 	}
 
 	request.TargetRuleKey = strings.TrimSpace(request.TargetRuleKey)
@@ -521,10 +616,10 @@ func InsertTranslationGuidanceScanRequest(
 	request.Notes = strings.TrimSpace(request.Notes)
 
 	if request.TargetRuleKey == "" {
-		return fmt.Errorf("missing target rule key")
+		return 0, fmt.Errorf("missing target rule key")
 	}
 
-	_, err := db.Exec(
+	result, err := db.Exec(
 		`
 		INSERT INTO translation_guidance_scan_requests (
 			target_rule_key,
@@ -545,7 +640,10 @@ func InsertTranslationGuidanceScanRequest(
 		request.Notes,
 		strings.TrimSpace(username),
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
 }
 
 func boolToSQLiteInt(value bool) int {
@@ -603,6 +701,347 @@ func FetchTranslationGuidanceScanRequests(db *sql.DB) ([]TranslationGuidanceScan
 		requests = append(requests, request)
 	}
 	return requests, rows.Err()
+}
+
+func CreateUrgentGuidanceScanJob(
+	db *sql.DB,
+	scanRequestID int64,
+	request TranslationGuidanceScanRequest,
+	username string,
+) (int64, error) {
+	if err := EnsureGuidanceSchema(db); err != nil {
+		return 0, err
+	}
+	request.TargetRuleKey = strings.TrimSpace(request.TargetRuleKey)
+	request.RuleLabel = strings.TrimSpace(request.RuleLabel)
+	request.SourceDocument = normalizeGuidanceScanSourceDocument(request.SourceDocument)
+	request.SampleSize = normalizeGuidanceScanSampleSize(request.SampleSize)
+	request.Notes = strings.TrimSpace(request.Notes)
+	if request.TargetRuleKey == "" {
+		return 0, fmt.Errorf("missing target rule key")
+	}
+
+	result, err := db.Exec(
+		`
+		INSERT OR IGNORE INTO translation_guidance_urgent_scan_jobs (
+			scan_request_id,
+			target_rule_key,
+			rule_label,
+			scope_kind,
+			sample_size,
+			source_document,
+			include_quarantined,
+			notes,
+			requested_by,
+			status
+		)
+		VALUES (?, ?, ?, 'urgent_sample', ?, ?, ?, ?, ?, 'pending')
+		`,
+		nullablePositiveInt64(scanRequestID),
+		request.TargetRuleKey,
+		request.RuleLabel,
+		request.SampleSize,
+		request.SourceDocument,
+		boolToSQLiteInt(request.IncludeQuarantined),
+		request.Notes,
+		strings.TrimSpace(username),
+	)
+	if err != nil {
+		return 0, err
+	}
+	if id, err := result.LastInsertId(); err == nil && id > 0 {
+		return id, nil
+	}
+	var jobID int64
+	err = db.QueryRow(
+		`
+		SELECT id
+		FROM translation_guidance_urgent_scan_jobs
+		WHERE scan_request_id = ?
+		ORDER BY id DESC
+		LIMIT 1
+		`,
+		scanRequestID,
+	).Scan(&jobID)
+	return jobID, err
+}
+
+func nullablePositiveInt64(value int64) interface{} {
+	if value > 0 {
+		return value
+	}
+	return nil
+}
+
+func FetchUrgentGuidanceScanJobs(db *sql.DB, ruleKey string, limit int) ([]TranslationGuidanceUrgentScanJob, error) {
+	if err := EnsureGuidanceSchema(db); err != nil {
+		return nil, err
+	}
+	ruleKey = strings.TrimSpace(ruleKey)
+	if limit <= 0 {
+		limit = 20
+	}
+	query := `
+		SELECT
+			j.id,
+			COALESCE(j.scan_request_id, 0),
+			COALESCE(j.target_rule_key, ''),
+			COALESCE(j.rule_label, ''),
+			COALESCE(j.scope_kind, 'urgent_sample'),
+			COALESCE(j.sample_size, 100),
+			COALESCE(j.source_document, 'meineke'),
+			COALESCE(j.include_quarantined, 0),
+			COALESCE(j.notes, ''),
+			COALESCE(j.requested_by, ''),
+			COALESCE(j.status, 'pending'),
+			COALESCE(j.pid, 0),
+			COALESCE(j.worker_started_at, ''),
+			COALESCE(j.heartbeat_at, ''),
+			COALESCE(j.finished_at, ''),
+			COALESCE(j.created_at, ''),
+			COALESCE(j.updated_at, ''),
+			COALESCE(j.error_message, ''),
+			COUNT(i.id) AS selected_count,
+			COALESCE(SUM(CASE WHEN i.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count,
+			COALESCE(SUM(CASE WHEN i.status = 'running' THEN 1 ELSE 0 END), 0) AS running_count,
+			COALESCE(SUM(CASE WHEN i.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_count,
+			COALESCE(SUM(CASE WHEN i.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_count,
+			COALESCE(SUM(CASE WHEN i.status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled_count,
+			COALESCE(SUM(CASE WHEN i.match_status = 'matched' THEN 1 ELSE 0 END), 0) AS matched_count,
+			COALESCE(SUM(CASE WHEN i.match_status = 'not_matched' THEN 1 ELSE 0 END), 0) AS not_matched_count,
+			COALESCE(SUM(CASE WHEN i.match_status = 'uncertain' THEN 1 ELSE 0 END), 0) AS uncertain_count,
+			COALESCE(SUM(i.tokens_used), 0) AS tokens_used,
+			COALESCE(GROUP_CONCAT(DISTINCT NULLIF(i.model, '')), '') AS models
+		FROM translation_guidance_urgent_scan_jobs j
+		LEFT JOIN translation_guidance_urgent_scan_items i ON i.job_id = j.id
+	`
+	var rows *sql.Rows
+	var err error
+	if ruleKey == "" {
+		rows, err = db.Query(
+			query+`
+				GROUP BY j.id
+				ORDER BY j.created_at DESC, j.id DESC
+				LIMIT ?
+			`,
+			limit,
+		)
+	} else {
+		rows, err = db.Query(
+			query+`
+				WHERE j.target_rule_key = ?
+				GROUP BY j.id
+				ORDER BY j.created_at DESC, j.id DESC
+				LIMIT ?
+			`,
+			ruleKey,
+			limit,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []TranslationGuidanceUrgentScanJob
+	for rows.Next() {
+		var job TranslationGuidanceUrgentScanJob
+		var includeQuarantined int
+		var modelsCSV string
+		if err := rows.Scan(
+			&job.ID,
+			&job.ScanRequestID,
+			&job.TargetRuleKey,
+			&job.RuleLabel,
+			&job.ScopeKind,
+			&job.SampleSize,
+			&job.SourceDocument,
+			&includeQuarantined,
+			&job.Notes,
+			&job.RequestedBy,
+			&job.Status,
+			&job.PID,
+			&job.WorkerStartedAt,
+			&job.HeartbeatAt,
+			&job.FinishedAt,
+			&job.CreatedAt,
+			&job.UpdatedAt,
+			&job.ErrorMessage,
+			&job.SelectedCount,
+			&job.StatusCounts.Pending,
+			&job.StatusCounts.Running,
+			&job.StatusCounts.Completed,
+			&job.StatusCounts.Failed,
+			&job.StatusCounts.Cancelled,
+			&job.ResultCounts.Matched,
+			&job.ResultCounts.NotMatched,
+			&job.ResultCounts.Uncertain,
+			&job.TokensUsed,
+			&modelsCSV,
+		); err != nil {
+			return nil, err
+		}
+		job.IncludeQuarantined = includeQuarantined != 0
+		job.StatusCounts.Total = job.SelectedCount
+		if modelsCSV != "" {
+			for _, model := range strings.Split(modelsCSV, ",") {
+				model = strings.TrimSpace(model)
+				if model != "" {
+					job.Models = append(job.Models, model)
+				}
+			}
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
+func FetchUrgentGuidanceScanEvidence(db *sql.DB, ruleKey string, limit int) (GuidanceScanEvidence, error) {
+	evidence := GuidanceScanEvidence{Available: db != nil}
+	if db == nil {
+		return evidence, nil
+	}
+	if err := EnsureGuidanceSchema(db); err != nil {
+		return evidence, err
+	}
+	ruleKey = strings.TrimSpace(ruleKey)
+	if ruleKey == "" {
+		return evidence, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	err := db.QueryRow(
+		`
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN occurrence_count = 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN occurrence_count > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(MAX(finished_at), '')
+		FROM translation_guidance_urgent_scan_items
+		WHERE target_rule_key = ?
+		  AND status = 'completed'
+		`,
+		ruleKey,
+	).Scan(
+		&evidence.TotalScannedCount,
+		&evidence.ZeroScannedCount,
+		&evidence.NonzeroCount,
+		&evidence.LastScannedAt,
+	)
+	if err != nil {
+		return evidence, err
+	}
+
+	rows, err := db.Query(
+		`
+		SELECT
+			id,
+			target_rule_key,
+			rule_label,
+			lemma_id,
+			lemma,
+			entry_number,
+			source_text_version_id,
+			occurrence_count,
+			COALESCE(confidence, ''),
+			COALESCE(evidence_text, ''),
+			COALESCE(finished_at, '')
+		FROM translation_guidance_urgent_scan_items
+		WHERE target_rule_key = ?
+		  AND status = 'completed'
+		  AND occurrence_count > 0
+		ORDER BY finished_at DESC, lemma COLLATE NOCASE, id DESC
+		LIMIT ?
+		`,
+		ruleKey,
+		limit,
+	)
+	if err != nil {
+		return evidence, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var row GuidanceScanEvidenceRow
+		var entryNumber sql.NullInt64
+		if err := rows.Scan(
+			&row.MatchID,
+			&row.RuleKey,
+			&row.PatternText,
+			&row.LemmaID,
+			&row.Lemma,
+			&entryNumber,
+			&row.SourceTextVersionID,
+			&row.OccurrenceCount,
+			&row.Confidence,
+			&row.EvidenceText,
+			&row.ScannedAt,
+		); err != nil {
+			return evidence, err
+		}
+		row.MatchID = -row.MatchID
+		if entryNumber.Valid {
+			row.EntryNumber = int(entryNumber.Int64)
+		}
+		evidence.NonzeroRows = append(evidence.NonzeroRows, row)
+	}
+	return evidence, rows.Err()
+}
+
+func MergeGuidanceScanEvidence(base GuidanceScanEvidence, local GuidanceScanEvidence, limit int) GuidanceScanEvidence {
+	if local.Available {
+		base.Available = true
+	}
+	base.TotalScannedCount += local.TotalScannedCount
+	base.ZeroScannedCount += local.ZeroScannedCount
+	base.NonzeroCount += local.NonzeroCount
+	if strings.TrimSpace(local.LastScannedAt) > strings.TrimSpace(base.LastScannedAt) {
+		base.LastScannedAt = local.LastScannedAt
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	rows := append([]GuidanceScanEvidenceRow{}, local.NonzeroRows...)
+	rows = append(rows, base.NonzeroRows...)
+	sort.SliceStable(rows, func(i, j int) bool {
+		left := strings.TrimSpace(rows[i].ScannedAt)
+		right := strings.TrimSpace(rows[j].ScannedAt)
+		if left == right {
+			return rows[i].MatchID > rows[j].MatchID
+		}
+		return left > right
+	})
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	base.NonzeroRows = rows
+	return base
+}
+
+func FilterGuidanceScanRequestsWithoutUrgentJobs(
+	requests []TranslationGuidanceScanRequest,
+	jobs []TranslationGuidanceUrgentScanJob,
+) []TranslationGuidanceScanRequest {
+	if len(requests) == 0 || len(jobs) == 0 {
+		return requests
+	}
+	handled := make(map[int]bool, len(jobs))
+	for _, job := range jobs {
+		if job.ScanRequestID > 0 {
+			handled[job.ScanRequestID] = true
+		}
+	}
+	if len(handled) == 0 {
+		return requests
+	}
+	filtered := requests[:0]
+	for _, request := range requests {
+		if handled[request.ID] {
+			continue
+		}
+		filtered = append(filtered, request)
+	}
+	return filtered
 }
 
 func FetchGuidanceScanEvidence(db *sql.DB, ruleKey string, limit int) (GuidanceScanEvidence, error) {
@@ -1156,6 +1595,53 @@ func AttachTranslationGuidanceScanRequests(
 			continue
 		}
 		rules[index].LocalScanRequests = append(rules[index].LocalScanRequests, request)
+	}
+	return rules
+}
+
+func AttachTranslationGuidanceUrgentScanJobs(
+	rules []TranslationGuidanceRule,
+	jobs []TranslationGuidanceUrgentScanJob,
+) []TranslationGuidanceRule {
+	if len(rules) == 0 || len(jobs) == 0 {
+		return rules
+	}
+	rulesByKey := make(map[string]int, len(rules))
+	for i, rule := range rules {
+		key := strings.TrimSpace(rule.RuleKey)
+		if key != "" {
+			rulesByKey[key] = i
+		}
+	}
+	handledRequestsByRule := make(map[string]map[int]bool)
+	for _, job := range jobs {
+		key := strings.TrimSpace(job.TargetRuleKey)
+		index, ok := rulesByKey[key]
+		if !ok {
+			continue
+		}
+		rules[index].UrgentScanJobs = append(rules[index].UrgentScanJobs, job)
+		if job.ScanRequestID > 0 {
+			if handledRequestsByRule[key] == nil {
+				handledRequestsByRule[key] = make(map[int]bool)
+			}
+			handledRequestsByRule[key][job.ScanRequestID] = true
+		}
+	}
+	for i := range rules {
+		key := strings.TrimSpace(rules[i].RuleKey)
+		handled := handledRequestsByRule[key]
+		if len(handled) == 0 || len(rules[i].LocalScanRequests) == 0 {
+			continue
+		}
+		filtered := rules[i].LocalScanRequests[:0]
+		for _, request := range rules[i].LocalScanRequests {
+			if handled[request.ID] {
+				continue
+			}
+			filtered = append(filtered, request)
+		}
+		rules[i].LocalScanRequests = filtered
 	}
 	return rules
 }

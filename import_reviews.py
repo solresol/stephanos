@@ -977,10 +977,19 @@ def import_translation_guidance_scan_requests(sqlite_cur, pg_cur) -> tuple[int, 
         return 0, 0, 0, 0
 
     last_id = get_last_imported_guidance_scan_request_id(pg_cur)
-    sqlite_cur.execute(
+    urgent_job_filter = ""
+    if sqlite_table_exists(sqlite_cur, "translation_guidance_urgent_scan_jobs"):
+        urgent_job_filter = """
+          AND NOT EXISTS (
+              SELECT 1
+              FROM translation_guidance_urgent_scan_jobs uj
+              WHERE uj.scan_request_id = r.id
+          )
         """
+    sqlite_cur.execute(
+        f"""
         SELECT
-            id,
+            r.id,
             COALESCE(target_rule_key, '') AS target_rule_key,
             COALESCE(rule_label, '') AS rule_label,
             COALESCE(sample_size, 100) AS sample_size,
@@ -989,8 +998,9 @@ def import_translation_guidance_scan_requests(sqlite_cur, pg_cur) -> tuple[int, 
             COALESCE(notes, '') AS notes,
             COALESCE(reviewer_username, '') AS reviewer_username,
             requested_at
-        FROM translation_guidance_scan_requests
-        WHERE id > ?
+        FROM translation_guidance_scan_requests r
+        WHERE r.id > ?
+        {urgent_job_filter}
         ORDER BY requested_at ASC, id ASC
         """,
         (last_id,),

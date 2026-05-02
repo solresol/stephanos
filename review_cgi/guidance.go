@@ -76,6 +76,12 @@ func main() {
 		return
 	}
 	rules = AttachTranslationGuidanceScanRequests(rules, scanRequests)
+	urgentScanJobs, err := FetchUrgentGuidanceScanJobs(db, "", 1000)
+	if err != nil {
+		showError(fmt.Sprintf("Failed to load urgent scan jobs: %v", err))
+		return
+	}
+	rules = AttachTranslationGuidanceUrgentScanJobs(rules, urgentScanJobs)
 
 	params, err := url.ParseQuery(os.Getenv("QUERY_STRING"))
 	if err != nil {
@@ -91,9 +97,12 @@ func main() {
 		defer scanDB.Close()
 		attachGuidanceScanEvidence(pageData, scanDB)
 	}
+	attachUrgentGuidanceScanEvidence(pageData, db)
 	tmpl, err := template.New("guidance").Funcs(template.FuncMap{
 		"scanBatchFinishedCount":   scanBatchFinishedCount,
 		"scanBatchProgressPercent": scanBatchProgressPercent,
+		"urgentJobFinishedCount":   urgentJobFinishedCount,
+		"urgentJobProgressPercent": urgentJobProgressPercent,
 	}).Parse(guidanceTemplate)
 	if err != nil {
 		showError(fmt.Sprintf("Template error: %v", err))
@@ -135,6 +144,31 @@ func attachGuidanceScanEvidence(pageData *GuidancePageData, scanDB *sql.DB) {
 	}
 }
 
+func attachUrgentGuidanceScanEvidence(pageData *GuidancePageData, db *sql.DB) {
+	if pageData == nil || db == nil {
+		return
+	}
+	for index := range pageData.Rules {
+		if pageData.Rules[index].Rule.Kind != "formula" {
+			continue
+		}
+		localEvidence, err := FetchUrgentGuidanceScanEvidence(db, pageData.Rules[index].Rule.RuleKey, 100)
+		if err != nil {
+			log.Printf(
+				"Failed to load urgent scan evidence for %s: %v",
+				pageData.Rules[index].Rule.RuleKey,
+				err,
+			)
+			continue
+		}
+		pageData.Rules[index].ScanEvidence = MergeGuidanceScanEvidence(
+			pageData.Rules[index].ScanEvidence,
+			localEvidence,
+			100,
+		)
+	}
+}
+
 func scanBatchFinishedCount(batch TranslationGuidanceScanBatch) int {
 	return batch.StatusCounts.Completed + batch.StatusCounts.Failed + batch.StatusCounts.Cancelled
 }
@@ -148,6 +182,28 @@ func scanBatchProgressPercent(batch TranslationGuidanceScanBatch) int {
 		return 0
 	}
 	finished := scanBatchFinishedCount(batch)
+	if finished < 0 {
+		finished = 0
+	}
+	if finished > total {
+		finished = total
+	}
+	return (finished * 100) / total
+}
+
+func urgentJobFinishedCount(job TranslationGuidanceUrgentScanJob) int {
+	return job.StatusCounts.Completed + job.StatusCounts.Failed + job.StatusCounts.Cancelled
+}
+
+func urgentJobProgressPercent(job TranslationGuidanceUrgentScanJob) int {
+	total := job.SelectedCount
+	if total <= 0 {
+		total = job.SampleSize
+	}
+	if total <= 0 {
+		return 0
+	}
+	finished := urgentJobFinishedCount(job)
 	if finished < 0 {
 		finished = 0
 	}
@@ -1187,9 +1243,9 @@ const guidanceTemplate = `<!DOCTYPE html>
                     </div>
 
                     {{if eq .Rule.Kind "formula"}}
-                    <div class="guidance-scan-panel" data-guidance-scan-panel="{{.Rule.RuleKey}}" data-scan-active="{{if .Rule.LocalScanRequests}}1{{else}}{{if .ScanEvidence.HasActiveBatch}}1{{end}}{{end}}">
+                    <div class="guidance-scan-panel" data-guidance-scan-panel="{{.Rule.RuleKey}}" data-scan-active="{{if .Rule.UrgentScanJobs}}1{{else}}{{if .Rule.LocalScanRequests}}1{{else}}{{if .ScanEvidence.HasActiveBatch}}1{{end}}{{end}}{{end}}">
                         <div class="section-title">Formula Discovery</div>
-                        <div class="section-note">Scan 100 random current Meineke entries. Requests are written locally now and picked up by the nightly raksasa sync; results stay in the protected editor.</div>
+                        <div class="section-note">Scan 100 random current Meineke entries immediately on merah; results stay in the protected editor.</div>
                         <div class="guidance-scan-grid">
                             <form class="guidance-scan-form" method="POST" action="/cgi-bin/save.cgi">
                                 <input type="hidden" name="form_mode" value="guidance_scan">
@@ -1208,16 +1264,46 @@ const guidanceTemplate = `<!DOCTYPE html>
                                     <span>Scanned headwords <strong data-scan-total-count>{{.ScanEvidence.TotalScannedCount}}</strong></span>
                                     <span>Zero occurrences <strong data-scan-zero-count>{{.ScanEvidence.ZeroScannedCount}}</strong></span>
                                     <span>Non-zero hits <strong data-scan-nonzero-count>{{.ScanEvidence.NonzeroCount}}</strong></span>
-                                    <span data-scan-last-scanned>{{if .Rule.LocalScanRequests}}Waiting for raksasa sync{{else}}{{if .ScanEvidence.LastScannedAt}}Last scan {{.ScanEvidence.LastScannedAt}}{{else}}No exported scan results yet{{end}}{{end}}</span>
+                                    <span data-scan-last-scanned>{{if .Rule.UrgentScanJobs}}Local urgent scan active{{else}}{{if .Rule.LocalScanRequests}}Queued locally{{else}}{{if .ScanEvidence.LastScannedAt}}Last scan {{.ScanEvidence.LastScannedAt}}{{else}}No scan results yet{{end}}{{end}}{{end}}</span>
+                                </div>
+                                <div data-scan-urgent-jobs>
+                                {{range .Rule.UrgentScanJobs}}
+                                <details class="guidance-scan-row" open>
+                                    <summary><strong>Urgent scan {{.ID}}</strong> · {{.Status}} · {{.StatusCounts.Completed}} / {{.SelectedCount}} completed · {{.ResultCounts.Matched}} matched · {{.ResultCounts.Uncertain}} uncertain</summary>
+                                    <div class="guidance-scan-meta">{{.SampleSize}} random {{.SourceDocument}} entries{{if .RequestedBy}} · requested by {{.RequestedBy}}{{end}}{{if .CreatedAt}} · {{.CreatedAt}}{{end}}{{if .PID}} · pid {{.PID}}{{end}}</div>
+                                    {{if .HeartbeatAt}}<div class="guidance-scan-meta">Heartbeat {{.HeartbeatAt}}</div>{{end}}
+                                    {{if .ErrorMessage}}<div class="guidance-scan-meta">{{.ErrorMessage}}</div>{{end}}
+                                    {{if .Notes}}<div class="guidance-scan-meta">{{.Notes}}</div>{{end}}
+                                    <div class="guidance-progress">
+                                        <div class="guidance-progress-head"><strong>{{urgentJobProgressPercent .}}% finished</strong><span>{{urgentJobFinishedCount .}} / {{if .SelectedCount}}{{.SelectedCount}}{{else}}{{.SampleSize}}{{end}} finished on merah</span></div>
+                                        <div class="guidance-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="{{if .SelectedCount}}{{.SelectedCount}}{{else}}{{.SampleSize}}{{end}}" aria-valuenow="{{urgentJobFinishedCount .}}" aria-label="Urgent scan progress">
+                                            <div class="guidance-progress-fill" style="width: {{urgentJobProgressPercent .}}%"></div>
+                                        </div>
+                                    </div>
+                                    <div class="guidance-scan-counts">
+                                        <span>Queued {{.StatusCounts.Pending}}</span>
+                                        <span>Running {{.StatusCounts.Running}}</span>
+                                        <span>Completed {{.StatusCounts.Completed}}</span>
+                                        <span>Failed {{.StatusCounts.Failed}}</span>
+                                        <span>Matched {{.ResultCounts.Matched}}</span>
+                                        <span>Not matched {{.ResultCounts.NotMatched}}</span>
+                                        <span>Uncertain {{.ResultCounts.Uncertain}}</span>
+                                        <span>Tokens {{.TokensUsed}}</span>
+                                    </div>
+                                    {{if .Models}}
+                                    <div class="guidance-scan-meta">Models: {{range $index, $model := .Models}}{{if $index}}, {{end}}{{$model}}{{end}}</div>
+                                    {{end}}
+                                </details>
+                                {{end}}
                                 </div>
                                 <div data-scan-pending>
                                 {{range .Rule.LocalScanRequests}}
                                 <div class="guidance-scan-row pending">
-                                    <strong>Pending sync to raksasa</strong>
+                                    <strong>Queued locally</strong>
                                     <div class="guidance-scan-meta">{{.SampleSize}} random {{.SourceDocument}} entries{{if .Reviewer}} · requested by {{.Reviewer}}{{end}}{{if .RequestedAt}} · {{.RequestedAt}}{{end}}</div>
                                     <div class="guidance-progress">
-                                        <div class="guidance-progress-head"><strong>Waiting for sync</strong><span>0 / {{.SampleSize}} queued on raksasa</span></div>
-                                        <div class="guidance-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="{{.SampleSize}}" aria-valuenow="0" aria-label="Waiting for raksasa sync">
+                                        <div class="guidance-progress-head"><strong>Waiting for worker</strong><span>0 / {{.SampleSize}} queued on merah</span></div>
+                                        <div class="guidance-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="{{.SampleSize}}" aria-valuenow="0" aria-label="Waiting for local worker">
                                             <div class="guidance-progress-fill waiting" style="width: 0%"></div>
                                         </div>
                                     </div>
@@ -1233,7 +1319,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                                     <div class="guidance-scan-meta">{{.SampleSize}} random {{.SourceDocument}} entries{{if .RequestedBy}} · requested by {{.RequestedBy}}{{end}}{{if .RequestedAt}} · {{.RequestedAt}}{{end}}</div>
                                     {{if .Notes}}<div class="guidance-scan-meta">{{.Notes}}</div>{{end}}
                                     <div class="guidance-progress">
-                                        <div class="guidance-progress-head"><strong>{{scanBatchProgressPercent .}}% finished</strong><span>{{scanBatchFinishedCount .}} / {{.SelectedCount}} finished on raksasa</span></div>
+                                        <div class="guidance-progress-head"><strong>{{scanBatchProgressPercent .}}% finished</strong><span>{{scanBatchFinishedCount .}} / {{.SelectedCount}} finished on raksasa export</span></div>
                                         <div class="guidance-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="{{.SelectedCount}}" aria-valuenow="{{scanBatchFinishedCount .}}" aria-label="Scan batch progress">
                                             <div class="guidance-progress-fill" style="width: {{scanBatchProgressPercent .}}%"></div>
                                         </div>
@@ -1259,7 +1345,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                         <div class="guidance-scan-results">
                             <div class="guidance-scan-results-head">
                                 <strong>Non-zero scan evidence</strong>
-                                <span>Showing latest protected hits from the indexed scan database.</span>
+                                <span>Showing latest protected hits from local urgent scans and the indexed scan database.</span>
                             </div>
                             <div class="guidance-scan-table-wrap">
                                 <table class="guidance-scan-table">
@@ -1283,7 +1369,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                                         </tr>
                                         {{else}}
                                         <tr data-scan-empty>
-                                            <td colspan="5">No non-zero scan results exported for this rule yet.</td>
+                                            <td colspan="5">No non-zero scan results for this rule yet.</td>
                                         </tr>
                                         {{end}}
                                     </tbody>
@@ -1688,7 +1774,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                     var row = document.createElement("div");
                     row.className = "guidance-scan-row pending";
                     var strong = document.createElement("strong");
-                    appendText(strong, "Pending sync to raksasa");
+                    appendText(strong, "Queued locally");
                     row.appendChild(strong);
 
                     var bits = [
@@ -1702,8 +1788,8 @@ const guidanceTemplate = `<!DOCTYPE html>
                     }
                     row.appendChild(scanMeta(bits.join(" · ")));
                     row.appendChild(createProgress(
-                        "Waiting for sync",
-                        "0 / " + String(request.sample_size || 100) + " queued on raksasa",
+                        "Waiting for worker",
+                        "0 / " + String(request.sample_size || 100) + " queued on merah",
                         0,
                         "waiting",
                         request.sample_size || 100,
@@ -1713,6 +1799,87 @@ const guidanceTemplate = `<!DOCTYPE html>
                         row.appendChild(scanMeta(request.notes));
                     }
                     container.appendChild(row);
+                });
+            }
+
+            function renderUrgentJobs(container, jobs) {
+                if (!container) {
+                    return;
+                }
+                clearChildren(container);
+                (jobs || []).forEach(function (job) {
+                    var details = document.createElement("details");
+                    details.className = "guidance-scan-row";
+                    details.open = true;
+
+                    var summary = document.createElement("summary");
+                    var strong = document.createElement("strong");
+                    appendText(strong, "Urgent scan " + String(job.id || ""));
+                    summary.appendChild(strong);
+                    var statusCounts = job.status_counts || {};
+                    var resultCounts = job.result_counts || {};
+                    appendText(
+                        summary,
+                        " · " + (job.status || "pending") +
+                            " · " + String(statusCounts.completed || 0) +
+                            " / " + String(job.selected_count || 0) +
+                            " completed · " + String(resultCounts.matched || 0) +
+                            " matched · " + String(resultCounts.uncertain || 0) + " uncertain"
+                    );
+                    details.appendChild(summary);
+
+                    var metaBits = [
+                        String(job.sample_size || 100) + " random " + (job.source_document || "meineke") + " entries"
+                    ];
+                    if (job.requested_by) {
+                        metaBits.push("requested by " + job.requested_by);
+                    }
+                    if (job.created_at) {
+                        metaBits.push(job.created_at);
+                    }
+                    if (job.pid) {
+                        metaBits.push("pid " + String(job.pid));
+                    }
+                    details.appendChild(scanMeta(metaBits.join(" · ")));
+                    if (job.heartbeat_at) {
+                        details.appendChild(scanMeta("Heartbeat " + job.heartbeat_at));
+                    }
+                    if (job.error_message) {
+                        details.appendChild(scanMeta(job.error_message));
+                    }
+                    if (job.notes) {
+                        details.appendChild(scanMeta(job.notes));
+                    }
+
+                    var selectedCount = Number(job.selected_count || statusCounts.total || job.sample_size || 0);
+                    var finishedCount = Number(statusCounts.completed || 0) +
+                        Number(statusCounts.failed || 0) +
+                        Number(statusCounts.cancelled || 0);
+                    var progressPercent = selectedCount > 0 ? (finishedCount * 100 / selectedCount) : 0;
+                    details.appendChild(createProgress(
+                        String(clampPercent(progressPercent)) + "% finished",
+                        String(finishedCount) + " / " + String(selectedCount) + " finished on merah",
+                        progressPercent,
+                        "",
+                        selectedCount || 100,
+                        finishedCount
+                    ));
+
+                    var counts = document.createElement("div");
+                    counts.className = "guidance-scan-counts";
+                    counts.appendChild(createCountSpan("Queued", statusCounts.pending));
+                    counts.appendChild(createCountSpan("Running", statusCounts.running));
+                    counts.appendChild(createCountSpan("Completed", statusCounts.completed));
+                    counts.appendChild(createCountSpan("Failed", statusCounts.failed));
+                    counts.appendChild(createCountSpan("Matched", resultCounts.matched));
+                    counts.appendChild(createCountSpan("Not matched", resultCounts.not_matched));
+                    counts.appendChild(createCountSpan("Uncertain", resultCounts.uncertain));
+                    counts.appendChild(createCountSpan("Tokens", job.tokens_used));
+                    details.appendChild(counts);
+                    if (job.models && job.models.length) {
+                        details.appendChild(scanMeta("Models: " + job.models.join(", ")));
+                    }
+                    container.appendChild(details);
                 });
             }
 
@@ -1761,7 +1928,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                     var progressPercent = selectedCount > 0 ? (finishedCount * 100 / selectedCount) : 0;
                     details.appendChild(createProgress(
                         String(clampPercent(progressPercent)) + "% finished",
-                        String(finishedCount) + " / " + String(selectedCount) + " finished on raksasa",
+                        String(finishedCount) + " / " + String(selectedCount) + " finished on raksasa export",
                         progressPercent,
                         "",
                         selectedCount || 100,
@@ -1799,7 +1966,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                     emptyRow.setAttribute("data-scan-empty", "1");
                     var emptyCell = document.createElement("td");
                     emptyCell.colSpan = 5;
-                    appendText(emptyCell, "No non-zero scan results exported for this rule yet.");
+                    appendText(emptyCell, "No non-zero scan results for this rule yet.");
                     emptyRow.appendChild(emptyCell);
                     body.appendChild(emptyRow);
                     return;
@@ -1843,6 +2010,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                 }
                 var evidence = payload.evidence || {};
                 var pendingRequests = payload.pending_requests || [];
+                var urgentJobs = payload.urgent_jobs || [];
                 var total = panel.querySelector("[data-scan-total-count]");
                 var zero = panel.querySelector("[data-scan-zero-count]");
                 var nonzero = panel.querySelector("[data-scan-nonzero-count]");
@@ -1857,18 +2025,23 @@ const guidanceTemplate = `<!DOCTYPE html>
                     nonzero.textContent = String(evidence.nonzero_count || 0);
                 }
                 if (last) {
-                    if (pendingRequests.length && !evidence.has_active_batch) {
-                        last.textContent = "Waiting for raksasa sync";
+                    if (urgentJobs.length) {
+                        last.textContent = "Local urgent scan active";
+                    } else if (pendingRequests.length && !evidence.has_active_batch) {
+                        last.textContent = "Queued locally";
                     } else {
-                        last.textContent = evidence.last_scanned_at ? "Last scan " + evidence.last_scanned_at : "No exported scan results yet";
+                        last.textContent = evidence.last_scanned_at ? "Last scan " + evidence.last_scanned_at : "No scan results yet";
                     }
                 }
+                renderUrgentJobs(panel.querySelector("[data-scan-urgent-jobs]"), urgentJobs);
                 renderPendingRequests(panel.querySelector("[data-scan-pending]"), pendingRequests);
                 renderBatches(panel.querySelector("[data-scan-batches]"), evidence.batches || []);
                 renderNonzeroRows(panel, evidence);
                 panel.setAttribute(
                     "data-scan-active",
-                    (pendingRequests.length || evidence.has_active_batch) ? "1" : ""
+                    (urgentJobs.some(function (job) {
+                        return job.status === "pending" || job.status === "running";
+                    }) || pendingRequests.length || evidence.has_active_batch) ? "1" : ""
                 );
             }
 

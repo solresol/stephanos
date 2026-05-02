@@ -127,7 +127,7 @@ func main() {
 			strings.EqualFold(scanIncludeQuarantinedRaw, "true") ||
 			strings.EqualFold(scanIncludeQuarantinedRaw, "on")
 
-		err = InsertTranslationGuidanceScanRequest(
+		scanRequestID, err := InsertTranslationGuidanceScanRequest(
 			db,
 			TranslationGuidanceScanRequest{
 				TargetRuleKey:      scanTargetRuleKey,
@@ -143,13 +143,35 @@ func main() {
 			showGuidanceErrorAndExit(fmt.Sprintf("Failed to save scan request: %v", err), "formula")
 			return
 		}
+		jobID, err := CreateUrgentGuidanceScanJob(
+			db,
+			scanRequestID,
+			TranslationGuidanceScanRequest{
+				TargetRuleKey:      scanTargetRuleKey,
+				RuleLabel:          scanRuleLabel,
+				SampleSize:         scanSampleSize,
+				SourceDocument:     scanSourceDocument,
+				IncludeQuarantined: includeQuarantined,
+				Notes:              scanNotes,
+			},
+			remoteUser,
+		)
+		if err != nil {
+			showGuidanceErrorAndExit(fmt.Sprintf("Failed to create urgent scan job: %v", err), "formula")
+			return
+		}
+		if err := StartUrgentGuidanceScanWorker(config, jobID); err != nil {
+			log.Printf("Failed to start urgent guidance scan worker for job %d: %v", jobID, err)
+		}
 
 		writeGuidanceRedirect("formula", scanTargetRuleKey)
 		log.Printf(
-			"Guidance scan request saved: rule_key=%s, sample_size=%d, user=%s",
+			"Guidance scan request saved: rule_key=%s, sample_size=%d, user=%s, request_id=%d, urgent_job_id=%d",
 			scanTargetRuleKey,
 			normalizeGuidanceScanSampleSize(scanSampleSize),
 			remoteUser,
+			scanRequestID,
+			jobID,
 		)
 		return
 	}

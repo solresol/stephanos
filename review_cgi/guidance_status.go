@@ -11,11 +11,12 @@ import (
 )
 
 type GuidanceScanStatusResponse struct {
-	RuleKey         string                           `json:"rule_key"`
-	GeneratedAt     string                           `json:"generated_at"`
-	PendingRequests []TranslationGuidanceScanRequest `json:"pending_requests"`
-	Evidence        GuidanceScanEvidence             `json:"evidence"`
-	Error           string                           `json:"error,omitempty"`
+	RuleKey         string                             `json:"rule_key"`
+	GeneratedAt     string                             `json:"generated_at"`
+	PendingRequests []TranslationGuidanceScanRequest   `json:"pending_requests"`
+	UrgentJobs      []TranslationGuidanceUrgentScanJob `json:"urgent_jobs"`
+	Evidence        GuidanceScanEvidence               `json:"evidence"`
+	Error           string                             `json:"error,omitempty"`
 }
 
 func writeGuidanceStatusJSON(statusLine string, payload GuidanceScanStatusResponse) {
@@ -66,6 +67,14 @@ func main() {
 		writeGuidanceStatusJSON("500 Internal Server Error", payload)
 		return
 	}
+	urgentJobs, err := FetchUrgentGuidanceScanJobs(db, ruleKey, 20)
+	if err != nil {
+		payload.Error = "failed to load local urgent scan jobs"
+		log.Printf("Failed to load urgent scan jobs for %s: %v", ruleKey, err)
+		writeGuidanceStatusJSON("500 Internal Server Error", payload)
+		return
+	}
+	payload.UrgentJobs = urgentJobs
 
 	scanDB, err := OpenReadOnlyDatabaseIfExists(config.GuidanceScanDBPath)
 	if err != nil {
@@ -80,7 +89,16 @@ func main() {
 			return
 		}
 	}
+	localEvidence, err := FetchUrgentGuidanceScanEvidence(db, ruleKey, 100)
+	if err != nil {
+		payload.Error = "failed to load local urgent scan evidence"
+		log.Printf("Failed to load urgent scan evidence for %s: %v", ruleKey, err)
+		writeGuidanceStatusJSON("500 Internal Server Error", payload)
+		return
+	}
+	payload.Evidence = MergeGuidanceScanEvidence(payload.Evidence, localEvidence, 100)
 
 	payload.PendingRequests = UnsyncedGuidanceScanRequestsForRule(ruleKey, requests, payload.Evidence)
+	payload.PendingRequests = FilterGuidanceScanRequestsWithoutUrgentJobs(payload.PendingRequests, urgentJobs)
 	writeGuidanceStatusJSON("", payload)
 }
