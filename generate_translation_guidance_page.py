@@ -19,12 +19,14 @@ KIND_LABELS = {
     "gloss": "Glosses",
     "formula": "Formulae",
     "proper_noun": "Proper Nouns",
+    "contextual_bias": "Vocabulary Bias",
 }
 
 KIND_TABLE_LABELS = {
     "gloss": "Gloss",
     "formula": "Formula",
     "proper_noun": "Proper noun",
+    "contextual_bias": "Vocabulary bias",
 }
 
 STATUS_LABELS = {
@@ -80,6 +82,26 @@ def fetch_rules() -> list[dict[str, object]]:
         """
     )
     has_lifecycle_stage = cur.fetchone() is not None
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'translation_guidance_rules'
+          AND column_name = 'context_condition'
+        """
+    )
+    has_context_condition = cur.fetchone() is not None
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'translation_guidance_rules'
+          AND column_name = 'bias_strength'
+        """
+    )
+    has_bias_strength = cur.fetchone() is not None
 
     match_join = ""
     match_select = "0 AS match_count, 0 AS uncertain_count"
@@ -128,6 +150,16 @@ def fetch_rules() -> list[dict[str, object]]:
             END AS lifecycle_stage
         """
     )
+    context_condition_select = (
+        "COALESCE(r.context_condition, '') AS context_condition"
+        if has_context_condition
+        else "'' AS context_condition"
+    )
+    bias_strength_select = (
+        "COALESCE(r.bias_strength, 'normal') AS bias_strength"
+        if has_bias_strength
+        else "'normal' AS bias_strength"
+    )
 
     cur.execute(
         f"""
@@ -147,6 +179,8 @@ def fetch_rules() -> list[dict[str, object]]:
             COALESCE(r.preferred_translation, '') AS preferred_translation,
             COALESCE(r.word_class, '') AS word_class,
             {semantic_domain_select},
+            {context_condition_select},
+            {bias_strength_select},
             {lifecycle_select},
             COALESCE(r.status, '') AS status,
             COALESCE(r.application_mode, '') AS application_mode,
@@ -165,7 +199,8 @@ def fetch_rules() -> list[dict[str, object]]:
                 WHEN 'gloss' THEN 0
                 WHEN 'formula' THEN 1
                 WHEN 'proper_noun' THEN 2
-                ELSE 3
+                WHEN 'contextual_bias' THEN 3
+                ELSE 4
             END,
             r.status = 'retired',
             r.label
@@ -186,16 +221,18 @@ def fetch_rules() -> list[dict[str, object]]:
                 "preferred_translation": row[5] or "",
                 "word_class": row[6] or "",
                 "semantic_domain": row[7] or "",
-                "lifecycle_stage": row[8] or "",
-                "status": row[9] or "",
-                "application_mode": row[10] or "",
-                "citations_text": row[11] or "",
-                "notes": row[12] or "",
-                "updated_at": row[13] or "",
-                "revision_number": int(row[14] or 0),
-                "match_count": int(row[15] or 0),
-                "uncertain_count": int(row[16] or 0),
-                "backlog_count": int(row[17] or 0),
+                "context_condition": row[8] or "",
+                "bias_strength": row[9] or "normal",
+                "lifecycle_stage": row[10] or "",
+                "status": row[11] or "",
+                "application_mode": row[12] or "",
+                "citations_text": row[13] or "",
+                "notes": row[14] or "",
+                "updated_at": row[15] or "",
+                "revision_number": int(row[16] or 0),
+                "match_count": int(row[17] or 0),
+                "uncertain_count": int(row[18] or 0),
+                "backlog_count": int(row[19] or 0),
             }
         )
     return rules
@@ -248,6 +285,8 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                     "preferred_translation",
                     "word_class",
                     "semantic_domain",
+                    "context_condition",
+                    "bias_strength",
                     "lifecycle_stage",
                     "citations_text",
                     "notes",
@@ -270,6 +309,8 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                 data-preferred="{esc(rule['preferred_translation'])}"
                 data-word-class="{esc(rule['word_class'])}"
                 data-domain="{esc(rule['semantic_domain'])}"
+                data-context="{esc(rule['context_condition'])}"
+                data-bias-strength="{esc(rule['bias_strength'])}"
                 data-citations="{esc(rule['citations_text'])}"
                 data-notes="{esc(rule['notes'])}"
                 data-revision="{int(rule['revision_number'])}"
@@ -286,6 +327,8 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                 {render_table_cell(rule["preferred_translation"], css_class="compact")}
                 {render_table_cell(rule["word_class"], css_class="compact")}
                 {render_table_cell(rule["semantic_domain"], css_class="compact")}
+                {render_table_cell(rule["context_condition"], css_class="compact")}
+                {render_table_cell(rule["bias_strength"], css_class="compact")}
                 {render_table_cell(rule["citations_text"], css_class="compact")}
                 {render_table_cell(rule["notes"], css_class="compact wide")}
                 <td class="numeric">{int(rule['revision_number'])}</td>
@@ -316,6 +359,7 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                         <option value="gloss">Gloss</option>
                         <option value="formula">Formula</option>
                         <option value="proper_noun">Proper noun</option>
+                        <option value="contextual_bias">Vocabulary bias</option>
                     </select>
                 </div>
                 <div>
@@ -355,6 +399,10 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                     <label for="guidance_table_domain">Semantic domain</label>
                     <input type="text" id="guidance_table_domain" placeholder="terrain, political">
                 </div>
+                <div>
+                    <label for="guidance_table_context">Context</label>
+                    <input type="text" id="guidance_table_context" placeholder="metalinguistic, dialect">
+                </div>
             </div>
             <div class="guidance-table-wrap">
                 <table class="guidance-table" id="guidance_rule_table">
@@ -369,6 +417,8 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                             <th class="sortable" data-sort="preferred">Preferred</th>
                             <th class="sortable" data-sort="word-class">Word class</th>
                             <th class="sortable" data-sort="domain">Semantic domain</th>
+                            <th class="sortable" data-sort="context">Context condition</th>
+                            <th class="sortable" data-sort="bias-strength">Bias</th>
                             <th class="sortable" data-sort="citations">Citations</th>
                             <th class="sortable" data-sort="notes">Notes</th>
                             <th class="sortable numeric" data-sort="revision">Revision</th>
@@ -499,7 +549,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
             align-items: end;
             display: grid;
             gap: 8px;
-            grid-template-columns: minmax(220px, 1.7fr) repeat(6, minmax(118px, 1fr));
+            grid-template-columns: minmax(220px, 1.7fr) repeat(7, minmax(118px, 1fr));
             margin-bottom: 8px;
         }}
         .guidance-table-controls label {{
@@ -528,7 +578,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
         .guidance-table {{
             border-collapse: collapse;
             font-size: 0.82rem;
-            min-width: 2260px;
+            min-width: 2460px;
             table-layout: fixed;
             width: 100%;
         }}
@@ -619,14 +669,22 @@ def build_html(rules: list[dict[str, object]]) -> str:
         }}
         .guidance-table th:nth-child(10),
         .guidance-table td:nth-child(10) {{
-            width: 180px;
+            width: 260px;
         }}
         .guidance-table th:nth-child(11),
         .guidance-table td:nth-child(11) {{
+            width: 90px;
+        }}
+        .guidance-table th:nth-child(12),
+        .guidance-table td:nth-child(12) {{
+            width: 260px;
+        }}
+        .guidance-table th:nth-child(13),
+        .guidance-table td:nth-child(13) {{
             width: 320px;
         }}
-        .guidance-table th:nth-child(15),
-        .guidance-table td:nth-child(15) {{
+        .guidance-table th:nth-child(17),
+        .guidance-table td:nth-child(17) {{
             width: 210px;
         }}
         .empty-state,
@@ -659,7 +717,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
             <h1>Translation Guidance</h1>
             <p>
                 Public read-only view of the translation guidance rules currently tracked for Stephanos:
-                gloss preferences, recurring formulae, and proper-noun transliterations. These rules are
+                gloss preferences, recurring formulae, proper-noun transliterations, and vocabulary-bias rules. These rules are
                 edited through the protected review workflow and stored in PostgreSQL as first-class project data.
             </p>
             <div class="hero-links">
@@ -687,6 +745,10 @@ def build_html(rules: list[dict[str, object]]) -> str:
                 <div>Proper nouns</div>
                 <div class="count">{summary['proper_noun']['active']}</div>
             </div>
+            <div class="summary-card">
+                <div>Vocabulary bias</div>
+                <div class="count">{summary['contextual_bias']['active']}</div>
+            </div>
         </section>
 
         {table_html}
@@ -707,7 +769,8 @@ def build_html(rules: list[dict[str, object]]) -> str:
                 stage: document.getElementById("guidance_table_stage"),
                 mode: document.getElementById("guidance_table_mode"),
                 wordClass: document.getElementById("guidance_table_word_class"),
-                domain: document.getElementById("guidance_table_domain")
+                domain: document.getElementById("guidance_table_domain"),
+                context: document.getElementById("guidance_table_context")
             }};
             var sortState = {{ key: "kind", direction: "asc" }};
 
@@ -720,7 +783,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
                     return Number(row.dataset[key] || 0);
                 }}
                 if (key === "kind") {{
-                    var kindOrder = {{ gloss: 0, formula: 1, proper_noun: 2 }};
+                    var kindOrder = {{ gloss: 0, formula: 1, proper_noun: 2, contextual_bias: 3 }};
                     var kind = text(row.dataset.kind);
                     return Object.prototype.hasOwnProperty.call(kindOrder, kind) ? kindOrder[kind] : 99;
                 }}
@@ -734,6 +797,11 @@ def build_html(rules: list[dict[str, object]]) -> str:
                 }}
                 if (key === "word-class") {{
                     return text(row.dataset.wordClass);
+                }}
+                if (key === "bias-strength") {{
+                    var strengthOrder = {{ weak: 0, normal: 1, strong: 2 }};
+                    var strength = text(row.dataset.biasStrength);
+                    return Object.prototype.hasOwnProperty.call(strengthOrder, strength) ? strengthOrder[strength] : 99;
                 }}
                 return text(row.dataset[key]);
             }}
@@ -771,6 +839,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
                 var mode = text(controls.mode && controls.mode.value);
                 var wordClass = text(controls.wordClass && controls.wordClass.value);
                 var domain = text(controls.domain && controls.domain.value);
+                var context = text(controls.context && controls.context.value);
                 var shown = 0;
 
                 rows.forEach(function (row) {{
@@ -794,6 +863,9 @@ def build_html(rules: list[dict[str, object]]) -> str:
                         matches = false;
                     }}
                     if (domain && text(row.dataset.domain).indexOf(domain) === -1) {{
+                        matches = false;
+                    }}
+                    if (context && text(row.dataset.context).indexOf(context) === -1) {{
                         matches = false;
                     }}
                     row.hidden = !matches;

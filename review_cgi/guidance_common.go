@@ -19,6 +19,8 @@ type TranslationGuidanceRule struct {
 	PreferredTranslation string `json:"preferred_translation"`
 	WordClass            string `json:"word_class"`
 	SemanticDomain       string `json:"semantic_domain"`
+	ContextCondition     string `json:"context_condition"`
+	BiasStrength         string `json:"bias_strength"`
 	LifecycleStage       string `json:"lifecycle_stage"`
 	Status               string `json:"status"`
 	ApplicationMode      string `json:"application_mode"`
@@ -111,6 +113,8 @@ type TranslationGuidanceAction struct {
 	PreferredTranslation string
 	WordClass            string
 	SemanticDomain       string
+	ContextCondition     string
+	BiasStrength         string
 	LifecycleStage       string
 	Status               string
 	ApplicationMode      string
@@ -138,6 +142,7 @@ func LoadGuidanceRules(filepath string) ([]TranslationGuidanceRule, error) {
 		rule := &data.TranslationGuidanceRules[i]
 		rule.Status = normalizeGuidanceStatus(rule.Kind, rule.Status)
 		rule.ApplicationMode = normalizeGuidanceApplicationMode(rule.Kind, rule.ApplicationMode)
+		rule.BiasStrength = normalizeGuidanceBiasStrength(rule.BiasStrength)
 		rule.LifecycleStage = normalizeGuidanceLifecycleStage(rule.Status, rule.PreferredTranslation, rule.LifecycleStage)
 	}
 	sortGuidanceRules(data.TranslationGuidanceRules)
@@ -153,11 +158,13 @@ func EnsureGuidanceSchema(db *sql.DB) error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			target_rule_key TEXT NOT NULL,
 			action TEXT NOT NULL CHECK (action IN ('create', 'update', 'retire', 'reactivate')),
-			kind TEXT NOT NULL CHECK (kind IN ('gloss', 'formula', 'proper_noun')),
+			kind TEXT NOT NULL CHECK (kind IN ('gloss', 'formula', 'proper_noun', 'contextual_bias')),
 			label TEXT NOT NULL,
 			preferred_translation TEXT,
 			word_class TEXT,
 			semantic_domain TEXT,
+			context_condition TEXT,
+			bias_strength TEXT NOT NULL DEFAULT 'normal' CHECK (bias_strength IN ('weak', 'normal', 'strong')),
 			lifecycle_stage TEXT NOT NULL DEFAULT 'guidance' CHECK (lifecycle_stage IN ('investigate', 'recognizer', 'guidance', 'inactive')),
 			status TEXT NOT NULL CHECK (status IN ('in_progress', 'settled', 'unsure', 'retired')),
 			application_mode TEXT NOT NULL CHECK (application_mode IN ('advisory', 'required', 'replace')),
@@ -189,7 +196,16 @@ func EnsureGuidanceSchema(db *sql.DB) error {
 	if err := ensureSQLiteColumn(db, "translation_guidance_actions", "semantic_domain", "TEXT"); err != nil {
 		return err
 	}
+	if err := ensureSQLiteColumn(db, "translation_guidance_actions", "context_condition", "TEXT"); err != nil {
+		return err
+	}
+	if err := ensureSQLiteColumn(db, "translation_guidance_actions", "bias_strength", "TEXT NOT NULL DEFAULT 'normal'"); err != nil {
+		return err
+	}
 	if err := ensureSQLiteColumn(db, "translation_guidance_actions", "lifecycle_stage", "TEXT NOT NULL DEFAULT 'guidance'"); err != nil {
+		return err
+	}
+	if err := ensureTranslationGuidanceActionsKindSupportsContextualBias(db); err != nil {
 		return err
 	}
 	if err := ensureSQLiteColumn(db, "translation_guidance_scan_requests", "rule_label", "TEXT"); err != nil {
@@ -199,6 +215,101 @@ func EnsureGuidanceSchema(db *sql.DB) error {
 		return err
 	}
 	return nil
+}
+
+func ensureTranslationGuidanceActionsKindSupportsContextualBias(db *sql.DB) error {
+	var createSQL string
+	err := db.QueryRow(
+		"SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = 'translation_guidance_actions'",
+	).Scan(&createSQL)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(createSQL, "contextual_bias") {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	statements := []string{
+		"DROP TABLE IF EXISTS translation_guidance_actions_old_contextual_bias",
+		"ALTER TABLE translation_guidance_actions RENAME TO translation_guidance_actions_old_contextual_bias",
+		`CREATE TABLE translation_guidance_actions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			target_rule_key TEXT NOT NULL,
+			action TEXT NOT NULL CHECK (action IN ('create', 'update', 'retire', 'reactivate')),
+			kind TEXT NOT NULL CHECK (kind IN ('gloss', 'formula', 'proper_noun', 'contextual_bias')),
+			label TEXT NOT NULL,
+			preferred_translation TEXT,
+			word_class TEXT,
+			semantic_domain TEXT,
+			context_condition TEXT,
+			bias_strength TEXT NOT NULL DEFAULT 'normal' CHECK (bias_strength IN ('weak', 'normal', 'strong')),
+			lifecycle_stage TEXT NOT NULL DEFAULT 'guidance' CHECK (lifecycle_stage IN ('investigate', 'recognizer', 'guidance', 'inactive')),
+			status TEXT NOT NULL CHECK (status IN ('in_progress', 'settled', 'unsure', 'retired')),
+			application_mode TEXT NOT NULL CHECK (application_mode IN ('advisory', 'required', 'replace')),
+			citations_text TEXT,
+			notes TEXT,
+			rule_code TEXT,
+			reviewer_username TEXT,
+			reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`INSERT INTO translation_guidance_actions (
+			id,
+			target_rule_key,
+			action,
+			kind,
+			label,
+			preferred_translation,
+			word_class,
+			semantic_domain,
+			context_condition,
+			bias_strength,
+			lifecycle_stage,
+			status,
+			application_mode,
+			citations_text,
+			notes,
+			rule_code,
+			reviewer_username,
+			reviewed_at
+		)
+		SELECT
+			id,
+			target_rule_key,
+			action,
+			kind,
+			label,
+			preferred_translation,
+			word_class,
+			semantic_domain,
+			context_condition,
+			CASE
+				WHEN bias_strength IN ('weak', 'normal', 'strong') THEN bias_strength
+				ELSE 'normal'
+			END,
+			lifecycle_stage,
+			status,
+			application_mode,
+			citations_text,
+			notes,
+			rule_code,
+			reviewer_username,
+			reviewed_at
+		FROM translation_guidance_actions_old_contextual_bias`,
+		"DROP TABLE translation_guidance_actions_old_contextual_bias",
+		"CREATE INDEX IF NOT EXISTS idx_translation_guidance_actions_rule ON translation_guidance_actions(target_rule_key, reviewed_at, id)",
+	}
+	for _, statement := range statements {
+		if _, err := tx.Exec(statement); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func ensureSQLiteColumn(db *sql.DB, tableName string, columnName string, columnType string) error {
@@ -237,6 +348,8 @@ func normalizeGuidanceKind(kind string) string {
 		return "formula"
 	case "proper_noun":
 		return "proper_noun"
+	case "contextual_bias":
+		return "contextual_bias"
 	default:
 		return ""
 	}
@@ -272,6 +385,8 @@ func defaultGuidanceApplicationMode(kind string) string {
 		return "required"
 	case "proper_noun":
 		return "replace"
+	case "contextual_bias":
+		return "advisory"
 	default:
 		return "advisory"
 	}
@@ -334,6 +449,17 @@ func normalizeGuidanceAction(action string) string {
 		return "reactivate"
 	default:
 		return ""
+	}
+}
+
+func normalizeGuidanceBiasStrength(strength string) string {
+	switch strings.TrimSpace(strings.ToLower(strength)) {
+	case "weak":
+		return "weak"
+	case "strong":
+		return "strong"
+	default:
+		return "normal"
 	}
 }
 
@@ -469,6 +595,8 @@ func InsertTranslationGuidanceAction(
 	action.PreferredTranslation = strings.TrimSpace(action.PreferredTranslation)
 	action.WordClass = strings.TrimSpace(action.WordClass)
 	action.SemanticDomain = strings.TrimSpace(action.SemanticDomain)
+	action.ContextCondition = strings.TrimSpace(action.ContextCondition)
+	action.BiasStrength = normalizeGuidanceBiasStrength(action.BiasStrength)
 	action.CitationsText = strings.TrimSpace(action.CitationsText)
 	action.Notes = strings.TrimSpace(action.Notes)
 	action.RuleCode = strings.TrimSpace(action.RuleCode)
@@ -492,6 +620,9 @@ func InsertTranslationGuidanceAction(
 		}
 		if action.LifecycleStage == "guidance" && action.PreferredTranslation == "" {
 			return "", fmt.Errorf("translation-guidance lifecycle requires a preferred English translation")
+		}
+		if action.Kind == "contextual_bias" && action.ContextCondition == "" {
+			return "", fmt.Errorf("vocabulary-bias rules require a context condition")
 		}
 	case "retire":
 		if action.TargetRuleKey == "" {
@@ -520,6 +651,8 @@ func InsertTranslationGuidanceAction(
 			preferred_translation,
 			word_class,
 			semantic_domain,
+			context_condition,
+			bias_strength,
 			lifecycle_stage,
 			status,
 			application_mode,
@@ -528,7 +661,7 @@ func InsertTranslationGuidanceAction(
 			rule_code,
 			reviewer_username
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
 		action.TargetRuleKey,
 		action.Action,
@@ -537,6 +670,8 @@ func InsertTranslationGuidanceAction(
 		action.PreferredTranslation,
 		action.WordClass,
 		action.SemanticDomain,
+		action.ContextCondition,
+		action.BiasStrength,
 		action.LifecycleStage,
 		action.Status,
 		action.ApplicationMode,
@@ -586,6 +721,8 @@ func FetchTranslationGuidanceActions(db *sql.DB) ([]TranslationGuidanceAction, e
 			COALESCE(preferred_translation, ''),
 			COALESCE(word_class, ''),
 			COALESCE(semantic_domain, ''),
+			COALESCE(context_condition, ''),
+			COALESCE(bias_strength, 'normal'),
 			COALESCE(lifecycle_stage, ''),
 			COALESCE(status, ''),
 			COALESCE(application_mode, ''),
@@ -615,6 +752,8 @@ func FetchTranslationGuidanceActions(db *sql.DB) ([]TranslationGuidanceAction, e
 			&action.PreferredTranslation,
 			&action.WordClass,
 			&action.SemanticDomain,
+			&action.ContextCondition,
+			&action.BiasStrength,
 			&action.LifecycleStage,
 			&action.Status,
 			&action.ApplicationMode,
@@ -668,6 +807,8 @@ func ApplyTranslationGuidanceActions(
 			rule.PreferredTranslation = action.PreferredTranslation
 			rule.WordClass = action.WordClass
 			rule.SemanticDomain = action.SemanticDomain
+			rule.ContextCondition = action.ContextCondition
+			rule.BiasStrength = normalizeGuidanceBiasStrength(action.BiasStrength)
 			rule.Status = normalizeGuidanceStatus(rule.Kind, action.Status)
 			rule.ApplicationMode = normalizeGuidanceApplicationMode(rule.Kind, action.ApplicationMode)
 			rule.LifecycleStage = normalizeGuidanceLifecycleStage(rule.Status, rule.PreferredTranslation, action.LifecycleStage)
@@ -689,6 +830,12 @@ func ApplyTranslationGuidanceActions(
 			}
 			if action.SemanticDomain != "" {
 				rule.SemanticDomain = action.SemanticDomain
+			}
+			if action.ContextCondition != "" {
+				rule.ContextCondition = action.ContextCondition
+			}
+			if action.BiasStrength != "" {
+				rule.BiasStrength = normalizeGuidanceBiasStrength(action.BiasStrength)
 			}
 			if action.ApplicationMode != "" {
 				rule.ApplicationMode = action.ApplicationMode
@@ -714,6 +861,7 @@ func ApplyTranslationGuidanceActions(
 			rule.Status = normalizeGuidanceStatus(rule.Kind, "")
 		}
 		rule.LifecycleStage = normalizeGuidanceLifecycleStage(rule.Status, rule.PreferredTranslation, rule.LifecycleStage)
+		rule.BiasStrength = normalizeGuidanceBiasStrength(rule.BiasStrength)
 		rule.PendingImport = true
 		rule.LastChangedBy = strings.TrimSpace(action.Reviewer)
 		rule.LastChangedAt = strings.TrimSpace(action.ReviewedAt)
@@ -731,6 +879,7 @@ func ApplyTranslationGuidanceActions(
 		rule.Status = normalizeGuidanceStatus(rule.Kind, rule.Status)
 		rule.ApplicationMode = normalizeGuidanceApplicationMode(rule.Kind, rule.ApplicationMode)
 		rule.LifecycleStage = normalizeGuidanceLifecycleStage(rule.Status, rule.PreferredTranslation, rule.LifecycleStage)
+		rule.BiasStrength = normalizeGuidanceBiasStrength(rule.BiasStrength)
 		result = append(result, rule)
 	}
 	sortGuidanceRules(result)
@@ -810,6 +959,8 @@ func guidanceKindOrder(kind string) int {
 		return 1
 	case "proper_noun":
 		return 2
+	case "contextual_bias":
+		return 3
 	default:
 		return 9
 	}

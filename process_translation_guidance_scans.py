@@ -227,6 +227,74 @@ def call_formula_model(
     )
 
 
+def call_contextual_bias_model(
+    client: OpenAI,
+    *,
+    model: str,
+    lemma: str,
+    source_text: str,
+    rule_label: str,
+    preferred_translation: str,
+    context_condition: str,
+    bias_strength: str,
+    notes: str,
+) -> tuple[dict[str, object], int]:
+    response = client.chat.completions.create(
+        model=model,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You judge whether a Stephanos entry matches the context condition for a "
+                    "vocabulary-bias translation guidance rule. The Greek term or phrase has "
+                    "already been found by a lexical prefilter; decide only whether the local "
+                    "context satisfies the stated condition. Return JSON only with keys "
+                    "match_status, confidence, evidence_text, notes. match_status must be "
+                    "matched, not_matched, or uncertain. confidence must be high, medium, or low."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Headword: {lemma}\n"
+                    f"Vocabulary term/phrase: {rule_label}\n"
+                    f"Context condition: {context_condition}\n"
+                    f"Preferred bias: {preferred_translation}\n"
+                    f"Bias strength: {bias_strength or 'normal'}\n"
+                    f"Rule notes: {notes}\n\n"
+                    f"Source Greek text:\n{source_text}"
+                ),
+            },
+        ],
+    )
+    tokens_used = response.usage.total_tokens if response.usage else 0
+    payload = json.loads(response.choices[0].message.content or "{}")
+    match_status = str(payload.get("match_status") or "uncertain").strip().lower()
+    if match_status not in {"matched", "not_matched", "uncertain"}:
+        match_status = "uncertain"
+    confidence = str(payload.get("confidence") or "low").strip().lower()
+    if confidence not in {"high", "medium", "low"}:
+        confidence = "low"
+    evidence_text = str(payload.get("evidence_text") or "").strip()
+    notes_text = str(payload.get("notes") or "").strip()
+    return (
+        {
+            "match_status": match_status,
+            "occurrence_count": 1 if match_status == "matched" else 0,
+            "confidence": confidence,
+            "evidence_text": evidence_text,
+            "evidence_json": {
+                "method": "contextual_bias_ai_judgement",
+                "context_condition": context_condition,
+                "bias_strength": bias_strength or "normal",
+                "notes": notes_text,
+            },
+        },
+        tokens_used,
+    )
+
+
 def claim_jobs(cur, limit: int) -> list[tuple]:
     lifecycle_filter = (
         "AND COALESCE(r.lifecycle_stage, 'guidance') <> 'inactive'"
@@ -237,6 +305,16 @@ def claim_jobs(cur, limit: int) -> list[tuple]:
         "q.scan_batch_id"
         if column_exists(cur, "translation_guidance_scan_queue", "scan_batch_id")
         else "NULL::integer AS scan_batch_id"
+    )
+    context_condition_select = (
+        "COALESCE(r.context_condition, '') AS context_condition"
+        if column_exists(cur, "translation_guidance_rules", "context_condition")
+        else "'' AS context_condition"
+    )
+    bias_strength_select = (
+        "COALESCE(r.bias_strength, 'normal') AS bias_strength"
+        if column_exists(cur, "translation_guidance_rules", "bias_strength")
+        else "'normal' AS bias_strength"
     )
     cur.execute(
         f"""
@@ -253,6 +331,8 @@ def claim_jobs(cur, limit: int) -> list[tuple]:
                 COALESCE(r.label, '') AS rule_label,
                 COALESCE(r.preferred_translation, '') AS preferred_translation,
                 COALESCE(r.notes, '') AS rule_notes,
+                {context_condition_select},
+                {bias_strength_select},
                 COALESCE(stv.text_body, '') AS source_text,
                 COALESCE(a.lemma, '') AS lemma
             FROM translation_guidance_scan_queue q
@@ -285,6 +365,8 @@ def claim_jobs(cur, limit: int) -> list[tuple]:
             next_jobs.rule_label,
             next_jobs.preferred_translation,
             next_jobs.rule_notes,
+            next_jobs.context_condition,
+            next_jobs.bias_strength,
             next_jobs.source_text,
             next_jobs.lemma
         """,
@@ -483,11 +565,16 @@ def main() -> None:
     parser.add_argument("--delay", type=float, default=0.0)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--daily-token-limit", type=int, default=DEFAULT_DAILY_TOKEN_LIMIT)
-    parser.add_argument("--formula-ai-limit", type=int, default=DEFAULT_FORMULA_AI_LIMIT)
+    parser.add_argument(
+        "--formula-ai-limit",
+        type=int,
+        default=DEFAULT_FORMULA_AI_LIMIT,
+        help="Max AI judgements per run for formula and contextual-bias scans.",
+    )
     args = parser.parse_args()
 
     client = None
-    formula_ai_used = 0
+    guidance_ai_used = 0
     try:
         client = OpenAI(api_key=load_api_key())
     except Exception:
@@ -504,8 +591,8 @@ def main() -> None:
     if not jobs:
         conn.close()
         print("No pending guidance scans.")
-        print(f"Formula AI model: {args.model}")
-        print(f"Formula AI tokens used today: {tokens_today:,} / {args.daily_token_limit:,}")
+        print(f"Guidance AI model: {args.model}")
+        print(f"Guidance AI tokens used today: {tokens_today:,} / {args.daily_token_limit:,}")
         return
 
     completed = failed = 0
@@ -527,10 +614,14 @@ def main() -> None:
             rule_label,
             preferred_translation,
             rule_notes,
+            context_condition,
+            bias_strength,
             source_text,
             lemma,
         ) = job
         try:
+            context_condition = str(context_condition or "").strip()
+            bias_strength = str(bias_strength or "normal").strip() or "normal"
             result = find_deterministic_match(source_text, rule_label)
             needs_formula_ai = (
                 rule_kind == "formula"
@@ -540,12 +631,31 @@ def main() -> None:
                 )
                 and should_escalate_formula(rule_label, source_text)
             )
-            if needs_formula_ai:
-                if formula_ai_used >= args.formula_ai_limit:
+            needs_contextual_bias_ai = False
+            if rule_kind == "contextual_bias":
+                evidence_json = dict(result.get("evidence_json") or {})
+                evidence_json.update(
+                    {
+                        "context_condition": context_condition,
+                        "bias_strength": bias_strength,
+                    }
+                )
+                if result["match_status"] == "matched" and context_condition:
+                    needs_contextual_bias_ai = True
+                elif result["match_status"] == "matched":
+                    evidence_json["method"] = "contextual_bias_lexical_no_context_condition"
+                    result["confidence"] = "medium"
+                else:
+                    evidence_json["method"] = "contextual_bias_lexical_prefilter"
+                result["evidence_json"] = evidence_json
+
+            needs_guidance_ai = needs_formula_ai or needs_contextual_bias_ai
+            if needs_guidance_ai:
+                if guidance_ai_used >= args.formula_ai_limit:
                     defer_job(
                         cur,
                         int(queue_id),
-                        f"Formula AI call limit reached for this run: {formula_ai_used} >= {args.formula_ai_limit}",
+                        f"Guidance AI call limit reached for this run: {guidance_ai_used} >= {args.formula_ai_limit}",
                     )
                     conn.commit()
                     deferred += 1
@@ -560,29 +670,59 @@ def main() -> None:
                     deferred += 1
                     continue
                 if client is not None:
-                    ai_result, tokens_used = call_formula_model(
-                        client,
-                        model=args.model,
-                        lemma=lemma,
-                        source_text=source_text,
-                        rule_label=rule_label,
-                        preferred_translation=preferred_translation,
-                        notes=rule_notes,
-                    )
+                    if needs_contextual_bias_ai:
+                        ai_result, tokens_used = call_contextual_bias_model(
+                            client,
+                            model=args.model,
+                            lemma=lemma,
+                            source_text=source_text,
+                            rule_label=rule_label,
+                            preferred_translation=preferred_translation,
+                            context_condition=context_condition,
+                            bias_strength=bias_strength,
+                            notes=rule_notes,
+                        )
+                        if not ai_result.get("evidence_text") and result.get("evidence_text"):
+                            ai_result["evidence_text"] = result["evidence_text"]
+                        evidence_json = dict(ai_result.get("evidence_json") or {})
+                        evidence_json["lexical_prefilter"] = result.get("evidence_json") or {}
+                        ai_result["evidence_json"] = evidence_json
+                    else:
+                        ai_result, tokens_used = call_formula_model(
+                            client,
+                            model=args.model,
+                            lemma=lemma,
+                            source_text=source_text,
+                            rule_label=rule_label,
+                            preferred_translation=preferred_translation,
+                            notes=rule_notes,
+                        )
                     result = ai_result
                     job_model = args.model
                     job_tokens = int(tokens_used or 0)
-                    formula_ai_used += 1
+                    guidance_ai_used += 1
                     ai_tokens += job_tokens
                 else:
+                    unavailable_method = (
+                        "contextual_bias_ai_unavailable"
+                        if needs_contextual_bias_ai
+                        else "formula_ai_unavailable"
+                    )
+                    unavailable_notes = (
+                        "OpenAI client unavailable for contextual-bias escalation."
+                        if needs_contextual_bias_ai
+                        else "OpenAI client unavailable for formula escalation."
+                    )
                     result = {
                         "match_status": "uncertain",
                         "occurrence_count": 0,
                         "confidence": "low",
                         "evidence_text": "",
                         "evidence_json": {
-                            "method": "formula_ai_unavailable",
-                            "notes": "OpenAI client unavailable for formula escalation.",
+                            "method": unavailable_method,
+                            "context_condition": context_condition if needs_contextual_bias_ai else "",
+                            "bias_strength": bias_strength if needs_contextual_bias_ai else "",
+                            "notes": unavailable_notes,
                         },
                     }
 
@@ -611,10 +751,10 @@ def main() -> None:
     print(f"Jobs completed: {completed}")
     print(f"Jobs failed: {failed}")
     print(f"Jobs deferred by AI limits: {deferred}")
-    print(f"Formula AI model: {args.model}")
-    print(f"Formula AI calls used: {formula_ai_used}")
-    print(f"Formula AI tokens used this run: {ai_tokens:,}")
-    print(f"Formula AI tokens used today: {tokens_today + ai_tokens:,} / {args.daily_token_limit:,}")
+    print(f"Guidance AI model: {args.model}")
+    print(f"Guidance AI calls used: {guidance_ai_used}")
+    print(f"Guidance AI tokens used this run: {ai_tokens:,}")
+    print(f"Guidance AI tokens used today: {tokens_today + ai_tokens:,} / {args.daily_token_limit:,}")
 
 
 if __name__ == "__main__":

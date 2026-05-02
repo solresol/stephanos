@@ -16,6 +16,7 @@ DETECTOR_BY_KIND = {
     "gloss": "lexical_prefilter",
     "formula": "formula_prefilter",
     "proper_noun": "proper_noun_lookup",
+    "contextual_bias": "contextual_bias_prefilter",
 }
 
 
@@ -206,7 +207,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Queue translation guidance scans.")
     parser.add_argument("--rule-id", type=int, action="append", help="Rule id to enqueue")
     parser.add_argument("--rule-key", action="append", help="Rule key to enqueue")
-    parser.add_argument("--kind", choices=["gloss", "formula", "proper_noun"], help="Enqueue all active rules of this kind")
+    parser.add_argument("--kind", choices=["gloss", "formula", "proper_noun", "contextual_bias"], help="Enqueue all active rules of this kind")
     parser.add_argument("--all-active-rules", action="store_true", help="Allow enqueueing every active rule")
     parser.add_argument("--lemma-id", type=int, action="append", help="Restrict to one or more lemma ids")
     parser.add_argument("--source-document", default="meineke", choices=["billerbeck", "meineke"])

@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS public.translation_guidance_rules (
     preferred_translation TEXT,
     word_class TEXT,
     semantic_domain TEXT,
+    context_condition TEXT,
+    bias_strength TEXT NOT NULL DEFAULT 'normal',
     lifecycle_stage TEXT NOT NULL DEFAULT 'guidance',
     status TEXT NOT NULL DEFAULT 'in_progress',
     application_mode TEXT NOT NULL,
@@ -22,7 +24,9 @@ CREATE TABLE IF NOT EXISTS public.translation_guidance_rules (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     retired_at TIMESTAMPTZ,
     CONSTRAINT translation_guidance_rules_kind_check
-        CHECK (kind IN ('gloss', 'formula', 'proper_noun')),
+        CHECK (kind IN ('gloss', 'formula', 'proper_noun', 'contextual_bias')),
+    CONSTRAINT translation_guidance_rules_bias_strength_check
+        CHECK (bias_strength IN ('weak', 'normal', 'strong')),
     CONSTRAINT translation_guidance_rules_lifecycle_stage_check
         CHECK (lifecycle_stage IN ('investigate', 'recognizer', 'guidance', 'inactive')),
     CONSTRAINT translation_guidance_rules_status_check
@@ -47,6 +51,14 @@ CREATE INDEX IF NOT EXISTS translation_guidance_rules_normalized_label_idx
 CREATE INDEX IF NOT EXISTS translation_guidance_rules_semantic_domain_idx
     ON public.translation_guidance_rules (semantic_domain)
     WHERE semantic_domain IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS translation_guidance_rules_context_condition_idx
+    ON public.translation_guidance_rules (context_condition)
+    WHERE context_condition IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS translation_guidance_rules_bias_strength_idx
+    ON public.translation_guidance_rules (bias_strength)
+    WHERE kind = 'contextual_bias';
 
 CREATE INDEX IF NOT EXISTS translation_guidance_rules_lifecycle_stage_idx
     ON public.translation_guidance_rules (lifecycle_stage)

@@ -649,6 +649,13 @@ def default_guidance_application_mode(kind: str) -> str:
     return "advisory"
 
 
+def normalize_guidance_bias_strength(value: object) -> str:
+    strength = str(value or "").strip().lower()
+    if strength in {"weak", "normal", "strong"}:
+        return strength
+    return "normal"
+
+
 def build_guidance_rule_payload(sqlite_row, *, rule_key: str, status_override: str | None = None) -> dict[str, object]:
     kind = (sqlite_row["kind"] or "").strip()
     label = (sqlite_row["label"] or "").strip()
@@ -668,6 +675,8 @@ def build_guidance_rule_payload(sqlite_row, *, rule_key: str, status_override: s
         "preferred_translation": preferred_translation,
         "word_class": (sqlite_row["word_class"] or "").strip() or None,
         "semantic_domain": (sqlite_row["semantic_domain"] or "").strip() or None,
+        "context_condition": (sqlite_row["context_condition"] or "").strip() or None,
+        "bias_strength": normalize_guidance_bias_strength(sqlite_row["bias_strength"]),
         "lifecycle_stage": lifecycle_stage,
         "status": status,
         "application_mode": ((sqlite_row["application_mode"] or "").strip() or default_guidance_application_mode(kind)).strip(),
@@ -760,6 +769,18 @@ def import_translation_guidance_actions(sqlite_cur, pg_cur) -> tuple[int, int, i
             "apply the lifecycle-stage migration before importing guidance actions."
         )
         return 0, 0, 0
+    if not pg_column_exists(pg_cur, "translation_guidance_rules", "context_condition"):
+        log(
+            "WARNING: translation_guidance_rules.context_condition missing; "
+            "apply the contextual-bias migration before importing guidance actions."
+        )
+        return 0, 0, 0
+    if not pg_column_exists(pg_cur, "translation_guidance_rules", "bias_strength"):
+        log(
+            "WARNING: translation_guidance_rules.bias_strength missing; "
+            "apply the contextual-bias migration before importing guidance actions."
+        )
+        return 0, 0, 0
 
     last_id = get_last_imported_guidance_action_id(pg_cur)
     if sqlite_column_exists(sqlite_cur, "translation_guidance_actions", "semantic_domain"):
@@ -770,6 +791,14 @@ def import_translation_guidance_actions(sqlite_cur, pg_cur) -> tuple[int, int, i
         lifecycle_stage_select = "COALESCE(lifecycle_stage, '') AS lifecycle_stage"
     else:
         lifecycle_stage_select = "'' AS lifecycle_stage"
+    if sqlite_column_exists(sqlite_cur, "translation_guidance_actions", "context_condition"):
+        context_condition_select = "COALESCE(context_condition, '') AS context_condition"
+    else:
+        context_condition_select = "'' AS context_condition"
+    if sqlite_column_exists(sqlite_cur, "translation_guidance_actions", "bias_strength"):
+        bias_strength_select = "COALESCE(bias_strength, 'normal') AS bias_strength"
+    else:
+        bias_strength_select = "'normal' AS bias_strength"
 
     sqlite_cur.execute(
         f"""
@@ -782,6 +811,8 @@ def import_translation_guidance_actions(sqlite_cur, pg_cur) -> tuple[int, int, i
             COALESCE(preferred_translation, '') AS preferred_translation,
             COALESCE(word_class, '') AS word_class,
             {semantic_domain_select},
+            {context_condition_select},
+            {bias_strength_select},
             {lifecycle_stage_select},
             COALESCE(status, '') AS status,
             COALESCE(application_mode, '') AS application_mode,
@@ -859,6 +890,8 @@ def import_translation_guidance_actions(sqlite_cur, pg_cur) -> tuple[int, int, i
                         "preferred_translation",
                         "word_class",
                         "semantic_domain",
+                        "context_condition",
+                        "bias_strength",
                         "lifecycle_stage",
                         "application_mode",
                         "citations_text",

@@ -97,9 +97,10 @@ func buildGuidancePageData(rules []TranslationGuidanceRule, params url.Values) *
 	}
 
 	counts := map[string]int{
-		"gloss":       0,
-		"formula":     0,
-		"proper_noun": 0,
+		"gloss":           0,
+		"formula":         0,
+		"proper_noun":     0,
+		"contextual_bias": 0,
 	}
 	activeCount := 0
 	retiredCount := 0
@@ -139,6 +140,7 @@ func buildGuidancePageData(rules []TranslationGuidanceRule, params url.Values) *
 		{Key: "gloss", Label: "Glosses", Count: counts["gloss"], Active: filterKind == "gloss"},
 		{Key: "formula", Label: "Formulae", Count: counts["formula"], Active: filterKind == "formula"},
 		{Key: "proper_noun", Label: "Proper Nouns", Count: counts["proper_noun"], Active: filterKind == "proper_noun"},
+		{Key: "contextual_bias", Label: "Vocabulary Bias", Count: counts["contextual_bias"], Active: filterKind == "contextual_bias"},
 	}
 
 	defaultCreateKind := filterKind
@@ -168,6 +170,8 @@ func guidanceKindLabel(kind string) string {
 		return "Formula"
 	case "proper_noun":
 		return "Proper noun"
+	case "contextual_bias":
+		return "Vocabulary bias"
 	default:
 		return kind
 	}
@@ -284,7 +288,7 @@ const guidanceTemplate = `<!DOCTYPE html>
             align-items: end;
             display: grid;
             gap: 8px;
-            grid-template-columns: minmax(220px, 1.7fr) repeat(6, minmax(118px, 1fr));
+            grid-template-columns: minmax(220px, 1.7fr) repeat(7, minmax(118px, 1fr));
             margin-bottom: 8px;
         }
         .guidance-table-controls label {
@@ -318,7 +322,7 @@ const guidanceTemplate = `<!DOCTYPE html>
         .guidance-table {
             border-collapse: collapse;
             font-size: 0.82em;
-            min-width: 1980px;
+            min-width: 2320px;
             table-layout: fixed;
             width: 100%;
         }
@@ -409,12 +413,20 @@ const guidanceTemplate = `<!DOCTYPE html>
         .guidance-table td:nth-child(9) {
             width: 230px;
         }
-        .guidance-table th:nth-child(13),
-        .guidance-table td:nth-child(13) {
+        .guidance-table th:nth-child(10),
+        .guidance-table td:nth-child(10) {
+            width: 260px;
+        }
+        .guidance-table th:nth-child(11),
+        .guidance-table td:nth-child(11) {
+            width: 88px;
+        }
+        .guidance-table th:nth-child(15),
+        .guidance-table td:nth-child(15) {
             width: 210px;
         }
-        .guidance-table th:nth-child(14),
-        .guidance-table td:nth-child(14) {
+        .guidance-table th:nth-child(16),
+        .guidance-table td:nth-child(16) {
             width: 120px;
         }
         .guidance-table .table-action {
@@ -661,7 +673,7 @@ const guidanceTemplate = `<!DOCTYPE html>
 <body>
     <div class="header">
         <h1>Translation Guidance Editor</h1>
-        <div>Protected CRUD for gloss preferences, formulae, and proper-noun transliterations.</div>
+        <div>Protected CRUD for gloss preferences, formulae, proper-noun transliterations, and vocabulary-bias rules.</div>
     </div>
 
     <div class="letter-nav">
@@ -728,6 +740,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                             <option value="gloss" {{if eq .DefaultCreateKind "gloss"}}selected{{end}}>Gloss</option>
                             <option value="formula" {{if eq .DefaultCreateKind "formula"}}selected{{end}}>Formula</option>
                             <option value="proper_noun" {{if eq .DefaultCreateKind "proper_noun"}}selected{{end}}>Proper noun</option>
+                            <option value="contextual_bias" {{if eq .DefaultCreateKind "contextual_bias"}}selected{{end}}>Vocabulary bias</option>
                         </select>
                     </div>
                     <div>
@@ -739,7 +752,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                         <input type="text" name="guidance_label" id="guidance_label_new" required>
                     </div>
                     <div class="full">
-                        <label for="guidance_preferred_translation_new">Preferred English translation</label>
+                        <label for="guidance_preferred_translation_new">Preferred English translation / bias</label>
                         <input type="text" name="guidance_preferred_translation" id="guidance_preferred_translation_new">
                     </div>
                     <div>
@@ -749,6 +762,18 @@ const guidanceTemplate = `<!DOCTYPE html>
                     <div>
                         <label for="guidance_semantic_domain_new">Semantic domain</label>
                         <input type="text" name="guidance_semantic_domain" id="guidance_semantic_domain_new" placeholder="terrain, settlements, political terms">
+                    </div>
+                    <div class="full">
+                        <label for="guidance_context_condition_new">Context condition</label>
+                        <input type="text" name="guidance_context_condition" id="guidance_context_condition_new" placeholder="metalinguistic discussion, dialect label, ordinary geography">
+                    </div>
+                    <div>
+                        <label for="guidance_bias_strength_new">Bias strength</label>
+                        <select name="guidance_bias_strength" id="guidance_bias_strength_new">
+                            <option value="weak">Weak</option>
+                            <option value="normal" selected>Normal</option>
+                            <option value="strong">Strong</option>
+                        </select>
                     </div>
                     <div>
                         <label for="guidance_lifecycle_stage_new">Lifecycle stage</label>
@@ -811,7 +836,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                         <option value="gloss" {{if eq .FilterKind "gloss"}}selected{{end}}>Gloss</option>
                         <option value="formula" {{if eq .FilterKind "formula"}}selected{{end}}>Formula</option>
                         <option value="proper_noun" {{if eq .FilterKind "proper_noun"}}selected{{end}}>Proper noun</option>
-                        <option value="contextual_bias">Contextual bias</option>
+                        <option value="contextual_bias" {{if eq .FilterKind "contextual_bias"}}selected{{end}}>Vocabulary bias</option>
                     </select>
                 </div>
                 <div>
@@ -851,6 +876,10 @@ const guidanceTemplate = `<!DOCTYPE html>
                     <label for="guidance_table_domain">Semantic domain</label>
                     <input type="text" id="guidance_table_domain" placeholder="terrain, political">
                 </div>
+                <div>
+                    <label for="guidance_table_context">Context</label>
+                    <input type="text" id="guidance_table_context" placeholder="metalinguistic, dialect">
+                </div>
             </div>
             <div class="guidance-table-meta">
                 <span id="guidance_table_visible_count">{{len .Rules}}</span> visible of {{len .Rules}} rules. Sort by any column header; click a row to open edit controls. Pending local changes are shaded.
@@ -868,6 +897,8 @@ const guidanceTemplate = `<!DOCTYPE html>
                             <th class="sortable" data-sort="preferred">Preferred</th>
                             <th class="sortable" data-sort="word-class">Word class</th>
                             <th class="sortable" data-sort="domain">Semantic domain</th>
+                            <th class="sortable" data-sort="context">Context condition</th>
+                            <th class="sortable" data-sort="bias-strength">Bias</th>
                             <th class="sortable numeric" data-sort="revision">Revision</th>
                             <th class="sortable numeric" data-sort="matched">Matched</th>
                             <th class="sortable numeric" data-sort="backlog">Backlog</th>
@@ -889,11 +920,13 @@ const guidanceTemplate = `<!DOCTYPE html>
                             data-preferred="{{.Rule.PreferredTranslation}}"
                             data-word-class="{{.Rule.WordClass}}"
                             data-domain="{{.Rule.SemanticDomain}}"
+                            data-context="{{.Rule.ContextCondition}}"
+                            data-bias-strength="{{.Rule.BiasStrength}}"
                             data-revision="{{.Rule.RevisionNumber}}"
                             data-matched="{{.Rule.MatchCount}}"
                             data-backlog="{{.Rule.BacklogCount}}"
                             data-updated="{{.Rule.UpdatedAt}}"
-                            data-search="{{.Rule.RuleCode}} {{.Rule.Label}} {{.Rule.PreferredTranslation}} {{.Rule.WordClass}} {{.Rule.SemanticDomain}} {{.StageLabel}} {{.Rule.CitationsText}} {{.Rule.Notes}}">
+                            data-search="{{.Rule.RuleCode}} {{.Rule.Label}} {{.Rule.PreferredTranslation}} {{.Rule.WordClass}} {{.Rule.SemanticDomain}} {{.Rule.ContextCondition}} {{.Rule.BiasStrength}} {{.StageLabel}} {{.Rule.CitationsText}} {{.Rule.Notes}}">
                             <td title="{{.KindLabel}}">{{.KindLabel}}</td>
                             <td title="{{.StageLabel}}">{{.StageLabel}}</td>
                             <td title="{{.StatusLabel}}">{{.StatusLabel}}</td>
@@ -903,6 +936,8 @@ const guidanceTemplate = `<!DOCTYPE html>
                             <td class="compact" title="{{.Rule.PreferredTranslation}}">{{.Rule.PreferredTranslation}}</td>
                             <td title="{{.Rule.WordClass}}">{{.Rule.WordClass}}</td>
                             <td title="{{.Rule.SemanticDomain}}">{{.Rule.SemanticDomain}}</td>
+                            <td title="{{.Rule.ContextCondition}}">{{.Rule.ContextCondition}}</td>
+                            <td title="{{.Rule.BiasStrength}}">{{.Rule.BiasStrength}}</td>
                             <td class="numeric">{{.Rule.RevisionNumber}}</td>
                             <td class="numeric">{{.Rule.MatchCount}}</td>
                             <td class="numeric">{{.Rule.BacklogCount}}</td>
@@ -943,6 +978,12 @@ const guidanceTemplate = `<!DOCTYPE html>
                         {{end}}
                         {{if .Rule.SemanticDomain}}
                         <div class="guidance-detail"><strong>Semantic domain</strong><div>{{.Rule.SemanticDomain}}</div></div>
+                        {{end}}
+                        {{if .Rule.ContextCondition}}
+                        <div class="guidance-detail"><strong>Context condition</strong><div>{{.Rule.ContextCondition}}</div></div>
+                        {{end}}
+                        {{if eq .Rule.Kind "contextual_bias"}}
+                        <div class="guidance-detail"><strong>Bias strength</strong><div>{{.Rule.BiasStrength}}</div></div>
                         {{end}}
                         <div class="guidance-detail"><strong>Lifecycle</strong><div>{{.StageLabel}}</div></div>
                         {{if .Rule.CitationsText}}
@@ -1034,6 +1075,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                                     <option value="gloss" {{if eq .Rule.Kind "gloss"}}selected{{end}}>Gloss</option>
                                     <option value="formula" {{if eq .Rule.Kind "formula"}}selected{{end}}>Formula</option>
                                     <option value="proper_noun" {{if eq .Rule.Kind "proper_noun"}}selected{{end}}>Proper noun</option>
+                                    <option value="contextual_bias" {{if eq .Rule.Kind "contextual_bias"}}selected{{end}}>Vocabulary bias</option>
                                 </select>
                             </div>
                             <div>
@@ -1045,7 +1087,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                                 <input type="text" name="guidance_label" id="guidance_label_{{.Rule.RuleKey}}" value="{{.Rule.Label}}" required>
                             </div>
                             <div class="full">
-                                <label for="guidance_preferred_translation_{{.Rule.RuleKey}}">Preferred English translation</label>
+                                <label for="guidance_preferred_translation_{{.Rule.RuleKey}}">Preferred English translation / bias</label>
                                 <input type="text" name="guidance_preferred_translation" id="guidance_preferred_translation_{{.Rule.RuleKey}}" value="{{.Rule.PreferredTranslation}}">
                             </div>
                             <div>
@@ -1055,6 +1097,18 @@ const guidanceTemplate = `<!DOCTYPE html>
                             <div>
                                 <label for="guidance_semantic_domain_{{.Rule.RuleKey}}">Semantic domain</label>
                                 <input type="text" name="guidance_semantic_domain" id="guidance_semantic_domain_{{.Rule.RuleKey}}" value="{{.Rule.SemanticDomain}}">
+                            </div>
+                            <div class="full">
+                                <label for="guidance_context_condition_{{.Rule.RuleKey}}">Context condition</label>
+                                <input type="text" name="guidance_context_condition" id="guidance_context_condition_{{.Rule.RuleKey}}" value="{{.Rule.ContextCondition}}">
+                            </div>
+                            <div>
+                                <label for="guidance_bias_strength_{{.Rule.RuleKey}}">Bias strength</label>
+                                <select name="guidance_bias_strength" id="guidance_bias_strength_{{.Rule.RuleKey}}">
+                                    <option value="weak" {{if eq .Rule.BiasStrength "weak"}}selected{{end}}>Weak</option>
+                                    <option value="normal" {{if eq .Rule.BiasStrength "normal"}}selected{{end}}>Normal</option>
+                                    <option value="strong" {{if eq .Rule.BiasStrength "strong"}}selected{{end}}>Strong</option>
+                                </select>
                             </div>
                             <div>
                                 <label for="guidance_lifecycle_stage_{{.Rule.RuleKey}}">Lifecycle stage</label>
@@ -1109,6 +1163,8 @@ const guidanceTemplate = `<!DOCTYPE html>
                             <input type="hidden" name="guidance_preferred_translation" value="{{.Rule.PreferredTranslation}}">
                             <input type="hidden" name="guidance_word_class" value="{{.Rule.WordClass}}">
                             <input type="hidden" name="guidance_semantic_domain" value="{{.Rule.SemanticDomain}}">
+                            <input type="hidden" name="guidance_context_condition" value="{{.Rule.ContextCondition}}">
+                            <input type="hidden" name="guidance_bias_strength" value="{{.Rule.BiasStrength}}">
                             <input type="hidden" name="guidance_lifecycle_stage" value="{{.Rule.LifecycleStage}}">
                             <input type="hidden" name="guidance_status" value="in_progress">
                             <input type="hidden" name="guidance_application_mode" value="{{.Rule.ApplicationMode}}">
@@ -1130,6 +1186,8 @@ const guidanceTemplate = `<!DOCTYPE html>
                             <input type="hidden" name="guidance_preferred_translation" value="{{.Rule.PreferredTranslation}}">
                             <input type="hidden" name="guidance_word_class" value="{{.Rule.WordClass}}">
                             <input type="hidden" name="guidance_semantic_domain" value="{{.Rule.SemanticDomain}}">
+                            <input type="hidden" name="guidance_context_condition" value="{{.Rule.ContextCondition}}">
+                            <input type="hidden" name="guidance_bias_strength" value="{{.Rule.BiasStrength}}">
                             <input type="hidden" name="guidance_lifecycle_stage" value="{{.Rule.LifecycleStage}}">
                             <input type="hidden" name="guidance_application_mode" value="{{.Rule.ApplicationMode}}">
                             <input type="hidden" name="guidance_citations_text" value="{{.Rule.CitationsText}}">
@@ -1160,7 +1218,8 @@ const guidanceTemplate = `<!DOCTYPE html>
                 stage: document.getElementById("guidance_table_stage"),
                 mode: document.getElementById("guidance_table_mode"),
                 wordClass: document.getElementById("guidance_table_word_class"),
-                domain: document.getElementById("guidance_table_domain")
+                domain: document.getElementById("guidance_table_domain"),
+                context: document.getElementById("guidance_table_context")
             };
             var sortState = { key: "kind", direction: "asc" };
 
@@ -1217,6 +1276,11 @@ const guidanceTemplate = `<!DOCTYPE html>
                 if (key === "word-class") {
                     return text(row.dataset.wordClass);
                 }
+                if (key === "bias-strength") {
+                    var strengthOrder = { weak: 0, normal: 1, strong: 2 };
+                    var strength = text(row.dataset.biasStrength);
+                    return Object.prototype.hasOwnProperty.call(strengthOrder, strength) ? strengthOrder[strength] : 99;
+                }
                 return text(row.dataset[key]);
             }
 
@@ -1253,6 +1317,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                 var mode = text(controls.mode && controls.mode.value);
                 var wordClass = text(controls.wordClass && controls.wordClass.value);
                 var domain = text(controls.domain && controls.domain.value);
+                var context = text(controls.context && controls.context.value);
                 var shown = 0;
 
                 rows.forEach(function (row) {
@@ -1276,6 +1341,9 @@ const guidanceTemplate = `<!DOCTYPE html>
                         matches = false;
                     }
                     if (domain && text(row.dataset.domain).indexOf(domain) === -1) {
+                        matches = false;
+                    }
+                    if (context && text(row.dataset.context).indexOf(context) === -1) {
                         matches = false;
                     }
                     row.hidden = !matches;
@@ -1325,6 +1393,21 @@ const guidanceTemplate = `<!DOCTYPE html>
                     });
                 });
             }
+
+            Array.prototype.slice.call(document.querySelectorAll("select[name='guidance_kind']")).forEach(function (kindSelect) {
+                var form = kindSelect.closest("form");
+                if (!form) {
+                    return;
+                }
+                var contextInput = form.querySelector("[name='guidance_context_condition']");
+                function updateContextRequirement() {
+                    if (contextInput) {
+                        contextInput.required = kindSelect.value === "contextual_bias";
+                    }
+                }
+                kindSelect.addEventListener("change", updateContextRequirement);
+                updateContextRequirement();
+            });
 
             var initialTargetId = "";
             if (window.location.hash) {

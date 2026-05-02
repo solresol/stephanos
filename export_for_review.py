@@ -1257,6 +1257,26 @@ def export_lemmas():
             """
         )
         has_guidance_lifecycle_stage = cur.fetchone() is not None
+        cur.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'translation_guidance_rules'
+              AND column_name = 'context_condition'
+            """
+        )
+        has_guidance_context_condition = cur.fetchone() is not None
+        cur.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'translation_guidance_rules'
+              AND column_name = 'bias_strength'
+            """
+        )
+        has_guidance_bias_strength = cur.fetchone() is not None
 
         guidance_match_join = ""
         guidance_match_select = "0 AS match_count, 0 AS uncertain_count"
@@ -1305,6 +1325,16 @@ def export_lemmas():
                 END AS lifecycle_stage
             """
         )
+        guidance_context_condition_select = (
+            "COALESCE(r.context_condition, '') AS context_condition"
+            if has_guidance_context_condition
+            else "'' AS context_condition"
+        )
+        guidance_bias_strength_select = (
+            "COALESCE(r.bias_strength, 'normal') AS bias_strength"
+            if has_guidance_bias_strength
+            else "'normal' AS bias_strength"
+        )
 
         cur.execute(
             f"""
@@ -1325,6 +1355,8 @@ def export_lemmas():
                 COALESCE(r.preferred_translation, '') AS preferred_translation,
                 COALESCE(r.word_class, '') AS word_class,
                 {guidance_semantic_domain_select},
+                {guidance_context_condition_select},
+                {guidance_bias_strength_select},
                 {guidance_lifecycle_select},
                 COALESCE(r.status, '') AS status,
                 COALESCE(r.application_mode, '') AS application_mode,
@@ -1343,7 +1375,8 @@ def export_lemmas():
                     WHEN 'gloss' THEN 0
                     WHEN 'formula' THEN 1
                     WHEN 'proper_noun' THEN 2
-                    ELSE 3
+                    WHEN 'contextual_bias' THEN 3
+                    ELSE 4
                 END,
                 r.status = 'retired',
                 r.label
@@ -1364,16 +1397,18 @@ def export_lemmas():
                     "preferred_translation": row[6] or "",
                     "word_class": row[7] or "",
                     "semantic_domain": row[8] or "",
-                    "lifecycle_stage": row[9] or "",
-                    "status": row[10] or "",
-                    "application_mode": row[11] or "",
-                    "citations_text": row[12] or "",
-                    "notes": row[13] or "",
-                    "updated_at": row[14] or "",
-                    "revision_number": int(row[15] or 0),
-                    "match_count": int(row[16] or 0),
-                    "uncertain_count": int(row[17] or 0),
-                    "backlog_count": int(row[18] or 0),
+                    "context_condition": row[9] or "",
+                    "bias_strength": row[10] or "normal",
+                    "lifecycle_stage": row[11] or "",
+                    "status": row[12] or "",
+                    "application_mode": row[13] or "",
+                    "citations_text": row[14] or "",
+                    "notes": row[15] or "",
+                    "updated_at": row[16] or "",
+                    "revision_number": int(row[17] or 0),
+                    "match_count": int(row[18] or 0),
+                    "uncertain_count": int(row[19] or 0),
+                    "backlog_count": int(row[20] or 0),
                     "scan_batches": scan_batches,
                 }
             )

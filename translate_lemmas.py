@@ -86,6 +86,16 @@ def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, l
         if column_exists(cur, "translation_guidance_rules", "lifecycle_stage")
         else ""
     )
+    context_condition_select = (
+        "COALESCE(r.context_condition, '') AS context_condition"
+        if column_exists(cur, "translation_guidance_rules", "context_condition")
+        else "'' AS context_condition"
+    )
+    bias_strength_select = (
+        "COALESCE(r.bias_strength, 'normal') AS bias_strength"
+        if column_exists(cur, "translation_guidance_rules", "bias_strength")
+        else "'normal' AS bias_strength"
+    )
     cur.execute(
         f"""
         SELECT
@@ -94,6 +104,8 @@ def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, l
             COALESCE(r.preferred_translation, '') AS preferred_translation,
             COALESCE(r.application_mode, '') AS application_mode,
             COALESCE(r.notes, '') AS notes,
+            {context_condition_select},
+            {bias_strength_select},
             COALESCE(m.evidence_text, '') AS evidence_text,
             COALESCE(m.confidence, '') AS confidence
         FROM translation_guidance_matches m
@@ -103,7 +115,7 @@ def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, l
           AND m.match_status = 'matched'
           AND r.status <> 'retired'
           {lifecycle_filter}
-          AND r.kind IN ('formula', 'gloss')
+          AND r.kind IN ('formula', 'gloss', 'contextual_bias')
         ORDER BY
             CASE r.application_mode
                 WHEN 'required' THEN 0
@@ -113,8 +125,9 @@ def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, l
             CASE r.kind
                 WHEN 'formula' THEN 0
                 WHEN 'gloss' THEN 1
-                WHEN 'proper_noun' THEN 2
-                ELSE 3
+                WHEN 'contextual_bias' THEN 2
+                WHEN 'proper_noun' THEN 3
+                ELSE 4
             END,
             m.confidence = 'high' DESC,
             r.label
@@ -129,8 +142,10 @@ def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, l
             "preferred_translation": row[2] or "",
             "application_mode": row[3] or "",
             "notes": row[4] or "",
-            "evidence_text": row[5] or "",
-            "confidence": row[6] or "",
+            "context_condition": row[5] or "",
+            "bias_strength": row[6] or "normal",
+            "evidence_text": row[7] or "",
+            "confidence": row[8] or "",
         }
         for row in cur.fetchall()
     ]
@@ -197,6 +212,24 @@ def format_context_sections(guidance_rows, source_passage_rows) -> str:
             "Use these rules where the cited Greek evidence is relevant; do not force them if the local syntax contradicts the rule.",
         ]
         for row in guidance_rows:
+            if row["kind"] == "contextual_bias":
+                strength = row.get("bias_strength") or "normal"
+                context = truncate_field(row.get("context_condition"), 260)
+                line = (
+                    f"- vocabulary bias strength={strength}"
+                    f" confidence={row['confidence'] or 'unknown'}: "
+                    f"when {context or 'the stated context applies'}, bias "
+                    f"{truncate_field(row['label'], 220)}"
+                )
+                if row["preferred_translation"]:
+                    line += f" toward {truncate_field(row['preferred_translation'], 220)}"
+                line += "; do not force this if local syntax or context argues against it."
+                if row["evidence_text"]:
+                    line += f" | evidence: {truncate_field(row['evidence_text'], 320)}"
+                if row["notes"]:
+                    line += f" | notes: {truncate_field(row['notes'], 260)}"
+                lines.append(line)
+                continue
             bits = [
                 f"- {row['kind'] or 'guidance'}",
                 f"mode={row['application_mode'] or 'advisory'}",

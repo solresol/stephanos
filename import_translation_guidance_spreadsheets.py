@@ -40,6 +40,7 @@ APPLICATION_MODE = {
     "gloss": "advisory",
     "formula": "required",
     "proper_noun": "replace",
+    "contextual_bias": "advisory",
 }
 
 SPECS = {
@@ -252,6 +253,8 @@ def fetch_existing(cur, rule_key: str) -> dict[str, object] | None:
             preferred_translation,
             word_class,
             semantic_domain,
+            context_condition,
+            bias_strength,
             lifecycle_stage,
             status,
             application_mode,
@@ -279,6 +282,8 @@ def fetch_existing(cur, rule_key: str) -> dict[str, object] | None:
         "preferred_translation",
         "word_class",
         "semantic_domain",
+        "context_condition",
+        "bias_strength",
         "lifecycle_stage",
         "status",
         "application_mode",
@@ -301,6 +306,8 @@ def comparable_state(rule: dict[str, object]) -> dict[str, object]:
         "preferred_translation": rule["preferred_translation"],
         "word_class": rule["word_class"],
         "semantic_domain": rule.get("semantic_domain"),
+        "context_condition": rule.get("context_condition"),
+        "bias_strength": rule.get("bias_strength") or "normal",
         "lifecycle_stage": rule.get("lifecycle_stage"),
         "status": rule["status"],
         "application_mode": rule["application_mode"],
@@ -324,6 +331,8 @@ def insert_rule(cur, rule: dict[str, object], username: str) -> int:
             preferred_translation,
             word_class,
             semantic_domain,
+            context_condition,
+            bias_strength,
             lifecycle_stage,
             status,
             application_mode,
@@ -336,7 +345,7 @@ def insert_rule(cur, rule: dict[str, object], username: str) -> int:
             updated_by
         )
         VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         RETURNING id
         """,
@@ -349,6 +358,8 @@ def insert_rule(cur, rule: dict[str, object], username: str) -> int:
             rule["preferred_translation"],
             rule["word_class"],
             rule.get("semantic_domain"),
+            rule.get("context_condition"),
+            rule.get("bias_strength") or "normal",
             rule["lifecycle_stage"],
             rule["status"],
             rule["application_mode"],
@@ -376,6 +387,8 @@ def update_rule(cur, rule_id: int, rule: dict[str, object], username: str) -> No
             preferred_translation = %s,
             word_class = %s,
             semantic_domain = %s,
+            context_condition = %s,
+            bias_strength = %s,
             lifecycle_stage = %s,
             status = %s,
             application_mode = %s,
@@ -397,6 +410,8 @@ def update_rule(cur, rule_id: int, rule: dict[str, object], username: str) -> No
             rule["preferred_translation"],
             rule["word_class"],
             rule.get("semantic_domain"),
+            rule.get("context_condition"),
+            rule.get("bias_strength") or "normal",
             rule["lifecycle_stage"],
             rule["status"],
             rule["application_mode"],
@@ -497,6 +512,34 @@ def ensure_required_tables(cur) -> None:
         raise RuntimeError(
             "Missing translation_guidance_rules.lifecycle_stage. "
             "Apply migrations/20260501_translation_guidance_lifecycle_stage.sql first."
+        )
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'translation_guidance_rules'
+          AND column_name = 'context_condition'
+        """
+    )
+    if not cur.fetchone():
+        raise RuntimeError(
+            "Missing translation_guidance_rules.context_condition. "
+            "Apply the contextual-bias migration first."
+        )
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'translation_guidance_rules'
+          AND column_name = 'bias_strength'
+        """
+    )
+    if not cur.fetchone():
+        raise RuntimeError(
+            "Missing translation_guidance_rules.bias_strength. "
+            "Apply the contextual-bias migration first."
         )
 
 
