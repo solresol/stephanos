@@ -31,6 +31,9 @@ func main() {
 			log.Fatalf("check stale urgent scan jobs: %v", err)
 		}
 		fmt.Printf("Requeued stale urgent guidance scan jobs: %d\n", count)
+		if *adoptRequestID <= 0 && !*backgroundOnce && !*claimPending && *jobID <= 0 {
+			return
+		}
 	}
 
 	if *adoptRequestID > 0 {
