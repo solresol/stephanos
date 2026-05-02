@@ -12,6 +12,7 @@ backups/
 logs/
 review_data/
 review_data.json
+guidance_scan_results.db
 .secrets/
 tmp/
 .playwright-cli/

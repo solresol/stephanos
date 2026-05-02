@@ -28,6 +28,16 @@ DEFAULT_FORMULA_AI_LIMIT = 500
 DETECTOR_VERSION = "translation_guidance_scan_v1"
 
 
+def ensure_mini_model(model: str) -> str:
+    normalized = (model or "").strip()
+    if "-mini" not in normalized.lower():
+        raise SystemExit(
+            "Translation guidance scans must use a mini model. "
+            f"Refusing model={model!r}; set --model to a *-mini model."
+        )
+    return normalized
+
+
 def column_exists(cur, table_name: str, column_name: str) -> bool:
     cur.execute(
         """
@@ -460,7 +470,6 @@ def upsert_match(cur, job: tuple, result: dict[str, object]) -> None:
             evidence_text = EXCLUDED.evidence_text,
             evidence_json = EXCLUDED.evidence_json,
             detector_version = EXCLUDED.detector_version,
-            detected_at = NOW(),
             updated_at = NOW()
         """,
         (
@@ -572,6 +581,7 @@ def main() -> None:
         help="Max AI judgements per run for formula and contextual-bias scans.",
     )
     args = parser.parse_args()
+    args.model = ensure_mini_model(args.model)
 
     client = None
     guidance_ai_used = 0

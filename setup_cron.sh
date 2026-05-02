@@ -9,7 +9,7 @@ cat > "$CRON_FILE" <<'EOF'
 # Runs at 1 AM daily
 
 # 1. Export lemma data for review interface (1:00 AM)
-0 1 * * * cd ~/stephanos && uv run export_for_review.py && rsync review_data.json stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ >> logs/export_for_review.log 2>&1
+0 1 * * * cd ~/stephanos && uv run export_for_review.py && uv run export_guidance_scan_db.py && rsync review_data.json guidance_scan_results.db stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ >> logs/export_for_review.log 2>&1
 
 # 2. Sync review database from merah (2:00 AM)
 0 2 * * * ~/stephanos/sync_review_db.sh

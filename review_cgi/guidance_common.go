@@ -44,16 +44,16 @@ type guidanceDataFile struct {
 }
 
 type TranslationGuidanceScanRequest struct {
-	ID                 int
-	SourceKey          string
-	TargetRuleKey      string
-	RuleLabel          string
-	SampleSize         int
-	SourceDocument     string
-	IncludeQuarantined bool
-	Notes              string
-	Reviewer           string
-	RequestedAt        string
+	ID                 int    `json:"id"`
+	SourceKey          string `json:"source_key"`
+	TargetRuleKey      string `json:"target_rule_key"`
+	RuleLabel          string `json:"rule_label"`
+	SampleSize         int    `json:"sample_size"`
+	SourceDocument     string `json:"source_document"`
+	IncludeQuarantined bool   `json:"include_quarantined"`
+	Notes              string `json:"notes"`
+	Reviewer           string `json:"reviewer"`
+	RequestedAt        string `json:"requested_at"`
 }
 
 type TranslationGuidanceScanStatusCounts struct {
@@ -102,6 +102,32 @@ type TranslationGuidanceScanBatch struct {
 	Models             []string                            `json:"models"`
 	TokensUsed         int                                 `json:"tokens_used"`
 	Examples           []TranslationGuidanceScanExample    `json:"examples"`
+}
+
+type GuidanceScanEvidenceRow struct {
+	MatchID             int    `json:"match_id"`
+	RuleKey             string `json:"rule_key"`
+	PatternText         string `json:"pattern_text"`
+	LemmaID             int    `json:"lemma_id"`
+	Lemma               string `json:"lemma"`
+	EntryNumber         int    `json:"entry_number"`
+	SourceTextVersionID int    `json:"source_text_version_id"`
+	OccurrenceCount     int    `json:"occurrence_count"`
+	Confidence          string `json:"confidence"`
+	EvidenceText        string `json:"evidence_text"`
+	ScannedAt           string `json:"scanned_at"`
+	ScanBatchID         int    `json:"scan_batch_id"`
+}
+
+type GuidanceScanEvidence struct {
+	Available         bool                           `json:"available"`
+	TotalScannedCount int                            `json:"total_scanned_count"`
+	ZeroScannedCount  int                            `json:"zero_scanned_count"`
+	NonzeroCount      int                            `json:"nonzero_count"`
+	LastScannedAt     string                         `json:"last_scanned_at"`
+	HasActiveBatch    bool                           `json:"has_active_batch"`
+	Batches           []TranslationGuidanceScanBatch `json:"batches"`
+	NonzeroRows       []GuidanceScanEvidenceRow      `json:"nonzero_rows"`
 }
 
 type TranslationGuidanceAction struct {
@@ -577,6 +603,212 @@ func FetchTranslationGuidanceScanRequests(db *sql.DB) ([]TranslationGuidanceScan
 		requests = append(requests, request)
 	}
 	return requests, rows.Err()
+}
+
+func FetchGuidanceScanEvidence(db *sql.DB, ruleKey string, limit int) (GuidanceScanEvidence, error) {
+	evidence := GuidanceScanEvidence{Available: db != nil}
+	ruleKey = strings.TrimSpace(ruleKey)
+	if db == nil || ruleKey == "" {
+		return evidence, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+
+	err := db.QueryRow(
+		`
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN occurrence_count = 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN occurrence_count > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(MAX(scanned_at), '')
+		FROM guidance_scan_results
+		WHERE rule_key = ?
+		`,
+		ruleKey,
+	).Scan(
+		&evidence.TotalScannedCount,
+		&evidence.ZeroScannedCount,
+		&evidence.NonzeroCount,
+		&evidence.LastScannedAt,
+	)
+	if err != nil {
+		return evidence, err
+	}
+
+	rows, err := db.Query(
+		`
+		SELECT
+			match_id,
+			rule_key,
+			pattern_text,
+			lemma_id,
+			lemma,
+			entry_number,
+			source_text_version_id,
+			occurrence_count,
+			confidence,
+			evidence_text,
+			scanned_at,
+			scan_batch_id
+		FROM guidance_scan_results
+		WHERE rule_key = ?
+		  AND occurrence_count > 0
+		ORDER BY scanned_at DESC, lemma COLLATE NOCASE, match_id DESC
+		LIMIT ?
+		`,
+		ruleKey,
+		limit,
+	)
+	if err != nil {
+		return evidence, err
+	}
+	for rows.Next() {
+		var row GuidanceScanEvidenceRow
+		var entryNumber sql.NullInt64
+		var scanBatchID sql.NullInt64
+		if err := rows.Scan(
+			&row.MatchID,
+			&row.RuleKey,
+			&row.PatternText,
+			&row.LemmaID,
+			&row.Lemma,
+			&entryNumber,
+			&row.SourceTextVersionID,
+			&row.OccurrenceCount,
+			&row.Confidence,
+			&row.EvidenceText,
+			&row.ScannedAt,
+			&scanBatchID,
+		); err != nil {
+			rows.Close()
+			return evidence, err
+		}
+		if entryNumber.Valid {
+			row.EntryNumber = int(entryNumber.Int64)
+		}
+		if scanBatchID.Valid {
+			row.ScanBatchID = int(scanBatchID.Int64)
+		}
+		evidence.NonzeroRows = append(evidence.NonzeroRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return evidence, err
+	}
+	rows.Close()
+
+	batchRows, err := db.Query(
+		`
+		SELECT
+			id,
+			source_key,
+			source_document,
+			scope_kind,
+			sample_size,
+			selected_count,
+			include_quarantined,
+			requested_by,
+			requested_at,
+			notes,
+			created_at,
+			updated_at,
+			total_count,
+			pending_count,
+			running_count,
+			completed_count,
+			failed_count,
+			cancelled_count,
+			matched_count,
+			not_matched_count,
+			uncertain_count,
+			tokens_used,
+			models_json
+		FROM guidance_scan_batches
+		WHERE rule_key = ?
+		ORDER BY created_at DESC, id DESC
+		LIMIT 10
+		`,
+		ruleKey,
+	)
+	if err != nil {
+		return evidence, err
+	}
+	defer batchRows.Close()
+	for batchRows.Next() {
+		var batch TranslationGuidanceScanBatch
+		var includeQuarantined int
+		var modelsJSON string
+		if err := batchRows.Scan(
+			&batch.ID,
+			&batch.SourceKey,
+			&batch.SourceDocument,
+			&batch.ScopeKind,
+			&batch.SampleSize,
+			&batch.SelectedCount,
+			&includeQuarantined,
+			&batch.RequestedBy,
+			&batch.RequestedAt,
+			&batch.Notes,
+			&batch.CreatedAt,
+			&batch.UpdatedAt,
+			&batch.StatusCounts.Total,
+			&batch.StatusCounts.Pending,
+			&batch.StatusCounts.Running,
+			&batch.StatusCounts.Completed,
+			&batch.StatusCounts.Failed,
+			&batch.StatusCounts.Cancelled,
+			&batch.ResultCounts.Matched,
+			&batch.ResultCounts.NotMatched,
+			&batch.ResultCounts.Uncertain,
+			&batch.TokensUsed,
+			&modelsJSON,
+		); err != nil {
+			return evidence, err
+		}
+		batch.IncludeQuarantined = includeQuarantined != 0
+		if strings.TrimSpace(modelsJSON) != "" {
+			_ = json.Unmarshal([]byte(modelsJSON), &batch.Models)
+		}
+		if batch.StatusCounts.Pending > 0 || batch.StatusCounts.Running > 0 {
+			evidence.HasActiveBatch = true
+		}
+		evidence.Batches = append(evidence.Batches, batch)
+	}
+	if err := batchRows.Err(); err != nil {
+		return evidence, err
+	}
+	return evidence, nil
+}
+
+func UnsyncedGuidanceScanRequestsForRule(
+	ruleKey string,
+	requests []TranslationGuidanceScanRequest,
+	evidence GuidanceScanEvidence,
+) []TranslationGuidanceScanRequest {
+	ruleKey = strings.TrimSpace(ruleKey)
+	if ruleKey == "" || len(requests) == 0 {
+		return nil
+	}
+	syncedSourceKeys := make(map[string]bool)
+	for _, batch := range evidence.Batches {
+		sourceKey := strings.TrimSpace(batch.SourceKey)
+		if sourceKey != "" {
+			syncedSourceKeys[sourceKey] = true
+		}
+	}
+
+	result := make([]TranslationGuidanceScanRequest, 0)
+	for _, request := range requests {
+		if strings.TrimSpace(request.TargetRuleKey) != ruleKey {
+			continue
+		}
+		if syncedSourceKeys[strings.TrimSpace(request.SourceKey)] {
+			continue
+		}
+		result = append(result, request)
+	}
+	return result
 }
 
 func InsertTranslationGuidanceAction(

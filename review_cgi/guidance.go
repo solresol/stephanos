@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"html/template"
 	"log"
@@ -17,11 +18,12 @@ type GuidanceKindTab struct {
 }
 
 type GuidanceRuleView struct {
-	Rule        TranslationGuidanceRule
-	KindLabel   string
-	StageLabel  string
-	StatusLabel string
-	ModeLabel   string
+	Rule         TranslationGuidanceRule
+	KindLabel    string
+	StageLabel   string
+	StatusLabel  string
+	ModeLabel    string
+	ScanEvidence GuidanceScanEvidence
 }
 
 type GuidancePageData struct {
@@ -79,6 +81,13 @@ func main() {
 	}
 
 	pageData := buildGuidancePageData(rules, params)
+	scanDB, err := OpenReadOnlyDatabaseIfExists(config.GuidanceScanDBPath)
+	if err != nil {
+		log.Printf("Failed to open guidance scan DB: %v", err)
+	} else if scanDB != nil {
+		defer scanDB.Close()
+		attachGuidanceScanEvidence(pageData, scanDB)
+	}
 	tmpl, err := template.New("guidance").Parse(guidanceTemplate)
 	if err != nil {
 		showError(fmt.Sprintf("Template error: %v", err))
@@ -87,6 +96,36 @@ func main() {
 
 	if err := tmpl.Execute(os.Stdout, pageData); err != nil {
 		log.Printf("Template execution error: %v", err)
+	}
+}
+
+func attachGuidanceScanEvidence(pageData *GuidancePageData, scanDB *sql.DB) {
+	if pageData == nil || scanDB == nil {
+		return
+	}
+	for index := range pageData.Rules {
+		if pageData.Rules[index].Rule.Kind != "formula" {
+			continue
+		}
+		evidence, err := FetchGuidanceScanEvidence(scanDB, pageData.Rules[index].Rule.RuleKey, 100)
+		if err != nil {
+			log.Printf(
+				"Failed to load scan evidence for %s: %v",
+				pageData.Rules[index].Rule.RuleKey,
+				err,
+			)
+			continue
+		}
+		if len(evidence.Batches) == 0 && len(pageData.Rules[index].Rule.ScanBatches) > 0 {
+			evidence.Batches = pageData.Rules[index].Rule.ScanBatches
+			for _, batch := range evidence.Batches {
+				if batch.StatusCounts.Pending > 0 || batch.StatusCounts.Running > 0 {
+					evidence.HasActiveBatch = true
+					break
+				}
+			}
+		}
+		pageData.Rules[index].ScanEvidence = evidence
 	}
 }
 
@@ -126,12 +165,23 @@ func buildGuidancePageData(rules []TranslationGuidanceRule, params url.Values) *
 		if filterKind != "" && rule.Kind != filterKind {
 			continue
 		}
+		scanEvidence := GuidanceScanEvidence{}
+		if rule.Kind == "formula" && len(rule.ScanBatches) > 0 {
+			scanEvidence.Batches = rule.ScanBatches
+			for _, batch := range scanEvidence.Batches {
+				if batch.StatusCounts.Pending > 0 || batch.StatusCounts.Running > 0 {
+					scanEvidence.HasActiveBatch = true
+					break
+				}
+			}
+		}
 		filtered = append(filtered, GuidanceRuleView{
-			Rule:        rule,
-			KindLabel:   guidanceKindLabel(rule.Kind),
-			StageLabel:  guidanceLifecycleLabel(rule.LifecycleStage),
-			StatusLabel: guidanceStatusLabel(rule.Status),
-			ModeLabel:   guidanceModeLabel(rule.ApplicationMode),
+			Rule:         rule,
+			KindLabel:    guidanceKindLabel(rule.Kind),
+			StageLabel:   guidanceLifecycleLabel(rule.LifecycleStage),
+			StatusLabel:  guidanceStatusLabel(rule.Status),
+			ModeLabel:    guidanceModeLabel(rule.ApplicationMode),
+			ScanEvidence: scanEvidence,
 		})
 	}
 
@@ -637,6 +687,61 @@ const guidanceTemplate = `<!DOCTYPE html>
             color: #334155;
             padding: 6px 8px;
         }
+        .guidance-scan-summary {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            color: #334155;
+            display: grid;
+            gap: 6px;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            padding: 10px 12px;
+        }
+        .guidance-scan-results {
+            margin-top: 14px;
+        }
+        .guidance-scan-results-head {
+            align-items: baseline;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .guidance-scan-results-head span {
+            color: #5b7287;
+            font-size: 0.85em;
+        }
+        .guidance-scan-table-wrap {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        .guidance-scan-table {
+            border-collapse: collapse;
+            min-width: 760px;
+            width: 100%;
+        }
+        .guidance-scan-table th,
+        .guidance-scan-table td {
+            border-bottom: 1px solid #e2e8f0;
+            padding: 8px 10px;
+            text-align: left;
+            vertical-align: top;
+        }
+        .guidance-scan-table th {
+            background: #f8fafc;
+            color: #15324c;
+            font-size: 0.86em;
+            letter-spacing: 0;
+        }
+        .guidance-scan-table td {
+            color: #334155;
+            font-size: 0.88em;
+        }
+        .guidance-scan-table tr:last-child td {
+            border-bottom: 0;
+        }
         .guidance-scan-examples {
             display: grid;
             gap: 8px;
@@ -802,10 +907,6 @@ const guidanceTemplate = `<!DOCTYPE html>
                         </select>
                     </div>
                     <div class="full">
-                        <label for="guidance_citations_text_new">Stephanos citations</label>
-                        <textarea name="guidance_citations_text" id="guidance_citations_text_new"></textarea>
-                    </div>
-                    <div class="full">
                         <label for="guidance_notes_new">Notes</label>
                         <textarea name="guidance_notes" id="guidance_notes_new"></textarea>
                     </div>
@@ -827,7 +928,7 @@ const guidanceTemplate = `<!DOCTYPE html>
             <div class="guidance-table-controls">
                 <div>
                     <label for="guidance_table_search">Search</label>
-                    <input type="search" id="guidance_table_search" placeholder="Label, translation, notes, citations">
+                    <input type="search" id="guidance_table_search" placeholder="Label, translation, notes">
                 </div>
                 <div>
                     <label for="guidance_table_kind">Kind</label>
@@ -926,7 +1027,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                             data-matched="{{.Rule.MatchCount}}"
                             data-backlog="{{.Rule.BacklogCount}}"
                             data-updated="{{.Rule.UpdatedAt}}"
-                            data-search="{{.Rule.RuleCode}} {{.Rule.Label}} {{.Rule.PreferredTranslation}} {{.Rule.WordClass}} {{.Rule.SemanticDomain}} {{.Rule.ContextCondition}} {{.Rule.BiasStrength}} {{.StageLabel}} {{.Rule.CitationsText}} {{.Rule.Notes}}">
+                            data-search="{{.Rule.RuleCode}} {{.Rule.Label}} {{.Rule.PreferredTranslation}} {{.Rule.WordClass}} {{.Rule.SemanticDomain}} {{.Rule.ContextCondition}} {{.Rule.BiasStrength}} {{.StageLabel}} {{.Rule.Notes}}">
                             <td title="{{.KindLabel}}">{{.KindLabel}}</td>
                             <td title="{{.StageLabel}}">{{.StageLabel}}</td>
                             <td title="{{.StatusLabel}}">{{.StatusLabel}}</td>
@@ -986,9 +1087,6 @@ const guidanceTemplate = `<!DOCTYPE html>
                         <div class="guidance-detail"><strong>Bias strength</strong><div>{{.Rule.BiasStrength}}</div></div>
                         {{end}}
                         <div class="guidance-detail"><strong>Lifecycle</strong><div>{{.StageLabel}}</div></div>
-                        {{if .Rule.CitationsText}}
-                        <div class="guidance-detail"><strong>Citations</strong><div>{{.Rule.CitationsText}}</div></div>
-                        {{end}}
                         {{if .Rule.Notes}}
                         <div class="guidance-detail"><strong>Notes</strong><div>{{.Rule.Notes}}</div></div>
                         {{end}}
@@ -1002,7 +1100,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                     </div>
 
                     {{if eq .Rule.Kind "formula"}}
-                    <div class="guidance-scan-panel">
+                    <div class="guidance-scan-panel" data-guidance-scan-panel="{{.Rule.RuleKey}}" data-scan-active="{{if .Rule.LocalScanRequests}}1{{else}}{{if .ScanEvidence.HasActiveBatch}}1{{end}}{{end}}">
                         <div class="section-title">Formula Discovery</div>
                         <div class="section-note">Scan 100 random current Meineke entries. Requests are written locally now and picked up by the nightly raksasa sync; results stay in the protected editor.</div>
                         <div class="guidance-scan-grid">
@@ -1019,6 +1117,13 @@ const guidanceTemplate = `<!DOCTYPE html>
                             </form>
 
                             <div class="guidance-scan-list">
+                                <div class="guidance-scan-summary" data-scan-summary>
+                                    <span>Scanned headwords <strong data-scan-total-count>{{.ScanEvidence.TotalScannedCount}}</strong></span>
+                                    <span>Zero occurrences <strong data-scan-zero-count>{{.ScanEvidence.ZeroScannedCount}}</strong></span>
+                                    <span>Non-zero hits <strong data-scan-nonzero-count>{{.ScanEvidence.NonzeroCount}}</strong></span>
+                                    <span data-scan-last-scanned>{{if .ScanEvidence.LastScannedAt}}Last scan {{.ScanEvidence.LastScannedAt}}{{else}}No exported scan results yet{{end}}</span>
+                                </div>
+                                <div data-scan-pending>
                                 {{range .Rule.LocalScanRequests}}
                                 <div class="guidance-scan-row pending">
                                     <strong>Pending sync to raksasa</strong>
@@ -1026,8 +1131,10 @@ const guidanceTemplate = `<!DOCTYPE html>
                                     {{if .Notes}}<div class="guidance-scan-meta">{{.Notes}}</div>{{end}}
                                 </div>
                                 {{end}}
+                                </div>
 
-                                {{range .Rule.ScanBatches}}
+                                <div data-scan-batches>
+                                {{range .ScanEvidence.Batches}}
                                 <details class="guidance-scan-row" open>
                                     <summary><strong>Batch {{.ID}}</strong> · {{.StatusCounts.Completed}} / {{.SelectedCount}} completed · {{.ResultCounts.Matched}} matched · {{.ResultCounts.Uncertain}} uncertain</summary>
                                     <div class="guidance-scan-meta">{{.SampleSize}} random {{.SourceDocument}} entries{{if .RequestedBy}} · requested by {{.RequestedBy}}{{end}}{{if .RequestedAt}} · {{.RequestedAt}}{{end}}</div>
@@ -1045,18 +1152,43 @@ const guidanceTemplate = `<!DOCTYPE html>
                                     {{if .Models}}
                                     <div class="guidance-scan-meta">Models: {{range $index, $model := .Models}}{{if $index}}, {{end}}{{$model}}{{end}}</div>
                                     {{end}}
-                                    {{if .Examples}}
-                                    <div class="guidance-scan-examples">
-                                        {{range .Examples}}
-                                        <div class="guidance-scan-example">
-                                            <strong>{{.Lemma}}</strong> · {{.MatchStatus}}{{if .Confidence}} · {{.Confidence}}{{end}}{{if .OccurrenceCount}} · {{.OccurrenceCount}} occurrence{{end}}
-                                            {{if .EvidenceText}}<div>{{.EvidenceText}}</div>{{else if .SourceExcerpt}}<div>{{.SourceExcerpt}}</div>{{end}}
-                                        </div>
-                                        {{end}}
-                                    </div>
-                                    {{end}}
                                 </details>
                                 {{end}}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="guidance-scan-results">
+                            <div class="guidance-scan-results-head">
+                                <strong>Non-zero scan evidence</strong>
+                                <span>Showing latest protected hits from the indexed scan database.</span>
+                            </div>
+                            <div class="guidance-scan-table-wrap">
+                                <table class="guidance-scan-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Headword</th>
+                                            <th>Pattern</th>
+                                            <th>Occurrences</th>
+                                            <th>Evidence</th>
+                                            <th>Scanned</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody data-scan-nonzero-body>
+                                        {{range .ScanEvidence.NonzeroRows}}
+                                        <tr>
+                                            <td>{{.Lemma}}{{if .EntryNumber}} <span class="guidance-scan-meta">#{{.EntryNumber}}</span>{{end}}</td>
+                                            <td>{{.PatternText}}</td>
+                                            <td class="numeric">{{.OccurrenceCount}}</td>
+                                            <td>{{.EvidenceText}}</td>
+                                            <td>{{.ScannedAt}}</td>
+                                        </tr>
+                                        {{else}}
+                                        <tr data-scan-empty>
+                                            <td colspan="5">No non-zero scan results exported for this rule yet.</td>
+                                        </tr>
+                                        {{end}}
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </div>
@@ -1136,10 +1268,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                                     <option value="replace" {{if eq .Rule.ApplicationMode "replace"}}selected{{end}}>Replace</option>
                                 </select>
                             </div>
-                            <div class="full">
-                                <label for="guidance_citations_text_{{.Rule.RuleKey}}">Citations</label>
-                                <textarea name="guidance_citations_text" id="guidance_citations_text_{{.Rule.RuleKey}}">{{.Rule.CitationsText}}</textarea>
-                            </div>
+                            <input type="hidden" name="guidance_citations_text" value="{{.Rule.CitationsText}}">
                             <div class="full">
                                 <label for="guidance_notes_{{.Rule.RuleKey}}">Notes</label>
                                 <textarea name="guidance_notes" id="guidance_notes_{{.Rule.RuleKey}}">{{.Rule.Notes}}</textarea>
@@ -1408,6 +1537,233 @@ const guidanceTemplate = `<!DOCTYPE html>
                 kindSelect.addEventListener("change", updateContextRequirement);
                 updateContextRequirement();
             });
+
+            function clearChildren(node) {
+                while (node && node.firstChild) {
+                    node.removeChild(node.firstChild);
+                }
+            }
+
+            function appendText(node, value) {
+                node.appendChild(document.createTextNode(value || ""));
+            }
+
+            function scanMeta(textValue) {
+                var node = document.createElement("div");
+                node.className = "guidance-scan-meta";
+                appendText(node, textValue || "");
+                return node;
+            }
+
+            function createCountSpan(label, value) {
+                var node = document.createElement("span");
+                appendText(node, label + " " + String(value || 0));
+                return node;
+            }
+
+            function renderPendingRequests(container, requests) {
+                if (!container) {
+                    return;
+                }
+                clearChildren(container);
+                (requests || []).forEach(function (request) {
+                    var row = document.createElement("div");
+                    row.className = "guidance-scan-row pending";
+                    var strong = document.createElement("strong");
+                    appendText(strong, "Pending sync to raksasa");
+                    row.appendChild(strong);
+
+                    var bits = [
+                        String(request.sample_size || 100) + " random " + (request.source_document || "meineke") + " entries"
+                    ];
+                    if (request.reviewer) {
+                        bits.push("requested by " + request.reviewer);
+                    }
+                    if (request.requested_at) {
+                        bits.push(request.requested_at);
+                    }
+                    row.appendChild(scanMeta(bits.join(" · ")));
+                    if (request.notes) {
+                        row.appendChild(scanMeta(request.notes));
+                    }
+                    container.appendChild(row);
+                });
+            }
+
+            function renderBatches(container, batches) {
+                if (!container) {
+                    return;
+                }
+                clearChildren(container);
+                (batches || []).forEach(function (batch) {
+                    var details = document.createElement("details");
+                    details.className = "guidance-scan-row";
+                    details.open = true;
+
+                    var summary = document.createElement("summary");
+                    var strong = document.createElement("strong");
+                    appendText(strong, "Batch " + String(batch.id || ""));
+                    summary.appendChild(strong);
+                    var statusCounts = batch.status_counts || {};
+                    var resultCounts = batch.result_counts || {};
+                    appendText(
+                        summary,
+                        " · " + String(statusCounts.completed || 0) + " / " + String(batch.selected_count || 0) +
+                            " completed · " + String(resultCounts.matched || 0) +
+                            " matched · " + String(resultCounts.uncertain || 0) + " uncertain"
+                    );
+                    details.appendChild(summary);
+
+                    var metaBits = [
+                        String(batch.sample_size || 0) + " random " + (batch.source_document || "meineke") + " entries"
+                    ];
+                    if (batch.requested_by) {
+                        metaBits.push("requested by " + batch.requested_by);
+                    }
+                    if (batch.requested_at) {
+                        metaBits.push(batch.requested_at);
+                    }
+                    details.appendChild(scanMeta(metaBits.join(" · ")));
+                    if (batch.notes) {
+                        details.appendChild(scanMeta(batch.notes));
+                    }
+
+                    var counts = document.createElement("div");
+                    counts.className = "guidance-scan-counts";
+                    counts.appendChild(createCountSpan("Queued", statusCounts.pending));
+                    counts.appendChild(createCountSpan("Running", statusCounts.running));
+                    counts.appendChild(createCountSpan("Completed", statusCounts.completed));
+                    counts.appendChild(createCountSpan("Failed", statusCounts.failed));
+                    counts.appendChild(createCountSpan("Matched", resultCounts.matched));
+                    counts.appendChild(createCountSpan("Not matched", resultCounts.not_matched));
+                    counts.appendChild(createCountSpan("Uncertain", resultCounts.uncertain));
+                    counts.appendChild(createCountSpan("Tokens", batch.tokens_used));
+                    details.appendChild(counts);
+
+                    if (batch.models && batch.models.length) {
+                        details.appendChild(scanMeta("Models: " + batch.models.join(", ")));
+                    }
+                    container.appendChild(details);
+                });
+            }
+
+            function renderNonzeroRows(panel, evidence) {
+                var body = panel.querySelector("[data-scan-nonzero-body]");
+                if (!body) {
+                    return;
+                }
+                clearChildren(body);
+                var rows = (evidence && evidence.nonzero_rows) || [];
+                if (!rows.length) {
+                    var emptyRow = document.createElement("tr");
+                    emptyRow.setAttribute("data-scan-empty", "1");
+                    var emptyCell = document.createElement("td");
+                    emptyCell.colSpan = 5;
+                    appendText(emptyCell, "No non-zero scan results exported for this rule yet.");
+                    emptyRow.appendChild(emptyCell);
+                    body.appendChild(emptyRow);
+                    return;
+                }
+                rows.forEach(function (result) {
+                    var tr = document.createElement("tr");
+                    var headword = document.createElement("td");
+                    appendText(headword, result.lemma || "");
+                    if (result.entry_number) {
+                        var entry = document.createElement("span");
+                        entry.className = "guidance-scan-meta";
+                        appendText(entry, " #" + String(result.entry_number));
+                        headword.appendChild(entry);
+                    }
+                    tr.appendChild(headword);
+
+                    var pattern = document.createElement("td");
+                    appendText(pattern, result.pattern_text || "");
+                    tr.appendChild(pattern);
+
+                    var occurrences = document.createElement("td");
+                    occurrences.className = "numeric";
+                    appendText(occurrences, String(result.occurrence_count || 0));
+                    tr.appendChild(occurrences);
+
+                    var evidenceCell = document.createElement("td");
+                    appendText(evidenceCell, result.evidence_text || "");
+                    tr.appendChild(evidenceCell);
+
+                    var scanned = document.createElement("td");
+                    appendText(scanned, result.scanned_at || "");
+                    tr.appendChild(scanned);
+
+                    body.appendChild(tr);
+                });
+            }
+
+            function updateScanPanel(panel, payload) {
+                if (!panel || !payload) {
+                    return;
+                }
+                var evidence = payload.evidence || {};
+                var total = panel.querySelector("[data-scan-total-count]");
+                var zero = panel.querySelector("[data-scan-zero-count]");
+                var nonzero = panel.querySelector("[data-scan-nonzero-count]");
+                var last = panel.querySelector("[data-scan-last-scanned]");
+                if (total) {
+                    total.textContent = String(evidence.total_scanned_count || 0);
+                }
+                if (zero) {
+                    zero.textContent = String(evidence.zero_scanned_count || 0);
+                }
+                if (nonzero) {
+                    nonzero.textContent = String(evidence.nonzero_count || 0);
+                }
+                if (last) {
+                    last.textContent = evidence.last_scanned_at ? "Last scan " + evidence.last_scanned_at : "No exported scan results yet";
+                }
+                renderPendingRequests(panel.querySelector("[data-scan-pending]"), payload.pending_requests || []);
+                renderBatches(panel.querySelector("[data-scan-batches]"), evidence.batches || []);
+                renderNonzeroRows(panel, evidence);
+                panel.setAttribute(
+                    "data-scan-active",
+                    ((payload.pending_requests || []).length || evidence.has_active_batch) ? "1" : ""
+                );
+            }
+
+            function pollScanPanel(panel) {
+                var ruleKey = panel && panel.getAttribute("data-guidance-scan-panel");
+                if (!ruleKey) {
+                    return;
+                }
+                fetch("/cgi-bin/guidance_status.cgi?rule_key=" + encodeURIComponent(ruleKey), {
+                    credentials: "same-origin",
+                    headers: { "Accept": "application/json" }
+                })
+                    .then(function (response) {
+                        if (!response.ok) {
+                            throw new Error("status " + response.status);
+                        }
+                        return response.json();
+                    })
+                    .then(function (payload) {
+                        updateScanPanel(panel, payload);
+                    })
+                    .catch(function () {
+                        panel.setAttribute("data-scan-active", "");
+                    });
+            }
+
+            var scanPanels = Array.prototype.slice.call(document.querySelectorAll("[data-guidance-scan-panel]"));
+            var activeScanPanels = scanPanels.filter(function (panel) {
+                return panel.getAttribute("data-scan-active") === "1";
+            });
+            if (activeScanPanels.length) {
+                activeScanPanels.forEach(pollScanPanel);
+                window.setInterval(function () {
+                    activeScanPanels.forEach(function (panel) {
+                        if (panel.getAttribute("data-scan-active") === "1") {
+                            pollScanPanel(panel);
+                        }
+                    });
+                }, 15000);
+            }
 
             var initialTargetId = "";
             if (window.location.hash) {

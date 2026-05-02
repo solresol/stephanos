@@ -290,7 +290,7 @@ if [ "$TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT" -gt 0 ]; then
     echo "Step 5k1: Queueing translation-guidance scans..." | tee -a "$LOGFILE"
     guidance_enqueue_args=(
         --all-active-rules
-        --source-document billerbeck
+        --source-document meineke
         --max-queue-rows "$TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT"
         --created-by "run_daily_pipeline.sh"
         --notes "daily pipeline incremental scan"
@@ -308,6 +308,13 @@ TRANSLATION_GUIDANCE_SCAN_MODEL="${TRANSLATION_GUIDANCE_SCAN_MODEL:-gpt-5.4-mini
 TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT="${TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT:-250000}"
 TRANSLATION_GUIDANCE_SCAN_FORMULA_AI_LIMIT="${TRANSLATION_GUIDANCE_SCAN_FORMULA_AI_LIMIT:-500}"
 TRANSLATION_GUIDANCE_SCAN_DELAY="${TRANSLATION_GUIDANCE_SCAN_DELAY:-0}"
+case "$TRANSLATION_GUIDANCE_SCAN_MODEL" in
+    *-mini*) ;;
+    *)
+        echo "  ERROR: TRANSLATION_GUIDANCE_SCAN_MODEL must be a *-mini model, got ${TRANSLATION_GUIDANCE_SCAN_MODEL}" | tee -a "$LOGFILE"
+        TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT=0
+        ;;
+esac
 if [ "$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT" -gt 0 ]; then
     echo "Step 5k2: Processing translation-guidance scans..." | tee -a "$LOGFILE"
     uv run process_translation_guidance_scans.py \
@@ -413,6 +420,7 @@ uv run generate_downloads_page.py 2>&1 | tee -a "$LOGFILE"
 # Step 8b: Export lemma data for review interface
 echo "Step 8b: Exporting lemma data for review interface..." | tee -a "$LOGFILE"
 uv run export_for_review.py 2>&1 | tee -a "$LOGFILE"
+uv run export_guidance_scan_db.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 9: Deploy to merah
 echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
@@ -430,6 +438,8 @@ rsync -az exports/source_citation_mentions.csv stephanos@merah.cassia.ifost.org.
 rsync -az exports/nodegoat/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/nodegoat/ 2>&1 | tee -a "$LOGFILE"
 # Deploy review data JSON
 rsync -az review_data.json stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ 2>&1 | tee -a "$LOGFILE"
+# Deploy protected scan evidence database
+rsync -az guidance_scan_results.db stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ 2>&1 | tee -a "$LOGFILE"
 # Deploy review CGI binaries from current source
 ./review_cgi/deploy_review_cgi.sh 2>&1 | tee -a "$LOGFILE" || echo "  Warning: review CGI deploy failed" | tee -a "$LOGFILE"
 

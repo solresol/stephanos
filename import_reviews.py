@@ -1118,8 +1118,24 @@ def import_translation_guidance_scan_requests(sqlite_cur, pg_cur) -> tuple[int, 
                  AND stv.source_document = %s
                  AND stv.is_current = TRUE
                 WHERE COALESCE(stv.text_body, '') <> ''
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM translation_guidance_matches m
+                      WHERE m.rule_revision_id = %s
+                        AND m.lemma_id = a.id
+                        AND m.source_text_version_id = stv.id
+                        AND m.detector_kind = 'formula_prefilter'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM translation_guidance_scan_queue q
+                      WHERE q.rule_revision_id = %s
+                        AND q.lemma_id = a.id
+                        AND q.source_text_version_id = stv.id
+                        AND q.status IN ('pending', 'running')
+                  )
             """
-            source_params: list[object] = [source_document]
+            source_params: list[object] = [source_document, rule_revision_id, rule_revision_id]
             if not include_quarantined and has_quarantined_column:
                 source_query += " AND COALESCE(a.quarantined, FALSE) = FALSE"
             source_query += " ORDER BY random() LIMIT %s"
@@ -1188,7 +1204,7 @@ def import_translation_guidance_scan_requests(sqlite_cur, pg_cur) -> tuple[int, 
                     updated_at = NOW()
                 WHERE id = %s
                 """,
-                (len(source_rows), scan_batch_id),
+                (inserted_for_batch, scan_batch_id),
             )
             imported += 1
             queued += inserted_for_batch

@@ -5,8 +5,9 @@ Publish canonical translation updates immediately.
 Runs the minimal publish chain needed for canonical changes to appear on public pages:
 1) refresh legacy canonical cache fields
 2) export review data
-3) regenerate reference site
-4) sync reference site + review JSON to merah
+3) export protected guidance scan DB
+4) regenerate reference site
+5) sync reference site + review data to merah
 """
 from __future__ import annotations
 
@@ -54,6 +55,7 @@ def main():
     steps = [
         ("refresh_legacy_canonical_fields", ["uv", "run", "refresh_legacy_canonical_fields.py"], 180),
         ("export_for_review", ["uv", "run", "export_for_review.py"], 180),
+        ("export_guidance_scan_db", ["uv", "run", "export_guidance_scan_db.py"], 180),
         ("generate_reference_site", ["uv", "run", "generate_reference_site.py"], 300),
         (
             "rsync_reference_site_to_merah",
@@ -71,6 +73,16 @@ def main():
                 "rsync",
                 "-az",
                 "review_data.json",
+                "stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/",
+            ],
+            180,
+        ),
+        (
+            "rsync_guidance_scan_db_to_merah",
+            [
+                "rsync",
+                "-az",
+                "guidance_scan_results.db",
                 "stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/",
             ],
             180,

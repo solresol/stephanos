@@ -184,7 +184,6 @@ def fetch_rules() -> list[dict[str, object]]:
             {lifecycle_select},
             COALESCE(r.status, '') AS status,
             COALESCE(r.application_mode, '') AS application_mode,
-            COALESCE(r.citations_text, '') AS citations_text,
             COALESCE(r.notes, '') AS notes,
             COALESCE(r.updated_at::text, '') AS updated_at,
             COALESCE(lr.revision_number, 0) AS revision_number,
@@ -226,13 +225,12 @@ def fetch_rules() -> list[dict[str, object]]:
                 "lifecycle_stage": row[10] or "",
                 "status": row[11] or "",
                 "application_mode": row[12] or "",
-                "citations_text": row[13] or "",
-                "notes": row[14] or "",
-                "updated_at": row[15] or "",
-                "revision_number": int(row[16] or 0),
-                "match_count": int(row[17] or 0),
-                "uncertain_count": int(row[18] or 0),
-                "backlog_count": int(row[19] or 0),
+                "notes": row[13] or "",
+                "updated_at": row[14] or "",
+                "revision_number": int(row[15] or 0),
+                "match_count": int(row[16] or 0),
+                "uncertain_count": int(row[17] or 0),
+                "backlog_count": int(row[18] or 0),
             }
         )
     return rules
@@ -288,7 +286,6 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                     "context_condition",
                     "bias_strength",
                     "lifecycle_stage",
-                    "citations_text",
                     "notes",
                 )
             ]
@@ -311,7 +308,6 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                 data-domain="{esc(rule['semantic_domain'])}"
                 data-context="{esc(rule['context_condition'])}"
                 data-bias-strength="{esc(rule['bias_strength'])}"
-                data-citations="{esc(rule['citations_text'])}"
                 data-notes="{esc(rule['notes'])}"
                 data-revision="{int(rule['revision_number'])}"
                 data-matched="{int(rule['match_count'])}"
@@ -329,7 +325,6 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                 {render_table_cell(rule["semantic_domain"], css_class="compact")}
                 {render_table_cell(rule["context_condition"], css_class="compact")}
                 {render_table_cell(rule["bias_strength"], css_class="compact")}
-                {render_table_cell(rule["citations_text"], css_class="compact")}
                 {render_table_cell(rule["notes"], css_class="compact wide")}
                 <td class="numeric">{int(rule['revision_number'])}</td>
                 <td class="numeric">{int(rule['match_count'])}</td>
@@ -350,7 +345,7 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
             <div class="guidance-table-controls">
                 <div>
                     <label for="guidance_table_search">Search</label>
-                    <input type="search" id="guidance_table_search" placeholder="Label, translation, notes, citations">
+                    <input type="search" id="guidance_table_search" placeholder="Label, translation, notes">
                 </div>
                 <div>
                     <label for="guidance_table_kind">Kind</label>
@@ -419,7 +414,6 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                             <th class="sortable" data-sort="domain">Semantic domain</th>
                             <th class="sortable" data-sort="context">Context condition</th>
                             <th class="sortable" data-sort="bias-strength">Bias</th>
-                            <th class="sortable" data-sort="citations">Citations</th>
                             <th class="sortable" data-sort="notes">Notes</th>
                             <th class="sortable numeric" data-sort="revision">Revision</th>
                             <th class="sortable numeric" data-sort="matched">Matched</th>

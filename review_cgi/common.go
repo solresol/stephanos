@@ -336,9 +336,10 @@ func effectiveReviewStatus(review *Review) string {
 
 // Config holds application configuration
 type Config struct {
-	DataFile     string
-	DBPath       string
-	ProtectedURL string
+	DataFile           string
+	DBPath             string
+	GuidanceScanDBPath string
+	ProtectedURL       string
 }
 
 const commentaryImportPrefix = "merah_review:"
@@ -349,9 +350,10 @@ var buildTime = ""
 // GetConfig returns the application configuration
 func GetConfig() Config {
 	return Config{
-		DataFile:     "../db/review_data.json",
-		DBPath:       "../db/reviews.db",
-		ProtectedURL: "/protected/",
+		DataFile:           "../db/review_data.json",
+		DBPath:             "../db/reviews.db",
+		GuidanceScanDBPath: "../db/guidance_scan_results.db",
+		ProtectedURL:       "/protected/",
 	}
 }
 
@@ -481,6 +483,28 @@ func OpenDatabase(dbPath string) (*sql.DB, error) {
 		db.Exec(migration) // Ignore errors (column may already exist)
 	}
 
+	return db, nil
+}
+
+func OpenReadOnlyDatabaseIfExists(dbPath string) (*sql.DB, error) {
+	if strings.TrimSpace(dbPath) == "" {
+		return nil, nil
+	}
+	if _, err := os.Stat(dbPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to stat database: %w", err)
+	}
+
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
 	return db, nil
 }
 
