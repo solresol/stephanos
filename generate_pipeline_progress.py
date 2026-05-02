@@ -9,11 +9,33 @@ Usage:
   uv run generate_pipeline_progress.py
 """
 import json
+import html as html_module
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import db
 from generate_spelling_variants import generate_variants
+
+
+def pg_table_exists(cur, table_name: str) -> bool:
+    cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table_name}",))
+    return bool(cur.fetchone()[0])
+
+
+def pg_column_exists(cur, table_name: str, column_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = %s
+              AND column_name = %s
+        )
+        """,
+        (table_name, column_name),
+    )
+    return bool(cur.fetchone()[0])
 
 
 def get_progress_stats(conn) -> dict:
@@ -438,7 +460,61 @@ def get_progress_stats(conn) -> dict:
     """)
     stats["translation_risk"]["rate_7d"] = cur.fetchone()[0]
 
-    # 13. nodegoat sync
+    # 13. Translation-guidance scan coverage
+    if pg_table_exists(cur, "translation_guidance_rules") and pg_table_exists(cur, "translation_guidance_matches"):
+        rule_filters = ["COALESCE(status, '') <> 'retired'"]
+        if pg_column_exists(cur, "translation_guidance_rules", "lifecycle_stage"):
+            rule_filters.append("COALESCE(lifecycle_stage, 'guidance') <> 'inactive'")
+        cur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM translation_guidance_rules
+            WHERE {' AND '.join(rule_filters)}
+            """
+        )
+        guidance_rule_total = cur.fetchone()[0]
+
+        if pg_table_exists(cur, "lemma_source_text_versions"):
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM assembled_lemmas a
+                JOIN lemma_source_text_versions stv
+                  ON stv.lemma_id = a.id
+                 AND stv.source_document = 'meineke'
+                 AND stv.is_current = TRUE
+                WHERE COALESCE(stv.text_body, '') <> ''
+                  AND COALESCE(a.quarantined, FALSE) = FALSE
+            """)
+        else:
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM assembled_lemmas
+                WHERE billerbeck_id IS NOT NULL
+            """)
+        guidance_headword_total = cur.fetchone()[0]
+        guidance_potential_total = guidance_headword_total * guidance_rule_total
+
+        cur.execute("SELECT COUNT(*) FROM translation_guidance_matches")
+        guidance_checked_total = cur.fetchone()[0]
+
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM translation_guidance_matches
+            WHERE updated_at > NOW() - INTERVAL '7 days'
+        """)
+        guidance_checked_rate = cur.fetchone()[0]
+
+        stats["translation_guidance_checks"] = {
+            "name": "Translation Guidance Checks",
+            "total": guidance_potential_total,
+            "completed": guidance_checked_total,
+            "pending": max(guidance_potential_total - guidance_checked_total, 0),
+            "unit": "rule/headword checks",
+            "rate_7d": guidance_checked_rate,
+            "detail": f"{guidance_headword_total:,} headwords x {guidance_rule_total:,} guidance rules",
+        }
+
+    # 14. nodegoat sync
     cur.execute("""
         SELECT
             COUNT(*) as total,
@@ -496,6 +572,7 @@ def generate_html(stats: dict) -> str:
         rate_7d = data.get("rate_7d", 0)
 
         pct = (completed / total * 100) if total > 0 else 0
+        bar_pct = max(0, min(pct, 100))
         eta = estimate_completion(pending, rate_7d)
 
         # Color based on progress
@@ -510,14 +587,19 @@ def generate_html(stats: dict) -> str:
         else:
             color = "#ef4444"  # red
 
+        stage_cell = f"<strong>{html_module.escape(str(data['name']))}</strong>"
+        if data.get("detail"):
+            detail = html_module.escape(str(data["detail"]))
+            stage_cell += f'<div style="color: #6b7280; font-size: 0.85em; margin-top: 3px;">{detail}</div>'
+
         rows.append(f"""
         <tr>
-            <td><strong>{data['name']}</strong></td>
+            <td>{stage_cell}</td>
             <td style="text-align: right;">{completed:,}</td>
             <td style="text-align: right;">{total:,}</td>
             <td>
                 <div style="background: #e5e7eb; border-radius: 4px; overflow: hidden; height: 20px;">
-                    <div style="background: {color}; width: {pct:.1f}%; height: 100%;"></div>
+                    <div style="background: {color}; width: {bar_pct:.1f}%; height: 100%;"></div>
                 </div>
             </td>
             <td style="text-align: right;">{pct:.1f}%</td>

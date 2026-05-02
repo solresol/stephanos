@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -986,6 +987,130 @@ func FetchUrgentGuidanceScanEvidence(db *sql.DB, ruleKey string, limit int) (Gui
 		evidence.NonzeroRows = append(evidence.NonzeroRows, row)
 	}
 	return evidence, rows.Err()
+}
+
+func FetchUrgentGuidanceHitsForLemma(db *sql.DB, lemmaID int) ([]GuidanceHit, error) {
+	if db == nil || lemmaID <= 0 {
+		return nil, nil
+	}
+	if err := EnsureGuidanceSchema(db); err != nil {
+		return nil, err
+	}
+
+	rows, err := db.Query(
+		`
+		SELECT
+			id,
+			target_rule_key,
+			rule_id,
+			rule_revision_id,
+			rule_key,
+			rule_label,
+			COALESCE(preferred_translation, ''),
+			lemma_id,
+			source_text_version_id,
+			COALESCE(source_document, ''),
+			COALESCE(source_variant, ''),
+			COALESCE(match_status, ''),
+			occurrence_count,
+			COALESCE(confidence, ''),
+			COALESCE(evidence_text, ''),
+			COALESCE(finished_at, ''),
+			COALESCE(updated_at, '')
+		FROM translation_guidance_urgent_scan_items
+		WHERE lemma_id = ?
+		  AND status = 'completed'
+		  AND (
+		      occurrence_count > 0
+		      OR COALESCE(match_status, '') IN ('matched', 'uncertain', 'needs_review')
+		  )
+		ORDER BY finished_at DESC, id DESC
+		`,
+		lemmaID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	hits := []GuidanceHit{}
+	for rows.Next() {
+		var (
+			itemID               int
+			targetRuleKey        string
+			ruleID               int
+			ruleRevisionID       int
+			ruleKey              string
+			ruleLabel            string
+			preferredTranslation string
+			rowLemmaID           int
+			sourceTextVersionID  int
+			sourceDocument       string
+			sourceVariant        string
+			matchStatus          string
+			occurrenceCount      int
+			confidence           string
+			evidenceText         string
+			finishedAt           string
+			updatedAt            string
+		)
+		if err := rows.Scan(
+			&itemID,
+			&targetRuleKey,
+			&ruleID,
+			&ruleRevisionID,
+			&ruleKey,
+			&ruleLabel,
+			&preferredTranslation,
+			&rowLemmaID,
+			&sourceTextVersionID,
+			&sourceDocument,
+			&sourceVariant,
+			&matchStatus,
+			&occurrenceCount,
+			&confidence,
+			&evidenceText,
+			&finishedAt,
+			&updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		key := strings.TrimSpace(ruleKey)
+		if key == "" {
+			key = strings.TrimSpace(targetRuleKey)
+		}
+		label := strings.TrimSpace(ruleLabel)
+		if label == "" {
+			label = key
+		}
+		status := strings.TrimSpace(matchStatus)
+		if status == "" && occurrenceCount > 0 {
+			status = "matched"
+		}
+		hits = append(hits, GuidanceHit{
+			MatchID:              -itemID,
+			LemmaID:              rowLemmaID,
+			SourceTextVersionID:  strconv.Itoa(sourceTextVersionID),
+			SourceDocument:       sourceDocument,
+			SourceVariant:        sourceVariant,
+			SourceIsCurrent:      true,
+			RuleID:               ruleID,
+			RuleKey:              key,
+			Kind:                 "formula",
+			Label:                label,
+			PreferredTranslation: preferredTranslation,
+			ApplicationMode:      "advisory",
+			MatchStatus:          status,
+			Confidence:           confidence,
+			OccurrenceCount:      occurrenceCount,
+			EvidenceText:         evidenceText,
+			DetectorKind:         "urgent_formula_scan",
+			DetectedAt:           finishedAt,
+			UpdatedAt:            updatedAt,
+			RuleRevisionID:       ruleRevisionID,
+		})
+	}
+	return hits, rows.Err()
 }
 
 func MergeGuidanceScanEvidence(base GuidanceScanEvidence, local GuidanceScanEvidence, limit int) GuidanceScanEvidence {

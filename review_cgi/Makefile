@@ -1,6 +1,6 @@
 .PHONY: all clean test
 
-COMMON_REVIEW_SRCS = common.go page.go templates.go shared_helpers.go
+COMMON_REVIEW_SRCS = common.go guidance_common.go page.go templates.go shared_helpers.go
 GUIDANCE_SRCS = common.go guidance_common.go guidance_urgent_common.go
 
 all: review.cgi entities.cgi guidance.cgi guidance_status.cgi guidance_urgent_worker save.cgi status.cgi

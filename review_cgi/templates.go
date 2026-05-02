@@ -982,7 +982,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
 
                 <div class="guidance-hit-panel context-panel">
                     <div class="section-title">Translation Guidance Hits</div>
-                    <div class="context-note">Current guidance detections for this source text, with prompt provenance for the displayed AI run when recorded.</div>
+                    <div class="context-note">Current guidance detections for this source text, including completed urgent local formula scans and prompt provenance for the displayed AI run when recorded.</div>
 
                     {{if .GuidanceStrongHits}}
                     <div class="guidance-hit-subheading">Matched guidance</div>
@@ -1001,6 +1001,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                 <div><strong>Preferred/advisory:</strong> {{.PreferredLabel}}</div>
                                 <div><strong>Rule revision:</strong> {{.RevisionLabel}}</div>
                                 <div><strong>Source:</strong> {{.SourceLabel}}</div>
+                                <div><strong>Occurrences:</strong> {{.Hit.OccurrenceCount}}</div>
                                 <div><strong>Prompt use:</strong> <span class="{{if .IncludedInDisplayedPrompt}}guidance-hit-prompt-included{{else}}guidance-hit-prompt-missing{{end}}">{{.PromptStatusLabel}}</span></div>
                                 {{if .PromptTextExcerpt}}<div><strong>Prompt excerpt:</strong><div class="guidance-hit-prompt-excerpt">{{.PromptTextExcerpt}}</div></div>{{end}}
                                 <div><strong>Evidence:</strong>{{if .Hit.EvidenceText}}<div class="guidance-hit-evidence">{{.Hit.EvidenceText}}</div>{{else}} <span class="empty-state">No evidence excerpt recorded.</span>{{end}}</div>
@@ -1028,6 +1029,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                 <div><strong>Preferred/advisory:</strong> {{.PreferredLabel}}</div>
                                 <div><strong>Rule revision:</strong> {{.RevisionLabel}}</div>
                                 <div><strong>Source:</strong> {{.SourceLabel}}</div>
+                                <div><strong>Occurrences:</strong> {{.Hit.OccurrenceCount}}</div>
                                 <div><strong>Prompt use:</strong> <span class="{{if .IncludedInDisplayedPrompt}}guidance-hit-prompt-included{{else}}guidance-hit-prompt-missing{{end}}">{{.PromptStatusLabel}}</span></div>
                                 {{if .PromptTextExcerpt}}<div><strong>Prompt excerpt:</strong><div class="guidance-hit-prompt-excerpt">{{.PromptTextExcerpt}}</div></div>{{end}}
                                 <div><strong>Evidence:</strong>{{if .Hit.EvidenceText}}<div class="guidance-hit-evidence">{{.Hit.EvidenceText}}</div>{{else}} <span class="empty-state">No evidence excerpt recorded.</span>{{end}}</div>
@@ -1056,6 +1058,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                     <div><strong>Preferred/advisory:</strong> {{.PreferredLabel}}</div>
                                     <div><strong>Rule revision:</strong> {{.RevisionLabel}}</div>
                                     <div><strong>Source:</strong> {{.SourceLabel}}</div>
+                                    <div><strong>Occurrences:</strong> {{.Hit.OccurrenceCount}}</div>
                                     <div><strong>Prompt use:</strong> <span class="{{if .IncludedInDisplayedPrompt}}guidance-hit-prompt-included{{else}}guidance-hit-prompt-missing{{end}}">{{.PromptStatusLabel}}</span></div>
                                     <div><strong>Evidence:</strong>{{if .Hit.EvidenceText}}<div class="guidance-hit-evidence">{{.Hit.EvidenceText}}</div>{{else}} <span class="empty-state">No evidence excerpt recorded.</span>{{end}}</div>
                                     <div class="guidance-hit-meta">Detector: {{if .Hit.DetectorKind}}{{.Hit.DetectorKind}}{{else}}unknown{{end}}{{if .Hit.UpdatedAt}} · updated {{.Hit.UpdatedAt}}{{end}} · <a href="{{.EditorURL}}">Open rule in guidance editor</a></div>

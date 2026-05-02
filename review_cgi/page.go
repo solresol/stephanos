@@ -410,11 +410,10 @@ func buildGuidanceHitView(hit GuidanceHit, latestRunID int) GuidanceHitView {
 	included, promptStatus, promptExcerpt := reviewGuidancePromptStatus(hit, latestRunID)
 	kind := strings.TrimSpace(hit.Kind)
 	editorURL := "/cgi-bin/guidance.cgi"
-	if kind != "" {
-		editorURL += "?kind=" + url.QueryEscape(kind)
-	}
 	if key := strings.TrimSpace(hit.RuleKey); key != "" {
-		editorURL += "#rule-" + url.PathEscape(key)
+		editorURL += "?rule=" + url.QueryEscape(key)
+	} else if kind != "" {
+		editorURL += "?kind=" + url.QueryEscape(kind)
 	}
 	return GuidanceHitView{
 		Hit:                       hit,
@@ -430,6 +429,39 @@ func buildGuidanceHitView(hit GuidanceHit, latestRunID int) GuidanceHitView {
 		PromptTextExcerpt:         promptExcerpt,
 		EditorURL:                 editorURL,
 	}
+}
+
+func guidanceHitRuleSourceKey(hit GuidanceHit) string {
+	ruleKey := strings.TrimSpace(hit.RuleKey)
+	sourceTextVersionID := strings.TrimSpace(hit.SourceTextVersionID)
+	if ruleKey == "" || sourceTextVersionID == "" {
+		return ""
+	}
+	return ruleKey + "\x00" + sourceTextVersionID
+}
+
+func mergeGuidanceHits(existing []GuidanceHit, local []GuidanceHit) []GuidanceHit {
+	if len(local) == 0 {
+		return existing
+	}
+	merged := make([]GuidanceHit, 0, len(existing)+len(local))
+	seen := map[string]bool{}
+	for _, hit := range existing {
+		if key := guidanceHitRuleSourceKey(hit); key != "" {
+			seen[key] = true
+		}
+		merged = append(merged, hit)
+	}
+	for _, hit := range local {
+		if key := guidanceHitRuleSourceKey(hit); key != "" {
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+		}
+		merged = append(merged, hit)
+	}
+	return merged
 }
 
 func splitGuidanceHitViews(lemma *Lemma, latestRunID int) ([]GuidanceHitView, []GuidanceHitView, []GuidanceHitView) {
@@ -640,6 +672,11 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 	latestAITranslation, latestAITranslationLabel, latestAITranslationRunID := chooseLatestAITranslation(currentLemma)
 	entityTranslation, entityTranslationLabel := chooseEntityContextTranslation(review, currentLemma)
 	primaryEntities, secondaryEntities, legacyPlaceEntities := splitEntityBuckets(currentLemma)
+	localUrgentGuidanceHits, err := FetchUrgentGuidanceHitsForLemma(db, currentLemma.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read urgent guidance hits: %w", err)
+	}
+	currentLemma.GuidanceHits = mergeGuidanceHits(currentLemma.GuidanceHits, localUrgentGuidanceHits)
 	guidanceStrongHits, guidanceUncertainHits, guidanceProperNounHits := splitGuidanceHitViews(currentLemma, latestAITranslationRunID)
 
 	pageData := &PageData{
