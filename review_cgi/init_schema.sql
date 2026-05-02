@@ -165,3 +165,20 @@ CREATE TABLE IF NOT EXISTS translation_guidance_actions (
 
 CREATE INDEX IF NOT EXISTS idx_translation_guidance_actions_rule
 ON translation_guidance_actions(target_rule_key, reviewed_at, id);
+
+-- Local protected formula-discovery requests.
+-- PostgreSQL imports these into durable scan batches during review sync.
+CREATE TABLE IF NOT EXISTS translation_guidance_scan_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_rule_key TEXT NOT NULL,
+    rule_label TEXT,
+    sample_size INTEGER NOT NULL DEFAULT 100,
+    source_document TEXT NOT NULL DEFAULT 'meineke' CHECK (source_document = 'meineke'),
+    include_quarantined INTEGER NOT NULL DEFAULT 0 CHECK (include_quarantined IN (0, 1)),
+    notes TEXT,
+    reviewer_username TEXT,
+    requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_translation_guidance_scan_requests_rule
+ON translation_guidance_scan_requests(target_rule_key, requested_at, id);

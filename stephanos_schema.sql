@@ -1814,6 +1814,53 @@ ALTER SEQUENCE public.translation_guidance_rules_id_seq OWNED BY public.translat
 
 
 --
+-- Name: translation_guidance_scan_batches; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_scan_batches (
+    id integer NOT NULL,
+    source_key text NOT NULL,
+    rule_id integer NOT NULL,
+    rule_revision_id integer NOT NULL,
+    target_rule_key text NOT NULL,
+    source_document text DEFAULT 'meineke'::text NOT NULL,
+    scope_kind text DEFAULT 'random_sample'::text NOT NULL,
+    sample_size integer NOT NULL,
+    selected_count integer DEFAULT 0 NOT NULL,
+    include_quarantined boolean DEFAULT false NOT NULL,
+    requested_by text,
+    requested_at timestamp with time zone,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT translation_guidance_scan_batches_sample_size_check CHECK ((sample_size > 0)),
+    CONSTRAINT translation_guidance_scan_batches_scope_kind_check CHECK ((scope_kind = ANY (ARRAY['random_sample'::text]))),
+    CONSTRAINT translation_guidance_scan_batches_selected_count_check CHECK ((selected_count >= 0)),
+    CONSTRAINT translation_guidance_scan_batches_source_document_check CHECK ((source_document = ANY (ARRAY['meineke'::text])))
+);
+
+
+--
+-- Name: translation_guidance_scan_batches_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_guidance_scan_batches_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_guidance_scan_batches_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_guidance_scan_batches_id_seq OWNED BY public.translation_guidance_scan_batches.id;
+
+
+--
 -- Name: translation_guidance_scan_queue; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1823,6 +1870,7 @@ CREATE TABLE public.translation_guidance_scan_queue (
     rule_revision_id integer NOT NULL,
     lemma_id integer NOT NULL,
     source_text_version_id integer NOT NULL,
+    scan_batch_id integer,
     status text DEFAULT 'pending'::text NOT NULL,
     priority integer DEFAULT 100 NOT NULL,
     detector_kind text,
@@ -2329,6 +2377,13 @@ ALTER TABLE ONLY public.translation_guidance_rules ALTER COLUMN id SET DEFAULT n
 
 
 --
+-- Name: translation_guidance_scan_batches id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_batches ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_scan_batches_id_seq'::regclass);
+
+
+--
 -- Name: translation_guidance_scan_queue id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -2775,6 +2830,14 @@ ALTER TABLE ONLY public.translation_guidance_rule_revisions
 
 ALTER TABLE ONLY public.translation_guidance_rules
     ADD CONSTRAINT translation_guidance_rules_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_scan_batches translation_guidance_scan_batches_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_batches
+    ADD CONSTRAINT translation_guidance_scan_batches_pkey PRIMARY KEY (id);
 
 
 --
@@ -3465,10 +3528,31 @@ CREATE UNIQUE INDEX translation_guidance_rules_rule_key_idx ON public.translatio
 
 
 --
+-- Name: translation_guidance_scan_batches_rule_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_scan_batches_rule_idx ON public.translation_guidance_scan_batches USING btree (rule_id, created_at DESC);
+
+
+--
+-- Name: translation_guidance_scan_batches_source_key_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_guidance_scan_batches_source_key_idx ON public.translation_guidance_scan_batches USING btree (source_key);
+
+
+--
 -- Name: translation_guidance_scan_queue_active_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX translation_guidance_scan_queue_active_idx ON public.translation_guidance_scan_queue USING btree (rule_revision_id, lemma_id, source_text_version_id) WHERE (status = ANY (ARRAY['pending'::text, 'running'::text]));
+
+
+--
+-- Name: translation_guidance_scan_queue_batch_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_scan_queue_batch_idx ON public.translation_guidance_scan_queue USING btree (scan_batch_id, status, updated_at) WHERE (scan_batch_id IS NOT NULL);
 
 
 --
@@ -4007,6 +4091,22 @@ ALTER TABLE ONLY public.translation_guidance_rule_revisions
 
 
 --
+-- Name: translation_guidance_scan_batches translation_guidance_scan_batches_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_batches
+    ADD CONSTRAINT translation_guidance_scan_batches_rule_id_fkey FOREIGN KEY (rule_id) REFERENCES public.translation_guidance_rules(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_scan_batches translation_guidance_scan_batches_rule_revision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_batches
+    ADD CONSTRAINT translation_guidance_scan_batches_rule_revision_id_fkey FOREIGN KEY (rule_revision_id) REFERENCES public.translation_guidance_rule_revisions(id) ON DELETE CASCADE;
+
+
+--
 -- Name: translation_guidance_scan_queue translation_guidance_scan_queue_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4028,6 +4128,14 @@ ALTER TABLE ONLY public.translation_guidance_scan_queue
 
 ALTER TABLE ONLY public.translation_guidance_scan_queue
     ADD CONSTRAINT translation_guidance_scan_queue_rule_revision_id_fkey FOREIGN KEY (rule_revision_id) REFERENCES public.translation_guidance_rule_revisions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_scan_queue translation_guidance_scan_queue_scan_batch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_scan_queue
+    ADD CONSTRAINT translation_guidance_scan_queue_scan_batch_id_fkey FOREIGN KEY (scan_batch_id) REFERENCES public.translation_guidance_scan_batches(id) ON DELETE SET NULL;
 
 
 --

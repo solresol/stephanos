@@ -94,6 +94,177 @@ def preview_text(text: str, limit: int = 180) -> str:
     return preview
 
 
+def fetch_guidance_scan_batches(cur, rule_id: int) -> list[dict]:
+    cur.execute(
+        """
+        SELECT
+            b.id,
+            COALESCE(b.source_key, '') AS source_key,
+            COALESCE(b.source_document, '') AS source_document,
+            COALESCE(b.scope_kind, '') AS scope_kind,
+            COALESCE(b.sample_size, 0) AS sample_size,
+            COALESCE(b.selected_count, 0) AS selected_count,
+            COALESCE(b.include_quarantined, FALSE) AS include_quarantined,
+            COALESCE(b.requested_by, '') AS requested_by,
+            COALESCE(b.requested_at::text, '') AS requested_at,
+            COALESCE(b.notes, '') AS notes,
+            COALESCE(b.created_at::text, '') AS created_at,
+            COALESCE(b.updated_at::text, '') AS updated_at,
+            COALESCE(qc.total_count, 0) AS total_count,
+            COALESCE(qc.pending_count, 0) AS pending_count,
+            COALESCE(qc.running_count, 0) AS running_count,
+            COALESCE(qc.completed_count, 0) AS completed_count,
+            COALESCE(qc.failed_count, 0) AS failed_count,
+            COALESCE(qc.cancelled_count, 0) AS cancelled_count,
+            COALESCE(rc.matched_count, 0) AS matched_count,
+            COALESCE(rc.not_matched_count, 0) AS not_matched_count,
+            COALESCE(rc.uncertain_count, 0) AS uncertain_count,
+            COALESCE(qc.tokens_used, 0) AS tokens_used,
+            COALESCE(qc.models, ARRAY[]::text[]) AS models
+        FROM translation_guidance_scan_batches b
+        LEFT JOIN LATERAL (
+            SELECT
+                COUNT(*) AS total_count,
+                COUNT(*) FILTER (WHERE q.status = 'pending') AS pending_count,
+                COUNT(*) FILTER (WHERE q.status = 'running') AS running_count,
+                COUNT(*) FILTER (WHERE q.status = 'completed') AS completed_count,
+                COUNT(*) FILTER (WHERE q.status = 'failed') AS failed_count,
+                COUNT(*) FILTER (WHERE q.status = 'cancelled') AS cancelled_count,
+                COALESCE(SUM(q.tokens_used), 0) AS tokens_used,
+                ARRAY_REMOVE(ARRAY_AGG(DISTINCT q.model) FILTER (WHERE COALESCE(q.model, '') <> ''), NULL) AS models
+            FROM translation_guidance_scan_queue q
+            WHERE q.scan_batch_id = b.id
+        ) qc ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT
+                COUNT(*) FILTER (WHERE m.match_status = 'matched') AS matched_count,
+                COUNT(*) FILTER (WHERE m.match_status = 'not_matched') AS not_matched_count,
+                COUNT(*) FILTER (WHERE m.match_status = 'uncertain') AS uncertain_count
+            FROM translation_guidance_scan_queue q
+            JOIN translation_guidance_matches m
+              ON m.rule_revision_id = q.rule_revision_id
+             AND m.lemma_id = q.lemma_id
+             AND m.source_text_version_id = q.source_text_version_id
+             AND m.detector_kind = COALESCE(NULLIF(q.detector_kind, ''), 'guidance_scan')
+            WHERE q.scan_batch_id = b.id
+        ) rc ON TRUE
+        WHERE b.rule_id = %s
+        ORDER BY b.created_at DESC, b.id DESC
+        LIMIT 10
+        """,
+        (int(rule_id),),
+    )
+    batches = []
+    for row in cur.fetchall():
+        batch_id = int(row[0])
+        cur.execute(
+            """
+            WITH ranked_examples AS (
+                SELECT
+                    q.lemma_id,
+                    COALESCE(a.lemma, '') AS lemma,
+                    q.source_text_version_id,
+                    COALESCE(m.match_status, '') AS match_status,
+                    COALESCE(m.confidence, '') AS confidence,
+                    COALESCE(m.occurrence_count, 0) AS occurrence_count,
+                    COALESCE(m.evidence_text, '') AS evidence_text,
+                    COALESCE(stv.text_body, '') AS source_text,
+                    COALESCE(q.model, '') AS model,
+                    COALESCE(q.tokens_used, 0) AS tokens_used,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY m.match_status
+                        ORDER BY
+                            CASE COALESCE(m.confidence, '')
+                                WHEN 'high' THEN 0
+                                WHEN 'medium' THEN 1
+                                WHEN 'low' THEN 2
+                                ELSE 3
+                            END,
+                            q.finished_at DESC NULLS LAST,
+                            q.id
+                    ) AS example_rank
+                FROM translation_guidance_scan_queue q
+                JOIN translation_guidance_matches m
+                  ON m.rule_revision_id = q.rule_revision_id
+                 AND m.lemma_id = q.lemma_id
+                 AND m.source_text_version_id = q.source_text_version_id
+                 AND m.detector_kind = COALESCE(NULLIF(q.detector_kind, ''), 'guidance_scan')
+                JOIN assembled_lemmas a ON a.id = q.lemma_id
+                JOIN lemma_source_text_versions stv ON stv.id = q.source_text_version_id
+                WHERE q.scan_batch_id = %s
+                  AND m.match_status IN ('matched', 'uncertain')
+            )
+            SELECT
+                lemma_id,
+                lemma,
+                source_text_version_id,
+                match_status,
+                confidence,
+                occurrence_count,
+                evidence_text,
+                source_text,
+                model,
+                tokens_used
+            FROM ranked_examples
+            WHERE example_rank <= 5
+            ORDER BY
+                CASE match_status WHEN 'matched' THEN 0 WHEN 'uncertain' THEN 1 ELSE 2 END,
+                example_rank
+            """,
+            (batch_id,),
+        )
+        examples = []
+        for example in cur.fetchall():
+            examples.append(
+                {
+                    "lemma_id": int(example[0] or 0),
+                    "lemma": example[1] or "",
+                    "source_text_version_id": int(example[2] or 0),
+                    "match_status": example[3] or "",
+                    "confidence": example[4] or "",
+                    "occurrence_count": int(example[5] or 0),
+                    "evidence_text": preview_text(example[6] or "", 280),
+                    "source_excerpt": preview_text(example[7] or "", 280),
+                    "model": example[8] or "",
+                    "tokens_used": int(example[9] or 0),
+                }
+            )
+        models = [model for model in (row[22] or []) if model]
+        batches.append(
+            {
+                "id": batch_id,
+                "source_key": row[1] or "",
+                "source_document": row[2] or "",
+                "scope_kind": row[3] or "",
+                "sample_size": int(row[4] or 0),
+                "selected_count": int(row[5] or 0),
+                "include_quarantined": bool(row[6]),
+                "requested_by": row[7] or "",
+                "requested_at": row[8] or "",
+                "notes": row[9] or "",
+                "created_at": row[10] or "",
+                "updated_at": row[11] or "",
+                "status_counts": {
+                    "total": int(row[12] or 0),
+                    "pending": int(row[13] or 0),
+                    "running": int(row[14] or 0),
+                    "completed": int(row[15] or 0),
+                    "failed": int(row[16] or 0),
+                    "cancelled": int(row[17] or 0),
+                },
+                "result_counts": {
+                    "matched": int(row[18] or 0),
+                    "not_matched": int(row[19] or 0),
+                    "uncertain": int(row[20] or 0),
+                },
+                "tokens_used": int(row[21] or 0),
+                "models": models,
+                "examples": examples,
+            }
+        )
+    return batches
+
+
 def parse_meineke_page_filename(meineke_id: str) -> str:
     """Derive a Meineke page image filename from ids like '397.3'."""
     text = (meineke_id or "").strip()
@@ -1054,6 +1225,18 @@ def export_lemmas():
         has_guidance_matches = bool(cur.fetchone()[0])
         cur.execute("SELECT to_regclass('public.translation_guidance_backlog_items') IS NOT NULL")
         has_guidance_backlog = bool(cur.fetchone()[0])
+        cur.execute("SELECT to_regclass('public.translation_guidance_scan_batches') IS NOT NULL")
+        has_guidance_scan_batches = bool(cur.fetchone()[0])
+        cur.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'translation_guidance_scan_queue'
+              AND column_name = 'scan_batch_id'
+            """
+        )
+        has_guidance_scan_batch_queue = cur.fetchone() is not None
         cur.execute(
             """
             SELECT 1
@@ -1167,6 +1350,9 @@ def export_lemmas():
             """
         )
         for row in cur.fetchall():
+            scan_batches = []
+            if has_guidance_scan_batches and has_guidance_scan_batch_queue and has_guidance_matches:
+                scan_batches = fetch_guidance_scan_batches(cur, int(row[0]))
             translation_guidance_rules.append(
                 {
                     "id": int(row[0]),
@@ -1188,6 +1374,7 @@ def export_lemmas():
                     "match_count": int(row[16] or 0),
                     "uncertain_count": int(row[17] or 0),
                     "backlog_count": int(row[18] or 0),
+                    "scan_batches": scan_batches,
                 }
             )
 

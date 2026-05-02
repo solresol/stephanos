@@ -32,6 +32,8 @@ CANONICAL_ACTION_SOURCE = "merah_reviews"
 ENTITY_ACTION_SOURCE = "merah_entity_actions"
 COMMENTARY_UPDATED_BY_PREFIX = "merah_review:"
 GUIDANCE_ACTION_SOURCE = "merah_translation_guidance_actions"
+GUIDANCE_SCAN_REQUEST_SOURCE = "merah_translation_guidance_scan_requests"
+GUIDANCE_SCAN_REQUEST_SOURCE_PREFIX = "merah_scan_request:"
 
 
 def log(message):
@@ -55,6 +57,20 @@ def sqlite_table_exists(cur, table_name: str) -> bool:
 def sqlite_column_exists(cur, table_name: str, column_name: str) -> bool:
     cur.execute(f"PRAGMA table_info({table_name})")
     return any((row["name"] or "").strip().lower() == column_name.lower() for row in cur.fetchall())
+
+
+def pg_column_exists(cur, table_name: str, column_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s
+          AND column_name = %s
+        """,
+        (table_name, column_name),
+    )
+    return cur.fetchone() is not None
 
 
 def derive_effective_review_status(
@@ -199,6 +215,43 @@ def set_last_imported_guidance_action_id(pg_cur, last_action_id: int):
     )
 
 
+def get_last_imported_guidance_scan_request_id(pg_cur) -> int:
+    ensure_canonical_import_state_table(pg_cur)
+    pg_cur.execute(
+        """
+        INSERT INTO canonical_action_import_state (source, last_action_id, updated_at)
+        VALUES (%s, 0, NOW())
+        ON CONFLICT (source) DO NOTHING
+        """,
+        (GUIDANCE_SCAN_REQUEST_SOURCE,),
+    )
+    pg_cur.execute(
+        """
+        SELECT COALESCE(last_action_id, 0)
+        FROM canonical_action_import_state
+        WHERE source = %s
+        LIMIT 1
+        """,
+        (GUIDANCE_SCAN_REQUEST_SOURCE,),
+    )
+    row = pg_cur.fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def set_last_imported_guidance_scan_request_id(pg_cur, last_request_id: int):
+    ensure_canonical_import_state_table(pg_cur)
+    pg_cur.execute(
+        """
+        INSERT INTO canonical_action_import_state (source, last_action_id, updated_at)
+        VALUES (%s, %s, NOW())
+        ON CONFLICT (source) DO UPDATE SET
+            last_action_id = EXCLUDED.last_action_id,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (GUIDANCE_SCAN_REQUEST_SOURCE, int(last_request_id or 0)),
+    )
+
+
 def ensure_guidance_import_map_table(pg_cur):
     pg_cur.execute(
         """
@@ -255,6 +308,20 @@ def guidance_actions_preflight(sqlite_cur, pg_cur) -> None:
     if sqlite_max_id < pg_last_id:
         raise RuntimeError(
             "SQLite guidance action log appears to be reset/rewound: "
+            f"max_id={sqlite_max_id} < last_imported_id={pg_last_id}"
+        )
+
+
+def guidance_scan_requests_preflight(sqlite_cur, pg_cur) -> None:
+    if not sqlite_table_exists(sqlite_cur, "translation_guidance_scan_requests"):
+        return
+    sqlite_cur.execute("SELECT COALESCE(MAX(id), 0) AS max_id FROM translation_guidance_scan_requests")
+    sqlite_max_id = int(sqlite_cur.fetchone()["max_id"] or 0)
+
+    pg_last_id = get_last_imported_guidance_scan_request_id(pg_cur)
+    if sqlite_max_id < pg_last_id:
+        raise RuntimeError(
+            "SQLite guidance scan request log appears to be reset/rewound: "
             f"max_id={sqlite_max_id} < last_imported_id={pg_last_id}"
         )
 
@@ -834,6 +901,270 @@ def import_translation_guidance_actions(sqlite_cur, pg_cur) -> tuple[int, int, i
 
     set_last_imported_guidance_action_id(pg_cur, max_seen_id)
     return applied, skipped, errors
+
+
+def normalize_guidance_scan_sample_size(value) -> int:
+    try:
+        sample_size = int(value or 100)
+    except Exception:
+        return 100
+    if sample_size in {100, 500, 1000}:
+        return sample_size
+    return 100
+
+
+def import_translation_guidance_scan_requests(sqlite_cur, pg_cur) -> tuple[int, int, int, int]:
+    if not sqlite_table_exists(sqlite_cur, "translation_guidance_scan_requests"):
+        return 0, 0, 0, 0
+
+    required_tables = [
+        "translation_guidance_rules",
+        "translation_guidance_rule_revisions",
+        "translation_guidance_scan_batches",
+        "translation_guidance_scan_queue",
+        "lemma_source_text_versions",
+        "assembled_lemmas",
+    ]
+    missing = []
+    for table in required_tables:
+        pg_cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table}",))
+        if not bool(pg_cur.fetchone()[0]):
+            missing.append(table)
+    if missing:
+        log(
+            "WARNING: guidance scan target tables missing; skipping scan request import: "
+            + ", ".join(missing)
+        )
+        return 0, 0, 0, 0
+    if not pg_column_exists(pg_cur, "translation_guidance_scan_queue", "scan_batch_id"):
+        log(
+            "WARNING: translation_guidance_scan_queue.scan_batch_id missing; "
+            "apply the scan-batch migration before importing scan requests."
+        )
+        return 0, 0, 0, 0
+
+    last_id = get_last_imported_guidance_scan_request_id(pg_cur)
+    sqlite_cur.execute(
+        """
+        SELECT
+            id,
+            COALESCE(target_rule_key, '') AS target_rule_key,
+            COALESCE(rule_label, '') AS rule_label,
+            COALESCE(sample_size, 100) AS sample_size,
+            COALESCE(source_document, 'meineke') AS source_document,
+            COALESCE(include_quarantined, 0) AS include_quarantined,
+            COALESCE(notes, '') AS notes,
+            COALESCE(reviewer_username, '') AS reviewer_username,
+            requested_at
+        FROM translation_guidance_scan_requests
+        WHERE id > ?
+        ORDER BY requested_at ASC, id ASC
+        """,
+        (last_id,),
+    )
+    rows = sqlite_cur.fetchall()
+    if not rows:
+        return 0, 0, 0, 0
+
+    imported = skipped = errors = queued = 0
+    max_seen_id = last_id
+    has_quarantined_column = pg_column_exists(pg_cur, "assembled_lemmas", "quarantined")
+
+    for row in rows:
+        request_id = int(row["id"] or 0)
+        max_seen_id = max(max_seen_id, request_id)
+        source_key = f"{GUIDANCE_SCAN_REQUEST_SOURCE_PREFIX}{request_id}"
+        target_rule_key = (row["target_rule_key"] or "").strip()
+        source_document = (row["source_document"] or "meineke").strip().lower()
+        if source_document != "meineke":
+            skipped += 1
+            continue
+        sample_size = normalize_guidance_scan_sample_size(row["sample_size"])
+        try:
+            include_quarantined = int(row["include_quarantined"] or 0) != 0
+        except Exception:
+            include_quarantined = False
+        requested_by = (row["reviewer_username"] or "").strip() or "guidance.cgi"
+        requested_at = row["requested_at"] or None
+        notes = (row["notes"] or "").strip() or None
+
+        try:
+            pg_cur.execute(
+                "SELECT id FROM translation_guidance_scan_batches WHERE source_key = %s",
+                (source_key,),
+            )
+            if pg_cur.fetchone():
+                skipped += 1
+                continue
+
+            lookup_rule_key = target_rule_key
+            if target_rule_key.startswith("local:"):
+                mapped = lookup_guidance_import_map(pg_cur, target_rule_key)
+                if mapped:
+                    lookup_rule_key = mapped[1]
+
+            existing = fetch_existing_guidance_rule(pg_cur, lookup_rule_key)
+            if not existing:
+                skipped += 1
+                log(
+                    "  WARNING: guidance scan request "
+                    f"{request_id} targets unknown rule_key={target_rule_key!r}"
+                )
+                continue
+            if str(existing.get("kind") or "").strip() != "formula":
+                skipped += 1
+                log(
+                    "  WARNING: guidance scan request "
+                    f"{request_id} targets non-formula rule_key={lookup_rule_key!r}"
+                )
+                continue
+
+            rule_id = int(existing["id"])
+            final_rule_key = str(existing["rule_key"])
+            pg_cur.execute(
+                """
+                SELECT id
+                FROM translation_guidance_rule_revisions
+                WHERE rule_id = %s
+                ORDER BY revision_number DESC, id DESC
+                LIMIT 1
+                """,
+                (rule_id,),
+            )
+            revision_row = pg_cur.fetchone()
+            if not revision_row:
+                skipped += 1
+                log(
+                    "  WARNING: guidance scan request "
+                    f"{request_id} has no revision for rule_key={final_rule_key!r}"
+                )
+                continue
+            rule_revision_id = int(revision_row[0])
+
+            pg_cur.execute(
+                """
+                INSERT INTO translation_guidance_scan_batches (
+                    source_key,
+                    rule_id,
+                    rule_revision_id,
+                    target_rule_key,
+                    source_document,
+                    scope_kind,
+                    sample_size,
+                    selected_count,
+                    include_quarantined,
+                    requested_by,
+                    requested_at,
+                    notes,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, 'random_sample', %s, 0, %s, %s, %s, %s, NOW(), NOW())
+                RETURNING id
+                """,
+                (
+                    source_key,
+                    rule_id,
+                    rule_revision_id,
+                    final_rule_key,
+                    source_document,
+                    sample_size,
+                    include_quarantined,
+                    requested_by,
+                    requested_at,
+                    notes,
+                ),
+            )
+            scan_batch_id = int(pg_cur.fetchone()[0])
+
+            source_query = """
+                SELECT a.id, stv.id
+                FROM assembled_lemmas a
+                JOIN lemma_source_text_versions stv
+                  ON stv.lemma_id = a.id
+                 AND stv.source_document = %s
+                 AND stv.is_current = TRUE
+                WHERE COALESCE(stv.text_body, '') <> ''
+            """
+            source_params: list[object] = [source_document]
+            if not include_quarantined and has_quarantined_column:
+                source_query += " AND COALESCE(a.quarantined, FALSE) = FALSE"
+            source_query += " ORDER BY random() LIMIT %s"
+            source_params.append(sample_size)
+            pg_cur.execute(source_query, source_params)
+            source_rows = [(int(source[0]), int(source[1])) for source in pg_cur.fetchall()]
+
+            inserted_for_batch = 0
+            for lemma_id, source_text_version_id in source_rows:
+                pg_cur.execute(
+                    """
+                    INSERT INTO translation_guidance_scan_queue (
+                        rule_id,
+                        rule_revision_id,
+                        lemma_id,
+                        source_text_version_id,
+                        scan_batch_id,
+                        status,
+                        priority,
+                        detector_kind,
+                        attempts,
+                        requested_by,
+                        notes,
+                        created_at,
+                        updated_at
+                    )
+                    SELECT
+                        %s, %s, %s, %s, %s,
+                        'pending',
+                        100,
+                        'formula_prefilter',
+                        0,
+                        %s,
+                        %s,
+                        NOW(),
+                        NOW()
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM translation_guidance_scan_queue q
+                        WHERE q.rule_revision_id = %s
+                          AND q.lemma_id = %s
+                          AND q.source_text_version_id = %s
+                          AND q.status IN ('pending', 'running')
+                    )
+                    """,
+                    (
+                        rule_id,
+                        rule_revision_id,
+                        lemma_id,
+                        source_text_version_id,
+                        scan_batch_id,
+                        requested_by,
+                        notes,
+                        rule_revision_id,
+                        lemma_id,
+                        source_text_version_id,
+                    ),
+                )
+                if pg_cur.rowcount > 0:
+                    inserted_for_batch += 1
+
+            pg_cur.execute(
+                """
+                UPDATE translation_guidance_scan_batches
+                SET selected_count = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (len(source_rows), scan_batch_id),
+            )
+            imported += 1
+            queued += inserted_for_batch
+        except Exception as exc:
+            log(f"  ERROR importing guidance scan request ID {request_id}: {exc}")
+            errors += 1
+
+    set_last_imported_guidance_scan_request_id(pg_cur, max_seen_id)
+    return imported, skipped, errors, queued
 
 
 def import_place_cluster_reviews(sqlite_cur, pg_cur) -> tuple[int, int, int]:
@@ -1439,6 +1770,13 @@ def import_reviews():
         sqlite_conn.close()
         pg_conn.close()
         return 1
+    try:
+        guidance_scan_requests_preflight(sqlite_cur, pg_cur)
+    except Exception as e:
+        log(f"ERROR: guidance scan request preflight failed: {e}")
+        sqlite_conn.close()
+        pg_conn.close()
+        return 1
 
     pg_cur.execute("SELECT to_regclass('public.human_translations') IS NOT NULL")
     has_human_translations = bool(pg_cur.fetchone()[0])
@@ -1639,6 +1977,27 @@ def import_reviews():
             )
     except Exception as e:
         log(f"ERROR: Translation guidance import failed: {e}")
+        pg_conn.rollback()
+        sqlite_conn.close()
+        pg_conn.close()
+        return 1
+
+    guidance_scan_imported = guidance_scan_skipped = guidance_scan_errors = guidance_scan_queued = 0
+    try:
+        (
+            guidance_scan_imported,
+            guidance_scan_skipped,
+            guidance_scan_errors,
+            guidance_scan_queued,
+        ) = import_translation_guidance_scan_requests(sqlite_cur, pg_cur)
+        if guidance_scan_imported or guidance_scan_errors:
+            log(
+                "Translation guidance scan request import: "
+                f"imported={guidance_scan_imported}, skipped={guidance_scan_skipped}, "
+                f"errors={guidance_scan_errors}, queued={guidance_scan_queued}"
+            )
+    except Exception as e:
+        log(f"ERROR: Translation guidance scan request import failed: {e}")
         pg_conn.rollback()
         sqlite_conn.close()
         pg_conn.close()

@@ -25,15 +25,16 @@ type GuidanceRuleView struct {
 }
 
 type GuidancePageData struct {
-	Rules              []GuidanceRuleView
-	KindTabs           []GuidanceKindTab
-	FilterKind         string
-	FilterLabel        string
-	TotalCount         int
-	ActiveCount        int
-	RetiredCount       int
-	PendingImportCount int
-	DefaultCreateKind  string
+	Rules                   []GuidanceRuleView
+	KindTabs                []GuidanceKindTab
+	FilterKind              string
+	FilterLabel             string
+	TotalCount              int
+	ActiveCount             int
+	RetiredCount            int
+	PendingImportCount      int
+	PendingScanRequestCount int
+	DefaultCreateKind       string
 }
 
 func main() {
@@ -64,6 +65,12 @@ func main() {
 		return
 	}
 	rules = ApplyTranslationGuidanceActions(rules, actions)
+	scanRequests, err := FetchTranslationGuidanceScanRequests(db)
+	if err != nil {
+		showError(fmt.Sprintf("Failed to load local scan requests: %v", err))
+		return
+	}
+	rules = AttachTranslationGuidanceScanRequests(rules, scanRequests)
 
 	params, err := url.ParseQuery(os.Getenv("QUERY_STRING"))
 	if err != nil {
@@ -97,6 +104,7 @@ func buildGuidancePageData(rules []TranslationGuidanceRule, params url.Values) *
 	activeCount := 0
 	retiredCount := 0
 	pendingImportCount := 0
+	pendingScanRequestCount := 0
 	for _, rule := range rules {
 		if _, ok := counts[rule.Kind]; ok {
 			counts[rule.Kind]++
@@ -109,6 +117,7 @@ func buildGuidancePageData(rules []TranslationGuidanceRule, params url.Values) *
 		if rule.PendingImport {
 			pendingImportCount++
 		}
+		pendingScanRequestCount += len(rule.LocalScanRequests)
 	}
 
 	filtered := make([]GuidanceRuleView, 0, len(rules))
@@ -138,15 +147,16 @@ func buildGuidancePageData(rules []TranslationGuidanceRule, params url.Values) *
 	}
 
 	return &GuidancePageData{
-		Rules:              filtered,
-		KindTabs:           tabs,
-		FilterKind:         filterKind,
-		FilterLabel:        guidanceFilterLabel(filterKind),
-		TotalCount:         len(rules),
-		ActiveCount:        activeCount,
-		RetiredCount:       retiredCount,
-		PendingImportCount: pendingImportCount,
-		DefaultCreateKind:  defaultCreateKind,
+		Rules:                   filtered,
+		KindTabs:                tabs,
+		FilterKind:              filterKind,
+		FilterLabel:             guidanceFilterLabel(filterKind),
+		TotalCount:              len(rules),
+		ActiveCount:             activeCount,
+		RetiredCount:            retiredCount,
+		PendingImportCount:      pendingImportCount,
+		PendingScanRequestCount: pendingScanRequestCount,
+		DefaultCreateKind:       defaultCreateKind,
 	}
 }
 
@@ -561,6 +571,71 @@ const guidanceTemplate = `<!DOCTYPE html>
             gap: 10px;
             margin-top: 16px;
         }
+        .guidance-scan-panel {
+            border-top: 1px solid #e2e8f0;
+            margin-top: 18px;
+            padding-top: 18px;
+        }
+        .guidance-scan-grid {
+            display: grid;
+            gap: 12px;
+            grid-template-columns: minmax(220px, 0.9fr) minmax(260px, 1.2fr);
+        }
+        .guidance-scan-form {
+            align-content: start;
+            display: grid;
+            gap: 10px;
+        }
+        .guidance-scan-form textarea {
+            border: 1px solid #cbd5e1;
+            border-radius: 10px;
+            font: inherit;
+            min-height: 74px;
+            padding: 10px 12px;
+            resize: vertical;
+            width: 100%;
+        }
+        .guidance-scan-list {
+            display: grid;
+            gap: 10px;
+        }
+        .guidance-scan-row {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 10px 12px;
+        }
+        .guidance-scan-row.pending {
+            background: #fff7ed;
+            border-color: #fed7aa;
+        }
+        .guidance-scan-meta {
+            color: #5b7287;
+            font-size: 0.85em;
+            margin-top: 4px;
+        }
+        .guidance-scan-counts {
+            display: grid;
+            gap: 6px;
+            grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+            margin-top: 8px;
+        }
+        .guidance-scan-counts span {
+            background: #f8fafc;
+            border-radius: 8px;
+            color: #334155;
+            padding: 6px 8px;
+        }
+        .guidance-scan-examples {
+            display: grid;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .guidance-scan-example {
+            background: #f8fafc;
+            border-radius: 8px;
+            color: #334155;
+            padding: 8px 10px;
+        }
         .btn-secondary {
             background: #e7eff8;
             color: #20496b;
@@ -576,6 +651,9 @@ const guidanceTemplate = `<!DOCTYPE html>
         @media (max-width: 1040px) {
             .guidance-table-controls {
                 grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            }
+            .guidance-scan-grid {
+                grid-template-columns: 1fr;
             }
         }
     </style>
@@ -627,6 +705,10 @@ const guidanceTemplate = `<!DOCTYPE html>
             <div class="summary-card">
                 <div>Pending local import</div>
                 <div class="summary-count">{{.PendingImportCount}}</div>
+            </div>
+            <div class="summary-card">
+                <div>Pending scan requests</div>
+                <div class="summary-count">{{.PendingScanRequestCount}}</div>
             </div>
         </div>
 
@@ -877,6 +959,67 @@ const guidanceTemplate = `<!DOCTYPE html>
                             {{if .Rule.LastChangedBy}} · local change by {{.Rule.LastChangedBy}}{{end}}
                         </div>
                     </div>
+
+                    {{if eq .Rule.Kind "formula"}}
+                    <div class="guidance-scan-panel">
+                        <div class="section-title">Formula Discovery</div>
+                        <div class="section-note">Scan 100 random current Meineke entries. Requests are written locally now and picked up by the nightly raksasa sync; results stay in the protected editor.</div>
+                        <div class="guidance-scan-grid">
+                            <form class="guidance-scan-form" method="POST" action="/cgi-bin/save.cgi">
+                                <input type="hidden" name="form_mode" value="guidance_scan">
+                                <input type="hidden" name="scan_target_rule_key" value="{{.Rule.RuleKey}}">
+                                <input type="hidden" name="scan_rule_label" value="{{.Rule.Label}}">
+                                <input type="hidden" name="scan_sample_size" value="100">
+                                <input type="hidden" name="scan_source_document" value="meineke">
+                                <input type="hidden" name="scan_include_quarantined" value="0">
+                                <label for="scan_notes_{{.Rule.RuleKey}}">Scan notes</label>
+                                <textarea name="scan_notes" id="scan_notes_{{.Rule.RuleKey}}" placeholder="Optional reason or question for this sample"></textarea>
+                                <button type="submit" class="btn-save">Scan Candidate</button>
+                            </form>
+
+                            <div class="guidance-scan-list">
+                                {{range .Rule.LocalScanRequests}}
+                                <div class="guidance-scan-row pending">
+                                    <strong>Pending sync to raksasa</strong>
+                                    <div class="guidance-scan-meta">{{.SampleSize}} random {{.SourceDocument}} entries{{if .Reviewer}} · requested by {{.Reviewer}}{{end}}{{if .RequestedAt}} · {{.RequestedAt}}{{end}}</div>
+                                    {{if .Notes}}<div class="guidance-scan-meta">{{.Notes}}</div>{{end}}
+                                </div>
+                                {{end}}
+
+                                {{range .Rule.ScanBatches}}
+                                <details class="guidance-scan-row" open>
+                                    <summary><strong>Batch {{.ID}}</strong> · {{.StatusCounts.Completed}} / {{.SelectedCount}} completed · {{.ResultCounts.Matched}} matched · {{.ResultCounts.Uncertain}} uncertain</summary>
+                                    <div class="guidance-scan-meta">{{.SampleSize}} random {{.SourceDocument}} entries{{if .RequestedBy}} · requested by {{.RequestedBy}}{{end}}{{if .RequestedAt}} · {{.RequestedAt}}{{end}}</div>
+                                    {{if .Notes}}<div class="guidance-scan-meta">{{.Notes}}</div>{{end}}
+                                    <div class="guidance-scan-counts">
+                                        <span>Queued {{.StatusCounts.Pending}}</span>
+                                        <span>Running {{.StatusCounts.Running}}</span>
+                                        <span>Completed {{.StatusCounts.Completed}}</span>
+                                        <span>Failed {{.StatusCounts.Failed}}</span>
+                                        <span>Matched {{.ResultCounts.Matched}}</span>
+                                        <span>Not matched {{.ResultCounts.NotMatched}}</span>
+                                        <span>Uncertain {{.ResultCounts.Uncertain}}</span>
+                                        <span>Tokens {{.TokensUsed}}</span>
+                                    </div>
+                                    {{if .Models}}
+                                    <div class="guidance-scan-meta">Models: {{range $index, $model := .Models}}{{if $index}}, {{end}}{{$model}}{{end}}</div>
+                                    {{end}}
+                                    {{if .Examples}}
+                                    <div class="guidance-scan-examples">
+                                        {{range .Examples}}
+                                        <div class="guidance-scan-example">
+                                            <strong>{{.Lemma}}</strong> · {{.MatchStatus}}{{if .Confidence}} · {{.Confidence}}{{end}}{{if .OccurrenceCount}} · {{.OccurrenceCount}} occurrence{{end}}
+                                            {{if .EvidenceText}}<div>{{.EvidenceText}}</div>{{else if .SourceExcerpt}}<div>{{.SourceExcerpt}}</div>{{end}}
+                                        </div>
+                                        {{end}}
+                                    </div>
+                                    {{end}}
+                                </details>
+                                {{end}}
+                            </div>
+                        </div>
+                    </div>
+                    {{end}}
 
                     <form method="POST" action="/cgi-bin/save.cgi">
                         <input type="hidden" name="form_mode" value="guidance">

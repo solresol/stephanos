@@ -233,6 +233,11 @@ def claim_jobs(cur, limit: int) -> list[tuple]:
         if column_exists(cur, "translation_guidance_rules", "lifecycle_stage")
         else ""
     )
+    scan_batch_select = (
+        "q.scan_batch_id"
+        if column_exists(cur, "translation_guidance_scan_queue", "scan_batch_id")
+        else "NULL::integer AS scan_batch_id"
+    )
     cur.execute(
         f"""
         WITH next_jobs AS (
@@ -242,6 +247,7 @@ def claim_jobs(cur, limit: int) -> list[tuple]:
                 q.rule_revision_id,
                 q.lemma_id,
                 q.source_text_version_id,
+                {scan_batch_select},
                 COALESCE(q.detector_kind, '') AS detector_kind,
                 COALESCE(r.kind, '') AS rule_kind,
                 COALESCE(r.label, '') AS rule_label,
@@ -273,6 +279,7 @@ def claim_jobs(cur, limit: int) -> list[tuple]:
             next_jobs.rule_revision_id,
             next_jobs.lemma_id,
             next_jobs.source_text_version_id,
+            next_jobs.scan_batch_id,
             next_jobs.detector_kind,
             next_jobs.rule_kind,
             next_jobs.rule_label,
@@ -341,6 +348,7 @@ def upsert_match(cur, job: tuple, result: dict[str, object]) -> None:
         rule_revision_id,
         lemma_id,
         source_text_version_id,
+        _scan_batch_id,
         detector_kind,
         *_rest,
     ) = job
@@ -398,33 +406,75 @@ def mark_job(
     model: str | None = None,
     tokens_used: int = 0,
 ) -> None:
-    cur.execute(
-        """
-        UPDATE translation_guidance_scan_queue
-        SET status = %s,
-            finished_at = NOW(),
-            updated_at = NOW(),
-            error_message = %s,
-            model = %s,
-            tokens_used = %s
-        WHERE id = %s
-        """,
-        (status, error_message, model, int(tokens_used or 0), queue_id),
-    )
+    if column_exists(cur, "translation_guidance_scan_queue", "scan_batch_id"):
+        cur.execute(
+            """
+            WITH updated AS (
+                UPDATE translation_guidance_scan_queue
+                SET status = %s,
+                    finished_at = NOW(),
+                    updated_at = NOW(),
+                    error_message = %s,
+                    model = %s,
+                    tokens_used = %s
+                WHERE id = %s
+                RETURNING scan_batch_id
+            )
+            UPDATE translation_guidance_scan_batches b
+            SET updated_at = NOW()
+            FROM updated
+            WHERE b.id = updated.scan_batch_id
+            """,
+            (status, error_message, model, int(tokens_used or 0), queue_id),
+        )
+    else:
+        cur.execute(
+            """
+            UPDATE translation_guidance_scan_queue
+            SET status = %s,
+                finished_at = NOW(),
+                updated_at = NOW(),
+                error_message = %s,
+                model = %s,
+                tokens_used = %s
+            WHERE id = %s
+            """,
+            (status, error_message, model, int(tokens_used or 0), queue_id),
+        )
 
 
 def defer_job(cur, queue_id: int, reason: str) -> None:
-    cur.execute(
-        """
-        UPDATE translation_guidance_scan_queue
-        SET status = 'pending',
-            finished_at = NULL,
-            updated_at = NOW(),
-            error_message = %s
-        WHERE id = %s
-        """,
-        (reason, queue_id),
-    )
+    if column_exists(cur, "translation_guidance_scan_queue", "scan_batch_id"):
+        cur.execute(
+            """
+            WITH updated AS (
+                UPDATE translation_guidance_scan_queue
+                SET status = 'pending',
+                    finished_at = NULL,
+                    updated_at = NOW(),
+                    error_message = %s
+                WHERE id = %s
+                RETURNING scan_batch_id
+            )
+            UPDATE translation_guidance_scan_batches b
+            SET updated_at = NOW()
+            FROM updated
+            WHERE b.id = updated.scan_batch_id
+            """,
+            (reason, queue_id),
+        )
+    else:
+        cur.execute(
+            """
+            UPDATE translation_guidance_scan_queue
+            SET status = 'pending',
+                finished_at = NULL,
+                updated_at = NOW(),
+                error_message = %s
+            WHERE id = %s
+            """,
+            (reason, queue_id),
+        )
 
 
 def main() -> None:
@@ -471,6 +521,7 @@ def main() -> None:
             _rule_revision_id,
             _lemma_id,
             _source_text_version_id,
+            _scan_batch_id,
             detector_kind,
             rule_kind,
             rule_label,

@@ -74,6 +74,12 @@ func main() {
 	guidanceNotes := strings.TrimSpace(formData.Get("guidance_notes"))
 	guidanceRuleCode := strings.TrimSpace(formData.Get("guidance_rule_code"))
 	guidanceFilterKind := strings.TrimSpace(formData.Get("guidance_filter_kind"))
+	scanTargetRuleKey := strings.TrimSpace(formData.Get("scan_target_rule_key"))
+	scanRuleLabel := strings.TrimSpace(formData.Get("scan_rule_label"))
+	scanSampleSizeStr := strings.TrimSpace(formData.Get("scan_sample_size"))
+	scanSourceDocument := strings.TrimSpace(formData.Get("scan_source_document"))
+	scanIncludeQuarantinedRaw := strings.TrimSpace(formData.Get("scan_include_quarantined"))
+	scanNotes := strings.TrimSpace(formData.Get("scan_notes"))
 	entityAction := strings.TrimSpace(strings.ToLower(formData.Get("entity_action")))
 	properNounIDStr := strings.TrimSpace(formData.Get("proper_noun_id"))
 	entityQID := strings.TrimSpace(formData.Get("entity_qid"))
@@ -99,6 +105,52 @@ func main() {
 	remoteUser := os.Getenv("REMOTE_USER")
 	setCanonical := setCanonicalRaw == "1" || strings.EqualFold(setCanonicalRaw, "true") || strings.EqualFold(setCanonicalRaw, "on")
 	clearCanonical := clearCanonicalRaw == "1" || strings.EqualFold(clearCanonicalRaw, "true") || strings.EqualFold(clearCanonicalRaw, "on")
+
+	if formMode == "guidance_scan" {
+		config := GetConfig()
+		db, err := OpenDatabase(config.DBPath)
+		if err != nil {
+			showGuidanceErrorAndExit(fmt.Sprintf("Failed to open database: %v", err), "formula")
+			return
+		}
+		defer db.Close()
+
+		scanSampleSize := 100
+		if scanSampleSizeStr != "" {
+			if parsed, parseErr := strconv.Atoi(scanSampleSizeStr); parseErr == nil {
+				scanSampleSize = parsed
+			}
+		}
+		includeQuarantined := scanIncludeQuarantinedRaw == "1" ||
+			strings.EqualFold(scanIncludeQuarantinedRaw, "true") ||
+			strings.EqualFold(scanIncludeQuarantinedRaw, "on")
+
+		err = InsertTranslationGuidanceScanRequest(
+			db,
+			TranslationGuidanceScanRequest{
+				TargetRuleKey:      scanTargetRuleKey,
+				RuleLabel:          scanRuleLabel,
+				SampleSize:         scanSampleSize,
+				SourceDocument:     scanSourceDocument,
+				IncludeQuarantined: includeQuarantined,
+				Notes:              scanNotes,
+			},
+			remoteUser,
+		)
+		if err != nil {
+			showGuidanceErrorAndExit(fmt.Sprintf("Failed to save scan request: %v", err), "formula")
+			return
+		}
+
+		writeGuidanceRedirect("formula", scanTargetRuleKey)
+		log.Printf(
+			"Guidance scan request saved: rule_key=%s, sample_size=%d, user=%s",
+			scanTargetRuleKey,
+			normalizeGuidanceScanSampleSize(scanSampleSize),
+			remoteUser,
+		)
+		return
+	}
 
 	if formMode == "guidance" {
 		config := GetConfig()

@@ -209,7 +209,7 @@ def main() -> None:
     parser.add_argument("--kind", choices=["gloss", "formula", "proper_noun"], help="Enqueue all active rules of this kind")
     parser.add_argument("--all-active-rules", action="store_true", help="Allow enqueueing every active rule")
     parser.add_argument("--lemma-id", type=int, action="append", help="Restrict to one or more lemma ids")
-    parser.add_argument("--source-document", default="billerbeck", choices=["billerbeck", "meineke"])
+    parser.add_argument("--source-document", default="meineke", choices=["billerbeck", "meineke"])
     parser.add_argument("--limit", type=int, help="Max source lemmas to enqueue per run")
     parser.add_argument("--max-queue-rows", type=int, help="Stop after inserting this many queue rows")
     parser.add_argument("--priority", type=int, default=100)

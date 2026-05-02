@@ -33,10 +33,73 @@ type TranslationGuidanceRule struct {
 	PendingImport        bool   `json:"pending_import,omitempty"`
 	LastChangedBy        string `json:"last_changed_by,omitempty"`
 	LastChangedAt        string `json:"last_changed_at,omitempty"`
+	LocalScanRequests    []TranslationGuidanceScanRequest
+	ScanBatches          []TranslationGuidanceScanBatch `json:"scan_batches,omitempty"`
 }
 
 type guidanceDataFile struct {
 	TranslationGuidanceRules []TranslationGuidanceRule `json:"translation_guidance_rules"`
+}
+
+type TranslationGuidanceScanRequest struct {
+	ID                 int
+	SourceKey          string
+	TargetRuleKey      string
+	RuleLabel          string
+	SampleSize         int
+	SourceDocument     string
+	IncludeQuarantined bool
+	Notes              string
+	Reviewer           string
+	RequestedAt        string
+}
+
+type TranslationGuidanceScanStatusCounts struct {
+	Total     int `json:"total"`
+	Pending   int `json:"pending"`
+	Running   int `json:"running"`
+	Completed int `json:"completed"`
+	Failed    int `json:"failed"`
+	Cancelled int `json:"cancelled"`
+}
+
+type TranslationGuidanceScanResultCounts struct {
+	Matched    int `json:"matched"`
+	NotMatched int `json:"not_matched"`
+	Uncertain  int `json:"uncertain"`
+}
+
+type TranslationGuidanceScanExample struct {
+	LemmaID             int    `json:"lemma_id"`
+	Lemma               string `json:"lemma"`
+	SourceTextVersionID int    `json:"source_text_version_id"`
+	MatchStatus         string `json:"match_status"`
+	Confidence          string `json:"confidence"`
+	OccurrenceCount     int    `json:"occurrence_count"`
+	EvidenceText        string `json:"evidence_text"`
+	SourceExcerpt       string `json:"source_excerpt"`
+	Model               string `json:"model"`
+	TokensUsed          int    `json:"tokens_used"`
+}
+
+type TranslationGuidanceScanBatch struct {
+	ID                 int                                 `json:"id"`
+	SourceKey          string                              `json:"source_key"`
+	SourceDocument     string                              `json:"source_document"`
+	ScopeKind          string                              `json:"scope_kind"`
+	SampleSize         int                                 `json:"sample_size"`
+	SelectedCount      int                                 `json:"selected_count"`
+	IncludeQuarantined bool                                `json:"include_quarantined"`
+	RequestedBy        string                              `json:"requested_by"`
+	RequestedAt        string                              `json:"requested_at"`
+	Notes              string                              `json:"notes"`
+	CreatedAt          string                              `json:"created_at"`
+	UpdatedAt          string                              `json:"updated_at"`
+	StatusCounts       TranslationGuidanceScanStatusCounts `json:"status_counts"`
+	ResultCounts       TranslationGuidanceScanResultCounts `json:"result_counts"`
+	Models             []string                            `json:"models"`
+	TokensUsed         int                                 `json:"tokens_used"`
+	Examples           []TranslationGuidanceScanExample    `json:"examples"`
 }
 
 type TranslationGuidanceAction struct {
@@ -105,6 +168,18 @@ func EnsureGuidanceSchema(db *sql.DB) error {
 			reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
 		"CREATE INDEX IF NOT EXISTS idx_translation_guidance_actions_rule ON translation_guidance_actions(target_rule_key, reviewed_at, id)",
+		`CREATE TABLE IF NOT EXISTS translation_guidance_scan_requests (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			target_rule_key TEXT NOT NULL,
+			rule_label TEXT,
+			sample_size INTEGER NOT NULL DEFAULT 100,
+			source_document TEXT NOT NULL DEFAULT 'meineke' CHECK (source_document = 'meineke'),
+			include_quarantined INTEGER NOT NULL DEFAULT 0 CHECK (include_quarantined IN (0, 1)),
+			notes TEXT,
+			reviewer_username TEXT,
+			requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		"CREATE INDEX IF NOT EXISTS idx_translation_guidance_scan_requests_rule ON translation_guidance_scan_requests(target_rule_key, requested_at, id)",
 	}
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
@@ -115,6 +190,12 @@ func EnsureGuidanceSchema(db *sql.DB) error {
 		return err
 	}
 	if err := ensureSQLiteColumn(db, "translation_guidance_actions", "lifecycle_stage", "TEXT NOT NULL DEFAULT 'guidance'"); err != nil {
+		return err
+	}
+	if err := ensureSQLiteColumn(db, "translation_guidance_scan_requests", "rule_label", "TEXT"); err != nil {
+		return err
+	}
+	if err := ensureSQLiteColumn(db, "translation_guidance_scan_requests", "include_quarantined", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	return nil
@@ -254,6 +335,122 @@ func normalizeGuidanceAction(action string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizeGuidanceScanSampleSize(sampleSize int) int {
+	switch sampleSize {
+	case 100, 500, 1000:
+		return sampleSize
+	default:
+		return 100
+	}
+}
+
+func normalizeGuidanceScanSourceDocument(sourceDocument string) string {
+	if strings.TrimSpace(strings.ToLower(sourceDocument)) == "meineke" {
+		return "meineke"
+	}
+	return "meineke"
+}
+
+func InsertTranslationGuidanceScanRequest(
+	db *sql.DB,
+	request TranslationGuidanceScanRequest,
+	username string,
+) error {
+	if err := EnsureGuidanceSchema(db); err != nil {
+		return err
+	}
+
+	request.TargetRuleKey = strings.TrimSpace(request.TargetRuleKey)
+	request.RuleLabel = strings.TrimSpace(request.RuleLabel)
+	request.SourceDocument = normalizeGuidanceScanSourceDocument(request.SourceDocument)
+	request.SampleSize = normalizeGuidanceScanSampleSize(request.SampleSize)
+	request.Notes = strings.TrimSpace(request.Notes)
+
+	if request.TargetRuleKey == "" {
+		return fmt.Errorf("missing target rule key")
+	}
+
+	_, err := db.Exec(
+		`
+		INSERT INTO translation_guidance_scan_requests (
+			target_rule_key,
+			rule_label,
+			sample_size,
+			source_document,
+			include_quarantined,
+			notes,
+			reviewer_username
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		`,
+		request.TargetRuleKey,
+		request.RuleLabel,
+		request.SampleSize,
+		request.SourceDocument,
+		boolToSQLiteInt(request.IncludeQuarantined),
+		request.Notes,
+		strings.TrimSpace(username),
+	)
+	return err
+}
+
+func boolToSQLiteInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func FetchTranslationGuidanceScanRequests(db *sql.DB) ([]TranslationGuidanceScanRequest, error) {
+	if err := EnsureGuidanceSchema(db); err != nil {
+		return nil, err
+	}
+
+	rows, err := db.Query(
+		`
+		SELECT
+			id,
+			COALESCE(target_rule_key, ''),
+			COALESCE(rule_label, ''),
+			COALESCE(sample_size, 100),
+			COALESCE(source_document, 'meineke'),
+			COALESCE(include_quarantined, 0),
+			COALESCE(notes, ''),
+			COALESCE(reviewer_username, ''),
+			COALESCE(requested_at, '')
+		FROM translation_guidance_scan_requests
+		ORDER BY requested_at DESC, id DESC
+		`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var requests []TranslationGuidanceScanRequest
+	for rows.Next() {
+		var request TranslationGuidanceScanRequest
+		var includeQuarantined int
+		if err := rows.Scan(
+			&request.ID,
+			&request.TargetRuleKey,
+			&request.RuleLabel,
+			&request.SampleSize,
+			&request.SourceDocument,
+			&includeQuarantined,
+			&request.Notes,
+			&request.Reviewer,
+			&request.RequestedAt,
+		); err != nil {
+			return nil, err
+		}
+		request.SourceKey = fmt.Sprintf("merah_scan_request:%d", request.ID)
+		request.IncludeQuarantined = includeQuarantined != 0
+		requests = append(requests, request)
+	}
+	return requests, rows.Err()
 }
 
 func InsertTranslationGuidanceAction(
@@ -538,6 +735,48 @@ func ApplyTranslationGuidanceActions(
 	}
 	sortGuidanceRules(result)
 	return result
+}
+
+func AttachTranslationGuidanceScanRequests(
+	rules []TranslationGuidanceRule,
+	requests []TranslationGuidanceScanRequest,
+) []TranslationGuidanceRule {
+	if len(rules) == 0 || len(requests) == 0 {
+		return rules
+	}
+
+	rulesByKey := make(map[string]int, len(rules))
+	syncedRequestsByRule := make(map[string]map[string]bool)
+	for i, rule := range rules {
+		key := strings.TrimSpace(rule.RuleKey)
+		if key == "" {
+			continue
+		}
+		rulesByKey[key] = i
+		for _, batch := range rule.ScanBatches {
+			sourceKey := strings.TrimSpace(batch.SourceKey)
+			if sourceKey == "" {
+				continue
+			}
+			if syncedRequestsByRule[key] == nil {
+				syncedRequestsByRule[key] = make(map[string]bool)
+			}
+			syncedRequestsByRule[key][sourceKey] = true
+		}
+	}
+
+	for _, request := range requests {
+		key := strings.TrimSpace(request.TargetRuleKey)
+		index, ok := rulesByKey[key]
+		if !ok {
+			continue
+		}
+		if syncedRequestsByRule[key][strings.TrimSpace(request.SourceKey)] {
+			continue
+		}
+		rules[index].LocalScanRequests = append(rules[index].LocalScanRequests, request)
+	}
+	return rules
 }
 
 func sortGuidanceRules(rules []TranslationGuidanceRule) {
