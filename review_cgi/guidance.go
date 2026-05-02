@@ -31,6 +31,9 @@ type GuidancePageData struct {
 	KindTabs                []GuidanceKindTab
 	FilterKind              string
 	FilterLabel             string
+	DetailMode              bool
+	BackURL                 string
+	BackLabel               string
 	TotalCount              int
 	ActiveCount             int
 	RetiredCount            int
@@ -134,6 +137,8 @@ func buildGuidancePageData(rules []TranslationGuidanceRule, params url.Values) *
 	if filterKind == "" && strings.TrimSpace(params.Get("kind")) != "" {
 		filterKind = ""
 	}
+	selectedRuleKey := strings.TrimSpace(params.Get("rule"))
+	detailMode := selectedRuleKey != ""
 
 	counts := map[string]int{
 		"gloss":           0,
@@ -161,9 +166,17 @@ func buildGuidancePageData(rules []TranslationGuidanceRule, params url.Values) *
 	}
 
 	filtered := make([]GuidanceRuleView, 0, len(rules))
+	backKind := filterKind
 	for _, rule := range rules {
-		if filterKind != "" && rule.Kind != filterKind {
-			continue
+		if detailMode {
+			if strings.TrimSpace(rule.RuleKey) != selectedRuleKey {
+				continue
+			}
+			backKind = normalizeGuidanceKind(rule.Kind)
+		} else {
+			if filterKind != "" && rule.Kind != filterKind {
+				continue
+			}
 		}
 		scanEvidence := GuidanceScanEvidence{}
 		if rule.Kind == "formula" && len(rule.ScanBatches) > 0 {
@@ -185,15 +198,28 @@ func buildGuidancePageData(rules []TranslationGuidanceRule, params url.Values) *
 		})
 	}
 
-	tabs := []GuidanceKindTab{
-		{Key: "", Label: "All Rules", Count: len(rules), Active: filterKind == ""},
-		{Key: "gloss", Label: "Glosses", Count: counts["gloss"], Active: filterKind == "gloss"},
-		{Key: "formula", Label: "Formulae", Count: counts["formula"], Active: filterKind == "formula"},
-		{Key: "proper_noun", Label: "Proper Nouns", Count: counts["proper_noun"], Active: filterKind == "proper_noun"},
-		{Key: "contextual_bias", Label: "Vocabulary Bias", Count: counts["contextual_bias"], Active: filterKind == "contextual_bias"},
+	backURL := "/cgi-bin/guidance.cgi"
+	if normalized := normalizeGuidanceKind(backKind); normalized != "" {
+		backURL += "?kind=" + url.QueryEscape(normalized)
+	}
+	backLabel := "Back to rules table"
+	if normalized := normalizeGuidanceKind(backKind); normalized != "" {
+		backLabel = "Back to " + guidanceFilterLabel(normalized)
+	}
+	displayFilterKind := filterKind
+	if detailMode && normalizeGuidanceKind(backKind) != "" {
+		displayFilterKind = normalizeGuidanceKind(backKind)
 	}
 
-	defaultCreateKind := filterKind
+	tabs := []GuidanceKindTab{
+		{Key: "", Label: "All Rules", Count: len(rules), Active: displayFilterKind == ""},
+		{Key: "gloss", Label: "Glosses", Count: counts["gloss"], Active: displayFilterKind == "gloss"},
+		{Key: "formula", Label: "Formulae", Count: counts["formula"], Active: displayFilterKind == "formula"},
+		{Key: "proper_noun", Label: "Proper Nouns", Count: counts["proper_noun"], Active: displayFilterKind == "proper_noun"},
+		{Key: "contextual_bias", Label: "Vocabulary Bias", Count: counts["contextual_bias"], Active: displayFilterKind == "contextual_bias"},
+	}
+
+	defaultCreateKind := displayFilterKind
 	if defaultCreateKind == "" {
 		defaultCreateKind = "gloss"
 	}
@@ -201,8 +227,11 @@ func buildGuidancePageData(rules []TranslationGuidanceRule, params url.Values) *
 	return &GuidancePageData{
 		Rules:                   filtered,
 		KindTabs:                tabs,
-		FilterKind:              filterKind,
-		FilterLabel:             guidanceFilterLabel(filterKind),
+		FilterKind:              displayFilterKind,
+		FilterLabel:             guidanceFilterLabel(displayFilterKind),
+		DetailMode:              detailMode,
+		BackURL:                 backURL,
+		BackLabel:               backLabel,
 		TotalCount:              len(rules),
 		ActiveCount:             activeCount,
 		RetiredCount:            retiredCount,
@@ -307,25 +336,11 @@ const guidanceTemplate = `<!DOCTYPE html>
             display: grid;
             gap: 18px;
         }
-        .guidance-view-toggle {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-bottom: 10px;
+        .guidance-table-container {
+            max-width: none;
         }
-        .guidance-view-toggle button {
-            background: #e7eff8;
-            border: 0;
-            border-radius: 999px;
-            color: #20496b;
-            cursor: pointer;
-            font: inherit;
-            font-weight: 700;
-            padding: 8px 14px;
-        }
-        .guidance-view-toggle button.active {
-            background: #15324c;
-            color: white;
+        .guidance-detail-container {
+            max-width: 1180px;
         }
         .guidance-table-panel {
             background: white;
@@ -365,26 +380,22 @@ const guidanceTemplate = `<!DOCTYPE html>
         .guidance-table-wrap {
             border: 1px solid #e2e8f0;
             border-radius: 8px;
-            max-height: calc(100vh - 290px);
-            min-height: 500px;
-            overflow: auto;
+            overflow: visible;
         }
         .guidance-table {
             border-collapse: collapse;
             font-size: 0.82em;
-            min-width: 2320px;
             table-layout: fixed;
             width: 100%;
         }
         .guidance-table th,
         .guidance-table td {
             border-bottom: 1px solid #e2e8f0;
-            overflow: hidden;
             padding: 5px 8px;
             text-align: left;
-            text-overflow: ellipsis;
-            vertical-align: middle;
-            white-space: nowrap;
+            vertical-align: top;
+            white-space: normal;
+            word-break: normal;
         }
         .guidance-table th {
             background: #f8fafc;
@@ -484,16 +495,25 @@ const guidanceTemplate = `<!DOCTYPE html>
             font-weight: 700;
             text-decoration: none;
         }
-        .guidance-card.highlighted {
-            outline: 3px solid #f59e0b;
-            outline-offset: 3px;
-        }
         .guidance-card,
         .guidance-create-card {
             background: white;
             border-radius: 14px;
             box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
             padding: 20px;
+        }
+        .guidance-detail-nav {
+            align-items: center;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            justify-content: space-between;
+            margin-bottom: 14px;
+        }
+        .guidance-detail-nav a {
+            color: #14528a;
+            font-weight: 800;
+            text-decoration: none;
         }
         .guidance-create-details {
             margin-bottom: 10px;
@@ -794,7 +814,7 @@ const guidanceTemplate = `<!DOCTYPE html>
         </div>
     </div>
 
-    <div class="container">
+    <div class="container {{if .DetailMode}}guidance-detail-container{{else}}guidance-table-container{{end}}">
         <div class="navigation">
             <div class="view-tabs">
                 <a class="view-tab" href="/cgi-bin/review.cgi">Translation Review</a>
@@ -806,6 +826,7 @@ const guidanceTemplate = `<!DOCTYPE html>
             </div>
         </div>
 
+        {{if not .DetailMode}}
         <div class="guidance-summary">
             <div class="summary-card">
                 <div>Total rules</div>
@@ -918,11 +939,6 @@ const guidanceTemplate = `<!DOCTYPE html>
             </div>
         </details>
 
-        <div class="guidance-view-toggle" aria-label="Guidance view">
-            <button type="button" class="active" data-guidance-view="table">Table</button>
-            <button type="button" data-guidance-view="cards">Cards / Edit</button>
-        </div>
-
         <section class="guidance-table-panel" id="guidance-table-panel">
             <div class="section-title">Rules Table</div>
             <div class="guidance-table-controls">
@@ -1011,7 +1027,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                         {{range .Rules}}
                         <tr
                             class="{{if .Rule.PendingImport}}pending-import {{end}}{{if eq .Rule.Status "retired"}}is-retired{{end}}"
-                            data-target-id="rule-{{.Rule.RuleKey}}"
+                            data-edit-url="/cgi-bin/guidance.cgi?rule={{urlquery .Rule.RuleKey}}"
                             data-kind="{{.Rule.Kind}}"
                             data-stage="{{.Rule.LifecycleStage}}"
                             data-status="{{.Rule.Status}}"
@@ -1033,7 +1049,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                             <td title="{{.StatusLabel}}">{{.StatusLabel}}</td>
                             <td title="{{.ModeLabel}}">{{.ModeLabel}}</td>
                             <td class="compact" title="{{.Rule.RuleCode}}">{{.Rule.RuleCode}}</td>
-                            <td class="compact" title="{{.Rule.Label}}"><a class="table-action" href="#rule-{{.Rule.RuleKey}}">{{.Rule.Label}}</a></td>
+                            <td class="compact" title="{{.Rule.Label}}"><a class="table-action" href="/cgi-bin/guidance.cgi?rule={{urlquery .Rule.RuleKey}}">{{.Rule.Label}}</a></td>
                             <td class="compact" title="{{.Rule.PreferredTranslation}}">{{.Rule.PreferredTranslation}}</td>
                             <td title="{{.Rule.WordClass}}">{{.Rule.WordClass}}</td>
                             <td title="{{.Rule.SemanticDomain}}">{{.Rule.SemanticDomain}}</td>
@@ -1051,7 +1067,12 @@ const guidanceTemplate = `<!DOCTYPE html>
             </div>
         </section>
 
-        <section class="guidance-grid" id="guidance-card-panel" hidden>
+        {{else}}
+        <div class="guidance-detail-nav">
+            <a href="{{.BackURL}}">{{.BackLabel}}</a>
+            <span class="guidance-table-meta">Single-rule edit page. Scan evidence and edit controls are loaded only for this rule.</span>
+        </div>
+        <section class="guidance-grid" id="guidance-detail-panel">
             {{if .Rules}}
                 {{range .Rules}}
                 <div class="guidance-card" id="rule-{{.Rule.RuleKey}}">
@@ -1328,15 +1349,26 @@ const guidanceTemplate = `<!DOCTYPE html>
                 </div>
                 {{end}}
             {{else}}
-                <div class="empty-guidance">No rules match this filter yet.</div>
+                <div class="empty-guidance">No rule matches this URL.</div>
             {{end}}
         </section>
+        {{end}}
     </div>
     <script>
         (function () {
-            var tablePanel = document.getElementById("guidance-table-panel");
-            var cardPanel = document.getElementById("guidance-card-panel");
-            var viewButtons = Array.prototype.slice.call(document.querySelectorAll("[data-guidance-view]"));
+            if (window.location.hash && window.location.hash.indexOf("#rule-") === 0) {
+                var params = new URLSearchParams(window.location.search || "");
+                if (!params.has("rule")) {
+                    try {
+                        params.set("rule", decodeURIComponent(window.location.hash.slice(6)));
+                    } catch (error) {
+                        params.set("rule", window.location.hash.slice(6));
+                    }
+                    window.location.replace(window.location.pathname + "?" + params.toString());
+                    return;
+                }
+            }
+
             var table = document.getElementById("guidance_rule_table");
             var rows = table ? Array.prototype.slice.call(table.querySelectorAll("tbody tr")) : [];
             var visibleCount = document.getElementById("guidance_table_visible_count");
@@ -1354,35 +1386,6 @@ const guidanceTemplate = `<!DOCTYPE html>
 
             function text(value) {
                 return (value || "").toString().trim().toLowerCase();
-            }
-
-            function activateView(view) {
-                var showCards = view === "cards";
-                if (tablePanel) {
-                    tablePanel.hidden = showCards;
-                }
-                if (cardPanel) {
-                    cardPanel.hidden = !showCards;
-                }
-                viewButtons.forEach(function (button) {
-                    button.classList.toggle("active", button.getAttribute("data-guidance-view") === view);
-                });
-            }
-
-            function openRuleCard(targetId) {
-                var target = document.getElementById(targetId || "");
-                if (!target) {
-                    return;
-                }
-                activateView("cards");
-                if (targetId) {
-                    window.location.hash = targetId;
-                }
-                target.classList.add("highlighted");
-                target.scrollIntoView({ behavior: "smooth", block: "start" });
-                window.setTimeout(function () {
-                    target.classList.remove("highlighted");
-                }, 1800);
             }
 
             function getSortValue(row, key) {
@@ -1485,12 +1488,6 @@ const guidanceTemplate = `<!DOCTYPE html>
                 }
             }
 
-            viewButtons.forEach(function (button) {
-                button.addEventListener("click", function () {
-                    activateView(button.getAttribute("data-guidance-view"));
-                });
-            });
-
             Object.keys(controls).forEach(function (key) {
                 var control = controls[key];
                 if (!control) {
@@ -1516,9 +1513,11 @@ const guidanceTemplate = `<!DOCTYPE html>
                 rows.forEach(function (row) {
                     row.addEventListener("click", function (event) {
                         if (event.target && event.target.closest && event.target.closest("a")) {
-                            event.preventDefault();
+                            return;
                         }
-                        openRuleCard(row.dataset.targetId || "");
+                        if (row.dataset.editUrl) {
+                            window.location.href = row.dataset.editUrl;
+                        }
                     });
                 });
             }
@@ -1765,21 +1764,8 @@ const guidanceTemplate = `<!DOCTYPE html>
                 }, 15000);
             }
 
-            var initialTargetId = "";
-            if (window.location.hash) {
-                try {
-                    initialTargetId = decodeURIComponent(window.location.hash.slice(1));
-                } catch (error) {
-                    initialTargetId = window.location.hash.slice(1);
-                }
-            }
-            var initialView = initialTargetId ? "cards" : "table";
-            activateView(initialView);
             applySort();
             applyFilters();
-            if (initialTargetId) {
-                openRuleCard(initialTargetId);
-            }
         }());
     </script>
 </body>

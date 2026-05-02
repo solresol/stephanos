@@ -628,15 +628,14 @@ func showErrorAndExit(message string, returnView string) {
 
 func guidanceRedirectPath(filterKind string, targetRuleKey string) string {
 	params := url.Values{}
-	if normalized := normalizeGuidanceKind(filterKind); normalized != "" {
+	if strings.TrimSpace(targetRuleKey) != "" {
+		params.Set("rule", strings.TrimSpace(targetRuleKey))
+	} else if normalized := normalizeGuidanceKind(filterKind); normalized != "" {
 		params.Set("kind", normalized)
 	}
 	path := "/cgi-bin/guidance.cgi"
 	if encoded := params.Encode(); encoded != "" {
 		path += "?" + encoded
-	}
-	if strings.TrimSpace(targetRuleKey) != "" {
-		path += "#rule-" + strings.TrimSpace(targetRuleKey)
 	}
 	return path
 }
