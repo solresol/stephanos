@@ -988,7 +988,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
                     <div class="guidance-hit-subheading">Matched guidance</div>
                     <div class="guidance-hit-list">
                         {{range .GuidanceStrongHits}}
-                        <details class="guidance-hit-row" {{if .IncludedInDisplayedPrompt}}open{{end}}>
+                        <details class="guidance-hit-row" {{if or .IncludedInDisplayedPrompt (eq .Hit.DetectorKind "urgent_formula_scan")}}open{{end}}>
                             <summary>
                                 <span class="guidance-hit-summary">
                                     <span class="guidance-hit-code">{{.RuleDisplay}}</span>
