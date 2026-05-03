@@ -1702,6 +1702,48 @@ CREATE TABLE public.translation_guidance_matches (
 
 
 --
+-- Name: TABLE translation_guidance_matches; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.translation_guidance_matches IS 'One row per translation-guidance rule revision, headword source text, and detector pattern scanned by the guidance recognizer.';
+
+
+--
+-- Name: COLUMN translation_guidance_matches.lemma_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_guidance_matches.lemma_id IS 'The headword entry searched by the recognizer.';
+
+
+--
+-- Name: COLUMN translation_guidance_matches.detector_kind; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_guidance_matches.detector_kind IS 'The recognizer pattern/search lane used for this guidance rule.';
+
+
+--
+-- Name: COLUMN translation_guidance_matches.occurrence_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_guidance_matches.occurrence_count IS 'Number of occurrences found by the recognizer; zero rows are retained as scan evidence.';
+
+
+--
+-- Name: COLUMN translation_guidance_matches.detected_at; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_guidance_matches.detected_at IS 'Timestamp when this rule/headword/source-text scan row was first recorded.';
+
+
+--
+-- Name: COLUMN translation_guidance_matches.updated_at; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_guidance_matches.updated_at IS 'Timestamp when this rule/headword/source-text scan row was last refreshed.';
+
+
+--
 -- Name: translation_guidance_matches_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -3519,10 +3561,31 @@ CREATE INDEX translation_guidance_matches_lemma_status_idx ON public.translation
 
 
 --
+-- Name: translation_guidance_matches_rule_occurrence_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_matches_rule_occurrence_idx ON public.translation_guidance_matches USING btree (rule_id, occurrence_count, detected_at DESC);
+
+
+--
+-- Name: translation_guidance_matches_rule_revision_detector_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_matches_rule_revision_detector_idx ON public.translation_guidance_matches USING btree (rule_revision_id, detector_kind, detected_at DESC);
+
+
+--
 -- Name: translation_guidance_matches_unique_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX translation_guidance_matches_unique_idx ON public.translation_guidance_matches USING btree (rule_revision_id, lemma_id, source_text_version_id, detector_kind);
+
+
+--
+-- Name: translation_guidance_matches_zero_scan_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_matches_zero_scan_idx ON public.translation_guidance_matches USING btree (rule_id, detected_at DESC) WHERE (occurrence_count = 0);
 
 
 --
