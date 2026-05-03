@@ -14,6 +14,96 @@ cd "$(dirname "$0")"
 LOGFILE="pipeline.log"
 DATE=$(date +%Y%m%d)
 
+find_pg_dump() {
+  if command -v pg_dump >/dev/null 2>&1; then
+    command -v pg_dump
+    return 0
+  fi
+
+  local candidates=(
+    "/Applications/Postgres.app/Contents/Versions/latest/bin/pg_dump"
+    "/Applications/Postgres/Contents/Versions/latest/bin/pg_dump"
+    "/Applications/Postgres/bin/pg_dump"
+  )
+
+  local path
+  for path in "${candidates[@]}"; do
+    if [[ -x "$path" ]]; then
+      echo "$path"
+      return 0
+    fi
+  done
+
+  shopt -s nullglob
+  for path in /Applications/Postgres.app/Contents/Versions/*/bin/pg_dump /Applications/Postgres/Contents/Versions/*/bin/pg_dump /Applications/Postgres/*/bin/pg_dump; do
+    if [[ -x "$path" ]]; then
+      echo "$path"
+      return 0
+    fi
+  done
+  shopt -u nullglob
+
+  return 1
+}
+
+dump_postgres_backup() {
+  local output_file="$1"
+  local db_name="${DB_NAME:-${PGDATABASE:-stephanos}}"
+  local db_host="${DB_HOST:-${PGHOST:-}}"
+  local db_port="${DB_PORT:-${PGPORT:-5432}}"
+  local db_user="${DB_USER:-${PGUSER:-stephanos}}"
+  local ssh_host="${SCHEMA_SSH_HOST:-stephanos@raksasa}"
+  local pg_dump_bin
+  local err_file
+
+  pg_dump_bin="$(find_pg_dump || true)"
+  err_file="$(mktemp)"
+  trap 'rm -f "$err_file"' RETURN
+
+  if [[ -n "$pg_dump_bin" ]]; then
+    local cmd=("$pg_dump_bin")
+    if [[ -n "$db_host" ]]; then
+      cmd+=("-h" "$db_host")
+    fi
+    if [[ -n "$db_port" ]]; then
+      cmd+=("-p" "$db_port")
+    fi
+    if [[ -n "$db_user" ]]; then
+      cmd+=("-U" "$db_user")
+    fi
+    cmd+=("$db_name")
+
+    if "${cmd[@]}" 2>"$err_file" | gzip > "$output_file"; then
+      echo "  PostgreSQL backup written with: $pg_dump_bin" | tee -a "$LOGFILE"
+      return 0
+    fi
+
+    if ! grep -q "server version mismatch" "$err_file"; then
+      cat "$err_file" >&2
+      return 1
+    fi
+
+    echo "  Local pg_dump version mismatch; falling back to remote pg_dump over SSH" | tee -a "$LOGFILE"
+  else
+    echo "  Local pg_dump not found; falling back to remote pg_dump over SSH" | tee -a "$LOGFILE"
+  fi
+
+  if [[ -z "$ssh_host" ]]; then
+    echo "No SSH host configured for remote pg_dump fallback." >&2
+    return 1
+  fi
+
+  local remote_cmd=(pg_dump)
+  if [[ -n "$db_user" ]]; then
+    remote_cmd+=("-U" "$db_user")
+  fi
+  remote_cmd+=("$db_name")
+
+  local remote_cmd_escaped
+  remote_cmd_escaped="$(printf '%q ' "${remote_cmd[@]}")"
+  ssh "$ssh_host" "$remote_cmd_escaped" | gzip > "$output_file"
+}
+
 echo "========================================" | tee -a "$LOGFILE"
 echo "Pipeline run: $(date)" | tee -a "$LOGFILE"
 echo "========================================" | tee -a "$LOGFILE"
@@ -460,7 +550,7 @@ fi
 # Backup PostgreSQL database
 echo "  Backing up PostgreSQL database..." | tee -a "$LOGFILE"
 mkdir -p backups
-pg_dump -U stephanos stephanos | gzip > backups/stephanos_${DATE}.sql.gz 2>&1 | tee -a "$LOGFILE"
+dump_postgres_backup "backups/stephanos_${DATE}.sql.gz" 2>&1 | tee -a "$LOGFILE"
 # Upload PostgreSQL backup to merah
 rsync -az backups/stephanos_${DATE}.sql.gz ${BACKUP_DIR}/ 2>&1 | tee -a "$LOGFILE"
 

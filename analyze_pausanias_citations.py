@@ -7,6 +7,7 @@ Creates visualizations and statistical analysis of citation distribution.
 """
 import re
 import sqlite3
+import os
 from pathlib import Path
 from collections import defaultdict
 import numpy as np
@@ -105,6 +106,33 @@ def get_pausanias_structure(pausanias_db_path):
 
     conn.close()
     return structure
+
+
+def resolve_pausanias_db_path():
+    """Find the Pausanias SQLite database in deployment or local checkouts."""
+    env_path = os.environ.get("PAUSANIAS_DB_PATH")
+    candidates = []
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+
+    repo_dir = Path(__file__).resolve().parent
+    candidates.extend(
+        [
+            Path("/home/stephanos/pausanias.sqlite"),
+            repo_dir.parent / "pausanias" / "pausanias.sqlite",
+            Path.home() / "Documents" / "devel" / "pausanias" / "pausanias.sqlite",
+        ]
+    )
+
+    seen = set()
+    for candidate in candidates:
+        candidate = candidate.resolve() if candidate.exists() else candidate
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def analyze_distribution(citations, structure):
@@ -461,14 +489,21 @@ def main():
     conn = get_connection()
     cur = conn.cursor()
 
-    pausanias_db = Path("/home/stephanos/pausanias.sqlite")
+    pausanias_db = resolve_pausanias_db_path()
+    if pausanias_db is None:
+        print(
+            "  Warning: Pausanias SQLite database not found; "
+            "set PAUSANIAS_DB_PATH or place pausanias.sqlite in ../pausanias/."
+        )
+        conn.close()
+        return
 
     # Get citations and structure
     print("  Extracting citations from Stephanos...")
     citations = get_stephanos_citations(cur)
     print(f"    Found {len(citations)} citations")
 
-    print("  Loading Pausanias structure...")
+    print(f"  Loading Pausanias structure from {pausanias_db}...")
     global structure
     structure = get_pausanias_structure(pausanias_db)
 
