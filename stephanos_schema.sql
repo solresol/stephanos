@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict Iat6ATMoODTg31fWhSKyZqusQKREUzpxhC4R9AhOSebmEeqGqxx8xMu0lWhQA14
+\restrict dDz7OX1wehXVhdSKeAR3Xe0SDeOKZ6zheRfLmJ2CuxBMciJisuPndKIgncEVhUM
 
 -- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
@@ -1482,6 +1482,45 @@ ALTER SEQUENCE public.proper_nouns_id_seq OWNED BY public.proper_nouns.id;
 
 
 --
+-- Name: source_citation_extraction_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.source_citation_extraction_runs (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    model text NOT NULL,
+    input_text_sha256 text NOT NULL,
+    units_extracted integer DEFAULT 0 NOT NULL,
+    mentions_inserted integer DEFAULT 0 NOT NULL,
+    tokens_used integer DEFAULT 0 NOT NULL,
+    status text DEFAULT 'completed'::text NOT NULL,
+    error_message text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT source_citation_extraction_runs_status_check CHECK ((status = ANY (ARRAY['completed'::text, 'failed'::text])))
+);
+
+
+--
+-- Name: source_citation_extraction_runs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.source_citation_extraction_runs_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: source_citation_extraction_runs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.source_citation_extraction_runs_id_seq OWNED BY public.source_citation_extraction_runs.id;
+
+
+--
 -- Name: source_citation_units; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1626,6 +1665,18 @@ CREATE SEQUENCE public.text_pair_differences_id_seq
 --
 
 ALTER SEQUENCE public.text_pair_differences_id_seq OWNED BY public.text_pair_differences.id;
+
+
+--
+-- Name: translation_guidance_action_import_map; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_action_import_map (
+    source_key text NOT NULL,
+    rule_id bigint NOT NULL,
+    rule_key text NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
 
 
 --
@@ -1814,10 +1865,6 @@ CREATE TABLE public.translation_guidance_rules (
     normalized_label text NOT NULL,
     preferred_translation text,
     word_class text,
-    semantic_domain text,
-    context_condition text,
-    bias_strength text DEFAULT 'normal'::text NOT NULL,
-    lifecycle_stage text DEFAULT 'guidance'::text NOT NULL,
     status text DEFAULT 'in_progress'::text NOT NULL,
     application_mode text NOT NULL,
     citations_text text,
@@ -1830,6 +1877,10 @@ CREATE TABLE public.translation_guidance_rules (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     retired_at timestamp with time zone,
+    semantic_domain text,
+    lifecycle_stage text DEFAULT 'guidance'::text NOT NULL,
+    context_condition text,
+    bias_strength text DEFAULT 'normal'::text NOT NULL,
     CONSTRAINT translation_guidance_rules_application_mode_check CHECK ((application_mode = ANY (ARRAY['replace'::text, 'required'::text, 'advisory'::text]))),
     CONSTRAINT translation_guidance_rules_bias_strength_check CHECK ((bias_strength = ANY (ARRAY['weak'::text, 'normal'::text, 'strong'::text]))),
     CONSTRAINT translation_guidance_rules_kind_check CHECK ((kind = ANY (ARRAY['gloss'::text, 'formula'::text, 'proper_noun'::text, 'contextual_bias'::text]))),
@@ -1879,9 +1930,9 @@ CREATE TABLE public.translation_guidance_scan_batches (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT translation_guidance_scan_batches_sample_size_check CHECK ((sample_size > 0)),
-    CONSTRAINT translation_guidance_scan_batches_scope_kind_check CHECK ((scope_kind = ANY (ARRAY['random_sample'::text]))),
+    CONSTRAINT translation_guidance_scan_batches_scope_kind_check CHECK ((scope_kind = 'random_sample'::text)),
     CONSTRAINT translation_guidance_scan_batches_selected_count_check CHECK ((selected_count >= 0)),
-    CONSTRAINT translation_guidance_scan_batches_source_document_check CHECK ((source_document = ANY (ARRAY['meineke'::text])))
+    CONSTRAINT translation_guidance_scan_batches_source_document_check CHECK ((source_document = 'meineke'::text))
 );
 
 
@@ -1915,7 +1966,6 @@ CREATE TABLE public.translation_guidance_scan_queue (
     rule_revision_id integer NOT NULL,
     lemma_id integer NOT NULL,
     source_text_version_id integer NOT NULL,
-    scan_batch_id integer,
     status text DEFAULT 'pending'::text NOT NULL,
     priority integer DEFAULT 100 NOT NULL,
     detector_kind text,
@@ -1929,6 +1979,7 @@ CREATE TABLE public.translation_guidance_scan_queue (
     error_message text,
     model text,
     tokens_used integer DEFAULT 0 NOT NULL,
+    scan_batch_id integer,
     CONSTRAINT translation_guidance_scan_queue_attempts_check CHECK ((attempts >= 0)),
     CONSTRAINT translation_guidance_scan_queue_priority_check CHECK ((priority >= 0)),
     CONSTRAINT translation_guidance_scan_queue_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text]))),
@@ -2409,6 +2460,13 @@ ALTER TABLE ONLY public.proper_nouns ALTER COLUMN id SET DEFAULT nextval('public
 
 
 --
+-- Name: source_citation_extraction_runs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_citation_extraction_runs ALTER COLUMN id SET DEFAULT nextval('public.source_citation_extraction_runs_id_seq'::regclass);
+
+
+--
 -- Name: source_citation_units id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -2857,6 +2915,14 @@ ALTER TABLE ONLY public.proper_nouns
 
 
 --
+-- Name: source_citation_extraction_runs source_citation_extraction_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_citation_extraction_runs
+    ADD CONSTRAINT source_citation_extraction_runs_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: source_citation_units source_citation_units_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2886,6 +2952,14 @@ ALTER TABLE ONLY public.source_quote_passages
 
 ALTER TABLE ONLY public.text_pair_differences
     ADD CONSTRAINT text_pair_differences_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_action_import_map translation_guidance_action_import_map_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_action_import_map
+    ADD CONSTRAINT translation_guidance_action_import_map_pkey PRIMARY KEY (source_key);
 
 
 --
@@ -3484,6 +3558,13 @@ CREATE INDEX meineke_word_lemma_occurrences_word_idx ON public.meineke_word_lemm
 
 
 --
+-- Name: source_citation_extraction_runs_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_citation_extraction_runs_lemma_idx ON public.source_citation_extraction_runs USING btree (lemma_id, created_at DESC);
+
+
+--
 -- Name: source_citation_units_author_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3603,13 +3684,6 @@ CREATE UNIQUE INDEX translation_guidance_rule_revisions_rule_revision_idx ON pub
 
 
 --
--- Name: translation_guidance_rules_kind_status_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX translation_guidance_rules_kind_status_idx ON public.translation_guidance_rules USING btree (kind, status, updated_at);
-
-
---
 -- Name: translation_guidance_rules_bias_strength_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3624,17 +3698,10 @@ CREATE INDEX translation_guidance_rules_context_condition_idx ON public.translat
 
 
 --
--- Name: translation_guidance_rules_normalized_label_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: translation_guidance_rules_kind_status_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX translation_guidance_rules_normalized_label_idx ON public.translation_guidance_rules USING btree (normalized_label);
-
-
---
--- Name: translation_guidance_rules_semantic_domain_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX translation_guidance_rules_semantic_domain_idx ON public.translation_guidance_rules USING btree (semantic_domain) WHERE (semantic_domain IS NOT NULL);
+CREATE INDEX translation_guidance_rules_kind_status_idx ON public.translation_guidance_rules USING btree (kind, status, updated_at);
 
 
 --
@@ -3642,6 +3709,13 @@ CREATE INDEX translation_guidance_rules_semantic_domain_idx ON public.translatio
 --
 
 CREATE INDEX translation_guidance_rules_lifecycle_stage_idx ON public.translation_guidance_rules USING btree (lifecycle_stage) WHERE (lifecycle_stage <> 'inactive'::text);
+
+
+--
+-- Name: translation_guidance_rules_normalized_label_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_rules_normalized_label_idx ON public.translation_guidance_rules USING btree (normalized_label);
 
 
 --
@@ -3656,6 +3730,13 @@ CREATE UNIQUE INDEX translation_guidance_rules_rule_code_idx ON public.translati
 --
 
 CREATE UNIQUE INDEX translation_guidance_rules_rule_key_idx ON public.translation_guidance_rules USING btree (rule_key);
+
+
+--
+-- Name: translation_guidance_rules_semantic_domain_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_rules_semantic_domain_idx ON public.translation_guidance_rules USING btree (semantic_domain) WHERE (semantic_domain IS NOT NULL);
 
 
 --
@@ -4115,6 +4196,14 @@ ALTER TABLE ONLY public.proper_nouns
 
 
 --
+-- Name: source_citation_extraction_runs source_citation_extraction_runs_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_citation_extraction_runs
+    ADD CONSTRAINT source_citation_extraction_runs_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
 -- Name: source_quote_passages source_quote_passages_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4414,4 +4503,5 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict Iat6ATMoODTg31fWhSKyZqusQKREUzpxhC4R9AhOSebmEeqGqxx8xMu0lWhQA14
+\unrestrict dDz7OX1wehXVhdSKeAR3Xe0SDeOKZ6zheRfLmJ2CuxBMciJisuPndKIgncEVhUM
+

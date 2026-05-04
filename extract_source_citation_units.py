@@ -139,11 +139,18 @@ def ensure_tables_exist(cur) -> None:
     has_units = bool(cur.fetchone()[0])
     cur.execute("SELECT to_regclass('public.lemma_source_citation_mentions') IS NOT NULL")
     has_mentions = bool(cur.fetchone()[0])
-    if not (has_units and has_mentions):
+    cur.execute("SELECT to_regclass('public.source_citation_extraction_runs') IS NOT NULL")
+    has_runs = bool(cur.fetchone()[0])
+    if not (has_units and has_mentions and has_runs):
         raise RuntimeError(
             "Missing source-citation tables. Apply migrations first: "
-            "migrations/20260303_source_citation_units.sql"
+            "migrations/20260303_source_citation_units.sql, "
+            "migrations/20260503_source_citation_extraction_runs.sql"
         )
+
+
+def hash_input_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def main() -> None:
@@ -151,7 +158,11 @@ def main() -> None:
     parser.add_argument("--model", default="gpt-5.4-mini", help="Model to use (default: gpt-5.4-mini)")
     parser.add_argument("--limit", type=int, help="Limit number of lemmas to process")
     parser.add_argument("--lemma-id", type=int, help="Process only a specific lemma_id")
-    parser.add_argument("--force", action="store_true", help="Reprocess even if mentions already exist")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Reprocess even when a completed extraction run already exists for the current input text",
+    )
     parser.add_argument("--delay", type=float, default=0.8, help="Delay between API calls (default: 0.8s)")
     args = parser.parse_args()
 
@@ -173,13 +184,6 @@ def main() -> None:
         where.append("a.id = %s")
         params.append(int(args.lemma_id))
 
-    if not args.force:
-        where.append(
-            "NOT EXISTS (SELECT 1 FROM lemma_source_citation_mentions m WHERE m.lemma_id = a.id)"
-        )
-
-    limit_sql = f"LIMIT {int(args.limit)}" if args.limit else ""
-
     cur.execute(
         f"""
         SELECT
@@ -189,11 +193,31 @@ def main() -> None:
         FROM assembled_lemmas a
         WHERE {' AND '.join(where)}
         ORDER BY a.id
-        {limit_sql}
         """,
         params,
     )
-    rows = cur.fetchall()
+    candidates = cur.fetchall()
+
+    # Skip lemmas that already have a completed run for the *current* input hash.
+    # Hashing happens in Python so it matches the value we'll later record.
+    completed_hashes: set[tuple[int, str]] = set()
+    if not args.force:
+        cur.execute(
+            "SELECT lemma_id, input_text_sha256 FROM source_citation_extraction_runs WHERE status = 'completed'"
+        )
+        completed_hashes = {(int(lid), str(h)) for (lid, h) in cur.fetchall()}
+
+    rows: list[tuple[int, str, str, str]] = []
+    for lemma_id, lemma, greek_text in candidates:
+        stripped = (greek_text or "").strip()
+        if not stripped:
+            continue
+        input_hash = hash_input_text(stripped)
+        if (int(lemma_id), input_hash) in completed_hashes:
+            continue
+        rows.append((int(lemma_id), lemma, stripped, input_hash))
+        if args.limit and len(rows) >= int(args.limit):
+            break
 
     if not rows:
         print("No lemmas need source-citation extraction.")
@@ -203,16 +227,20 @@ def main() -> None:
     print(f"Extracting source-citation units from {len(rows)} lemmas...")
 
     total_tokens = 0
-    for idx, (lemma_id, lemma, greek_text) in enumerate(rows, 1):
-        greek_text = (greek_text or "").strip()
-        if not greek_text:
-            continue
-
+    for idx, (lemma_id, lemma, greek_text, input_hash) in enumerate(rows, 1):
         print(f"  [{idx}/{len(rows)}] lemma_id={lemma_id} {lemma}...", end=" ", flush=True)
 
         try:
             units, tokens = extract_units_for_lemma(client, greek_text, model=args.model)
             total_tokens += tokens
+
+            # Reprocessing replaces prior mentions for this lemma so the unique
+            # constraint on (lemma_id, unit_id, raw_citation_text) doesn't block
+            # changed extractions.
+            cur.execute(
+                "DELETE FROM lemma_source_citation_mentions WHERE lemma_id = %s",
+                (int(lemma_id),),
+            )
 
             inserted_mentions = 0
             for unit in units:
@@ -310,11 +338,44 @@ def main() -> None:
                 )
                 inserted_mentions += cur.rowcount
 
+            cur.execute(
+                """
+                INSERT INTO source_citation_extraction_runs (
+                    lemma_id, model, input_text_sha256,
+                    units_extracted, mentions_inserted, tokens_used, status
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, 'completed')
+                """,
+                (
+                    int(lemma_id),
+                    args.model,
+                    input_hash,
+                    len(units),
+                    inserted_mentions,
+                    int(tokens),
+                ),
+            )
+
             conn.commit()
             print(f"OK ({len(units)} units, {inserted_mentions} mentions, {tokens} tokens)")
             time.sleep(max(0.0, float(args.delay)))
         except Exception as exc:
             conn.rollback()
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO source_citation_extraction_runs (
+                        lemma_id, model, input_text_sha256,
+                        units_extracted, mentions_inserted, tokens_used,
+                        status, error_message
+                    )
+                    VALUES (%s, %s, %s, 0, 0, 0, 'failed', %s)
+                    """,
+                    (int(lemma_id), args.model, input_hash, str(exc)[:1000]),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
             print(f"ERROR: {exc}")
 
     conn.close()
