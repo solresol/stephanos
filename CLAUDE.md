@@ -49,7 +49,7 @@ To add dependencies: `uv add <package>`
      - `--no-headword-constraint`: Disables headword validation against the Meineke list. Useful for processing pages outside the expected headword range.
 
 4. **Translation** (`translate_lemmas.py`)
-   - Processes extracted Greek text through gpt-5.2 for translation using tool calling
+   - Processes extracted Greek text through gpt-5.5 for translation using tool calling
    - Reads system prompt from `translation_prompts` table (versioned)
    - Stores translations in `translation` column with `translation_prompt_version`
    - Priority order: (1) outdated prompt versions, (2) untranslated entries
@@ -242,7 +242,7 @@ When writing new processing code:
 - Database: PostgreSQL on localhost (see `db.py` and `config.py`)
 
 ### Model Behavior
-- Gemini 3.0 Flash is used for image processing (OCR); gpt-5.2 handles translation
+- Gemini 3.0 Flash is used for image processing (OCR); gpt-5.5 handles translation
 - Output is "best effort" - expect occasional errors or low-confidence readings
 - Polytonic Greek should be preserved exactly as rendered in images
 

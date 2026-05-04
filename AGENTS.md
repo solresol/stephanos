@@ -55,7 +55,7 @@
 - `--no-headword-constraint` disables Meineke headword validation for out-of-range pages.
 - **Assembly + translation**
 - `assemble_lemmas.py` builds `assembled_lemmas` from OCR JSON and populates lemma metadata.
-- `translate_lemmas.py` uses gpt-5.2 tool calling; respects prompt versions and skips entries with human translations.
+- `translate_lemmas.py` uses gpt-5.5 tool calling; respects prompt versions and skips entries with human translations.
 
 ## Translation Prompt Versioning
 - Translation prompts live in the `translation_prompts` table and are versioned.

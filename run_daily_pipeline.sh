@@ -255,8 +255,8 @@ if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: enqueue step failed" | tee -a "$LOGFILE"
 fi
 
-# Step 5: Translate lemmas with gpt-5.2
-echo "Step 5: Translating lemmas with gpt-5.2..." | tee -a "$LOGFILE"
+# Step 5: Translate lemmas with gpt-5.5
+echo "Step 5: Translating lemmas with gpt-5.5..." | tee -a "$LOGFILE"
 uv run translate_lemmas.py \
     --delay 1 \
     2>&1 | tee -a "$LOGFILE"

@@ -14,7 +14,7 @@ from api_keys import load_api_key
 from billerbeck_german_utils import ensure_billerbeck_german_tables
 from db import get_connection
 
-DEFAULT_MODEL = "gpt-5.2"
+DEFAULT_MODEL = "gpt-5.5"
 
 
 def fetch_candidates(cur, limit: int | None, lemma_id: int | None):

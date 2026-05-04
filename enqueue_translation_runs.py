@@ -189,7 +189,7 @@ def main():
         action="store_true",
         help="Also queue lemmas that already have an AI translation (default: queue untranslated/outdated only)",
     )
-    parser.add_argument("--model", default="gpt-5.2")
+    parser.add_argument("--model", default="gpt-5.5")
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--created-by", default="enqueue_translation_runs.py")

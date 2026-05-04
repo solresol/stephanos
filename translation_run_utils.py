@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-DEFAULT_TRANSLATION_MODEL = "gpt-5.2"
+DEFAULT_TRANSLATION_MODEL = "gpt-5.5"
 RISK_BLOCK_REASON_PREFIX = "Blocked by risk gating: "
 
 
