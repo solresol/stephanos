@@ -1676,10 +1676,6 @@ def render_lemma_cards(lemmas):
                 )
             )
 
-        guidance_html = render_translation_guidance_metadata(lemma.get("translation_guidance_hits") or [])
-        if guidance_html:
-            metadata_sections.append(guidance_html)
-
         # Add Wikidata place link and coordinates
         link_rows = []
         if lemma.get("wikidata_place_qid"):
@@ -2573,6 +2569,20 @@ def common_styles():
             color: #334155;
             font-size: 0.92em;
         }
+        .headword-guidance-section {
+            margin-top: 24px;
+        }
+        .headword-guidance-section .lemma-meta-section {
+            background: #fff;
+            overflow-x: auto;
+        }
+        .headword-guidance-section .lemma-meta-table {
+            min-width: 760px;
+        }
+        .headword-guidance-section .lemma-meta-table th,
+        .headword-guidance-section .lemma-meta-table td {
+            padding: 10px 12px;
+        }
         .overlap-section {
             margin-top: 26px;
         }
@@ -3354,6 +3364,7 @@ def generate_headword_page(lemma: dict, overlaps: list[dict], overlap_run_id: in
     letter_char, letter_name = LETTER_META_BY_SLUG.get(letter_slug, ("?", "Other"))
     lemma_title = html_module.escape(lemma.get("lemma") or f"Lemma {lemma.get('lemma_id')}")
     overlaps_html = render_herodian_overlap_rows(lemma, overlaps, overlap_run_id)
+    guidance_html = render_translation_guidance_metadata(lemma.get("translation_guidance_hits") or [])
 
     body = f"""
         <div class="breadcrumb">
@@ -3364,6 +3375,7 @@ def generate_headword_page(lemma: dict, overlaps: list[dict], overlap_run_id: in
         <div class="lemma-grid">
             {render_lemma_cards([lemma])}
         </div>
+        {f'<div class="headword-guidance-section">{guidance_html}</div>' if guidance_html else ''}
         <div class="overlap-section">
             <h2>Herodian overlaps</h2>
             <p class="note">Stephanos excerpt (left) is aligned with matched Herodian passages (right). Colors indicate corresponding overlap spans.</p>
