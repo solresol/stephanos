@@ -1485,7 +1485,7 @@ def export_lemmas():
             """
         )
         hit_lifecycle_condition = (
-            "AND COALESCE(r.lifecycle_stage, 'guidance') <> 'inactive'"
+            "AND COALESCE(r.lifecycle_stage, 'guidance') = 'guidance'"
             if has_hit_lifecycle_stage
             else ""
         )
@@ -1543,10 +1543,12 @@ def export_lemmas():
             LEFT JOIN translation_guidance_rule_revisions rr ON rr.id = m.rule_revision_id
             LEFT JOIN lemma_source_text_versions stv ON stv.id = m.source_text_version_id
             {prompt_usage_join}
-            WHERE m.match_status IN ('matched', 'uncertain', 'needs_review')
-              AND COALESCE(r.status, '') <> 'retired'
+            WHERE m.match_status = 'matched'
+              AND COALESCE(r.status, '') = 'settled'
               {hit_lifecycle_condition}
               AND r.kind IN ('formula', 'gloss', 'contextual_bias', 'proper_noun')
+              AND COALESCE(stv.source_document, '') = 'meineke'
+              AND COALESCE(stv.is_current, FALSE) = TRUE
             ORDER BY
                 m.lemma_id,
                 COALESCE(stv.is_current, FALSE) DESC,
