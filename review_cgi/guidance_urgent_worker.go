@@ -16,9 +16,7 @@ func main() {
 	adoptRequestID := flag.Int64("adopt-request-id", 0, "create an urgent job for an existing local scan request")
 	claimPending := flag.Bool("claim-pending", false, "process the next pending urgent scan job")
 	checkStale := flag.Bool("check-stale", false, "requeue stale running urgent scan jobs")
-	backgroundOnce := flag.Bool("background-once", false, "enqueue and process one background daily formula-scan batch")
 	limit := flag.Int("limit", 0, "maximum items to process in this run")
-	backgroundLimit := flag.Int("background-limit", 50, "source/rule pairs to enqueue for a background batch")
 	staleMinutes := flag.Int("stale-minutes", 15, "minutes before a running worker is considered stale")
 	model := flag.String("model", defaultUrgentGuidanceScanModel, "OpenAI model; must be a *-mini model")
 	flag.Parse()
@@ -31,7 +29,7 @@ func main() {
 			log.Fatalf("check stale urgent scan jobs: %v", err)
 		}
 		fmt.Printf("Requeued stale urgent guidance scan jobs: %d\n", count)
-		if *adoptRequestID <= 0 && !*backgroundOnce && !*claimPending && *jobID <= 0 {
+		if *adoptRequestID <= 0 && !*claimPending && *jobID <= 0 {
 			return
 		}
 	}
@@ -48,15 +46,6 @@ func main() {
 		}
 		*jobID = adoptedJobID
 		fmt.Printf("Adopted scan request %d as urgent job %d\n", *adoptRequestID, adoptedJobID)
-	}
-
-	if *backgroundOnce {
-		backgroundJobID, err := EnqueueBackgroundGuidanceScanJob(*dbPath, *backgroundLimit)
-		if err != nil {
-			log.Fatalf("enqueue background guidance scan job: %v", err)
-		}
-		*jobID = backgroundJobID
-		fmt.Printf("Enqueued background guidance scan job %d\n", backgroundJobID)
 	}
 
 	if *claimPending {
