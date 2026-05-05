@@ -21,6 +21,14 @@ import (
 
 const defaultUrgentGuidanceScanModel = "gpt-5.4-mini"
 
+const urgentFormulaSystemPrompt = "You judge whether a Greek translation formula applies to a Stephanos entry. " +
+	"Match only the Greek surface pattern described by the rule. X/Y placeholders are variable slots, " +
+	"but every fixed Greek word, particle, or phrase in the rule label must be present in the relevant local order. " +
+	"Do not accept a merely semantic resemblance or an implicit equivalent when the fixed wording is absent. " +
+	"Return JSON only with keys match_status, confidence, evidence_text, notes. " +
+	"match_status must be matched, not_matched, or uncertain. confidence must be high, medium, or low. " +
+	"evidence_text must quote the exact Greek words that instantiate the formula; if there is no exact surface evidence, return not_matched."
+
 type urgentGuidanceScanJobRecord struct {
 	ID                 int64
 	ScanRequestID      int64
@@ -1055,7 +1063,7 @@ func callUrgentFormulaModel(apiKey string, model string, item urgentGuidanceScan
 		"messages": []map[string]string{
 			{
 				"role":    "system",
-				"content": "You judge whether a Greek translation formula applies to a Stephanos entry. Return JSON only with keys match_status, confidence, evidence_text, notes. match_status must be matched, not_matched, or uncertain. confidence must be high, medium, or low.",
+				"content": urgentFormulaSystemPrompt,
 			},
 			{
 				"role": "user",
