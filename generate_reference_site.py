@@ -543,8 +543,8 @@ def fetch_public_translation_guidance_hits(cur) -> dict[int, list[dict]]:
         if has_lifecycle_stage
         else "'' AS lifecycle_stage"
     )
-    lifecycle_condition = (
-        "AND COALESCE(r.lifecycle_stage, 'guidance') <> 'inactive'"
+    public_lifecycle_condition = (
+        "AND COALESCE(r.lifecycle_stage, 'guidance') = 'guidance'"
         if has_lifecycle_stage
         else ""
     )
@@ -601,9 +601,9 @@ def fetch_public_translation_guidance_hits(cur) -> dict[int, list[dict]]:
             FROM translation_guidance_matches m
             JOIN translation_guidance_rules r ON r.id = m.rule_id
             JOIN lemma_source_text_versions stv ON stv.id = m.source_text_version_id
-            WHERE m.match_status IN ('matched', 'uncertain', 'needs_review')
-              AND COALESCE(r.status, '') <> 'retired'
-              {lifecycle_condition}
+            WHERE m.match_status = 'matched'
+              AND COALESCE(r.status, '') = 'settled'
+              {public_lifecycle_condition}
               AND r.kind IN ('formula', 'gloss', 'contextual_bias', 'proper_noun')
               AND stv.source_document = 'meineke'
               AND stv.is_current = TRUE

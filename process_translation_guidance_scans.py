@@ -27,6 +27,31 @@ DEFAULT_DAILY_TOKEN_LIMIT = 250_000
 DEFAULT_FORMULA_AI_LIMIT = 500
 DETECTOR_VERSION = "translation_guidance_scan_v1"
 
+GREEK_ARTICLE_CANDIDATES = {
+    "ο",
+    "η",
+    "το",
+    "οι",
+    "αι",
+    "τα",
+    "του",
+    "της",
+    "των",
+    "τω",
+    "τη",
+    "τοις",
+    "ταις",
+    "τον",
+    "την",
+    "τους",
+    "τας",
+}
+GREEK_ARTICLE_PATTERN = (
+    r"(?:ὁ|ο|ἡ|η|ἥ|ἣ|ή|ή|τὸ|τό|τό|το|οἱ|οι|αἱ|αι|"
+    r"τὰ|τά|τά|τα|τοῦ|του|τῆς|της|τῶν|των|τῷ|τω|τῇ|τη|"
+    r"τοῖς|τοις|ταῖς|ταις|τὸν|τον|τὴν|την|τοὺς|τους|τὰς|τας)"
+)
+
 
 def ensure_mini_model(model: str) -> str:
     normalized = (model or "").strip()
@@ -90,21 +115,39 @@ def build_candidates(label: str) -> list[str]:
     candidates: list[str] = []
     seen: set[str] = set()
 
+    def is_noise_candidate(normalized: str) -> bool:
+        if not normalized:
+            return True
+        tokens = re.findall(r"[\w']+", normalized, flags=re.UNICODE)
+        if tokens and all(token in GREEK_ARTICLE_CANDIDATES for token in tokens):
+            return True
+        letters = "".join(tokens)
+        return len(letters) < 3
+
+    def strip_label_grammar(value: str) -> str:
+        stripped = (value or "").strip()
+        stripped = re.sub(rf"\s+{GREEK_ARTICLE_PATTERN}(?:\s*/\s*{GREEK_ARTICLE_PATTERN})*\s*$", "", stripped)
+        stripped = re.sub(r"(?:\s+-[^\s,;/·]+)+\s*$", "", stripped)
+        return stripped.strip()
+
     def add(value: str) -> None:
         normalized = normalize_text(value)
         normalized = re.sub(r"\s+", " ", normalized).strip()
-        if normalized and normalized not in seen:
+        if normalized and not is_noise_candidate(normalized) and normalized not in seen:
             seen.add(normalized)
             candidates.append(normalized)
 
-    add(raw)
-    add(re.sub(r"\([^)]*\)", "", raw))
+    def add_variants(value: str) -> None:
+        without_parens = re.sub(r"\([^)]*\)", "", value)
+        for candidate in (value, without_parens, strip_label_grammar(value), strip_label_grammar(without_parens)):
+            add(candidate)
+
+    add_variants(raw)
     for piece in re.split(r"/|;|,|\u00b7", raw):
         stripped = piece.strip()
         if not stripped:
             continue
-        add(stripped)
-        add(re.sub(r"\([^)]*\)", "", stripped))
+        add_variants(stripped)
 
     candidates.sort(key=len, reverse=True)
     return candidates
