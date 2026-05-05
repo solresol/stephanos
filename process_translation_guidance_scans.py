@@ -25,7 +25,7 @@ from db import get_connection
 DEFAULT_MODEL = "gpt-5.4-mini"
 DEFAULT_DAILY_TOKEN_LIMIT = 250_000
 DEFAULT_FORMULA_AI_LIMIT = 500
-DETECTOR_VERSION = "translation_guidance_scan_v1"
+DETECTOR_VERSION = "translation_guidance_scan_v2"
 
 GREEK_ARTICLE_CANDIDATES = {
     "ο",
@@ -238,9 +238,15 @@ def call_formula_model(
                 "role": "system",
                 "content": (
                     "You judge whether a Greek translation formula applies to a Stephanos entry. "
+                    "Match only the Greek surface pattern described by the rule. X/Y placeholders "
+                    "are variable slots, but every fixed Greek word, particle, or phrase in the "
+                    "rule label must be present in the relevant local order. Do not accept a merely "
+                    "semantic resemblance or an implicit equivalent when the fixed wording is absent. "
                     "Return JSON only with keys match_status, confidence, evidence_text, notes. "
                     "match_status must be matched, not_matched, or uncertain. "
-                    "confidence must be high, medium, or low."
+                    "confidence must be high, medium, or low. evidence_text must quote the exact "
+                    "Greek words that instantiate the formula; if there is no exact surface evidence, "
+                    "return not_matched."
                 ),
             },
             {
