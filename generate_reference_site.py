@@ -8,6 +8,7 @@ import html as html_module
 import hashlib
 import unicodedata
 import os
+import urllib.parse
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -70,6 +71,32 @@ _SAFE_REF_RE = re.compile(r"[^0-9A-Za-z._-]+")
 
 OVERLAP_COLOR_CLASSES = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"]
 
+GUIDANCE_KIND_LABELS = {
+    "gloss": "Gloss",
+    "formula": "Formula",
+    "proper_noun": "Proper noun",
+    "contextual_bias": "Vocabulary bias",
+}
+
+GUIDANCE_STATUS_LABELS = {
+    "matched": "Matched",
+    "uncertain": "Uncertain",
+    "needs_review": "Needs review",
+}
+
+GUIDANCE_MODE_LABELS = {
+    "advisory": "Advisory",
+    "required": "Required",
+    "replace": "Replace",
+}
+
+GUIDANCE_STAGE_LABELS = {
+    "investigate": "Investigate",
+    "recognizer": "Recognizer",
+    "guidance": "Translation guidance",
+    "inactive": "Inactive",
+}
+
 
 def normalize_whitespace(text: str) -> str:
     """Normalize whitespace for robust string comparison (collapse runs, trim)."""
@@ -78,6 +105,25 @@ def normalize_whitespace(text: str) -> str:
     # Also normalize non-breaking spaces to regular spaces.
     text = text.replace("\u00a0", " ")
     return _WS_RE.sub(" ", text).strip()
+
+
+def pg_table_exists(cur, table_name: str) -> bool:
+    cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table_name}",))
+    return bool(cur.fetchone()[0])
+
+
+def pg_column_exists(cur, table_name: str, column_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s
+          AND column_name = %s
+        """,
+        (table_name, column_name),
+    )
+    return cur.fetchone() is not None
 
 
 def strip_diacritics(text: str) -> str:
@@ -458,6 +504,176 @@ def normalize_headword_for_display(headword: str) -> str:
     return text.lstrip("<〈《«").rstrip(">〉》»").strip()
 
 
+def fetch_public_translation_guidance_hits(cur) -> dict[int, list[dict]]:
+    """Fetch positive guidance detections that are safe to summarize publicly.
+
+    The public page shows which guidance rules apply, but deliberately does not
+    expose formula-scan evidence excerpts.
+    """
+    required_tables = (
+        "translation_guidance_matches",
+        "translation_guidance_rules",
+        "lemma_source_text_versions",
+    )
+    if not all(pg_table_exists(cur, table) for table in required_tables):
+        return {}
+
+    has_semantic_domain = pg_column_exists(cur, "translation_guidance_rules", "semantic_domain")
+    has_context_condition = pg_column_exists(cur, "translation_guidance_rules", "context_condition")
+    has_bias_strength = pg_column_exists(cur, "translation_guidance_rules", "bias_strength")
+    has_lifecycle_stage = pg_column_exists(cur, "translation_guidance_rules", "lifecycle_stage")
+    has_source_public_flag = pg_column_exists(cur, "lemma_source_text_versions", "is_public_greek")
+
+    semantic_select = (
+        "COALESCE(r.semantic_domain, '') AS semantic_domain"
+        if has_semantic_domain
+        else "'' AS semantic_domain"
+    )
+    context_select = (
+        "COALESCE(r.context_condition, '') AS context_condition"
+        if has_context_condition
+        else "'' AS context_condition"
+    )
+    bias_select = (
+        "COALESCE(r.bias_strength, 'normal') AS bias_strength"
+        if has_bias_strength
+        else "'normal' AS bias_strength"
+    )
+    lifecycle_select = (
+        "COALESCE(r.lifecycle_stage, '') AS lifecycle_stage"
+        if has_lifecycle_stage
+        else "'' AS lifecycle_stage"
+    )
+    lifecycle_condition = (
+        "AND COALESCE(r.lifecycle_stage, 'guidance') <> 'inactive'"
+        if has_lifecycle_stage
+        else ""
+    )
+    source_public_condition = (
+        "AND COALESCE(stv.is_public_greek, TRUE) = TRUE"
+        if has_source_public_flag
+        else ""
+    )
+    optional_group_columns = []
+    if has_semantic_domain:
+        optional_group_columns.append("r.semantic_domain")
+    if has_context_condition:
+        optional_group_columns.append("r.context_condition")
+    if has_bias_strength:
+        optional_group_columns.append("r.bias_strength")
+    if has_lifecycle_stage:
+        optional_group_columns.append("r.lifecycle_stage")
+    optional_group_by = ""
+    if optional_group_columns:
+        optional_group_by = ",\n                " + ",\n                ".join(optional_group_columns)
+
+    cur.execute(
+        f"""
+        WITH grouped AS (
+            SELECT
+                m.lemma_id,
+                r.id AS rule_id,
+                COALESCE(r.rule_key, '') AS rule_key,
+                COALESCE(r.rule_code, '') AS rule_code,
+                COALESCE(r.kind, '') AS kind,
+                COALESCE(r.label, '') AS label,
+                COALESCE(r.preferred_translation, '') AS preferred_translation,
+                {semantic_select},
+                {context_select},
+                {bias_select},
+                {lifecycle_select},
+                COALESCE(r.application_mode, '') AS application_mode,
+                CASE
+                    WHEN BOOL_OR(m.match_status = 'matched') THEN 'matched'
+                    WHEN BOOL_OR(m.match_status = 'needs_review') THEN 'needs_review'
+                    ELSE 'uncertain'
+                END AS match_status,
+                CASE
+                    WHEN BOOL_OR(m.confidence = 'high') THEN 'high'
+                    WHEN BOOL_OR(m.confidence = 'medium') THEN 'medium'
+                    WHEN BOOL_OR(m.confidence = 'low') THEN 'low'
+                    ELSE ''
+                END AS confidence,
+                COALESCE(SUM(m.occurrence_count), 0) AS occurrence_count,
+                COUNT(*) AS match_count,
+                MAX(m.updated_at) AS updated_at,
+                MIN(CASE r.kind
+                    WHEN 'formula' THEN 0
+                    WHEN 'contextual_bias' THEN 1
+                    WHEN 'gloss' THEN 2
+                    WHEN 'proper_noun' THEN 3
+                    ELSE 4
+                END) AS kind_rank
+            FROM translation_guidance_matches m
+            JOIN translation_guidance_rules r ON r.id = m.rule_id
+            JOIN lemma_source_text_versions stv ON stv.id = m.source_text_version_id
+            WHERE m.match_status IN ('matched', 'uncertain', 'needs_review')
+              AND COALESCE(r.status, '') <> 'retired'
+              {lifecycle_condition}
+              AND r.kind IN ('formula', 'gloss', 'contextual_bias', 'proper_noun')
+              AND stv.source_document = 'meineke'
+              AND stv.is_current = TRUE
+              {source_public_condition}
+            GROUP BY
+                m.lemma_id,
+                r.id,
+                r.rule_key,
+                r.rule_code,
+                r.kind,
+                r.label,
+                r.preferred_translation,
+                r.application_mode
+                {optional_group_by}
+        )
+        SELECT
+            lemma_id,
+            json_agg(
+                json_build_object(
+                    'rule_id', rule_id,
+                    'rule_key', rule_key,
+                    'rule_code', rule_code,
+                    'kind', kind,
+                    'label', label,
+                    'preferred_translation', preferred_translation,
+                    'semantic_domain', semantic_domain,
+                    'context_condition', context_condition,
+                    'bias_strength', bias_strength,
+                    'lifecycle_stage', lifecycle_stage,
+                    'application_mode', application_mode,
+                    'match_status', match_status,
+                    'confidence', confidence,
+                    'occurrence_count', occurrence_count,
+                    'match_count', match_count,
+                    'updated_at', COALESCE(updated_at::text, '')
+                )
+                ORDER BY
+                    CASE match_status
+                        WHEN 'matched' THEN 0
+                        WHEN 'uncertain' THEN 1
+                        WHEN 'needs_review' THEN 2
+                        ELSE 3
+                    END,
+                    kind_rank,
+                    label,
+                    rule_key
+            ) AS hits
+        FROM grouped
+        GROUP BY lemma_id
+        """
+    )
+
+    hits_by_lemma: dict[int, list[dict]] = {}
+    for lemma_id, hits in cur.fetchall():
+        if isinstance(hits, str):
+            try:
+                hits = json.loads(hits)
+            except json.JSONDecodeError:
+                hits = []
+        if isinstance(hits, list):
+            hits_by_lemma[int(lemma_id)] = [hit for hit in hits if isinstance(hit, dict)]
+    return hits_by_lemma
+
+
 def get_all_lemmas(cur):
     """Get all lemmas (translated and untranslated) from assembled_lemmas"""
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE")
@@ -650,6 +866,8 @@ def get_all_lemmas(cur):
         )
         commentary_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
 
+    translation_guidance_hits_by_lemma = fetch_public_translation_guidance_hits(cur)
+
     all_lemmas = []
     for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at, wikidata_place_qid, wikidata_place_label, latitude, longitude, pleiades_id, translation_prompt_version, translation_blocked, translation_block_reason in rows:
         # Public Greek preference: current public Meineke source text (or Meineke headword paragraph).
@@ -756,6 +974,7 @@ def get_all_lemmas(cur):
             "etymologies": etymologies_by_lemma.get(lemma_id, []),
             "aliases_by_name": aliases_by_name,
             "commentary_entries": commentary_by_lemma.get(lemma_id, []),
+            "translation_guidance_hits": translation_guidance_hits_by_lemma.get(lemma_id, []),
             "version": version or "epitome",
             "review_status": review_status or "not_reviewed",
             "reviewed_by": reviewed_by,
@@ -1097,6 +1316,82 @@ def render_matrix_metadata_table(
     )
 
 
+def guidance_label(mapping: dict[str, str], value: object) -> str:
+    key = str(value or "")
+    return mapping.get(key, key.replace("_", " ").title())
+
+
+def guidance_rule_public_href(rule_key: str) -> str:
+    if not rule_key:
+        return "translation_guidance.html"
+    fragment = "rule-" + urllib.parse.quote(rule_key, safe=":")
+    return f"translation_guidance.html#{fragment}"
+
+
+def render_translation_guidance_metadata(hits: list[dict]) -> str:
+    if not isinstance(hits, list) or not hits:
+        return ""
+
+    rows = []
+    for hit in hits:
+        if not isinstance(hit, dict):
+            continue
+        kind = guidance_label(GUIDANCE_KIND_LABELS, hit.get("kind"))
+        rule_key = str(hit.get("rule_key") or "").strip()
+        rule_code = str(hit.get("rule_code") or "").strip()
+        label = str(hit.get("label") or "").strip() or rule_code or rule_key or "Guidance rule"
+        rule_bits = [
+            f'<a class="guidance-rule-link" href="{html_module.escape(guidance_rule_public_href(rule_key))}">{html_module.escape(label)}</a>'
+        ]
+        if rule_code and rule_code != label:
+            rule_bits.append(f'<div class="guidance-rule-key">{html_module.escape(rule_code)}</div>')
+        elif rule_key:
+            rule_bits.append(f'<div class="guidance-rule-key">{html_module.escape(rule_key)}</div>')
+
+        guidance_bits = []
+        preferred = str(hit.get("preferred_translation") or "").strip()
+        if preferred:
+            guidance_bits.append(f"<strong>{html_module.escape(preferred)}</strong>")
+        context = str(hit.get("context_condition") or "").strip()
+        if context:
+            guidance_bits.append(f"Context: {html_module.escape(context)}")
+        semantic_domain = str(hit.get("semantic_domain") or "").strip()
+        if semantic_domain:
+            guidance_bits.append(f"Domain: {html_module.escape(semantic_domain)}")
+        if not guidance_bits:
+            mode = guidance_label(GUIDANCE_MODE_LABELS, hit.get("application_mode"))
+            stage = guidance_label(GUIDANCE_STAGE_LABELS, hit.get("lifecycle_stage"))
+            guidance_bits.append(html_module.escape(" · ".join(part for part in (mode, stage) if part) or "Recognized guidance"))
+
+        match_status = guidance_label(GUIDANCE_STATUS_LABELS, hit.get("match_status"))
+        confidence = str(hit.get("confidence") or "").strip()
+        match_count = int(hit.get("match_count") or 0)
+        occurrence_count = int(hit.get("occurrence_count") or 0)
+        hit_bits = [html_module.escape(match_status)]
+        if confidence:
+            hit_bits.append(html_module.escape(f"{confidence} confidence"))
+        if match_count:
+            hit_bits.append(html_module.escape(f"{match_count} scan row{'s' if match_count != 1 else ''}"))
+        if occurrence_count:
+            hit_bits.append(html_module.escape(f"{occurrence_count} occurrence{'s' if occurrence_count != 1 else ''}"))
+
+        rows.append(
+            (
+                html_module.escape(kind),
+                "".join(rule_bits),
+                "<br>".join(guidance_bits),
+                '<span class="guidance-hit-summary">' + " · ".join(hit_bits) + "</span>",
+            )
+        )
+
+    return render_matrix_metadata_table(
+        "Translation Guidance",
+        ("Kind", "Rule", "Guidance", "Detection"),
+        rows,
+        footer_html='<a href="translation_guidance.html">Browse all translation guidance rules</a>',
+    )
+
+
 def render_lemma_cards(lemmas):
     """Render HTML cards for a list of lemmas"""
     cards_html = []
@@ -1387,6 +1682,10 @@ def render_lemma_cards(lemmas):
                     etym_rows,
                 )
             )
+
+        guidance_html = render_translation_guidance_metadata(lemma.get("translation_guidance_hits") or [])
+        if guidance_html:
+            metadata_sections.append(guidance_html)
 
         # Add Wikidata place link and coordinates
         link_rows = []
@@ -2261,6 +2560,25 @@ def common_styles():
         }
         .lemma-meta-footer a:hover {
             text-decoration: underline;
+        }
+        .guidance-rule-link {
+            color: #0d47a1;
+            font-weight: 700;
+            text-decoration: none;
+        }
+        .guidance-rule-link:hover {
+            text-decoration: underline;
+        }
+        .guidance-rule-key {
+            color: #6b7280;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.82em;
+            margin-top: 3px;
+            overflow-wrap: anywhere;
+        }
+        .guidance-hit-summary {
+            color: #334155;
+            font-size: 0.92em;
         }
         .overlap-section {
             margin-top: 26px;
