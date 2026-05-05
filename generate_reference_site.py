@@ -522,7 +522,6 @@ def fetch_public_translation_guidance_hits(cur) -> dict[int, list[dict]]:
     has_context_condition = pg_column_exists(cur, "translation_guidance_rules", "context_condition")
     has_bias_strength = pg_column_exists(cur, "translation_guidance_rules", "bias_strength")
     has_lifecycle_stage = pg_column_exists(cur, "translation_guidance_rules", "lifecycle_stage")
-    has_source_public_flag = pg_column_exists(cur, "lemma_source_text_versions", "is_public_greek")
 
     semantic_select = (
         "COALESCE(r.semantic_domain, '') AS semantic_domain"
@@ -547,11 +546,6 @@ def fetch_public_translation_guidance_hits(cur) -> dict[int, list[dict]]:
     lifecycle_condition = (
         "AND COALESCE(r.lifecycle_stage, 'guidance') <> 'inactive'"
         if has_lifecycle_stage
-        else ""
-    )
-    source_public_condition = (
-        "AND COALESCE(stv.is_public_greek, TRUE) = TRUE"
-        if has_source_public_flag
         else ""
     )
     optional_group_columns = []
@@ -613,7 +607,6 @@ def fetch_public_translation_guidance_hits(cur) -> dict[int, list[dict]]:
               AND r.kind IN ('formula', 'gloss', 'contextual_bias', 'proper_noun')
               AND stv.source_document = 'meineke'
               AND stv.is_current = TRUE
-              {source_public_condition}
             GROUP BY
                 m.lemma_id,
                 r.id,
