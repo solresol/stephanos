@@ -49,6 +49,7 @@ func main() {
 	notes := strings.TrimSpace(formData.Get("notes"))
 	returnView := normalizeReturnView(formData.Get("return_view"))
 	finalReviewReturnURL := strings.TrimSpace(formData.Get("return_url"))
+	finalReviewEditSource := strings.TrimSpace(formData.Get("edit_source"))
 	variantKind := strings.TrimSpace(formData.Get("variant_kind"))
 	variantID := strings.TrimSpace(formData.Get("variant_id"))
 	variantStatus := strings.TrimSpace(formData.Get("variant_status"))
@@ -263,7 +264,7 @@ func main() {
 			reviewedEnglish,
 			oldReview.Notes,
 			notes,
-			"final_review",
+			finalReviewEditSource,
 			remoteUser,
 		); err != nil {
 			showErrorAndExit(fmt.Sprintf("Failed to record final translation edit history: %v", err), "final_review")

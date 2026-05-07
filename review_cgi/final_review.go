@@ -696,6 +696,21 @@ const finalReviewTemplate = `<!DOCTYPE html>
             padding: 10px 12px;
             margin-bottom: 12px;
         }
+        .bulk-bar {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin: 0 0 12px 0;
+        }
+        .bulk-bar button {
+            border: 1px solid #6f5a17;
+            border-radius: 4px;
+            background: #fff7d7;
+            color: #4b3b0b;
+            padding: 7px 11px;
+            cursor: pointer;
+            font-size: 14px;
+        }
         .entry-row {
             background: white;
             border: 1px solid #deded5;
@@ -894,12 +909,16 @@ const finalReviewTemplate = `<!DOCTYPE html>
             <a class="filter-link" href="{{filterHref .Filters "rule" ""}}">Clear rule filter</a>
         </div>
         {{end}}
+        <div class="bulk-bar">
+            <button type="button" id="bulk_save_btn">Save selected rows</button>
+            <span id="bulk_save_status" class="muted">Select rows whose edited final text should be saved together.</span>
+        </div>
         {{if .Rows}}
             {{range .Rows}}
             <article class="entry-row" id="entry-{{.Lemma.ID}}">
                 <div class="entry-head">
                     <div>
-                        <div class="headword">{{.Lemma.Lemma}}</div>
+                        <div class="headword"><label><input class="row-select" type="checkbox" value="{{.Lemma.ID}}" data-form-id="final_review_form_{{.Lemma.ID}}"> {{.Lemma.Lemma}}</label></div>
                         <div class="muted">Entry {{.Lemma.EntryNumber}} · lemma {{.Lemma.ID}} · {{.Lemma.Letter}}{{if .Lemma.MeinekeID}} · Meineke {{.Lemma.MeinekeID}}{{end}}</div>
                     </div>
                     <div class="row-links">
@@ -907,8 +926,9 @@ const finalReviewTemplate = `<!DOCTYPE html>
                         <a href="{{reviewHref .Lemma.ID}}">Review entry</a>
                     </div>
                 </div>
-                <form method="post" action="/cgi-bin/save.cgi">
+                <form method="post" action="/cgi-bin/save.cgi" id="final_review_form_{{.Lemma.ID}}">
                     <input type="hidden" name="form_mode" value="final_review_row">
+                    <input type="hidden" name="edit_source" value="final_review">
                     <input type="hidden" name="return_view" value="final_review">
                     <input type="hidden" name="return_url" value="{{$.ReturnURL}}">
                     <input type="hidden" name="lemma_id" value="{{.Lemma.ID}}">
@@ -941,6 +961,50 @@ const finalReviewTemplate = `<!DOCTYPE html>
                 {{end}}
             </article>
             {{end}}
+            <script>
+            (function () {
+                var bulkButton = document.getElementById("bulk_save_btn");
+                var status = document.getElementById("bulk_save_status");
+                if (!bulkButton || !status || !window.fetch || !window.FormData || !window.URLSearchParams) return;
+                bulkButton.addEventListener("click", function () {
+                    var selected = Array.prototype.slice.call(document.querySelectorAll(".row-select:checked"));
+                    if (!selected.length) {
+                        status.textContent = "No rows selected.";
+                        return;
+                    }
+                    var message = "Save edited final translations for " + selected.length + " selected row" + (selected.length === 1 ? "?" : "s?");
+                    if (!window.confirm(message)) return;
+                    bulkButton.disabled = true;
+                    status.textContent = "Saving 0 of " + selected.length + "...";
+                    var chain = Promise.resolve();
+                    selected.forEach(function (box, index) {
+                        chain = chain.then(function () {
+                            var form = document.getElementById(box.getAttribute("data-form-id"));
+                            if (!form) return Promise.resolve();
+                            var params = new URLSearchParams(new FormData(form));
+                            params.set("edit_source", "final_review_bulk");
+                            return fetch(form.action, {
+                                method: "POST",
+                                credentials: "same-origin",
+                                headers: {"Content-Type": "application/x-www-form-urlencoded"},
+                                body: params.toString()
+                            }).then(function (response) {
+                                if (!response.ok) throw new Error("Save failed for lemma " + box.value);
+                                box.checked = false;
+                                status.textContent = "Saving " + (index + 1) + " of " + selected.length + "...";
+                            });
+                        });
+                    });
+                    chain.then(function () {
+                        status.textContent = "Saved " + selected.length + " selected row" + (selected.length === 1 ? "." : "s.");
+                    }).catch(function (err) {
+                        status.textContent = err.message || "Bulk save failed.";
+                    }).finally(function () {
+                        bulkButton.disabled = false;
+                    });
+                });
+            })();
+            </script>
         {{else}}
             <div class="empty">No entries match the current filters.</div>
         {{end}}
