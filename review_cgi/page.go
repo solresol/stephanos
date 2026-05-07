@@ -591,12 +591,48 @@ func splitEntityBuckets(lemma *Lemma) ([]ProperNoun, []ProperNoun, []ProperNoun)
 	return primary, secondary, legacyPlaces
 }
 
+func FindLemmaByProperNounID(data *LemmaData, properNounID int) *Lemma {
+	if data == nil || properNounID <= 0 {
+		return nil
+	}
+	for i := range data.Lemmas {
+		for _, entity := range data.Lemmas[i].ProperNouns {
+			if entity.ID == properNounID {
+				return &data.Lemmas[i]
+			}
+		}
+	}
+	return nil
+}
+
+func FindLemmaByPlaceClusterID(data *LemmaData, clusterID int) *Lemma {
+	if data == nil || clusterID <= 0 {
+		return nil
+	}
+	for i := range data.Lemmas {
+		for _, cluster := range data.Lemmas[i].PlaceClusters {
+			if cluster.ID == clusterID {
+				return &data.Lemmas[i]
+			}
+		}
+	}
+	return nil
+}
+
 func selectCurrentLemma(db *sql.DB, data *LemmaData, params url.Values) *Lemma {
 	action := params.Get("action")
 	lemmaIDStr := params.Get("id")
+	entityIDStr := params.Get("entity_id")
+	placeClusterIDStr := params.Get("place_cluster_id")
 
 	var currentLemma *Lemma
-	if action == "next_unreviewed" && lemmaIDStr != "" {
+	if entityIDStr != "" {
+		entityID, _ := strconv.Atoi(entityIDStr)
+		currentLemma = FindLemmaByProperNounID(data, entityID)
+	} else if placeClusterIDStr != "" {
+		clusterID, _ := strconv.Atoi(placeClusterIDStr)
+		currentLemma = FindLemmaByPlaceClusterID(data, clusterID)
+	} else if action == "next_unreviewed" && lemmaIDStr != "" {
 		lemmaID, _ := strconv.Atoi(lemmaIDStr)
 		currentLemma = FindLemmaByID(data, lemmaID)
 		if currentLemma != nil {

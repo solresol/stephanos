@@ -268,7 +268,7 @@ def headword_page_filename(lemma_id: int) -> str:
     return f"headword_{lemma_num}.html"
 
 
-def entity_editor_href(lemma_id: int, anchor: str) -> str:
+def entity_editor_href(lemma_id: int, anchor: str, *, entity_id: int | None = None, place_cluster_id: int | None = None) -> str:
     """Protected editor URL for a public entity or place-cluster row."""
     try:
         lemma_num = int(lemma_id)
@@ -276,6 +276,10 @@ def entity_editor_href(lemma_id: int, anchor: str) -> str:
         lemma_num = 0
     safe_anchor = _SAFE_REF_RE.sub("-", str(anchor or "").strip()).strip("-")
     suffix = f"#{safe_anchor}" if safe_anchor else ""
+    if entity_id:
+        return f"/cgi-bin/entities.cgi?entity_id={int(entity_id)}{suffix}"
+    if place_cluster_id:
+        return f"/cgi-bin/entities.cgi?place_cluster_id={int(place_cluster_id)}{suffix}"
     return f"/cgi-bin/entities.cgi?id={lemma_num}{suffix}"
 
 
@@ -1738,7 +1742,11 @@ def render_lemma_cards(lemmas):
                     noun_id = noun.get("id")
                     if noun_id:
                         entity_href = html_module.escape(
-                            entity_editor_href(int(lemma.get("lemma_id") or 0), f"entity-{noun_id}")
+                            entity_editor_href(
+                                int(lemma.get("lemma_id") or 0),
+                                f"entity-{noun_id}",
+                                entity_id=int(noun_id),
+                            )
                         )
                         entity_html = f"<a href=\"{entity_href}\">{html_module.escape(entity_label)}</a>"
                     else:
@@ -1758,7 +1766,11 @@ def render_lemma_cards(lemmas):
                     cluster_id = cluster.get("id")
                     if cluster_id:
                         place_href = html_module.escape(
-                            entity_editor_href(int(lemma.get("lemma_id") or 0), f"place-cluster-{cluster_id}")
+                            entity_editor_href(
+                                int(lemma.get("lemma_id") or 0),
+                                f"place-cluster-{cluster_id}",
+                                place_cluster_id=int(cluster_id),
+                            )
                         )
                         place_html = f"<a href=\"{place_href}\">{html_module.escape(label)}</a>"
                     else:

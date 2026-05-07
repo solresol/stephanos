@@ -6,6 +6,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 TEMPLATES = ROOT / "review_cgi" / "templates.go"
+PAGE_GO = ROOT / "review_cgi" / "page.go"
+REFERENCE_SITE = ROOT / "generate_reference_site.py"
 
 
 def extract_template(name: str) -> str:
@@ -55,6 +57,17 @@ class ReviewTemplateSplitTests(unittest.TestCase):
         self.assertIn('name="place_original_id"', template)
         self.assertIn('name="place_jbk_id"', template)
         self.assertIn('name="place_final_id"', template)
+
+    def test_public_entity_links_can_address_entities_directly(self):
+        page_source = PAGE_GO.read_text(encoding="utf-8")
+        site_source = REFERENCE_SITE.read_text(encoding="utf-8")
+
+        self.assertIn('params.Get("entity_id")', page_source)
+        self.assertIn('FindLemmaByProperNounID', page_source)
+        self.assertIn('params.Get("place_cluster_id")', page_source)
+        self.assertIn('FindLemmaByPlaceClusterID', page_source)
+        self.assertIn('?entity_id=', site_source)
+        self.assertIn('?place_cluster_id=', site_source)
 
 
 if __name__ == "__main__":
