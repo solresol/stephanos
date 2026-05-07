@@ -197,7 +197,7 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
                    COALESCE(status, ''),
                    ht.source_text_version_id,
                    COALESCE(stv.source_document, '')
-            FROM human_translations
+            FROM human_translations ht
             LEFT JOIN lemma_source_text_versions stv
               ON stv.id = ht.source_text_version_id
             WHERE ht.id = %s
