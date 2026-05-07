@@ -8,7 +8,9 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timezone
 import html
+import json
 from pathlib import Path
+import urllib.parse
 
 from db import get_connection
 
@@ -48,6 +50,25 @@ APPLICATION_MODE_LABELS = {
     "required": "Required",
     "replace": "Replace",
 }
+
+TABLE_COLUMNS = [
+    ("kind", "Kind", True),
+    ("stage", "Lifecycle", True),
+    ("status", "Status", True),
+    ("mode", "Mode", False),
+    ("rule-code", "Rule code", False),
+    ("label", "Label", True),
+    ("preferred", "Preferred", True),
+    ("word-class", "Word class", False),
+    ("domain", "Semantic domain", True),
+    ("context", "Context condition", False),
+    ("bias-strength", "Bias", False),
+    ("notes", "Notes", False),
+    ("revision", "Revision", False),
+    ("matched", "Matched", True),
+    ("backlog", "Backlog", False),
+    ("updated", "Updated", False),
+]
 
 
 def esc(value: object) -> str:
@@ -258,9 +279,29 @@ def mode_label(mode: object) -> str:
     return APPLICATION_MODE_LABELS.get(key, key.replace("_", " ").title())
 
 
-def render_table_cell(value: object, *, css_class: str = "") -> str:
+def protected_rule_href(rule: dict[str, object]) -> str:
+    values = urllib.parse.urlencode(
+        {
+            "kind": str(rule["kind"]),
+            "rule": str(rule["rule_key"]),
+        }
+    )
+    return f"/cgi-bin/guidance.cgi?{values}"
+
+
+def render_table_cell(value: object, *, col_key: str, css_class: str = "") -> str:
     class_attr = f' class="{css_class}"' if css_class else ""
-    return f"<td{class_attr} title=\"{esc(value)}\">{esc(value)}</td>"
+    return f"<td data-col=\"{esc(col_key)}\"{class_attr} title=\"{esc(value)}\">{esc(value)}</td>"
+
+
+def render_linked_rule_cell(rule: dict[str, object]) -> str:
+    label = rule["label"] or rule["rule_code"] or rule["rule_key"]
+    href = protected_rule_href(rule)
+    return (
+        f'<td data-col="label" class="compact strong" title="{esc(label)}">'
+        f'<a class="rule-detail-link" href="{esc(href)}">{esc(label)}</a>'
+        "</td>"
+    )
 
 
 def render_rule_table(rules: list[dict[str, object]]) -> str:
@@ -314,25 +355,40 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                 data-backlog="{int(rule['backlog_count'])}"
                 data-updated="{esc(rule['updated_at'])}"
                 data-search="{esc(search_text)}">
-                {render_table_cell(kind_display)}
-                {render_table_cell(lifecycle_display)}
-                {render_table_cell(status_display)}
-                {render_table_cell(mode_display)}
-                {render_table_cell(rule["rule_code"], css_class="compact")}
-                {render_table_cell(rule["label"], css_class="compact strong")}
-                {render_table_cell(rule["preferred_translation"], css_class="compact")}
-                {render_table_cell(rule["word_class"], css_class="compact")}
-                {render_table_cell(rule["semantic_domain"], css_class="compact")}
-                {render_table_cell(rule["context_condition"], css_class="compact")}
-                {render_table_cell(rule["bias_strength"], css_class="compact")}
-                {render_table_cell(rule["notes"], css_class="compact wide")}
-                <td class="numeric">{int(rule['revision_number'])}</td>
-                <td class="numeric">{int(rule['match_count'])}</td>
-                <td class="numeric">{int(rule['backlog_count'])}</td>
-                {render_table_cell(rule["updated_at"], css_class="compact")}
+                {render_table_cell(kind_display, col_key="kind")}
+                {render_table_cell(lifecycle_display, col_key="stage")}
+                {render_table_cell(status_display, col_key="status")}
+                {render_table_cell(mode_display, col_key="mode")}
+                {render_table_cell(rule["rule_code"], col_key="rule-code", css_class="compact")}
+                {render_linked_rule_cell(rule)}
+                {render_table_cell(rule["preferred_translation"], col_key="preferred", css_class="compact")}
+                {render_table_cell(rule["word_class"], col_key="word-class", css_class="compact")}
+                {render_table_cell(rule["semantic_domain"], col_key="domain", css_class="compact")}
+                {render_table_cell(rule["context_condition"], col_key="context", css_class="compact")}
+                {render_table_cell(rule["bias_strength"], col_key="bias-strength", css_class="compact")}
+                {render_table_cell(rule["notes"], col_key="notes", css_class="compact wide")}
+                <td data-col="revision" class="numeric">{int(rule['revision_number'])}</td>
+                <td data-col="matched" class="numeric">{int(rule['match_count'])}</td>
+                <td data-col="backlog" class="numeric">{int(rule['backlog_count'])}</td>
+                {render_table_cell(rule["updated_at"], col_key="updated", css_class="compact")}
             </tr>
             """
         )
+
+    column_toggles = "\n".join(
+        f"""
+        <label class="column-toggle">
+            <input type="checkbox" data-column-toggle="{esc(key)}" {"checked" if default_visible else ""}>
+            {esc(label)}
+        </label>
+        """
+        for key, label, default_visible in TABLE_COLUMNS
+    )
+    header_cells = "\n".join(
+        f'<th data-col="{esc(key)}" class="sortable{" numeric" if key in {"revision", "matched", "backlog"} else ""}" '
+        f'data-sort="{esc(key)}">{esc(label)}</th>'
+        for key, label, _ in TABLE_COLUMNS
+    )
 
     return f"""
         <section class="guidance-table-panel" aria-labelledby="guidance_table_heading">
@@ -399,26 +455,21 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                     <input type="text" id="guidance_table_context" placeholder="metalinguistic, dialect">
                 </div>
             </div>
+            <details class="column-panel" open>
+                <summary>Columns</summary>
+                <div class="column-panel-actions">
+                    <button type="button" id="guidance_columns_core">Core columns</button>
+                    <button type="button" id="guidance_columns_all">All columns</button>
+                </div>
+                <div class="column-toggles">
+                    {column_toggles}
+                </div>
+            </details>
             <div class="guidance-table-wrap">
                 <table class="guidance-table" id="guidance_rule_table">
                     <thead>
                         <tr>
-                            <th class="sortable" data-sort="kind">Kind</th>
-                            <th class="sortable" data-sort="stage">Lifecycle</th>
-                            <th class="sortable" data-sort="status">Status</th>
-                            <th class="sortable" data-sort="mode">Mode</th>
-                            <th class="sortable" data-sort="rule-code">Rule code</th>
-                            <th class="sortable" data-sort="label">Label</th>
-                            <th class="sortable" data-sort="preferred">Preferred</th>
-                            <th class="sortable" data-sort="word-class">Word class</th>
-                            <th class="sortable" data-sort="domain">Semantic domain</th>
-                            <th class="sortable" data-sort="context">Context condition</th>
-                            <th class="sortable" data-sort="bias-strength">Bias</th>
-                            <th class="sortable" data-sort="notes">Notes</th>
-                            <th class="sortable numeric" data-sort="revision">Revision</th>
-                            <th class="sortable numeric" data-sort="matched">Matched</th>
-                            <th class="sortable numeric" data-sort="backlog">Backlog</th>
-                            <th class="sortable" data-sort="updated">Updated</th>
+                            {header_cells}
                         </tr>
                     </thead>
                     <tbody>
@@ -448,6 +499,8 @@ def build_html(rules: list[dict[str, object]]) -> str:
 
     generated_at = datetime.now(timezone.utc).isoformat()
     total_rules = len(rules)
+    default_column_visibility = json.dumps({key: default_visible for key, _, default_visible in TABLE_COLUMNS})
+    all_column_keys = json.dumps([key for key, _, _ in TABLE_COLUMNS])
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -562,6 +615,53 @@ def build_html(rules: list[dict[str, object]]) -> str:
             padding: 6px 8px;
             width: 100%;
         }}
+        .column-panel {{
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            padding: 8px 10px;
+        }}
+        .column-panel summary {{
+            color: #334155;
+            cursor: pointer;
+            font-size: 0.78rem;
+            font-weight: 800;
+            text-transform: uppercase;
+        }}
+        .column-panel-actions {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 8px 0;
+        }}
+        .column-panel-actions button {{
+            background: white;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            color: #163047;
+            cursor: pointer;
+            font: inherit;
+            font-size: 0.82rem;
+            font-weight: 700;
+            padding: 5px 9px;
+        }}
+        .column-toggles {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }}
+        .column-toggle {{
+            align-items: center;
+            background: white;
+            border: 1px solid #dbe4ee;
+            border-radius: 999px;
+            color: #334155;
+            display: inline-flex;
+            font-size: 0.8rem;
+            gap: 5px;
+            padding: 4px 8px;
+        }}
         .guidance-table-wrap {{
             border: 1px solid #e2e8f0;
             border-radius: 8px;
@@ -570,9 +670,9 @@ def build_html(rules: list[dict[str, object]]) -> str:
         .guidance-table {{
             border-collapse: collapse;
             font-size: 0.82rem;
-            min-width: 2460px;
             table-layout: fixed;
-            width: 100%;
+            min-width: 100%;
+            width: max-content;
         }}
         .guidance-table th,
         .guidance-table td {{
@@ -612,6 +712,11 @@ def build_html(rules: list[dict[str, object]]) -> str:
         .guidance-table tbody tr:hover {{
             background: #f1f7fd;
         }}
+        .guidance-table tbody tr:target {{
+            background: #fff7ed;
+            outline: 2px solid #f59e0b;
+            outline-offset: -2px;
+        }}
         .guidance-table tbody tr.is-retired {{
             color: #64748b;
         }}
@@ -623,60 +728,59 @@ def build_html(rules: list[dict[str, object]]) -> str:
             color: #14528a;
             font-weight: 700;
         }}
-        .guidance-table th:nth-child(1),
-        .guidance-table td:nth-child(1) {{
+        .guidance-table [data-col].is-hidden-column {{
+            display: none;
+        }}
+        .rule-detail-link {{
+            color: #14528a;
+            font-weight: 800;
+            text-decoration: none;
+        }}
+        .rule-detail-link:hover {{
+            text-decoration: underline;
+        }}
+        .guidance-table [data-col="kind"] {{
             width: 92px;
         }}
-        .guidance-table th:nth-child(2),
-        .guidance-table td:nth-child(2) {{
+        .guidance-table [data-col="stage"] {{
             width: 150px;
         }}
-        .guidance-table th:nth-child(3),
-        .guidance-table td:nth-child(3) {{
+        .guidance-table [data-col="status"] {{
             width: 96px;
         }}
-        .guidance-table th:nth-child(4),
-        .guidance-table td:nth-child(4) {{
+        .guidance-table [data-col="mode"] {{
             width: 96px;
         }}
-        .guidance-table th:nth-child(5),
-        .guidance-table td:nth-child(5) {{
+        .guidance-table [data-col="rule-code"] {{
             width: 120px;
         }}
-        .guidance-table th:nth-child(6),
-        .guidance-table td:nth-child(6) {{
+        .guidance-table [data-col="label"] {{
             width: 300px;
         }}
-        .guidance-table th:nth-child(7),
-        .guidance-table td:nth-child(7) {{
+        .guidance-table [data-col="preferred"] {{
             width: 220px;
         }}
-        .guidance-table th:nth-child(8),
-        .guidance-table td:nth-child(8) {{
+        .guidance-table [data-col="word-class"] {{
             width: 140px;
         }}
-        .guidance-table th:nth-child(9),
-        .guidance-table td:nth-child(9) {{
+        .guidance-table [data-col="domain"] {{
             width: 230px;
         }}
-        .guidance-table th:nth-child(10),
-        .guidance-table td:nth-child(10) {{
+        .guidance-table [data-col="context"] {{
             width: 260px;
         }}
-        .guidance-table th:nth-child(11),
-        .guidance-table td:nth-child(11) {{
+        .guidance-table [data-col="bias-strength"] {{
             width: 90px;
         }}
-        .guidance-table th:nth-child(12),
-        .guidance-table td:nth-child(12) {{
+        .guidance-table [data-col="notes"] {{
             width: 260px;
         }}
-        .guidance-table th:nth-child(13),
-        .guidance-table td:nth-child(13) {{
-            width: 320px;
+        .guidance-table [data-col="revision"],
+        .guidance-table [data-col="matched"],
+        .guidance-table [data-col="backlog"] {{
+            width: 84px;
         }}
-        .guidance-table th:nth-child(17),
-        .guidance-table td:nth-child(17) {{
+        .guidance-table [data-col="updated"] {{
             width: 210px;
         }}
         .empty-state,
@@ -754,6 +858,11 @@ def build_html(rules: list[dict[str, object]]) -> str:
             var table = document.getElementById("guidance_rule_table");
             var rows = table ? Array.prototype.slice.call(table.querySelectorAll("tbody tr")) : [];
             var visibleCount = document.getElementById("guidance_table_visible_count");
+            var defaultColumnVisibility = {default_column_visibility};
+            var allColumnKeys = {all_column_keys};
+            var columnToggles = Array.prototype.slice.call(document.querySelectorAll("[data-column-toggle]"));
+            var coreColumnsButton = document.getElementById("guidance_columns_core");
+            var allColumnsButton = document.getElementById("guidance_columns_all");
             var controls = {{
                 search: document.getElementById("guidance_table_search"),
                 kind: document.getElementById("guidance_table_kind"),
@@ -768,6 +877,48 @@ def build_html(rules: list[dict[str, object]]) -> str:
 
             function text(value) {{
                 return (value || "").toString().trim().toLowerCase();
+            }}
+
+            function getColumnStorage() {{
+                try {{
+                    var saved = window.localStorage.getItem("stephanos.translationGuidance.columns");
+                    return saved ? JSON.parse(saved) : null;
+                }} catch (error) {{
+                    return null;
+                }}
+            }}
+
+            function saveColumnStorage(visibility) {{
+                try {{
+                    window.localStorage.setItem("stephanos.translationGuidance.columns", JSON.stringify(visibility));
+                }} catch (error) {{
+                    return;
+                }}
+            }}
+
+            function currentColumnVisibility() {{
+                var visibility = {{}};
+                columnToggles.forEach(function (toggle) {{
+                    visibility[toggle.dataset.columnToggle] = toggle.checked;
+                }});
+                return visibility;
+            }}
+
+            function setColumnVisibility(visibility, persist) {{
+                allColumnKeys.forEach(function (key) {{
+                    var visible = visibility[key] !== false;
+                    columnToggles.forEach(function (toggle) {{
+                        if (toggle.dataset.columnToggle === key) {{
+                            toggle.checked = visible;
+                        }}
+                    }});
+                    Array.prototype.slice.call(document.querySelectorAll('[data-col="' + key + '"]')).forEach(function (cell) {{
+                        cell.classList.toggle("is-hidden-column", !visible);
+                    }});
+                }});
+                if (persist) {{
+                    saveColumnStorage(currentColumnVisibility());
+                }}
             }}
 
             function getSortValue(row, key) {{
@@ -879,6 +1030,26 @@ def build_html(rules: list[dict[str, object]]) -> str:
                 control.addEventListener("change", applyFilters);
             }});
 
+            columnToggles.forEach(function (toggle) {{
+                toggle.addEventListener("change", function () {{
+                    setColumnVisibility(currentColumnVisibility(), true);
+                }});
+            }});
+            if (coreColumnsButton) {{
+                coreColumnsButton.addEventListener("click", function () {{
+                    setColumnVisibility(defaultColumnVisibility, true);
+                }});
+            }}
+            if (allColumnsButton) {{
+                allColumnsButton.addEventListener("click", function () {{
+                    var allVisible = {{}};
+                    allColumnKeys.forEach(function (key) {{
+                        allVisible[key] = true;
+                    }});
+                    setColumnVisibility(allVisible, true);
+                }});
+            }}
+
             if (table) {{
                 Array.prototype.slice.call(table.querySelectorAll("th.sortable")).forEach(function (header) {{
                     header.addEventListener("click", function () {{
@@ -894,6 +1065,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
                 }});
             }}
 
+            setColumnVisibility(getColumnStorage() || defaultColumnVisibility, false);
             applySort();
             applyFilters();
         }}());
