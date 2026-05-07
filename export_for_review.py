@@ -408,6 +408,206 @@ def sort_translation_variants(variants: list[dict]) -> list[dict]:
     )
 
 
+def pg_table_exists(cur, table_name: str) -> bool:
+    cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table_name}",))
+    return bool(cur.fetchone()[0])
+
+
+def fetch_guidance_rule_impacts(cur) -> list[dict]:
+    """Find guidance matches whose rule/detection timestamp postdates a translation."""
+    required_tables = [
+        "translation_guidance_matches",
+        "translation_guidance_rules",
+        "translation_guidance_rule_revisions",
+        "lemma_source_text_versions",
+        "assembled_lemmas",
+    ]
+    if not all(pg_table_exists(cur, table_name) for table_name in required_tables):
+        return []
+
+    has_translation_runs = pg_table_exists(cur, "translation_runs")
+    has_human_translations = pg_table_exists(cur, "human_translations")
+    translation_sources = []
+    if has_translation_runs:
+        translation_sources.append(
+            """
+            SELECT
+                tr.lemma_id,
+                tr.source_text_version_id,
+                'translation_run'::text AS translation_variant_kind,
+                tr.id::text AS translation_variant_id,
+                COALESCE(p.name, '') AS translation_profile_name,
+                pv.version AS translation_profile_version,
+                COALESCE(tr.status, '') AS translation_status,
+                COALESCE(tr.reviewed_by, '') AS translation_reviewer,
+                COALESCE(tr.reviewed_at, tr.completed_at, tr.created_at) AS translation_at,
+                COALESCE(tr.translation_text, '') AS translation_text
+            FROM translation_runs tr
+            LEFT JOIN translation_prompt_profiles p ON p.id = tr.profile_id
+            LEFT JOIN translation_prompt_profile_versions pv ON pv.id = tr.profile_version_id
+            JOIN lemma_source_text_versions stv ON stv.id = tr.source_text_version_id
+            WHERE tr.status = 'approved'
+              AND COALESCE(tr.public_eligible, TRUE) = TRUE
+              AND COALESCE(tr.translation_text, '') <> ''
+              AND COALESCE(stv.source_document, '') = 'meineke'
+            """
+        )
+    if has_human_translations:
+        translation_sources.append(
+            """
+            SELECT
+                ht.lemma_id,
+                ht.source_text_version_id,
+                'human_translation'::text AS translation_variant_kind,
+                ht.id::text AS translation_variant_id,
+                ''::text AS translation_profile_name,
+                NULL::integer AS translation_profile_version,
+                CONCAT_WS('/', NULLIF(COALESCE(ht.stage, ''), ''), NULLIF(COALESCE(ht.status, ''), '')) AS translation_status,
+                COALESCE(ht.reviewed_by, ht.updated_by, ht.created_by, '') AS translation_reviewer,
+                COALESCE(ht.reviewed_at, ht.updated_at, ht.created_at) AS translation_at,
+                COALESCE(ht.translation_text, '') AS translation_text
+            FROM human_translations ht
+            JOIN lemma_source_text_versions stv ON stv.id = ht.source_text_version_id
+            WHERE ht.status = 'approved'
+              AND ht.stage IN ('reviewed', 'final')
+              AND COALESCE(ht.translation_text, '') <> ''
+              AND COALESCE(stv.source_document, '') = 'meineke'
+            """
+        )
+    translation_sources.append(
+        """
+        SELECT
+            a.id AS lemma_id,
+            stv.id AS source_text_version_id,
+            'legacy_reviewed'::text AS translation_variant_kind,
+            'reviewed_english_translation'::text AS translation_variant_id,
+            ''::text AS translation_profile_name,
+            NULL::integer AS translation_profile_version,
+            COALESCE(a.review_status, '') AS translation_status,
+            COALESCE(a.reviewed_by, '') AS translation_reviewer,
+            a.reviewed_at AS translation_at,
+            COALESCE(a.reviewed_english_translation, '') AS translation_text
+        FROM assembled_lemmas a
+        JOIN lemma_source_text_versions stv
+          ON stv.lemma_id = a.id
+         AND stv.source_document = 'meineke'
+         AND stv.is_current = TRUE
+        WHERE COALESCE(a.reviewed_english_translation, '') <> ''
+          AND a.reviewed_at IS NOT NULL
+        """
+    )
+
+    translations_cte = "\nUNION ALL\n".join(translation_sources)
+    cur.execute(
+        f"""
+        WITH finalized_translations AS (
+            {translations_cte}
+        ),
+        impact_rows AS (
+            SELECT
+                ft.lemma_id,
+                COALESCE(a.lemma, '') AS lemma,
+                COALESCE(a.entry_number, 0) AS entry_number,
+                ft.source_text_version_id,
+                ft.translation_variant_kind,
+                ft.translation_variant_id,
+                ft.translation_profile_name,
+                ft.translation_profile_version,
+                ft.translation_status,
+                ft.translation_reviewer,
+                ft.translation_at,
+                COALESCE(ft.translation_text, '') AS translation_text,
+                m.id AS match_id,
+                m.detected_at,
+                m.updated_at AS match_updated_at,
+                COALESCE(m.evidence_text, '') AS evidence_text,
+                COALESCE(m.confidence, '') AS confidence,
+                COALESCE(m.occurrence_count, 0) AS occurrence_count,
+                r.id AS rule_id,
+                COALESCE(r.rule_key, '') AS rule_key,
+                COALESCE(r.rule_code, '') AS rule_code,
+                COALESCE(r.kind, '') AS kind,
+                COALESCE(r.label, '') AS label,
+                COALESCE(r.preferred_translation, '') AS preferred_translation,
+                COALESCE(r.application_mode, '') AS application_mode,
+                COALESCE(r.lifecycle_stage, '') AS lifecycle_stage,
+                COALESCE(r.status, '') AS rule_status,
+                rr.id AS rule_revision_id,
+                COALESCE(rr.revision_number, 0) AS rule_revision_number,
+                rr.created_at AS rule_revision_created_at,
+                CASE
+                    WHEN rr.created_at > ft.translation_at THEN 'rule_after_translation'
+                    WHEN m.detected_at > ft.translation_at THEN 'detected_after_translation'
+                    ELSE 'unknown'
+                END AS impact_reason
+            FROM finalized_translations ft
+            JOIN translation_guidance_matches m
+              ON m.lemma_id = ft.lemma_id
+             AND m.source_text_version_id = ft.source_text_version_id
+            JOIN translation_guidance_rules r ON r.id = m.rule_id
+            JOIN translation_guidance_rule_revisions rr ON rr.id = m.rule_revision_id
+            JOIN assembled_lemmas a ON a.id = ft.lemma_id
+            WHERE ft.translation_at IS NOT NULL
+              AND m.match_status = 'matched'
+              AND COALESCE(r.status, '') <> 'retired'
+              AND COALESCE(r.lifecycle_stage, 'guidance') <> 'inactive'
+              AND (rr.created_at > ft.translation_at OR m.detected_at > ft.translation_at)
+        )
+        SELECT *
+        FROM impact_rows
+        ORDER BY
+            translation_at DESC,
+            lemma,
+            CASE impact_reason
+                WHEN 'rule_after_translation' THEN 0
+                WHEN 'detected_after_translation' THEN 1
+                ELSE 2
+            END,
+            kind,
+            label
+        """
+    )
+
+    impacts = []
+    for row in cur.fetchall():
+        impacts.append(
+            {
+                "lemma_id": int(row[0] or 0),
+                "lemma": row[1] or "",
+                "entry_number": int(row[2] or 0),
+                "source_text_version_id": str(row[3] or ""),
+                "translation_variant_kind": row[4] or "",
+                "translation_variant_id": row[5] or "",
+                "translation_profile_name": row[6] or "",
+                "translation_profile_version": int(row[7]) if row[7] is not None else None,
+                "translation_status": row[8] or "",
+                "translation_reviewer": row[9] or "",
+                "translation_at": row[10].isoformat() if hasattr(row[10], "isoformat") else str(row[10] or ""),
+                "translation_preview": preview_text(row[11] or "", 220),
+                "match_id": int(row[12] or 0),
+                "detected_at": row[13].isoformat() if hasattr(row[13], "isoformat") else str(row[13] or ""),
+                "match_updated_at": row[14].isoformat() if hasattr(row[14], "isoformat") else str(row[14] or ""),
+                "evidence_text": row[15] or "",
+                "confidence": row[16] or "",
+                "occurrence_count": int(row[17] or 0),
+                "rule_id": int(row[18] or 0),
+                "rule_key": row[19] or "",
+                "rule_code": row[20] or "",
+                "kind": row[21] or "",
+                "label": row[22] or "",
+                "preferred_translation": row[23] or "",
+                "application_mode": row[24] or "",
+                "lifecycle_stage": row[25] or "",
+                "rule_status": row[26] or "",
+                "rule_revision_id": int(row[27] or 0),
+                "rule_revision_number": int(row[28] or 0),
+                "rule_revision_created_at": row[29].isoformat() if hasattr(row[29], "isoformat") else str(row[29] or ""),
+                "impact_reason": row[30] or "",
+            }
+        )
+    return impacts
+
+
 def export_lemmas():
     """Export all lemmas to JSON for review system."""
     conn = get_connection()
@@ -1604,6 +1804,8 @@ def export_lemmas():
                 }
             )
 
+    translation_guidance_rule_impacts = fetch_guidance_rule_impacts(cur)
+
     lemmas = []
     for row in rows:
         (lemma_id, lemma, entry_number, version, greek_text, human_greek_text, english_translation,
@@ -1770,6 +1972,7 @@ def export_lemmas():
         "total_count": len(lemmas),
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "translation_guidance_rules": translation_guidance_rules,
+        "translation_guidance_rule_impacts": translation_guidance_rule_impacts,
     }
 
     # Write to file

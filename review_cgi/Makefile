@@ -3,7 +3,7 @@
 COMMON_REVIEW_SRCS = common.go guidance_common.go page.go templates.go shared_helpers.go
 GUIDANCE_SRCS = common.go guidance_common.go guidance_urgent_common.go
 
-all: review.cgi entities.cgi guidance.cgi guidance_status.cgi guidance_urgent_worker save.cgi status.cgi
+all: review.cgi entities.cgi guidance.cgi guidance_impacts.cgi guidance_status.cgi guidance_urgent_worker save.cgi status.cgi
 
 review.cgi: review.go $(COMMON_REVIEW_SRCS)
 	go build -o review.cgi review.go $(COMMON_REVIEW_SRCS)
@@ -13,6 +13,9 @@ entities.cgi: entities.go $(COMMON_REVIEW_SRCS)
 
 guidance.cgi: guidance.go $(GUIDANCE_SRCS) templates.go shared_helpers.go
 	go build -o guidance.cgi guidance.go $(GUIDANCE_SRCS) templates.go shared_helpers.go
+
+guidance_impacts.cgi: guidance_impacts.go common.go shared_helpers.go
+	go build -o guidance_impacts.cgi guidance_impacts.go common.go shared_helpers.go
 
 guidance_status.cgi: guidance_status.go $(GUIDANCE_SRCS)
 	go build -o guidance_status.cgi guidance_status.go $(GUIDANCE_SRCS)
@@ -31,7 +34,7 @@ status.cgi: status.go common.go
 	go build -ldflags "-X main.buildVersion=$$version -X main.buildTime=$$build_time" -o status.cgi status.go common.go
 
 clean:
-	rm -f review.cgi entities.cgi guidance.cgi guidance_status.cgi guidance_urgent_worker save.cgi status.cgi
+	rm -f review.cgi entities.cgi guidance.cgi guidance_impacts.cgi guidance_status.cgi guidance_urgent_worker save.cgi status.cgi
 
 test:
 	cd .. && python3 -m unittest test_place_cluster_extraction.py test_review_template_split.py
@@ -39,4 +42,4 @@ test:
 # For deployment on merah
 deploy: all
 	@echo "Built CGI programs. Ready to deploy to merah."
-	@echo "Copy review.cgi, entities.cgi, guidance.cgi, guidance_status.cgi, guidance_urgent_worker, save.cgi, and status.cgi to /var/www/vhosts/stephanos.symmachus.org/cgi-bin/"
+	@echo "Copy review.cgi, entities.cgi, guidance.cgi, guidance_impacts.cgi, guidance_status.cgi, guidance_urgent_worker, save.cgi, and status.cgi to /var/www/vhosts/stephanos.symmachus.org/cgi-bin/"

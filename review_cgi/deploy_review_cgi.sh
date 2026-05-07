@@ -18,6 +18,7 @@ SOURCE_FILES=(
     "review.go"
     "entities.go"
     "guidance.go"
+    "guidance_impacts.go"
     "guidance_status.go"
     "guidance_urgent_common.go"
     "guidance_urgent_worker.go"
@@ -46,6 +47,7 @@ ssh "$REMOTE_HOST" "
     /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o review.cgi review.go common.go guidance_common.go page.go templates.go shared_helpers.go
     /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o entities.cgi entities.go common.go guidance_common.go page.go templates.go shared_helpers.go
     /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance.cgi guidance.go common.go guidance_common.go guidance_urgent_common.go templates.go shared_helpers.go
+    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance_impacts.cgi guidance_impacts.go common.go shared_helpers.go
     /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance_status.cgi guidance_status.go common.go guidance_common.go guidance_urgent_common.go
     /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance_urgent_worker guidance_urgent_worker.go common.go guidance_common.go guidance_urgent_common.go
     /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o save.cgi save.go common.go guidance_common.go guidance_urgent_common.go
@@ -53,6 +55,7 @@ ssh "$REMOTE_HOST" "
     install -m 755 review.cgi '$REMOTE_CGI_DIR/review.cgi'
     install -m 755 entities.cgi '$REMOTE_CGI_DIR/entities.cgi'
     install -m 755 guidance.cgi '$REMOTE_CGI_DIR/guidance.cgi'
+    install -m 755 guidance_impacts.cgi '$REMOTE_CGI_DIR/guidance_impacts.cgi'
     install -m 755 guidance_status.cgi '$REMOTE_CGI_DIR/guidance_status.cgi'
     install -m 755 guidance_urgent_worker '$REMOTE_CGI_DIR/guidance_urgent_worker'
     install -m 755 save.cgi '$REMOTE_CGI_DIR/save.cgi'

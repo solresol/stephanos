@@ -111,6 +111,40 @@ type GuidanceHit struct {
 	PromptRuns           []GuidancePromptRun `json:"prompt_runs"`
 }
 
+type GuidanceRuleImpact struct {
+	LemmaID                 int    `json:"lemma_id"`
+	Lemma                   string `json:"lemma"`
+	EntryNumber             int    `json:"entry_number"`
+	SourceTextVersionID     string `json:"source_text_version_id"`
+	TranslationVariantKind  string `json:"translation_variant_kind"`
+	TranslationVariantID    string `json:"translation_variant_id"`
+	TranslationProfileName  string `json:"translation_profile_name"`
+	TranslationProfileVer   *int   `json:"translation_profile_version"`
+	TranslationStatus       string `json:"translation_status"`
+	TranslationReviewer     string `json:"translation_reviewer"`
+	TranslationAt           string `json:"translation_at"`
+	TranslationPreview      string `json:"translation_preview"`
+	MatchID                 int    `json:"match_id"`
+	DetectedAt              string `json:"detected_at"`
+	MatchUpdatedAt          string `json:"match_updated_at"`
+	EvidenceText            string `json:"evidence_text"`
+	Confidence              string `json:"confidence"`
+	OccurrenceCount         int    `json:"occurrence_count"`
+	RuleID                  int    `json:"rule_id"`
+	RuleKey                 string `json:"rule_key"`
+	RuleCode                string `json:"rule_code"`
+	Kind                    string `json:"kind"`
+	Label                   string `json:"label"`
+	PreferredTranslation    string `json:"preferred_translation"`
+	ApplicationMode         string `json:"application_mode"`
+	LifecycleStage          string `json:"lifecycle_stage"`
+	RuleStatus              string `json:"rule_status"`
+	RuleRevisionID          int    `json:"rule_revision_id"`
+	RuleRevisionNumber      int    `json:"rule_revision_number"`
+	RuleRevisionCreatedAt   string `json:"rule_revision_created_at"`
+	ImpactReason            string `json:"impact_reason"`
+}
+
 type PlaceMention struct {
 	ID                 int    `json:"id"`
 	TextForm           string `json:"text_form"`
@@ -269,9 +303,10 @@ type Lemma struct {
 
 // LemmaData contains all lemmas from JSON export
 type LemmaData struct {
-	Lemmas     []Lemma   `json:"lemmas"`
-	TotalCount int       `json:"total_count"`
-	ExportedAt time.Time `json:"exported_at"`
+	Lemmas              []Lemma              `json:"lemmas"`
+	TotalCount          int                  `json:"total_count"`
+	ExportedAt          time.Time            `json:"exported_at"`
+	GuidanceRuleImpacts []GuidanceRuleImpact `json:"translation_guidance_rule_impacts"`
 }
 
 // Review represents review data from SQLite
