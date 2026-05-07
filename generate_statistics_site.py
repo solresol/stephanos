@@ -10,19 +10,41 @@ Produces statistics and visualizations for:
 """
 from pathlib import Path
 from datetime import datetime
+import html as html_module
+import re
 import numpy as np
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
-from sklearn.linear_model import RidgeCV
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LinearRegression, Ridge, RidgeCV
 from sklearn.model_selection import cross_val_score
 from sklearn.preprocessing import StandardScaler
 from scipy import stats
 
+import canonical_variants
 from db import get_connection
 import plotly.graph_objects as go
 import plotly.express as px
+
+
+GREEK_WORD_RE = re.compile(r"[\u0370-\u03FF\u1F00-\u1FFF]+")
+ENGLISH_WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?|\d+")
+GREEK_TFIDF_TOKEN_PATTERN = r"(?u)[\u0370-\u03FF\u1F00-\u1FFF]{2,}"
+ENGLISH_TFIDF_TOKEN_PATTERN = r"(?u)[A-Za-z][A-Za-z'’\-]*"
+
+
+def count_greek_words(text: str) -> int:
+    if not text:
+        return 0
+    return len(GREEK_WORD_RE.findall(text))
+
+
+def count_english_words(text: str) -> int:
+    if not text:
+        return 0
+    return len(ENGLISH_WORD_RE.findall(text))
 
 
 def save_plot_to_file(fig, filename):
@@ -263,6 +285,188 @@ def get_etymology_data(cur):
     rows = cur.fetchall()
     df = pd.DataFrame(rows, columns=['category', 'is_parisinus', 'count'])
     return df
+
+
+def get_translation_length_data(cur):
+    """Fetch source texts and best available PostgreSQL translations for analysis.
+
+    Current selected variants are preferred. If no current selected variant exists,
+    the legacy assembled translation is used as a statistical fallback.
+    """
+    cur.execute("""
+        SELECT
+            id,
+            COALESCE(lemma, '') AS lemma,
+            COALESCE(human_greek_text, greek_text, '') AS source_text,
+            COALESCE(word_count, 0) AS word_count,
+            COALESCE(version, '') AS version
+        FROM assembled_lemmas
+        WHERE version IN ('epitome', 'parisinus')
+          AND COALESCE(human_greek_text, greek_text, '') <> ''
+        ORDER BY id
+    """)
+    rows = cur.fetchall()
+
+    records = []
+    for idx, (lemma_id, lemma, source_text, word_count, version) in enumerate(rows, 1):
+        if idx % 1000 == 0:
+            print(f"    resolved canonical translations for {idx:,}/{len(rows):,} lemmas...")
+
+        selected = canonical_variants.select_pointer_variant(cur, lemma_id=int(lemma_id))
+        if not selected:
+            legacy = canonical_variants.resolve_variant(
+                cur,
+                lemma_id=int(lemma_id),
+                variant_kind="legacy_assembled",
+                variant_id="translation",
+            )
+            if legacy.get("publishable"):
+                selected = legacy
+
+        translation_text = (selected or {}).get("translation_text", "").strip()
+        if not translation_text:
+            continue
+
+        greek_word_count = int(word_count or 0) or count_greek_words(source_text)
+        english_word_count = count_english_words(translation_text)
+        if greek_word_count <= 0 or english_word_count <= 0:
+            continue
+
+        records.append({
+            "id": int(lemma_id),
+            "lemma": lemma or "",
+            "source_text": source_text or "",
+            "translation_text": translation_text,
+            "greek_word_count": greek_word_count,
+            "english_word_count": english_word_count,
+            "version": version or "",
+            "is_parisinus": version == "parisinus",
+            "translation_kind": (selected or {}).get("kind", ""),
+            "translation_variant_id": (selected or {}).get("id", ""),
+            "translation_profile": (selected or {}).get("profile_name", ""),
+        })
+
+    return pd.DataFrame(records)
+
+
+def add_translation_length_residuals(df):
+    """Add residual English length after fitting English word count from Greek word count."""
+    if df.empty:
+        return df, None
+
+    analysis_df = df.copy().reset_index(drop=True)
+    X = analysis_df[["greek_word_count"]].astype(float).to_numpy()
+    y = analysis_df["english_word_count"].astype(float).to_numpy()
+
+    baseline = LinearRegression()
+    baseline.fit(X, y)
+    predicted = baseline.predict(X)
+    residual = y - predicted
+
+    analysis_df["expected_english_word_count"] = predicted
+    analysis_df["translation_length_residual"] = residual
+
+    if len(analysis_df) >= 5 and np.nanvar(y) > 0:
+        cv_folds = min(5, len(analysis_df))
+        cv_scores = cross_val_score(baseline, X, y, cv=cv_folds, scoring="r2")
+    else:
+        cv_scores = np.array([])
+
+    baseline_info = {
+        "model": baseline,
+        "intercept": float(baseline.intercept_),
+        "slope": float(baseline.coef_[0]),
+        "r2": float(baseline.score(X, y)) if np.nanvar(y) > 0 else np.nan,
+        "cv_scores": cv_scores,
+    }
+
+    return analysis_df, baseline_info
+
+
+def fit_translation_length_vocab_model(
+    df,
+    *,
+    text_column,
+    label,
+    token_pattern,
+    min_df=5,
+    max_features=5000,
+    stop_words=None,
+):
+    """Fit a TF-IDF ridge model against translation-length residuals."""
+    if df.empty or len(df) < 10:
+        return None
+
+    texts = df[text_column].fillna("").astype(str)
+    y = df["translation_length_residual"].astype(float).to_numpy()
+    if np.nanvar(y) <= 0:
+        return None
+
+    actual_min_df = max(2, min(min_df, max(2, len(df) // 10)))
+    vectorizer = TfidfVectorizer(
+        token_pattern=token_pattern,
+        lowercase=True,
+        strip_accents="unicode",
+        min_df=actual_min_df,
+        max_features=max_features,
+        stop_words=stop_words,
+    )
+
+    try:
+        X = vectorizer.fit_transform(texts)
+    except ValueError as exc:
+        print(f"    {label}: unable to build TF-IDF features: {exc}")
+        return None
+
+    if X.shape[1] == 0:
+        return None
+
+    alphas = np.logspace(-2, 4, 50)
+    cv_folds = min(5, len(df))
+    model = RidgeCV(alphas=alphas, cv=cv_folds)
+    model.fit(X, y)
+
+    cv_scores = cross_val_score(
+        Ridge(alpha=float(model.alpha_)),
+        X,
+        y,
+        cv=cv_folds,
+        scoring="r2",
+    )
+
+    terms = vectorizer.get_feature_names_out()
+    present = X > 0
+    doc_counts = np.asarray(present.sum(axis=0)).ravel()
+    residual_sums = np.asarray(present.T.dot(y)).ravel()
+    residual_total = float(np.sum(y))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mean_present = residual_sums / doc_counts
+        absent_counts = len(df) - doc_counts
+        mean_absent = (residual_total - residual_sums) / absent_counts
+        mean_absent[absent_counts == 0] = np.nan
+
+    coef_df = pd.DataFrame({
+        "term": terms,
+        "coefficient": np.asarray(model.coef_).ravel(),
+        "document_count": doc_counts.astype(int),
+        "mean_residual_when_present": mean_present,
+        "mean_residual_when_absent": mean_absent,
+    }).sort_values("coefficient", ascending=False)
+
+    return {
+        "label": label,
+        "text_column": text_column,
+        "n_samples": len(df),
+        "n_features": X.shape[1],
+        "min_df": actual_min_df,
+        "model": model,
+        "cv_scores": cv_scores,
+        "coef_df": coef_df,
+        "vectorizer": vectorizer,
+        "term_index": {term: idx for idx, term in enumerate(terms)},
+        "X": X,
+        "df": df.reset_index(drop=True),
+    }
 
 
 def generate_word_count_statistics(df):
@@ -983,6 +1187,7 @@ def generate_navigation(current_page='index', in_subdirectory=False):
     pages = {
         'index': 'Overview',
         'word_count': 'Word Count Statistics',
+        'translation_length': 'Translation Length',
         'regression': 'Stephanos vs Epitomizer Emphasis',
         'categories': 'By Category',
         'category_authors': 'Authors',
@@ -1251,6 +1456,296 @@ def generate_coefficient_table(top_20, bottom_20, noun_details, title_prefix="")
     return html
 
 
+def format_signed_float(value, decimal_places=2):
+    if pd.isna(value):
+        return "N/A"
+    return f"{value:+.{decimal_places}f}"
+
+
+def vocab_extremes(model_result, n=25):
+    coef_df = model_result["coef_df"]
+    positive = coef_df.sort_values("coefficient", ascending=False).head(n)
+    negative = coef_df.sort_values("coefficient", ascending=True).head(n)
+    return positive, negative
+
+
+def get_term_examples(model_result, term, coefficient, limit=5):
+    term_index = model_result["term_index"].get(term)
+    if term_index is None:
+        return []
+
+    row_indices = model_result["X"][:, term_index].nonzero()[0]
+    if len(row_indices) == 0:
+        return []
+
+    examples = model_result["df"].iloc[row_indices].copy()
+    examples = examples.sort_values(
+        "translation_length_residual",
+        ascending=coefficient < 0,
+    )
+
+    result = []
+    for _, row in examples.head(limit).iterrows():
+        result.append({
+            "id": int(row["id"]),
+            "lemma": row["lemma"],
+            "residual": float(row["translation_length_residual"]),
+            "greek_word_count": int(row["greek_word_count"]),
+            "english_word_count": int(row["english_word_count"]),
+        })
+    return result
+
+
+def generate_translation_length_vocab_visualization(model_result, filename):
+    """Generate interactive Plotly chart for translation-length vocabulary coefficients."""
+    if model_result is None:
+        return None
+
+    from plotly.subplots import make_subplots
+
+    positive, negative = vocab_extremes(model_result, n=20)
+    positive_display = positive.iloc[::-1]
+    negative_display = negative.iloc[::-1]
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=(
+            "Terms associated with longer-than-expected translations",
+            "Terms associated with shorter-than-expected translations",
+        ),
+        horizontal_spacing=0.18,
+    )
+
+    def hover_texts(rows):
+        texts = []
+        for _, row in rows.iterrows():
+            texts.append(
+                f"<b>{html_module.escape(str(row['term']))}</b><br>"
+                f"Coefficient: {row['coefficient']:+.3f}<br>"
+                f"Entries with term: {int(row['document_count'])}<br>"
+                f"Mean residual when present: {row['mean_residual_when_present']:+.2f} English words"
+            )
+        return texts
+
+    fig.add_trace(
+        go.Bar(
+            y=positive_display["term"].values,
+            x=positive_display["coefficient"].values,
+            orientation="h",
+            marker_color="#3498db",
+            text=[f"{c:+.2f}" for c in positive_display["coefficient"].values],
+            textposition="outside",
+            hovertext=hover_texts(positive_display),
+            hovertemplate="%{hovertext}<extra></extra>",
+            showlegend=False,
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Bar(
+            y=negative_display["term"].values,
+            x=negative_display["coefficient"].values,
+            orientation="h",
+            marker_color="#e74c3c",
+            text=[f"{c:+.2f}" for c in negative_display["coefficient"].values],
+            textposition="outside",
+            hovertext=hover_texts(negative_display),
+            hovertemplate="%{hovertext}<extra></extra>",
+            showlegend=False,
+        ),
+        row=1,
+        col=2,
+    )
+
+    fig.update_layout(
+        height=650,
+        width=1200,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+    fig.update_xaxes(title_text="TF-IDF ridge coefficient", gridcolor="lightgray", zeroline=True, row=1, col=1)
+    fig.update_xaxes(title_text="TF-IDF ridge coefficient", gridcolor="lightgray", zeroline=True, row=1, col=2)
+    fig.update_yaxes(tickfont=dict(size=10), row=1, col=1)
+    fig.update_yaxes(tickfont=dict(size=10), row=1, col=2)
+
+    output_dir = Path("reference_site/statistics_images")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    html_path = output_dir / filename
+    fig.write_html(str(html_path), include_plotlyjs="cdn")
+    return f"statistics_images/{filename}"
+
+
+def generate_translation_length_vocab_table(model_result, *, direction, title):
+    if model_result is None:
+        return f"<h3>{html_module.escape(title)}</h3><p>No model was available for this vocabulary.</p>"
+
+    positive, negative = vocab_extremes(model_result, n=25)
+    rows = positive if direction == "positive" else negative
+
+    html = f"""
+    <h3>{html_module.escape(title)}</h3>
+    <table>
+        <tr>
+            <th>Rank</th>
+            <th>Word</th>
+            <th>Coefficient</th>
+            <th>Entries</th>
+            <th>Mean residual when present</th>
+            <th>Example entries</th>
+        </tr>
+"""
+    for rank, (_, row) in enumerate(rows.iterrows(), 1):
+        term = str(row["term"])
+        coefficient = float(row["coefficient"])
+        examples = get_term_examples(model_result, term, coefficient)
+        example_links = []
+        for item in examples:
+            lemma = html_module.escape(item["lemma"])
+            residual = format_signed_float(item["residual"], 1)
+            example_links.append(
+                f'<a href="../headword_{item["id"]}.html">{lemma}</a> '
+                f'({residual})'
+            )
+        examples_html = ", ".join(example_links)
+        html += f"""        <tr>
+            <td>{rank}</td>
+            <td><strong>{html_module.escape(term)}</strong></td>
+            <td><strong>{format_signed_float(coefficient, 3)}</strong></td>
+            <td>{int(row["document_count"])}</td>
+            <td>{format_signed_float(row["mean_residual_when_present"], 2)}</td>
+            <td style="font-size: 0.9em;">{examples_html}</td>
+        </tr>
+"""
+
+    html += "    </table>\n"
+    return html
+
+
+def cv_summary(cv_scores):
+    if cv_scores is None or len(cv_scores) == 0:
+        return "N/A"
+    return f"{np.mean(cv_scores):.4f} +/- {np.std(cv_scores):.4f}"
+
+
+def generate_translation_length_page(translation_df, baseline_info, greek_model, english_model, greek_img, english_img):
+    """Generate translation length vocabulary analysis page."""
+    html = generate_page_header('Translation Length Vocabulary', 'translation_length', in_subdirectory=True)
+
+    if translation_df.empty or baseline_info is None:
+        html += """
+    <p>No translation-length data is available yet. This page requires selected public translations and non-empty Greek source text.</p>
+"""
+        html += generate_page_footer()
+        return html
+
+    kind_counts = translation_df["translation_kind"].replace("", "unknown").value_counts()
+    kind_rows = ""
+    for kind, count in kind_counts.items():
+        kind_rows += f"<tr><td>{html_module.escape(str(kind))}</td><td>{int(count):,}</td></tr>\n"
+
+    html += f"""
+    <p>This analysis asks which words are associated with English translations that are longer or shorter than expected
+    after controlling for the length of the Greek source text. It uses the current selected translation where one exists,
+    and falls back to the legacy assembled translation for statistical coverage.</p>
+
+    <h2>Baseline Length Model</h2>
+    <div class="stats-box">
+        <div class="metric">
+            <span class="metric-label">Entries analyzed:</span>
+            <span class="metric-value">{len(translation_df):,}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">Mean Greek words:</span>
+            <span class="metric-value">{translation_df['greek_word_count'].mean():.2f}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">Mean English words:</span>
+            <span class="metric-value">{translation_df['english_word_count'].mean():.2f}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">Baseline R²:</span>
+            <span class="metric-value">{format_stat(baseline_info['r2'])}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">Baseline CV R²:</span>
+            <span class="metric-value">{cv_summary(baseline_info['cv_scores'])}</span>
+        </div>
+    </div>
+
+    <p><strong>Baseline:</strong> expected English words =
+    {baseline_info['intercept']:.2f} + {baseline_info['slope']:.3f} * Greek words.
+    The residual is actual English words minus this expected count.</p>
+
+    <h3>Translation sources used</h3>
+    <table>
+        <tr><th>Variant kind</th><th>Entries</th></tr>
+        {kind_rows}
+    </table>
+"""
+
+    html += """
+    <h2>Greek Vocabulary Predictors</h2>
+    <p>Terms here come from the Greek source text. Positive coefficients are associated with longer-than-expected
+    English translations; negative coefficients are associated with shorter-than-expected translations.</p>
+"""
+    if greek_model:
+        alpha = float(greek_model["model"].alpha_)
+        html += f"""
+    <div class="stats-box">
+        <div class="metric"><span class="metric-label">Features:</span> <span class="metric-value">{greek_model['n_features']:,}</span></div>
+        <div class="metric"><span class="metric-label">Minimum document frequency:</span> <span class="metric-value">{greek_model['min_df']}</span></div>
+        <div class="metric"><span class="metric-label">Ridge alpha:</span> <span class="metric-value">{alpha:.4f}</span></div>
+        <div class="metric"><span class="metric-label">CV R²:</span> <span class="metric-value">{cv_summary(greek_model['cv_scores'])}</span></div>
+    </div>
+"""
+    if greek_img:
+        html += generate_chart_embed(greek_img, "Greek vocabulary translation-length coefficients")
+    html += generate_translation_length_vocab_table(
+        greek_model,
+        direction="positive",
+        title="Greek words associated with longer translations",
+    )
+    html += generate_translation_length_vocab_table(
+        greek_model,
+        direction="negative",
+        title="Greek words associated with shorter translations",
+    )
+
+    html += """
+    <h2>English Vocabulary Predictors</h2>
+    <p>Terms here come from the selected English translation text. This surfaces English wording patterns associated
+    with expansion or compression relative to Greek source length.</p>
+"""
+    if english_model:
+        alpha = float(english_model["model"].alpha_)
+        html += f"""
+    <div class="stats-box">
+        <div class="metric"><span class="metric-label">Features:</span> <span class="metric-value">{english_model['n_features']:,}</span></div>
+        <div class="metric"><span class="metric-label">Minimum document frequency:</span> <span class="metric-value">{english_model['min_df']}</span></div>
+        <div class="metric"><span class="metric-label">Ridge alpha:</span> <span class="metric-value">{alpha:.4f}</span></div>
+        <div class="metric"><span class="metric-label">CV R²:</span> <span class="metric-value">{cv_summary(english_model['cv_scores'])}</span></div>
+    </div>
+"""
+    if english_img:
+        html += generate_chart_embed(english_img, "English vocabulary translation-length coefficients")
+    html += generate_translation_length_vocab_table(
+        english_model,
+        direction="positive",
+        title="English words associated with longer translations",
+    )
+    html += generate_translation_length_vocab_table(
+        english_model,
+        direction="negative",
+        title="English words associated with shorter translations",
+    )
+
+    html += generate_page_footer()
+    return html
+
+
 def generate_index_page():
     """Generate index page with links to all statistics sections."""
     html = generate_page_header('Statistical Analysis - Overview', 'index')
@@ -1265,22 +1760,27 @@ def generate_index_page():
     </div>
 
     <div class="section-card">
-        <h3><a href="statistics/regression.html">2. Stephanos vs Epitomizer Emphasis</a></h3>
+        <h3><a href="statistics/translation_length.html">2. Translation Length Vocabulary</a></h3>
+        <p>Identify Greek and English words associated with longer or shorter English translations after controlling for Greek source length.</p>
+    </div>
+
+    <div class="section-card">
+        <h3><a href="statistics/regression.html">3. Stephanos vs Epitomizer Emphasis</a></h3>
         <p>Discover what the original Stephanos emphasized versus what the Byzantine epitomizer emphasized. Interactive visualizations reveal what was lost in the epitome and what was added or expanded.</p>
     </div>
 
     <div class="section-card">
-        <h3><a href="statistics/etymology.html">3. Etymology Analysis</a></h3>
+        <h3><a href="statistics/etymology.html">4. Etymology Analysis</a></h3>
         <p>Examine the distribution of etymology categories across the corpus, with comparisons between Delta and Non-Delta entries.</p>
     </div>
 
     <div class="section-card">
-        <h3><a href="statistics/parisinus_comparison.html">4. Parisinus Coislinianus 228 vs Epitomised version Comparison</a></h3>
+        <h3><a href="statistics/parisinus_comparison.html">5. Parisinus Coislinianus 228 vs Epitomised version Comparison</a></h3>
         <p>Statistical comparison of word counts between entries from the original Stephanos (Delta) and the Byzantine epitome (Non-Delta).</p>
     </div>
 
     <div class="section-card">
-        <h3><a href="statistics/categories.html">5. Analysis by Category</a></h3>
+        <h3><a href="statistics/categories.html">6. Analysis by Category</a></h3>
         <p>Detailed analysis of how different categories of proper nouns correlate with entry length.
         Explore which authors, historical figures, places, ethnic groups, and deities Stephanos emphasized.</p>
         <div style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 10px;">
@@ -1293,7 +1793,7 @@ def generate_index_page():
     </div>
 
     <div class="section-card">
-        <h3><a href="statistics/pausanias_analysis.html">6. Pausanias Citations</a></h3>
+        <h3><a href="statistics/pausanias_analysis.html">7. Pausanias Citations</a></h3>
         <p>Analysis of Stephanos's citations of Pausanias the Periegete. Did Stephanos have access to the
         complete text of Pausanias, or only certain portions? Statistical analysis of citation distribution
         with links to the cited passages.</p>
@@ -2045,6 +2545,63 @@ def main():
     print("  Generating histograms...")
     hist_by_type_img, hist_by_letter_img = generate_histograms(df)
 
+    # 3.5. Translation-length vocabulary analysis
+    print("  Analyzing translation-length vocabulary...")
+    translation_df = get_translation_length_data(cur)
+    if not translation_df.empty:
+        translation_df, translation_baseline = add_translation_length_residuals(translation_df)
+        print(f"    translation-length entries: {len(translation_df):,}")
+
+        greek_vocab_model = fit_translation_length_vocab_model(
+            translation_df,
+            text_column="source_text",
+            label="Greek source vocabulary",
+            token_pattern=GREEK_TFIDF_TOKEN_PATTERN,
+            min_df=5,
+            max_features=5000,
+        )
+        if greek_vocab_model:
+            print(
+                f"    Greek source vocabulary: {greek_vocab_model['n_features']:,} features, "
+                f"CV R² = {greek_vocab_model['cv_scores'].mean():.4f}"
+            )
+            greek_vocab_img = generate_translation_length_vocab_visualization(
+                greek_vocab_model,
+                "translation_length_greek_vocab.html",
+            )
+        else:
+            print("    Greek source vocabulary: insufficient data")
+            greek_vocab_img = None
+
+        english_vocab_model = fit_translation_length_vocab_model(
+            translation_df,
+            text_column="translation_text",
+            label="English translation vocabulary",
+            token_pattern=ENGLISH_TFIDF_TOKEN_PATTERN,
+            min_df=5,
+            max_features=5000,
+            stop_words="english",
+        )
+        if english_vocab_model:
+            print(
+                f"    English translation vocabulary: {english_vocab_model['n_features']:,} features, "
+                f"CV R² = {english_vocab_model['cv_scores'].mean():.4f}"
+            )
+            english_vocab_img = generate_translation_length_vocab_visualization(
+                english_vocab_model,
+                "translation_length_english_vocab.html",
+            )
+        else:
+            print("    English translation vocabulary: insufficient data")
+            english_vocab_img = None
+    else:
+        print("    no selected public translations available")
+        translation_baseline = None
+        greek_vocab_model = None
+        english_vocab_model = None
+        greek_vocab_img = None
+        english_vocab_img = None
+
     # 4. Ridge regression analysis
     print("  Building feature matrix for ridge regression...")
     X, y, noun_lemmas, lemma_names, is_parisinus = get_proper_noun_features(cur)
@@ -2256,6 +2813,18 @@ def main():
     )
     (stats_dir / "word_count.html").write_text(word_count_html, encoding='utf-8')
 
+    # Generate translation length page
+    print("    - Generating translation length page...")
+    translation_length_html = generate_translation_length_page(
+        translation_df,
+        translation_baseline,
+        greek_vocab_model,
+        english_vocab_model,
+        greek_vocab_img,
+        english_vocab_img,
+    )
+    (stats_dir / "translation_length.html").write_text(translation_length_html, encoding='utf-8')
+
     # Generate regression page
     print("    - Generating regression page...")
     regression_html = generate_regression_page(
@@ -2303,6 +2872,7 @@ def main():
     print(f"\nStatistics website generated:")
     print(f"  - Main page: {(ref_site_dir / 'statistics.html').absolute()}")
     print(f"  - Word count: {(stats_dir / 'word_count.html').absolute()}")
+    print(f"  - Translation length: {(stats_dir / 'translation_length.html').absolute()}")
     print(f"  - Regression: {(stats_dir / 'regression.html').absolute()}")
     print(f"  - Categories: {(stats_dir / 'categories.html').absolute()}")
     print(f"  - Etymology: {(stats_dir / 'etymology.html').absolute()}")
