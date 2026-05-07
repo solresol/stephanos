@@ -2149,6 +2149,7 @@ CREATE TABLE public.translation_run_requests (
     model text,
     temperature double precision,
     top_p double precision,
+    priority integer DEFAULT 100 NOT NULL,
     status text DEFAULT 'pending'::text NOT NULL,
     created_by text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -2156,6 +2157,7 @@ CREATE TABLE public.translation_run_requests (
     finished_at timestamp with time zone,
     error_message text,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT translation_run_requests_priority_check CHECK ((priority >= 0)),
     CONSTRAINT translation_run_requests_requested_runs_check CHECK ((requested_runs > 0)),
     CONSTRAINT translation_run_requests_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])))
 );
@@ -3754,6 +3756,13 @@ CREATE UNIQUE INDEX translation_run_guidance_matches_run_match_idx ON public.tra
 --
 
 CREATE INDEX translation_run_requests_status_idx ON public.translation_run_requests USING btree (status, created_at);
+
+
+--
+-- Name: translation_run_requests_status_priority_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_run_requests_status_priority_idx ON public.translation_run_requests USING btree (status, priority, created_at, id);
 
 
 --

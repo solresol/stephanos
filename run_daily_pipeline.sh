@@ -302,16 +302,31 @@ fi
 
 # Step 4e: Enqueue Meineke translation run requests (set TRANSLATION_ENQUEUE_LIMIT=0 to disable)
 TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-20}"
+TRANSLATION_ENQUEUE_ORDER="${TRANSLATION_ENQUEUE_ORDER:-canonical}"
+TRANSLATION_ENQUEUE_PRIORITY="${TRANSLATION_ENQUEUE_PRIORITY:-100}"
+TRANSLATION_ENQUEUE_LETTER="${TRANSLATION_ENQUEUE_LETTER:-}"
+TRANSLATION_ENQUEUE_HEADWORD_PREFIX="${TRANSLATION_ENQUEUE_HEADWORD_PREFIX:-}"
 if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
     echo "Step 4e: Enqueuing translation run requests..." | tee -a "$LOGFILE"
-    uv run enqueue_translation_runs.py \
-        --profile legacy_scholarly \
-        --source-document meineke \
-        --limit "$TRANSLATION_ENQUEUE_LIMIT" \
-        --repeat 1 \
-        --prepare-guidance-first \
-        --require-guidance-complete \
-        2>&1 | tee -a "$LOGFILE" || echo "  Warning: enqueue step failed" | tee -a "$LOGFILE"
+    translation_enqueue_args=(
+        uv run enqueue_translation_runs.py
+        --profile legacy_scholarly
+        --source-document meineke
+        --limit "$TRANSLATION_ENQUEUE_LIMIT"
+        --missing-final
+        --order "$TRANSLATION_ENQUEUE_ORDER"
+        --priority "$TRANSLATION_ENQUEUE_PRIORITY"
+        --repeat 1
+        --prepare-guidance-first
+        --require-guidance-complete
+    )
+    if [ -n "$TRANSLATION_ENQUEUE_LETTER" ]; then
+        translation_enqueue_args+=(--letter "$TRANSLATION_ENQUEUE_LETTER")
+    fi
+    if [ -n "$TRANSLATION_ENQUEUE_HEADWORD_PREFIX" ]; then
+        translation_enqueue_args+=(--headword-prefix "$TRANSLATION_ENQUEUE_HEADWORD_PREFIX")
+    fi
+    "${translation_enqueue_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: enqueue step failed" | tee -a "$LOGFILE"
 fi
 
 # Step 5: Translate Meineke lemmas with gpt-5.5 after guidance coverage is complete

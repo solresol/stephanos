@@ -436,7 +436,8 @@ def format_context_sections(guidance_rows, source_passage_rows) -> str:
 
 
 def fetch_requests(cur, request_limit: int | None):
-    query = """
+    order_by = "r.priority ASC, r.created_at, r.id" if column_exists(cur, "translation_run_requests", "priority") else "r.created_at, r.id"
+    query = f"""
         SELECT
             r.id AS request_id,
             r.lemma_id,
@@ -460,7 +461,7 @@ def fetch_requests(cur, request_limit: int | None):
         JOIN lemma_source_text_versions stv ON stv.id = r.source_text_version_id
         JOIN assembled_lemmas a ON a.id = r.lemma_id
         WHERE r.status IN ('pending', 'running')
-        ORDER BY r.created_at, r.id
+        ORDER BY {order_by}
     """
     params = [DEFAULT_TRANSLATION_MODEL]
     if request_limit is not None:

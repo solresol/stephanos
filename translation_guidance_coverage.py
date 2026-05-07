@@ -5,7 +5,7 @@ from __future__ import annotations
 
 CURRENT_DETECTOR_VERSION = "translation_guidance_scan_v4"
 
-PROMPT_GUIDANCE_KINDS = ("formula", "gloss", "proper_noun", "contextual_bias")
+PROMPT_GUIDANCE_KINDS = ("formula", "gloss", "contextual_bias")
 
 DETECTOR_BY_KIND = {
     "gloss": "lexical_prefilter",
