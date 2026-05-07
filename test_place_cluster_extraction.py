@@ -2,7 +2,10 @@
 import unittest
 
 from place_cluster_extraction import (
+    build_wikidata_candidates,
+    explicit_place_list_count,
     normalize_place_cluster_payload,
+    preferred_machine_choice,
     place_cluster_queue_priority,
     rank_place_candidates,
 )
@@ -107,6 +110,54 @@ class PlaceClusterExtractionTests(unittest.TestCase):
             [("topostext", "204EKo"), ("wikidata", "Q100"), ("pleiades", "123")],
         )
 
+    def test_wikidata_candidates_do_not_inherit_cluster_region(self):
+        cluster = {
+            "display_label": "Apollonia in Libya",
+            "inferred_canonical_name": "Apollonia",
+            "place_type": "city",
+            "region": "Libya",
+            "mentions": [{"text_form": "Apollonia"}],
+        }
+        raw_candidates = [
+            {
+                "qid": "Q1",
+                "label": "Apollonia",
+                "description": "ancient city in Illyria",
+                "country": "",
+                "pleiades_id": "",
+                "is_ancient_place": True,
+            }
+        ]
+
+        candidates = build_wikidata_candidates(cluster, raw_candidates)
+
+        self.assertEqual(candidates[0]["region"], "")
+
+    def test_region_mismatch_does_not_become_machine_choice(self):
+        cluster = {
+            "display_label": "Apollonia in Libya",
+            "inferred_canonical_name": "Apollonia",
+            "place_type": "city",
+            "region": "Libya",
+            "mentions": [{"text_form": "Apollonia"}],
+        }
+        candidates = [
+            {
+                "source_name": "wikidata",
+                "external_id": "Q45826",
+                "label": "Apollonia",
+                "description": "ancient city in Illyria",
+                "region": "",
+                "metadata_json": {"is_ancient_place": True, "pleiades_id": "481723"},
+            }
+        ]
+
+        ranked = rank_place_candidates(cluster, candidates)
+        machine_choice = preferred_machine_choice(ranked)
+
+        self.assertEqual(machine_choice["resolution_status"], "unresolved")
+        self.assertEqual(machine_choice["wikidata_qid"], "")
+
     def test_queue_priority_prefers_place_like_headwords_with_existing_place_signals(self):
         high_priority = place_cluster_queue_priority(
             lemma_type="city",
@@ -120,6 +171,61 @@ class PlaceClusterExtractionTests(unittest.TestCase):
         )
 
         self.assertGreater(high_priority, low_priority)
+
+    def test_queue_priority_prefers_explicit_homonymous_lists(self):
+        plain_city = place_cluster_queue_priority(
+            lemma_type="city",
+            has_headword_alignment=False,
+            place_signal_count=0,
+            explicit_place_list_markers=0,
+        )
+        listed_city = place_cluster_queue_priority(
+            lemma_type="city",
+            has_headword_alignment=False,
+            place_signal_count=0,
+            explicit_place_list_markers=5,
+        )
+
+        self.assertGreater(listed_city, plain_city)
+
+    def test_explicit_place_list_count_detects_alpha_beta_gamma_lists(self):
+        greek_text = (
+            "Ἀπολλωνία, αʹ πόλις Ἰλλυρίας. βʹ ἐν νήσῳ πρὸς τῇ Σαλμυδησσῷ. "
+            "γʹ Μακεδονίας. δʹ πόλις Λιβύης."
+        )
+
+        self.assertEqual(explicit_place_list_count("Ἀπολλωνία", greek_text), 4)
+
+    def test_explicit_place_list_count_detects_poleis_duo(self):
+        greek_text = (
+            "Ἀντικύραι, πόλεις δύο, ἡ μὲν Φωκίδος, ἡ δὲ ἐν Μαλιεῦσιν."
+        )
+
+        self.assertEqual(explicit_place_list_count("Ἀντικύραι", greek_text), 2)
+
+    def test_explicit_place_list_count_ignores_single_book_reference_marker(self):
+        greek_text = "Στράβων ιβʹ τὸ περὶ Μαγνησίαν καὶ Μυοῦντα."
+
+        self.assertEqual(explicit_place_list_count("Μυοῦς", greek_text), 0)
+
+    def test_explicit_place_list_count_ignores_quoted_book_reference(self):
+        greek_text = "Δυσπόντιον, Παυσανίας βʹ “Ἀντίμαχος Ἠλεῖος ἐκ Δυσποντίου”."
+
+        self.assertEqual(explicit_place_list_count("Δυσπόντιον", greek_text), 0)
+
+    def test_explicit_place_list_count_ignores_work_title_reference(self):
+        greek_text = "Κάρνος, νῆσος. Ἀρριανὸς βʹ γεωγραφουμένων. τὸ ἐθνικὸν Κάρνιος."
+
+        self.assertEqual(explicit_place_list_count("Κάρνος", greek_text), 0)
+
+    def test_explicit_place_list_count_ignores_late_citation_sequence(self):
+        greek_text = (
+            "Δώτιον, πεδίον Θεσσαλίας. "
+            + "καὶ ".join(["μαρτυρία"] * 80)
+            + " Διονύσιος ἐν αʹ Γιγαντιάδος. καὶ τὸ ἑνικὸν ἐν τῷ βʹ."
+        )
+
+        self.assertEqual(explicit_place_list_count("Δώτιον", greek_text), 0)
 
     def test_wikidata_place_filter_requires_positive_ancient_signal(self):
         titular_see = {

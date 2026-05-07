@@ -16,6 +16,7 @@ from db import get_connection
 from link_wikidata_places import query_wikidata_places
 from place_cluster_extraction import (
     build_wikidata_candidates,
+    explicit_place_list_count,
     extract_place_clusters_for_lemma,
     place_cluster_queue_priority,
     preferred_machine_choice,
@@ -118,6 +119,7 @@ def load_lemma_rows(cur, *, limit: int | None, lemma_id: int | None, rebuild: bo
                 lemma_type=row[4],
                 has_headword_alignment=bool(row[5]),
                 place_signal_count=int(row[6] or 0),
+                explicit_place_list_markers=explicit_place_list_count(row[1], row[2]),
             ),
             row[0],
         ),

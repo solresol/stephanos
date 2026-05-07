@@ -46,6 +46,57 @@ PLACE_HEADWORD_TYPE_MARKERS = (
     "φρούρι",
 )
 
+GREEK_NUMERAL_VALUES = {
+    "α": 1,
+    "β": 2,
+    "γ": 3,
+    "δ": 4,
+    "ε": 5,
+    "ϛ": 6,
+    "ς": 6,
+    "ζ": 7,
+    "η": 8,
+    "θ": 9,
+    "ι": 10,
+    "κ": 20,
+    "λ": 30,
+    "μ": 40,
+    "ν": 50,
+    "ξ": 60,
+    "ο": 70,
+    "π": 80,
+    "ϟ": 90,
+    "ρ": 100,
+}
+
+GREEK_NUMERAL_MARK_RE = re.compile(r"(?<!\w)([α-ωϛϟ]{1,3})[ʹʹ′'](?=\s)")
+GREEK_NUMERAL_CITATION_CONTEXT_RE = re.compile(
+    r"^(γεωγραφ|ιστορ|αρχαιολογ|χρονικ|φιλιππικ|λυκιακ|μεσσηνιακ|λυδης|ρωμαικ)"
+)
+ORDINAL_LIST_MARKERS = {
+    "πρῶτον": 1,
+    "πρωτον": 1,
+    "δεύτερον": 2,
+    "δευτερον": 2,
+    "τρίτον": 3,
+    "τριτον": 3,
+    "τέταρτον": 4,
+    "τεταρτον": 4,
+    "πέμπτον": 5,
+    "πεμπτον": 5,
+    "ἕκτον": 6,
+    "εκτον": 6,
+    "ἕβδομον": 7,
+    "εβδομον": 7,
+    "ὄγδοον": 8,
+    "ογδοον": 8,
+    "ἔνατον": 9,
+    "ενατον": 9,
+    "δέκατον": 10,
+    "δεκατον": 10,
+}
+TWO_PLACE_LIST_RE = re.compile(r"\bπ[όό]λεις\s+δ[ύύ]ο\b|\bδ[ύύ]ο\s+π[όό]λεις\b")
+
 PLACE_CLUSTER_SYSTEM_PROMPT = """You are a classical philologist working on Stephanos of Byzantium.
 Your task is to identify distinct place referents within one lemma, especially when the same headword refers to multiple different places.
 
@@ -53,7 +104,10 @@ Important rules:
 - One lemma may describe many different places that share the same name.
 - Later references can be implicit, such as "another city in the Peloponnese" or "a fortress in Ambracia", even when the headword is not repeated.
 - Keep different places separate even if they share the same canonical name.
-- Numbered, lettered, or ordinal lists usually indicate separate homonymous places. Treat markers such as α/β/γ, πρῶτον/δεύτερον/τρίτον, ἄλλη/ἕτερον, "first/second/third", and explicit regional phrases as split signals.
+- Numbered, lettered, or ordinal lists usually indicate separate homonymous places. Treat markers such as αʹ/βʹ/γʹ, α/β/γ, πρῶτον/δεύτερον/τρίτον, ἡ μὲν ... ἡ δὲ ..., ἄλλη/ἕτερον, "first/second/third", and explicit regional phrases as split signals.
+- If a lemma is an explicit city list, create at least one place cluster for each list item. For example, "Ἀπολλωνία, αʹ πόλις Ἰλλυρίας ... βʹ ... γʹ Μακεδονίας" must become separate Apollonia clusters, not one generic Apollonia row.
+- Phrases such as "πόλεις δύο, ἡ μὲν ... ἡ δὲ ..." likewise require two distinct clusters even when the headword is not repeated.
+- Do not confuse citation book numbers with place-list markers. A marker is a split signal when it structures the lemma's same-named place list, especially near the headword or before region/type phrases.
 - Treat places as distinct when the text gives a different region, settlement type, political affiliation, or descriptive context.
 - Prefer informative labels such as "Demetrion in Persis" or "Demetrion in Macedonia" over bare repeated labels when the region is known.
 - Extract only places for this task. People, deities, and cited sources are handled elsewhere.
@@ -169,13 +223,77 @@ def is_place_like_type(lemma_type: str | None) -> bool:
     return any(marker in normalized for marker in PLACE_HEADWORD_TYPE_MARKERS)
 
 
+def strip_combining_marks(value: str | None) -> str:
+    normalized = unicodedata.normalize("NFD", value or "")
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def greek_numeral_value(value: str | None) -> int | None:
+    if not value:
+        return None
+    total = 0
+    for char in strip_combining_marks(value).lower():
+        if char not in GREEK_NUMERAL_VALUES:
+            return None
+        total += GREEK_NUMERAL_VALUES[char]
+    return total or None
+
+
+def explicit_place_list_count(headword: str | None, greek_text: str | None) -> int:
+    """Return a conservative lower-bound count for explicit homonymous place lists."""
+    text = normalize_space(greek_text)
+    if not text:
+        return 0
+
+    text_key_value = text_key(text)
+    expected_counts = []
+
+    if TWO_PLACE_LIST_RE.search(text):
+        expected_counts.append(2)
+
+    ordinal_values = [
+        ordinal_value
+        for token, ordinal_value in ORDINAL_LIST_MARKERS.items()
+        if re.search(rf"\b{re.escape(token)}\b", text_key_value)
+    ]
+    if 1 in ordinal_values and 2 in ordinal_values:
+        expected_counts.append(max(ordinal_values))
+
+    numeral_matches = []
+    for match in GREEK_NUMERAL_MARK_RE.finditer(text_key_value):
+        value = greek_numeral_value(match.group(1))
+        if value is None:
+            continue
+        before = text_key_value[max(0, match.start() - 8) : match.start()]
+        after = text_key_value[match.end() : match.end() + 12].lstrip()
+        if (
+            before.endswith("εν ")
+            or after.startswith(("“", '"', "«"))
+            or GREEK_NUMERAL_CITATION_CONTEXT_RE.search(after)
+        ):
+            continue
+        numeral_matches.append((value, match.start()))
+    numeral_values = [value for value, _ in numeral_matches]
+    has_opening_list_marker = any(value in {1, 2} and start <= 350 for value, start in numeral_matches)
+    if has_opening_list_marker and 2 in numeral_values:
+        expected_counts.append(max(value for value in numeral_values if value <= 50))
+
+    if re.search(r"\b(αλλη|ετερα|ετερον)\b", text_key_value):
+        expected_counts.append(2)
+
+    return max(expected_counts, default=0)
+
+
 def place_cluster_queue_priority(
     *,
     lemma_type: str | None,
     has_headword_alignment: bool,
     place_signal_count: int,
+    explicit_place_list_markers: int = 0,
 ) -> int:
     score = 0
+    if explicit_place_list_markers >= 2:
+        score += min(explicit_place_list_markers, 10) * 3
     if has_headword_alignment:
         score += 6
     if is_place_like_type(lemma_type):
@@ -378,7 +496,7 @@ def build_wikidata_candidates(cluster: dict, raw_candidates: list[dict]) -> list
                 "label": normalize_space(candidate.get("label")),
                 "description": normalize_space(candidate.get("description")),
                 "place_type": normalize_space(cluster.get("place_type")),
-                "region": normalize_space(candidate.get("country") or cluster.get("region")),
+                "region": normalize_space(candidate.get("country")),
                 "url": authority_url("wikidata", qid),
                 "metadata_json": metadata,
             }
@@ -392,7 +510,7 @@ def build_wikidata_candidates(cluster: dict, raw_candidates: list[dict]) -> list
                     "label": normalize_space(candidate.get("label")),
                     "description": normalize_space(candidate.get("description")),
                     "place_type": normalize_space(cluster.get("place_type")),
-                    "region": normalize_space(candidate.get("country") or cluster.get("region")),
+                    "region": normalize_space(candidate.get("country")),
                     "url": authority_url("pleiades", pleiades_id),
                     "metadata_json": {
                         "linked_wikidata_qid": qid,
@@ -404,6 +522,23 @@ def build_wikidata_candidates(cluster: dict, raw_candidates: list[dict]) -> list
                 }
             )
     return candidate_rows
+
+
+def candidate_region_match(cluster: dict, candidate: dict) -> bool | None:
+    region_key = text_key(cluster.get("region"))
+    if not region_key:
+        return None
+    metadata = candidate.get("metadata_json") or {}
+    searchable = " ".join(
+        part
+        for part in [
+            candidate.get("label", ""),
+            candidate.get("description", ""),
+            metadata.get("country", ""),
+        ]
+        if part
+    )
+    return region_key in text_key(searchable)
 
 
 def score_place_candidate(cluster: dict, candidate: dict) -> float:
@@ -439,9 +574,11 @@ def score_place_candidate(cluster: dict, candidate: dict) -> float:
     if place_type_key and place_type_key in searchable_key:
         score += 5.0
 
-    region_key = text_key(cluster.get("region"))
-    if region_key and region_key in searchable_key:
+    region_match = candidate_region_match(cluster, candidate)
+    if region_match is True:
         score += 8.0
+    elif region_match is False:
+        score -= 12.0
 
     mention_text_keys = {text_key(mention.get("text_form")) for mention in cluster.get("mentions", [])}
     if label_key and label_key in mention_text_keys:
@@ -468,6 +605,7 @@ def rank_place_candidates(cluster: dict, candidates: list[dict]) -> list[dict]:
             "url": normalize_space(candidate.get("url")) or authority_url(source_name, external_id),
             "metadata_json": candidate.get("metadata_json") or {},
         }
+        candidate_copy["region_match"] = candidate_region_match(cluster, candidate_copy)
         candidate_copy["score"] = score_place_candidate(cluster, candidate_copy)
         if key not in deduped or candidate_copy["score"] > deduped[key]["score"]:
             deduped[key] = candidate_copy
@@ -500,6 +638,19 @@ def preferred_machine_choice(ranked_candidates: list[dict]) -> dict:
         }
 
     top = ranked_candidates[0]
+    if top.get("region_match") is False:
+        return {
+            "preferred_external_id_type": "",
+            "preferred_external_id_value": "",
+            "wikidata_qid": "",
+            "wikidata_label": "",
+            "wikidata_description": "",
+            "wikidata_confidence": "",
+            "topostext_id": "",
+            "pleiades_id": "",
+            "resolution_status": "unresolved",
+        }
+
     runner_up_score = ranked_candidates[1]["score"] if len(ranked_candidates) > 1 else None
     score_gap = math.inf if runner_up_score is None else top["score"] - runner_up_score
 
