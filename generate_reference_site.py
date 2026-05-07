@@ -268,6 +268,17 @@ def headword_page_filename(lemma_id: int) -> str:
     return f"headword_{lemma_num}.html"
 
 
+def entity_editor_href(lemma_id: int, anchor: str) -> str:
+    """Protected editor URL for a public entity or place-cluster row."""
+    try:
+        lemma_num = int(lemma_id)
+    except Exception:
+        lemma_num = 0
+    safe_anchor = _SAFE_REF_RE.sub("-", str(anchor or "").strip()).strip("-")
+    suffix = f"#{safe_anchor}" if safe_anchor else ""
+    return f"/cgi-bin/entities.cgi?id={lemma_num}{suffix}"
+
+
 def prompt_version_page_filename(profile_version_id: int) -> str:
     """Stable filename for a prompt-version detail page."""
     return f"prompts/{int(profile_version_id or 0)}.html"
@@ -677,11 +688,41 @@ def fetch_public_translation_guidance_hits(cur) -> dict[int, list[dict]]:
     return hits_by_lemma
 
 
+def ensure_column(cur, table_name: str, column_name: str, ddl: str) -> None:
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s
+          AND column_name = %s
+        """,
+        (table_name, column_name),
+    )
+    if cur.fetchone() is None:
+        cur.execute(ddl)
+
+
 def get_all_lemmas(cur):
     """Get all lemmas (translated and untranslated) from assembled_lemmas"""
-    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE")
-    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS quarantine_reason TEXT")
-    cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAMPTZ")
+    ensure_column(
+        cur,
+        "assembled_lemmas",
+        "quarantined",
+        "ALTER TABLE assembled_lemmas ADD COLUMN quarantined BOOLEAN NOT NULL DEFAULT FALSE",
+    )
+    ensure_column(
+        cur,
+        "assembled_lemmas",
+        "quarantine_reason",
+        "ALTER TABLE assembled_lemmas ADD COLUMN quarantine_reason TEXT",
+    )
+    ensure_column(
+        cur,
+        "assembled_lemmas",
+        "quarantined_at",
+        "ALTER TABLE assembled_lemmas ADD COLUMN quarantined_at TIMESTAMPTZ",
+    )
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS translation_risk_flags (
@@ -809,6 +850,7 @@ def get_all_lemmas(cur):
     cur.execute("""
         SELECT lemma_id,
                json_agg(json_build_object(
+                   'id', id,
                    'text_form', proper_noun,
                    'lemma_form', lemma_form,
                    'english', english_translation,
@@ -816,12 +858,38 @@ def get_all_lemmas(cur):
                    'role', role,
                    'citation', citation,
                    'work_title', work_title,
-                   'wikidata_qid', effective_wikidata_qid
+                   'wikidata_qid', effective_wikidata_qid,
+                   'resolution_status', effective_resolution_status
                ) ORDER BY id) as nouns
         FROM effective_proper_nouns
         GROUP BY lemma_id
     """)
     proper_nouns_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
+
+    place_clusters_by_lemma = {}
+    cur.execute("SELECT to_regclass('public.effective_place_clusters') IS NOT NULL")
+    if bool(cur.fetchone()[0]):
+        cur.execute("""
+            SELECT lemma_id,
+                   json_agg(json_build_object(
+                       'id', id,
+                       'cluster_index', cluster_index,
+                       'display_label', effective_display_label,
+                       'canonical_name', effective_canonical_name,
+                       'place_type', effective_place_type,
+                       'region', effective_region,
+                       'explicit_name_present', effective_explicit_name_present,
+                       'preferred_external_id_type', effective_preferred_external_id_type,
+                       'preferred_external_id_value', effective_preferred_external_id_value,
+                       'wikidata_qid', effective_wikidata_qid,
+                       'topostext_id', effective_topostext_id,
+                       'pleiades_id', effective_pleiades_id,
+                       'resolution_status', effective_resolution_status
+                   ) ORDER BY cluster_index, id) as clusters
+            FROM effective_place_clusters
+            GROUP BY lemma_id
+        """)
+        place_clusters_by_lemma = {row[0]: row[1] for row in cur.fetchall()}
 
     # Fetch etymologies for all lemmas
     cur.execute("""
@@ -974,6 +1042,7 @@ def get_all_lemmas(cur):
             "image_filenames": images,
             "word_count": word_count,
             "proper_nouns": proper_nouns_by_lemma.get(lemma_id, []),
+            "place_clusters": place_clusters_by_lemma.get(lemma_id, []),
             "etymologies": etymologies_by_lemma.get(lemma_id, []),
             "aliases_by_name": aliases_by_name,
             "commentary_entries": commentary_by_lemma.get(lemma_id, []),
@@ -1649,8 +1718,9 @@ def render_lemma_cards(lemmas):
                     )
                 )
 
-            # Display entities (people/places in the story)
-            if entities:
+            # Display entities and disambiguated same-name place clusters.
+            place_clusters = lemma.get("place_clusters") or []
+            if entities or place_clusters:
                 entity_rows = []
                 for noun in entities:
                     detail_bits = []
@@ -1660,12 +1730,55 @@ def render_lemma_cards(lemmas):
                     noun_type = (noun.get("type") or "").strip()
                     if noun_type:
                         detail_bits.append(noun_type.replace("_", " "))
+                    if noun.get("resolution_status"):
+                        detail_bits.append(str(noun.get("resolution_status")))
+                    if noun.get("wikidata_qid"):
+                        detail_bits.append(str(noun.get("wikidata_qid")))
+                    entity_label = str(noun.get("lemma_form") or noun.get("text_form") or english or "—")
+                    noun_id = noun.get("id")
+                    if noun_id:
+                        entity_href = html_module.escape(
+                            entity_editor_href(int(lemma.get("lemma_id") or 0), f"entity-{noun_id}")
+                        )
+                        entity_html = f"<a href=\"{entity_href}\">{html_module.escape(entity_label)}</a>"
+                    else:
+                        entity_html = html_module.escape(entity_label)
                     entity_rows.append(
                         (
-                            html_module.escape(str(noun.get("lemma_form") or "—")),
+                            entity_html,
                             html_module.escape(" · ".join(detail_bits) or "—"),
                         )
                     )
+                for cluster in place_clusters:
+                    label = str(
+                        cluster.get("display_label")
+                        or cluster.get("canonical_name")
+                        or f"Place cluster {cluster.get('cluster_index') or ''}"
+                    ).strip() or "Place cluster"
+                    cluster_id = cluster.get("id")
+                    if cluster_id:
+                        place_href = html_module.escape(
+                            entity_editor_href(int(lemma.get("lemma_id") or 0), f"place-cluster-{cluster_id}")
+                        )
+                        place_html = f"<a href=\"{place_href}\">{html_module.escape(label)}</a>"
+                    else:
+                        place_html = html_module.escape(label)
+
+                    detail_bits = ["place"]
+                    if cluster.get("place_type"):
+                        detail_bits.append(str(cluster.get("place_type")))
+                    if cluster.get("region"):
+                        detail_bits.append(str(cluster.get("region")))
+                    detail_bits.append("explicit" if cluster.get("explicit_name_present") else "implicit")
+                    if cluster.get("preferred_external_id_type") and cluster.get("preferred_external_id_value"):
+                        detail_bits.append(
+                            f"{cluster.get('preferred_external_id_type')}: {cluster.get('preferred_external_id_value')}"
+                        )
+                    elif cluster.get("wikidata_qid"):
+                        detail_bits.append(str(cluster.get("wikidata_qid")))
+                    if cluster.get("resolution_status"):
+                        detail_bits.append(str(cluster.get("resolution_status")))
+                    entity_rows.append((place_html, html_module.escape(" · ".join(detail_bits))))
                 metadata_sections.append(
                     render_matrix_metadata_table(
                         "Mentioned Entities",

@@ -389,20 +389,25 @@ def import_entity_resolution_actions(sqlite_cur, pg_cur) -> tuple[int, int, int]
 
         action = (row["action"] or "").strip().lower()
         qid = (row["qid"] or "").strip() or None
+        text_form = (row["text_form"] or "").strip() or None
+        lemma_form = (row["lemma_form"] or "").strip() or None
+        english = (row["english"] or "").strip() or None
+        noun_type = (row["noun_type"] or "").strip().lower() or None
+        if noun_type not in (None, "person", "place", "people", "deity", "other"):
+            noun_type = None
+        role = (row["role"] or "").strip().lower() or None
+        if role not in (None, "entity", "source"):
+            role = None
         notes = (row["notes"] or "").strip() or None
         reviewer = (row["reviewer_username"] or "").strip() or "import_reviews.py"
         reviewed_at = row["reviewed_at"] or None
 
         try:
             if action == "add_entity":
-                text_form = (row["text_form"] or "").strip()
-                lemma_form = (row["lemma_form"] or "").strip()
-                english = (row["english"] or "").strip() or None
-                noun_type = (row["noun_type"] or "").strip() or None
-                role = (row["role"] or "entity").strip() or "entity"
-                if role not in ("entity", "source"):
-                    role = "entity"
-                if lemma_id <= 0 or not (text_form and lemma_form):
+                add_text_form = text_form or ""
+                add_lemma_form = lemma_form or ""
+                add_role = role or "entity"
+                if lemma_id <= 0 or not (add_text_form and add_lemma_form):
                     skipped += 1
                     continue
                 pg_cur.execute(
@@ -425,11 +430,11 @@ def import_entity_resolution_actions(sqlite_cur, pg_cur) -> tuple[int, int, int]
                     """,
                     (
                         lemma_id,
-                        text_form,
-                        lemma_form,
+                        add_text_form,
+                        add_lemma_form,
                         english,
-                        noun_type,
-                        role,
+                        noun_type or "other",
+                        add_role,
                         qid,
                         notes,
                         reviewer,
@@ -460,11 +465,28 @@ def import_entity_resolution_actions(sqlite_cur, pg_cur) -> tuple[int, int, int]
                         human_resolution_status = 'corrected',
                         human_resolution_notes = %s,
                         human_resolved_by = %s,
-                        human_resolved_at = %s
+                        human_resolved_at = %s,
+                        proper_noun = COALESCE(%s, proper_noun),
+                        lemma_form = COALESCE(%s, lemma_form),
+                        english_translation = COALESCE(%s, english_translation),
+                        noun_type = COALESCE(%s, noun_type),
+                        role = COALESCE(%s, role)
                     WHERE id = %s
                       AND lemma_id = %s
                     """,
-                    (qid, notes, reviewer, reviewed_at, proper_noun_id, lemma_id),
+                    (
+                        qid,
+                        notes,
+                        reviewer,
+                        reviewed_at,
+                        text_form,
+                        lemma_form,
+                        english,
+                        noun_type,
+                        role,
+                        proper_noun_id,
+                        lemma_id,
+                    ),
                 )
                 applied += 1
                 continue
@@ -477,11 +499,28 @@ def import_entity_resolution_actions(sqlite_cur, pg_cur) -> tuple[int, int, int]
                         human_resolution_status = 'approved',
                         human_resolution_notes = %s,
                         human_resolved_by = %s,
-                        human_resolved_at = %s
+                        human_resolved_at = %s,
+                        proper_noun = COALESCE(%s, proper_noun),
+                        lemma_form = COALESCE(%s, lemma_form),
+                        english_translation = COALESCE(%s, english_translation),
+                        noun_type = COALESCE(%s, noun_type),
+                        role = COALESCE(%s, role)
                     WHERE id = %s
                       AND lemma_id = %s
                     """,
-                    (qid, notes, reviewer, reviewed_at, proper_noun_id, lemma_id),
+                    (
+                        qid,
+                        notes,
+                        reviewer,
+                        reviewed_at,
+                        text_form,
+                        lemma_form,
+                        english,
+                        noun_type,
+                        role,
+                        proper_noun_id,
+                        lemma_id,
+                    ),
                 )
                 applied += 1
                 continue
@@ -494,11 +533,27 @@ def import_entity_resolution_actions(sqlite_cur, pg_cur) -> tuple[int, int, int]
                         human_resolution_status = 'not_alignable',
                         human_resolution_notes = %s,
                         human_resolved_by = %s,
-                        human_resolved_at = %s
+                        human_resolved_at = %s,
+                        proper_noun = COALESCE(%s, proper_noun),
+                        lemma_form = COALESCE(%s, lemma_form),
+                        english_translation = COALESCE(%s, english_translation),
+                        noun_type = COALESCE(%s, noun_type),
+                        role = COALESCE(%s, role)
                     WHERE id = %s
                       AND lemma_id = %s
                     """,
-                    (notes, reviewer, reviewed_at, proper_noun_id, lemma_id),
+                    (
+                        notes,
+                        reviewer,
+                        reviewed_at,
+                        text_form,
+                        lemma_form,
+                        english,
+                        noun_type,
+                        role,
+                        proper_noun_id,
+                        lemma_id,
+                    ),
                 )
                 applied += 1
                 continue
@@ -1240,8 +1295,23 @@ def import_place_cluster_reviews(sqlite_cur, pg_cur) -> tuple[int, int, int]:
         log("WARNING: place_clusters missing; skipping place_cluster_reviews import.")
         return 0, 0, 0
 
+    optional_sqlite_columns = {
+        "chosen_manto_id": sqlite_column_exists(sqlite_cur, "place_cluster_reviews", "chosen_manto_id"),
+        "original_id": sqlite_column_exists(sqlite_cur, "place_cluster_reviews", "original_id"),
+        "jbk_id": sqlite_column_exists(sqlite_cur, "place_cluster_reviews", "jbk_id"),
+        "final_id": sqlite_column_exists(sqlite_cur, "place_cluster_reviews", "final_id"),
+    }
+    optional_selects = [
+        (
+            f"COALESCE({column}, '') AS {column}"
+            if exists
+            else f"'' AS {column}"
+        )
+        for column, exists in optional_sqlite_columns.items()
+    ]
+
     sqlite_cur.execute(
-        """
+        f"""
         SELECT
             cluster_id,
             lemma_id,
@@ -1255,6 +1325,7 @@ def import_place_cluster_reviews(sqlite_cur, pg_cur) -> tuple[int, int, int]:
             COALESCE(chosen_wikidata_qid, '') AS chosen_wikidata_qid,
             COALESCE(chosen_topostext_id, '') AS chosen_topostext_id,
             COALESCE(chosen_pleiades_id, '') AS chosen_pleiades_id,
+            {", ".join(optional_selects)},
             COALESCE(resolution_status, '') AS resolution_status,
             COALESCE(notes, '') AS notes,
             COALESCE(reviewer_username, '') AS reviewer_username,
@@ -1266,6 +1337,22 @@ def import_place_cluster_reviews(sqlite_cur, pg_cur) -> tuple[int, int, int]:
     rows = sqlite_cur.fetchall()
     if not rows:
         return 0, 0, 0
+
+    optional_pg_fields = [
+        (pg_field, sqlite_field)
+        for pg_field, sqlite_field in (
+            ("human_manto_id", "chosen_manto_id"),
+            ("human_original_id", "original_id"),
+            ("human_jbk_id", "jbk_id"),
+            ("human_final_id", "final_id"),
+        )
+        if pg_column_exists(pg_cur, "place_clusters", pg_field)
+    ]
+    if len(optional_pg_fields) < 4 and any(
+        (row["chosen_manto_id"] or row["original_id"] or row["jbk_id"] or row["final_id"])
+        for row in rows
+    ):
+        log("WARNING: place_clusters is missing one or more manual ID columns; some place-cluster ID review fields will not be imported.")
 
     applied = skipped = errors = 0
     for row in rows:
@@ -1294,45 +1381,61 @@ def import_place_cluster_reviews(sqlite_cur, pg_cur) -> tuple[int, int, int]:
         reviewed_at = row["reviewed_at"] or None
 
         try:
-            pg_cur.execute(
-                """
-                UPDATE place_clusters
-                SET human_display_label = %s,
-                    human_inferred_canonical_name = %s,
-                    human_place_type = %s,
-                    human_region = %s,
-                    human_explicit_name_present = %s,
-                    human_preferred_external_id_type = %s,
-                    human_preferred_external_id_value = %s,
-                    human_wikidata_qid = %s,
-                    human_topostext_id = %s,
-                    human_pleiades_id = %s,
-                    human_resolution_status = %s,
-                    human_resolution_notes = %s,
-                    human_resolved_by = %s,
-                    human_resolved_at = %s,
-                    updated_at = NOW()
-                WHERE id = %s
-                  AND lemma_id = %s
-                """,
-                (
-                    (row["display_label"] or "").strip() or None,
-                    (row["inferred_canonical_name"] or "").strip() or None,
-                    (row["place_type"] or "").strip() or None,
-                    (row["region"] or "").strip() or None,
-                    explicit_name_present,
-                    (row["preferred_external_id_type"] or "").strip() or None,
-                    (row["preferred_external_id_value"] or "").strip() or None,
-                    (row["chosen_wikidata_qid"] or "").strip() or None,
-                    (row["chosen_topostext_id"] or "").strip() or None,
-                    (row["chosen_pleiades_id"] or "").strip() or None,
+            set_clauses = [
+                "human_display_label = %s",
+                "human_inferred_canonical_name = %s",
+                "human_place_type = %s",
+                "human_region = %s",
+                "human_explicit_name_present = %s",
+                "human_preferred_external_id_type = %s",
+                "human_preferred_external_id_value = %s",
+                "human_wikidata_qid = %s",
+                "human_topostext_id = %s",
+                "human_pleiades_id = %s",
+            ]
+            values = [
+                (row["display_label"] or "").strip() or None,
+                (row["inferred_canonical_name"] or "").strip() or None,
+                (row["place_type"] or "").strip() or None,
+                (row["region"] or "").strip() or None,
+                explicit_name_present,
+                (row["preferred_external_id_type"] or "").strip() or None,
+                (row["preferred_external_id_value"] or "").strip() or None,
+                (row["chosen_wikidata_qid"] or "").strip() or None,
+                (row["chosen_topostext_id"] or "").strip() or None,
+                (row["chosen_pleiades_id"] or "").strip() or None,
+            ]
+            for pg_field, sqlite_field in optional_pg_fields:
+                set_clauses.append(f"{pg_field} = %s")
+                values.append((row[sqlite_field] or "").strip() or None)
+            set_clauses.extend(
+                [
+                    "human_resolution_status = %s",
+                    "human_resolution_notes = %s",
+                    "human_resolved_by = %s",
+                    "human_resolved_at = %s",
+                    "updated_at = NOW()",
+                ]
+            )
+            values.extend(
+                [
                     (row["resolution_status"] or "").strip() or None,
                     (row["notes"] or "").strip() or None,
                     reviewer,
                     reviewed_at,
                     cluster_id,
                     lemma_id,
-                ),
+                ]
+            )
+
+            pg_cur.execute(
+                f"""
+                UPDATE place_clusters
+                SET {", ".join(set_clauses)}
+                WHERE id = %s
+                  AND lemma_id = %s
+                """,
+                values,
             )
             applied += 1
         except Exception as exc:

@@ -132,6 +132,10 @@ CREATE TABLE IF NOT EXISTS place_cluster_reviews (
     chosen_wikidata_qid TEXT,
     chosen_topostext_id TEXT,
     chosen_pleiades_id TEXT,
+    chosen_manto_id TEXT,
+    original_id TEXT,
+    jbk_id TEXT,
+    final_id TEXT,
     resolution_status TEXT,
     notes TEXT,
     reviewer_username TEXT,
@@ -273,3 +277,32 @@ ON translation_guidance_urgent_scan_items(target_rule_key, status, updated_at);
 
 CREATE INDEX IF NOT EXISTS idx_translation_guidance_urgent_items_source
 ON translation_guidance_urgent_scan_items(target_rule_key, source_text_version_id);
+
+-- Local acknowledgement state for the guidance rule impacts to-do page.
+-- The exported JSON still describes potential impacts; this table records which
+-- ones the protected review UI has already checked or dismissed.
+CREATE TABLE IF NOT EXISTS guidance_rule_impact_acknowledgements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lemma_id INTEGER NOT NULL,
+    source_text_version_id TEXT NOT NULL DEFAULT '',
+    translation_variant_kind TEXT NOT NULL DEFAULT '',
+    translation_variant_id TEXT NOT NULL DEFAULT '',
+    match_id INTEGER NOT NULL DEFAULT 0,
+    rule_revision_id INTEGER NOT NULL DEFAULT 0,
+    impact_reason TEXT NOT NULL DEFAULT '',
+    acknowledged_by TEXT,
+    acknowledged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    notes TEXT,
+    UNIQUE (
+        lemma_id,
+        source_text_version_id,
+        translation_variant_kind,
+        translation_variant_id,
+        match_id,
+        rule_revision_id,
+        impact_reason
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_guidance_impact_acknowledgements_status
+ON guidance_rule_impact_acknowledgements(acknowledged_at, acknowledged_by, lemma_id);

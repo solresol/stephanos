@@ -53,7 +53,9 @@ Important rules:
 - One lemma may describe many different places that share the same name.
 - Later references can be implicit, such as "another city in the Peloponnese" or "a fortress in Ambracia", even when the headword is not repeated.
 - Keep different places separate even if they share the same canonical name.
+- Numbered, lettered, or ordinal lists usually indicate separate homonymous places. Treat markers such as α/β/γ, πρῶτον/δεύτερον/τρίτον, ἄλλη/ἕτερον, "first/second/third", and explicit regional phrases as split signals.
 - Treat places as distinct when the text gives a different region, settlement type, political affiliation, or descriptive context.
+- Prefer informative labels such as "Demetrion in Persis" or "Demetrion in Macedonia" over bare repeated labels when the region is known.
 - Extract only places for this task. People, deities, and cited sources are handled elsewhere.
 - Be conservative: if you are uncertain, explain the uncertainty in notes rather than collapsing distinct places together.
 """

@@ -63,6 +63,20 @@ def get_letter_slug(text: str) -> str:
     return LETTER_SLUGS.get(letter, "other")
 
 
+def pg_column_exists(cur, table_name: str, column_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s
+          AND column_name = %s
+        """,
+        (table_name, column_name),
+    )
+    return cur.fetchone() is not None
+
+
 def greek_sort_key(lemma: str, version: str) -> tuple:
     """
     Generate sort key for Greek alphabetical ordering.
@@ -1036,8 +1050,23 @@ def export_lemmas():
     has_place_clusters = bool(cur.fetchone()[0])
     if has_place_clusters:
         cluster_rows_by_id: dict[int, dict] = {}
+        optional_place_columns = {
+            "manto_id": pg_column_exists(cur, "place_clusters", "manto_id"),
+            "human_manto_id": pg_column_exists(cur, "place_clusters", "human_manto_id"),
+            "human_original_id": pg_column_exists(cur, "place_clusters", "human_original_id"),
+            "human_jbk_id": pg_column_exists(cur, "place_clusters", "human_jbk_id"),
+            "human_final_id": pg_column_exists(cur, "place_clusters", "human_final_id"),
+        }
+        optional_place_selects = [
+            (
+                f"COALESCE({column}, '') AS {column}"
+                if exists
+                else f"'' AS {column}"
+            )
+            for column, exists in optional_place_columns.items()
+        ]
         cur.execute(
-            """
+            f"""
             SELECT
                 id,
                 lemma_id,
@@ -1057,6 +1086,7 @@ def export_lemmas():
                 COALESCE(wikidata_confidence, '') AS wikidata_confidence,
                 COALESCE(topostext_id, '') AS topostext_id,
                 COALESCE(pleiades_id, '') AS pleiades_id,
+                {", ".join(optional_place_selects)},
                 COALESCE(resolution_status, '') AS resolution_status,
                 COALESCE(human_display_label, '') AS human_display_label,
                 COALESCE(human_inferred_canonical_name, '') AS human_inferred_canonical_name,
@@ -1096,6 +1126,11 @@ def export_lemmas():
                 wikidata_confidence,
                 topostext_id,
                 pleiades_id,
+                manto_id,
+                human_manto_id,
+                human_original_id,
+                human_jbk_id,
+                human_final_id,
                 resolution_status,
                 human_display_label,
                 human_inferred_canonical_name,
@@ -1130,6 +1165,7 @@ def export_lemmas():
                 "wikidata_confidence": wikidata_confidence or "",
                 "topostext_id": topostext_id or "",
                 "pleiades_id": pleiades_id or "",
+                "manto_id": manto_id or "",
                 "resolution_status": resolution_status or "",
                 "human_display_label": human_display_label or "",
                 "human_inferred_canonical_name": human_inferred_canonical_name or "",
@@ -1141,6 +1177,10 @@ def export_lemmas():
                 "human_wikidata_qid": human_wikidata_qid or "",
                 "human_topostext_id": human_topostext_id or "",
                 "human_pleiades_id": human_pleiades_id or "",
+                "human_manto_id": human_manto_id or "",
+                "human_original_id": human_original_id or "",
+                "human_jbk_id": human_jbk_id or "",
+                "human_final_id": human_final_id or "",
                 "human_resolution_status": human_resolution_status or "",
                 "human_resolution_notes": human_resolution_notes or "",
                 "human_resolved_by": human_resolved_by or "",

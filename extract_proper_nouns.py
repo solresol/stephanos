@@ -47,6 +47,10 @@ For each proper noun, provide:
 Do NOT extract:
 - Common nouns (river, mountain, city, etc.)
 - Adjectives derived from proper nouns unless they're used as substantives
+- Modern editors, editions, translators, commentators, or fragment collections that are cited by the printed edition rather than by Stephanos.
+  Examples: Parke, Wormell, Jacoby, Meineke, Billerbeck, FGrHist as a modern collection, RE / Pauly-Wissowa, and modern "fr. ... Editor" labels.
+- Modern editorial references must never be role="source". Only ancient authors or ancient works cited by Stephanos may be role="source".
+- If a modern editor labels an oracle or fragment, do not turn the editor into an ancient author/work. Leave that material out of proper_nouns; oracle handling is tracked separately.
 
 Greek text to analyze:
 {greek_text}"""

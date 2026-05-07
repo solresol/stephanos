@@ -144,6 +144,25 @@ type GuidanceRuleImpact struct {
 	RuleRevisionNumber     int    `json:"rule_revision_number"`
 	RuleRevisionCreatedAt  string `json:"rule_revision_created_at"`
 	ImpactReason           string `json:"impact_reason"`
+	Acknowledged           bool   `json:"-"`
+	AcknowledgedBy         string `json:"-"`
+	AcknowledgedAt         string `json:"-"`
+}
+
+func (impact GuidanceRuleImpact) AcknowledgedLabel() string {
+	if !impact.Acknowledged {
+		return ""
+	}
+	if strings.TrimSpace(impact.AcknowledgedBy) != "" && strings.TrimSpace(impact.AcknowledgedAt) != "" {
+		return strings.TrimSpace(impact.AcknowledgedBy) + " at " + strings.TrimSpace(impact.AcknowledgedAt)
+	}
+	if strings.TrimSpace(impact.AcknowledgedBy) != "" {
+		return strings.TrimSpace(impact.AcknowledgedBy)
+	}
+	if strings.TrimSpace(impact.AcknowledgedAt) != "" {
+		return strings.TrimSpace(impact.AcknowledgedAt)
+	}
+	return "acknowledged"
 }
 
 type PlaceMention struct {
@@ -191,6 +210,7 @@ type PlaceCluster struct {
 	WikidataConfidence              string           `json:"wikidata_confidence"`
 	ToposTextID                     string           `json:"topostext_id"`
 	PleiadesID                      string           `json:"pleiades_id"`
+	MantoID                         string           `json:"manto_id"`
 	ResolutionStatus                string           `json:"resolution_status"`
 	HumanDisplayLabel               string           `json:"human_display_label"`
 	HumanInferredCanonicalName      string           `json:"human_inferred_canonical_name"`
@@ -205,6 +225,10 @@ type PlaceCluster struct {
 	HumanWikidataDescription        string           `json:"human_wikidata_description"`
 	HumanToposTextID                string           `json:"human_topostext_id"`
 	HumanPleiadesID                 string           `json:"human_pleiades_id"`
+	HumanMantoID                    string           `json:"human_manto_id"`
+	HumanOriginalID                 string           `json:"human_original_id"`
+	HumanJBKID                      string           `json:"human_jbk_id"`
+	HumanFinalID                    string           `json:"human_final_id"`
 	HumanResolutionStatus           string           `json:"human_resolution_status"`
 	HumanResolutionNotes            string           `json:"human_resolution_notes"`
 	HumanResolvedBy                 string           `json:"human_resolved_by"`
@@ -221,6 +245,10 @@ type PlaceCluster struct {
 	EffectiveWikidataDescription    string           `json:"-"`
 	EffectiveToposTextID            string           `json:"-"`
 	EffectivePleiadesID             string           `json:"-"`
+	EffectiveMantoID                string           `json:"-"`
+	EffectiveOriginalID             string           `json:"-"`
+	EffectiveJBKID                  string           `json:"-"`
+	EffectiveFinalID                string           `json:"-"`
 	EffectiveResolutionStatus       string           `json:"-"`
 	EffectiveResolutionSource       string           `json:"-"`
 	PendingImport                   bool             `json:"pending_import,omitempty"`
@@ -241,6 +269,10 @@ type PlaceClusterReview struct {
 	ChosenWikidataQID        string
 	ChosenToposTextID        string
 	ChosenPleiadesID         string
+	ChosenMantoID            string
+	OriginalID               string
+	JBKID                    string
+	FinalID                  string
 	ResolutionStatus         string
 	Notes                    string
 	ReviewerUsername         string
@@ -517,15 +549,46 @@ func OpenDatabase(dbPath string) (*sql.DB, error) {
 			explicit_name_present INTEGER,
 			preferred_external_id_type TEXT,
 			preferred_external_id_value TEXT,
-			chosen_wikidata_qid TEXT,
-			chosen_topostext_id TEXT,
-			chosen_pleiades_id TEXT,
-			resolution_status TEXT,
-			notes TEXT,
-			reviewer_username TEXT,
-			reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		)`,
+				chosen_wikidata_qid TEXT,
+				chosen_topostext_id TEXT,
+				chosen_pleiades_id TEXT,
+				chosen_manto_id TEXT,
+				original_id TEXT,
+				jbk_id TEXT,
+				final_id TEXT,
+				resolution_status TEXT,
+				notes TEXT,
+				reviewer_username TEXT,
+				reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			)`,
+		"ALTER TABLE place_cluster_reviews ADD COLUMN chosen_manto_id TEXT",
+		"ALTER TABLE place_cluster_reviews ADD COLUMN original_id TEXT",
+		"ALTER TABLE place_cluster_reviews ADD COLUMN jbk_id TEXT",
+		"ALTER TABLE place_cluster_reviews ADD COLUMN final_id TEXT",
 		"CREATE INDEX IF NOT EXISTS idx_place_cluster_reviews_lemma ON place_cluster_reviews(lemma_id, reviewed_at, cluster_id)",
+		`CREATE TABLE IF NOT EXISTS guidance_rule_impact_acknowledgements (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			lemma_id INTEGER NOT NULL,
+			source_text_version_id TEXT NOT NULL DEFAULT '',
+			translation_variant_kind TEXT NOT NULL DEFAULT '',
+			translation_variant_id TEXT NOT NULL DEFAULT '',
+			match_id INTEGER NOT NULL DEFAULT 0,
+			rule_revision_id INTEGER NOT NULL DEFAULT 0,
+			impact_reason TEXT NOT NULL DEFAULT '',
+			acknowledged_by TEXT,
+			acknowledged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			notes TEXT,
+			UNIQUE (
+				lemma_id,
+				source_text_version_id,
+				translation_variant_kind,
+				translation_variant_id,
+				match_id,
+				rule_revision_id,
+				impact_reason
+			)
+		)`,
+		"CREATE INDEX IF NOT EXISTS idx_guidance_impact_acknowledgements_status ON guidance_rule_impact_acknowledgements(acknowledged_at, acknowledged_by, lemma_id)",
 	}
 	for _, migration := range migrations {
 		db.Exec(migration) // Ignore errors (column may already exist)
@@ -554,6 +617,206 @@ func OpenReadOnlyDatabaseIfExists(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 	return db, nil
+}
+
+type GuidanceImpactAcknowledgement struct {
+	LemmaID                int
+	SourceTextVersionID    string
+	TranslationVariantKind string
+	TranslationVariantID   string
+	MatchID                int
+	RuleRevisionID         int
+	ImpactReason           string
+	AcknowledgedBy         string
+	AcknowledgedAt         string
+	Notes                  string
+}
+
+func guidanceImpactAcknowledgementKey(
+	lemmaID int,
+	sourceTextVersionID string,
+	translationVariantKind string,
+	translationVariantID string,
+	matchID int,
+	ruleRevisionID int,
+	impactReason string,
+) string {
+	return fmt.Sprintf(
+		"%d|%s|%s|%s|%d|%d|%s",
+		lemmaID,
+		strings.TrimSpace(sourceTextVersionID),
+		strings.TrimSpace(translationVariantKind),
+		strings.TrimSpace(translationVariantID),
+		matchID,
+		ruleRevisionID,
+		strings.TrimSpace(impactReason),
+	)
+}
+
+func GuidanceImpactKey(impact GuidanceRuleImpact) string {
+	return guidanceImpactAcknowledgementKey(
+		impact.LemmaID,
+		impact.SourceTextVersionID,
+		impact.TranslationVariantKind,
+		impact.TranslationVariantID,
+		impact.MatchID,
+		impact.RuleRevisionID,
+		impact.ImpactReason,
+	)
+}
+
+func FetchGuidanceImpactAcknowledgements(db *sql.DB) (map[string]GuidanceImpactAcknowledgement, error) {
+	acks := map[string]GuidanceImpactAcknowledgement{}
+	if db == nil {
+		return acks, nil
+	}
+	rows, err := db.Query(
+		`
+		SELECT
+			lemma_id,
+			COALESCE(source_text_version_id, ''),
+			COALESCE(translation_variant_kind, ''),
+			COALESCE(translation_variant_id, ''),
+			match_id,
+			rule_revision_id,
+			COALESCE(impact_reason, ''),
+			COALESCE(acknowledged_by, ''),
+			COALESCE(acknowledged_at, ''),
+			COALESCE(notes, '')
+		FROM guidance_rule_impact_acknowledgements
+		`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var ack GuidanceImpactAcknowledgement
+		if err := rows.Scan(
+			&ack.LemmaID,
+			&ack.SourceTextVersionID,
+			&ack.TranslationVariantKind,
+			&ack.TranslationVariantID,
+			&ack.MatchID,
+			&ack.RuleRevisionID,
+			&ack.ImpactReason,
+			&ack.AcknowledgedBy,
+			&ack.AcknowledgedAt,
+			&ack.Notes,
+		); err != nil {
+			return nil, err
+		}
+		key := guidanceImpactAcknowledgementKey(
+			ack.LemmaID,
+			ack.SourceTextVersionID,
+			ack.TranslationVariantKind,
+			ack.TranslationVariantID,
+			ack.MatchID,
+			ack.RuleRevisionID,
+			ack.ImpactReason,
+		)
+		acks[key] = ack
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return acks, nil
+}
+
+func ApplyGuidanceImpactAcknowledgements(impacts []GuidanceRuleImpact, acks map[string]GuidanceImpactAcknowledgement) {
+	if len(acks) == 0 {
+		return
+	}
+	for i := range impacts {
+		ack, ok := acks[GuidanceImpactKey(impacts[i])]
+		if !ok {
+			continue
+		}
+		impacts[i].Acknowledged = true
+		impacts[i].AcknowledgedBy = ack.AcknowledgedBy
+		impacts[i].AcknowledgedAt = ack.AcknowledgedAt
+	}
+}
+
+func SaveGuidanceImpactAcknowledgement(
+	db *sql.DB,
+	ack GuidanceImpactAcknowledgement,
+	username string,
+) error {
+	if db == nil || ack.LemmaID <= 0 || ack.MatchID <= 0 || ack.RuleRevisionID <= 0 {
+		return nil
+	}
+	_, err := db.Exec(
+		`
+		INSERT INTO guidance_rule_impact_acknowledgements (
+			lemma_id,
+			source_text_version_id,
+			translation_variant_kind,
+			translation_variant_id,
+			match_id,
+			rule_revision_id,
+			impact_reason,
+			acknowledged_by,
+			acknowledged_at,
+			notes
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+		ON CONFLICT (
+			lemma_id,
+			source_text_version_id,
+			translation_variant_kind,
+			translation_variant_id,
+			match_id,
+			rule_revision_id,
+			impact_reason
+		) DO UPDATE SET
+			acknowledged_by = excluded.acknowledged_by,
+			acknowledged_at = CURRENT_TIMESTAMP,
+			notes = excluded.notes
+		`,
+		ack.LemmaID,
+		strings.TrimSpace(ack.SourceTextVersionID),
+		strings.TrimSpace(ack.TranslationVariantKind),
+		strings.TrimSpace(ack.TranslationVariantID),
+		ack.MatchID,
+		ack.RuleRevisionID,
+		strings.TrimSpace(ack.ImpactReason),
+		username,
+		ack.Notes,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save guidance impact acknowledgement: %w", err)
+	}
+	return nil
+}
+
+func DeleteGuidanceImpactAcknowledgement(db *sql.DB, ack GuidanceImpactAcknowledgement) error {
+	if db == nil || ack.LemmaID <= 0 || ack.MatchID <= 0 || ack.RuleRevisionID <= 0 {
+		return nil
+	}
+	_, err := db.Exec(
+		`
+		DELETE FROM guidance_rule_impact_acknowledgements
+		WHERE lemma_id = ?
+		  AND source_text_version_id = ?
+		  AND translation_variant_kind = ?
+		  AND translation_variant_id = ?
+		  AND match_id = ?
+		  AND rule_revision_id = ?
+		  AND impact_reason = ?
+		`,
+		ack.LemmaID,
+		strings.TrimSpace(ack.SourceTextVersionID),
+		strings.TrimSpace(ack.TranslationVariantKind),
+		strings.TrimSpace(ack.TranslationVariantID),
+		ack.MatchID,
+		ack.RuleRevisionID,
+		strings.TrimSpace(ack.ImpactReason),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete guidance impact acknowledgement: %w", err)
+	}
+	return nil
 }
 
 type CanonicalMembership struct {
@@ -882,6 +1145,16 @@ func normalizeEntityRole(role string) string {
 	return "entity"
 }
 
+func normalizeEntityType(nounType string) string {
+	nounType = strings.TrimSpace(strings.ToLower(nounType))
+	switch nounType {
+	case "person", "place", "people", "deity", "other":
+		return nounType
+	default:
+		return ""
+	}
+}
+
 func normalizeHumanResolutionStatus(status string) string {
 	status = strings.TrimSpace(strings.ToLower(status))
 	switch status {
@@ -900,7 +1173,10 @@ func recomputeProperNounResolution(pn *ProperNoun) {
 	pn.TextForm = strings.TrimSpace(pn.TextForm)
 	pn.LemmaForm = strings.TrimSpace(pn.LemmaForm)
 	pn.English = strings.TrimSpace(pn.English)
-	pn.Type = strings.TrimSpace(pn.Type)
+	pn.Type = normalizeEntityType(pn.Type)
+	if pn.Type == "" {
+		pn.Type = "other"
+	}
 	pn.Role = normalizeEntityRole(pn.Role)
 	pn.Citation = strings.TrimSpace(pn.Citation)
 	pn.WorkTitle = strings.TrimSpace(pn.WorkTitle)
@@ -1060,7 +1336,7 @@ func InsertEntityResolutionAction(
 	textForm = strings.TrimSpace(textForm)
 	lemmaForm = strings.TrimSpace(lemmaForm)
 	english = strings.TrimSpace(english)
-	nounType = strings.TrimSpace(nounType)
+	nounType = normalizeEntityType(nounType)
 	role = normalizeEntityRole(role)
 	notes = strings.TrimSpace(notes)
 
@@ -1082,12 +1358,12 @@ func InsertEntityResolutionAction(
 		if textForm == "" || lemmaForm == "" {
 			return nil
 		}
-		if nounType == "" {
-			nounType = "other"
-		}
 		properNounID = 0
 	} else if properNounID <= 0 {
 		return nil
+	}
+	if nounType == "" {
+		nounType = "other"
 	}
 
 	var properNounValue interface{}
@@ -1127,6 +1403,27 @@ func InsertEntityResolutionAction(
 		return fmt.Errorf("failed to insert entity action: %w", err)
 	}
 	return nil
+}
+
+func applyEntityTextCorrections(pn *ProperNoun, action EntityResolutionAction) {
+	if pn == nil {
+		return
+	}
+	if value := strings.TrimSpace(action.TextForm); value != "" {
+		pn.TextForm = value
+	}
+	if value := strings.TrimSpace(action.LemmaForm); value != "" {
+		pn.LemmaForm = value
+	}
+	if value := strings.TrimSpace(action.English); value != "" {
+		pn.English = value
+	}
+	if value := normalizeEntityType(action.NounType); value != "" {
+		pn.Type = value
+	}
+	if strings.TrimSpace(action.Role) != "" {
+		pn.Role = normalizeEntityRole(action.Role)
+	}
 }
 
 func ApplyEntityResolutionActions(baseline []ProperNoun, actions []EntityResolutionAction) []ProperNoun {
@@ -1180,6 +1477,7 @@ func ApplyEntityResolutionActions(baseline []ProperNoun, actions []EntityResolut
 			}
 			pn := &resolved[idx]
 			pn.PendingImport = true
+			applyEntityTextCorrections(pn, action)
 			switch action.Action {
 			case "set_qid":
 				pn.HumanWikidataQID = action.QID
@@ -1236,7 +1534,7 @@ func normalizePlaceResolutionStatus(status string) string {
 func normalizePreferredExternalIDType(idType string) string {
 	idType = strings.TrimSpace(strings.ToLower(idType))
 	switch idType {
-	case "topostext", "wikidata", "pleiades", "re", "none":
+	case "topostext", "wikidata", "pleiades", "manto", "re", "none":
 		return idType
 	default:
 		return ""
@@ -1278,6 +1576,7 @@ func normalizePlaceCluster(cluster *PlaceCluster) {
 	cluster.WikidataConfidence = strings.TrimSpace(cluster.WikidataConfidence)
 	cluster.ToposTextID = strings.TrimSpace(cluster.ToposTextID)
 	cluster.PleiadesID = strings.TrimSpace(cluster.PleiadesID)
+	cluster.MantoID = strings.TrimSpace(cluster.MantoID)
 	cluster.ResolutionStatus = strings.TrimSpace(cluster.ResolutionStatus)
 	cluster.HumanDisplayLabel = strings.TrimSpace(cluster.HumanDisplayLabel)
 	cluster.HumanInferredCanonicalName = strings.TrimSpace(cluster.HumanInferredCanonicalName)
@@ -1290,6 +1589,10 @@ func normalizePlaceCluster(cluster *PlaceCluster) {
 	cluster.HumanWikidataDescription = strings.TrimSpace(cluster.HumanWikidataDescription)
 	cluster.HumanToposTextID = strings.TrimSpace(cluster.HumanToposTextID)
 	cluster.HumanPleiadesID = strings.TrimSpace(cluster.HumanPleiadesID)
+	cluster.HumanMantoID = strings.TrimSpace(cluster.HumanMantoID)
+	cluster.HumanOriginalID = strings.TrimSpace(cluster.HumanOriginalID)
+	cluster.HumanJBKID = strings.TrimSpace(cluster.HumanJBKID)
+	cluster.HumanFinalID = strings.TrimSpace(cluster.HumanFinalID)
 	cluster.HumanResolutionStatus = normalizePlaceResolutionStatus(cluster.HumanResolutionStatus)
 	cluster.HumanResolutionNotes = strings.TrimSpace(cluster.HumanResolutionNotes)
 	cluster.HumanResolvedBy = strings.TrimSpace(cluster.HumanResolvedBy)
@@ -1356,6 +1659,10 @@ func recomputePlaceClusterResolution(cluster *PlaceCluster) {
 	cluster.EffectiveWikidataDescription = cluster.WikidataDescription
 	cluster.EffectiveToposTextID = cluster.ToposTextID
 	cluster.EffectivePleiadesID = cluster.PleiadesID
+	cluster.EffectiveMantoID = cluster.MantoID
+	cluster.EffectiveOriginalID = cluster.HumanOriginalID
+	cluster.EffectiveJBKID = cluster.HumanJBKID
+	cluster.EffectiveFinalID = cluster.HumanFinalID
 	cluster.EffectiveResolutionStatus = strings.TrimSpace(cluster.ResolutionStatus)
 	cluster.EffectiveResolutionSource = ""
 
@@ -1365,6 +1672,8 @@ func recomputePlaceClusterResolution(cluster *PlaceCluster) {
 			cluster.EffectivePreferredExternalType = cluster.HumanPreferredExternalIDType
 		} else if cluster.HumanToposTextID != "" {
 			cluster.EffectivePreferredExternalType = "topostext"
+		} else if cluster.HumanMantoID != "" {
+			cluster.EffectivePreferredExternalType = "manto"
 		} else if cluster.HumanWikidataQID != "" {
 			cluster.EffectivePreferredExternalType = "wikidata"
 		} else if cluster.HumanPleiadesID != "" {
@@ -1374,6 +1683,8 @@ func recomputePlaceClusterResolution(cluster *PlaceCluster) {
 			cluster.EffectivePreferredExternalValue = cluster.HumanPreferredExternalIDValue
 		} else if cluster.HumanToposTextID != "" {
 			cluster.EffectivePreferredExternalValue = cluster.HumanToposTextID
+		} else if cluster.HumanMantoID != "" {
+			cluster.EffectivePreferredExternalValue = cluster.HumanMantoID
 		} else if cluster.HumanWikidataQID != "" {
 			cluster.EffectivePreferredExternalValue = cluster.HumanWikidataQID
 		} else if cluster.HumanPleiadesID != "" {
@@ -1388,6 +1699,7 @@ func recomputePlaceClusterResolution(cluster *PlaceCluster) {
 		}
 		cluster.EffectiveToposTextID = cluster.HumanToposTextID
 		cluster.EffectivePleiadesID = cluster.HumanPleiadesID
+		cluster.EffectiveMantoID = cluster.HumanMantoID
 		cluster.EffectiveResolutionStatus = cluster.HumanResolutionStatus
 		cluster.EffectiveResolutionSource = "human"
 	case "approved":
@@ -1412,6 +1724,9 @@ func recomputePlaceClusterResolution(cluster *PlaceCluster) {
 		if cluster.HumanPleiadesID != "" {
 			cluster.EffectivePleiadesID = cluster.HumanPleiadesID
 		}
+		if cluster.HumanMantoID != "" {
+			cluster.EffectiveMantoID = cluster.HumanMantoID
+		}
 		cluster.EffectiveResolutionStatus = "approved"
 		cluster.EffectiveResolutionSource = "human"
 	case "not_alignable":
@@ -1422,6 +1737,7 @@ func recomputePlaceClusterResolution(cluster *PlaceCluster) {
 		cluster.EffectiveWikidataDescription = ""
 		cluster.EffectiveToposTextID = ""
 		cluster.EffectivePleiadesID = ""
+		cluster.EffectiveMantoID = ""
 		cluster.EffectiveResolutionStatus = "not_alignable"
 		cluster.EffectiveResolutionSource = "human"
 	case "removed":
@@ -1432,18 +1748,22 @@ func recomputePlaceClusterResolution(cluster *PlaceCluster) {
 		cluster.EffectiveWikidataDescription = ""
 		cluster.EffectiveToposTextID = ""
 		cluster.EffectivePleiadesID = ""
+		cluster.EffectiveMantoID = ""
+		cluster.EffectiveOriginalID = ""
+		cluster.EffectiveJBKID = ""
+		cluster.EffectiveFinalID = ""
 		cluster.EffectiveResolutionStatus = "removed"
 		cluster.EffectiveResolutionSource = "human"
 	default:
 		if cluster.EffectiveResolutionStatus == "" {
 			switch {
-			case cluster.EffectiveWikidataQID != "", cluster.EffectiveToposTextID != "", cluster.EffectivePleiadesID != "":
+			case cluster.EffectiveWikidataQID != "", cluster.EffectiveToposTextID != "", cluster.EffectivePleiadesID != "", cluster.EffectiveMantoID != "":
 				cluster.EffectiveResolutionStatus = "candidate"
 			default:
 				cluster.EffectiveResolutionStatus = "unresolved"
 			}
 		}
-		if cluster.EffectiveWikidataQID != "" || cluster.EffectiveToposTextID != "" || cluster.EffectivePleiadesID != "" {
+		if cluster.EffectiveWikidataQID != "" || cluster.EffectiveToposTextID != "" || cluster.EffectivePleiadesID != "" || cluster.EffectiveMantoID != "" {
 			cluster.EffectiveResolutionSource = "machine"
 		}
 	}
@@ -1473,11 +1793,15 @@ func FetchPlaceClusterReviews(db *sql.DB, lemmaID int) ([]PlaceClusterReview, er
 			explicit_name_present,
 			COALESCE(preferred_external_id_type, ''),
 			COALESCE(preferred_external_id_value, ''),
-			COALESCE(chosen_wikidata_qid, ''),
-			COALESCE(chosen_topostext_id, ''),
-			COALESCE(chosen_pleiades_id, ''),
-			COALESCE(resolution_status, ''),
-			COALESCE(notes, ''),
+				COALESCE(chosen_wikidata_qid, ''),
+				COALESCE(chosen_topostext_id, ''),
+				COALESCE(chosen_pleiades_id, ''),
+				COALESCE(chosen_manto_id, ''),
+				COALESCE(original_id, ''),
+				COALESCE(jbk_id, ''),
+				COALESCE(final_id, ''),
+				COALESCE(resolution_status, ''),
+				COALESCE(notes, ''),
 			COALESCE(reviewer_username, ''),
 			COALESCE(reviewed_at, '')
 		FROM place_cluster_reviews
@@ -1508,6 +1832,10 @@ func FetchPlaceClusterReviews(db *sql.DB, lemmaID int) ([]PlaceClusterReview, er
 			&review.ChosenWikidataQID,
 			&review.ChosenToposTextID,
 			&review.ChosenPleiadesID,
+			&review.ChosenMantoID,
+			&review.OriginalID,
+			&review.JBKID,
+			&review.FinalID,
 			&review.ResolutionStatus,
 			&review.Notes,
 			&review.ReviewerUsername,
@@ -1548,6 +1876,10 @@ func SavePlaceClusterReview(
 	review.ChosenWikidataQID = strings.TrimSpace(review.ChosenWikidataQID)
 	review.ChosenToposTextID = strings.TrimSpace(review.ChosenToposTextID)
 	review.ChosenPleiadesID = strings.TrimSpace(review.ChosenPleiadesID)
+	review.ChosenMantoID = strings.TrimSpace(review.ChosenMantoID)
+	review.OriginalID = strings.TrimSpace(review.OriginalID)
+	review.JBKID = strings.TrimSpace(review.JBKID)
+	review.FinalID = strings.TrimSpace(review.FinalID)
 	review.ResolutionStatus = normalizePlaceResolutionStatus(review.ResolutionStatus)
 	review.Notes = strings.TrimSpace(review.Notes)
 
@@ -1563,14 +1895,18 @@ func SavePlaceClusterReview(
 			explicit_name_present,
 			preferred_external_id_type,
 			preferred_external_id_value,
-			chosen_wikidata_qid,
-			chosen_topostext_id,
-			chosen_pleiades_id,
-			resolution_status,
+				chosen_wikidata_qid,
+				chosen_topostext_id,
+				chosen_pleiades_id,
+				chosen_manto_id,
+				original_id,
+				jbk_id,
+				final_id,
+				resolution_status,
 			notes,
 			reviewer_username,
 			reviewed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(cluster_id) DO UPDATE SET
 			lemma_id = excluded.lemma_id,
 			display_label = excluded.display_label,
@@ -1580,10 +1916,14 @@ func SavePlaceClusterReview(
 			explicit_name_present = excluded.explicit_name_present,
 			preferred_external_id_type = excluded.preferred_external_id_type,
 			preferred_external_id_value = excluded.preferred_external_id_value,
-			chosen_wikidata_qid = excluded.chosen_wikidata_qid,
-			chosen_topostext_id = excluded.chosen_topostext_id,
-			chosen_pleiades_id = excluded.chosen_pleiades_id,
-			resolution_status = excluded.resolution_status,
+				chosen_wikidata_qid = excluded.chosen_wikidata_qid,
+				chosen_topostext_id = excluded.chosen_topostext_id,
+				chosen_pleiades_id = excluded.chosen_pleiades_id,
+				chosen_manto_id = excluded.chosen_manto_id,
+				original_id = excluded.original_id,
+				jbk_id = excluded.jbk_id,
+				final_id = excluded.final_id,
+				resolution_status = excluded.resolution_status,
 			notes = excluded.notes,
 			reviewer_username = excluded.reviewer_username,
 			reviewed_at = excluded.reviewed_at
@@ -1600,6 +1940,10 @@ func SavePlaceClusterReview(
 		review.ChosenWikidataQID,
 		review.ChosenToposTextID,
 		review.ChosenPleiadesID,
+		review.ChosenMantoID,
+		review.OriginalID,
+		review.JBKID,
+		review.FinalID,
 		review.ResolutionStatus,
 		review.Notes,
 		username,
@@ -1642,6 +1986,18 @@ func placeClusterReviewDiffers(cluster PlaceCluster, review PlaceClusterReview) 
 	if strings.TrimSpace(cluster.HumanPleiadesID) != strings.TrimSpace(review.ChosenPleiadesID) {
 		return true
 	}
+	if strings.TrimSpace(cluster.HumanMantoID) != strings.TrimSpace(review.ChosenMantoID) {
+		return true
+	}
+	if strings.TrimSpace(cluster.HumanOriginalID) != strings.TrimSpace(review.OriginalID) {
+		return true
+	}
+	if strings.TrimSpace(cluster.HumanJBKID) != strings.TrimSpace(review.JBKID) {
+		return true
+	}
+	if strings.TrimSpace(cluster.HumanFinalID) != strings.TrimSpace(review.FinalID) {
+		return true
+	}
 	if strings.TrimSpace(cluster.HumanResolutionStatus) != strings.TrimSpace(review.ResolutionStatus) {
 		return true
 	}
@@ -1681,6 +2037,10 @@ func ApplyPlaceClusterReviews(baseline []PlaceCluster, reviews []PlaceClusterRev
 		cluster.HumanWikidataQID = strings.TrimSpace(review.ChosenWikidataQID)
 		cluster.HumanToposTextID = strings.TrimSpace(review.ChosenToposTextID)
 		cluster.HumanPleiadesID = strings.TrimSpace(review.ChosenPleiadesID)
+		cluster.HumanMantoID = strings.TrimSpace(review.ChosenMantoID)
+		cluster.HumanOriginalID = strings.TrimSpace(review.OriginalID)
+		cluster.HumanJBKID = strings.TrimSpace(review.JBKID)
+		cluster.HumanFinalID = strings.TrimSpace(review.FinalID)
 		cluster.HumanResolutionStatus = normalizePlaceResolutionStatus(review.ResolutionStatus)
 		cluster.HumanResolutionNotes = strings.TrimSpace(review.Notes)
 		cluster.HumanResolvedBy = strings.TrimSpace(review.ReviewerUsername)

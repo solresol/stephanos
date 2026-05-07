@@ -38,6 +38,14 @@ e.g. patterns like:
 Return a list of citation-units. The unit is:
   author + work + book + other identifiers (all together).
 
+Only extract ancient source citations that Stephanos is citing. Do not extract
+modern editors, editions, translators, commentaries, or fragment collections as
+authors or works. Parke, Wormell, Jacoby, Meineke, Billerbeck, FGrHist as a
+modern collection, RE / Pauly-Wissowa, and "fr. ... Editor" labels are modern
+apparatus/reference data, not ancient source authors. If such material labels an
+oracle or fragment, keep the ancient author/work if one is explicit, otherwise
+do not create a source-citation unit for the modern editor.
+
 For each unit, provide:
 - author_lemma_form (Greek canonical form; required)
 - author_english (English name; optional)

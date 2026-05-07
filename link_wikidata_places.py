@@ -26,7 +26,6 @@ import requests
 from openai import OpenAI
 
 from api_keys import load_api_key
-from db import get_connection
 
 # Wikidata SPARQL endpoint
 WIKIDATA_ENDPOINT = "https://query.wikidata.org/sparql"
@@ -75,6 +74,32 @@ EXCLUDE_TYPES = [
     "Q431289",     # brand
     "Q35127",      # website
     "Q1002812",    # periodic publication
+]
+
+ANCIENT_PLACE_KEYWORDS = [
+    "ancient",
+    "archaeological",
+    "historical",
+    "greek",
+    "roman",
+    "polis",
+    "classical",
+    "hellenistic",
+    "byzantine",
+]
+
+DISQUALIFYING_PLACE_PATTERNS = [
+    re.compile(r"\btitular see\b", re.IGNORECASE),
+    re.compile(r"\bdiocese\b", re.IGNORECASE),
+    re.compile(r"\barchdiocese\b", re.IGNORECASE),
+    re.compile(r"\bbishopric\b", re.IGNORECASE),
+    re.compile(r"\bepiscopal see\b", re.IGNORECASE),
+    re.compile(r"\bmint\b", re.IGNORECASE),
+    re.compile(r"\bcoin(?:age)?\b", re.IGNORECASE),
+    re.compile(r"\bdiscovery site\b", re.IGNORECASE),
+    re.compile(r"\btype locality\b", re.IGNORECASE),
+    re.compile(r"\badministrative territorial entity\b", re.IGNORECASE),
+    re.compile(r"\bmunicipality\b", re.IGNORECASE),
 ]
 
 # Wikidata properties
@@ -126,6 +151,40 @@ def is_within_ancient_world(lat: float, lon: float) -> bool:
     bounds = ANCIENT_WORLD_BOUNDS
     return (bounds["min_lon"] <= lon <= bounds["max_lon"] and
             bounds["min_lat"] <= lat <= bounds["max_lat"])
+
+
+def has_disqualifying_place_context(candidate: dict) -> bool:
+    """Return true for Wikidata hits that are about later institutions or metadata, not the ancient place."""
+    text = " ".join(
+        str(part or "")
+        for part in [
+            candidate.get("label"),
+            candidate.get("description"),
+            " ".join(candidate.get("type_labels", [])),
+        ]
+    )
+    return any(pattern.search(text) for pattern in DISQUALIFYING_PLACE_PATTERNS)
+
+
+def has_positive_ancient_place_signal(candidate: dict) -> bool:
+    """Require a positive ancient-place signal instead of relying on a blacklist alone."""
+    if has_disqualifying_place_context(candidate):
+        return False
+    types = set(candidate.get("types", []))
+    if types.intersection(ANCIENT_PLACE_TYPES):
+        return True
+    if candidate.get("pleiades_id"):
+        return True
+    searchable = " ".join(
+        str(part or "").lower()
+        for part in [
+            candidate.get("description"),
+            " ".join(candidate.get("type_labels", [])),
+        ]
+    )
+    return any(keyword in searchable for keyword in ANCIENT_PLACE_KEYWORDS)
+
+
 def normalize_place_name(name: str) -> list:
     """
     Generate search variants for a place name.
@@ -335,29 +394,26 @@ def query_wikidata_places(name_greek: str, name_english: str = None) -> list:
                 if any(c["qid"] == qid for c in candidates):
                     continue
 
-                # Score based on how "ancient" the place seems
-                is_ancient = any(t in ANCIENT_PLACE_TYPES for t in data["types"])
-                has_pleiades = data["pleiades_id"] is not None
-                has_coords = data["lat"] is not None
-
-                # Keywords suggesting ancient places
-                ancient_keywords = ['ancient', 'archaeological', 'historical', 'greek', 'roman',
-                                   'polis', 'classical', 'hellenistic', 'byzantine']
-                desc_lower = (data["description"] or "").lower()
-                type_str = " ".join(data["type_labels"]).lower()
-                has_ancient_keyword = any(kw in desc_lower or kw in type_str for kw in ancient_keywords)
-
                 # Check if this is an excluded type (human, film, taxon, etc.)
                 is_excluded = any(t in EXCLUDE_TYPES for t in data["types"])
                 if is_excluded:
                     continue  # Skip non-place entities
+
+                if has_disqualifying_place_context(data):
+                    print(f"    Skipping {qid} ({data['label']}): later institution or non-place context")
+                    continue
+
+                is_ancient_place = has_positive_ancient_place_signal(data)
+                if not is_ancient_place:
+                    print(f"    Skipping {qid} ({data['label']}): no positive ancient-place signal")
+                    continue
 
                 # Check if coordinates are within the ancient world
                 if not is_within_ancient_world(data["lat"], data["lon"]):
                     print(f"    Skipping {qid} ({data['label']}): coordinates {data['lat']}, {data['lon']} outside ancient world")
                     continue
 
-                data["is_ancient_place"] = is_ancient or has_pleiades or has_ancient_keyword
+                data["is_ancient_place"] = is_ancient_place
                 data["types"] = list(data["types"])
                 data["type_labels"] = list(data["type_labels"])
 
@@ -532,6 +588,8 @@ def update_place_link(cur, lemma_id: int, qid: str, label: str, confidence: str,
 
 
 def main():
+    from db import get_connection
+
     parser = argparse.ArgumentParser(description="Link lemma headwords to Wikidata places")
     parser.add_argument("--limit", type=int, help="Maximum number of entries to process")
     parser.add_argument("--relink", action="store_true", help="Re-process already linked entries")

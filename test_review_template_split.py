@@ -45,6 +45,16 @@ class ReviewTemplateSplitTests(unittest.TestCase):
         self.assertIn("Remove place", template)
         self.assertIn("Add missed entity", template)
         self.assertIn('/cgi-bin/review.cgi?id={{.Lemma.ID}}', template)
+        self.assertIn('id="place-cluster-{{.ID}}"', template)
+        self.assertIn('id="entity-{{.ID}}"', template)
+        self.assertIn('name="entity_text_form"', template)
+        self.assertIn('name="entity_lemma_form"', template)
+        self.assertIn('name="entity_type"', template)
+        self.assertIn('<option value="manto"', template)
+        self.assertIn('name="place_manto_id"', template)
+        self.assertIn('name="place_original_id"', template)
+        self.assertIn('name="place_jbk_id"', template)
+        self.assertIn('name="place_final_id"', template)
 
 
 if __name__ == "__main__":

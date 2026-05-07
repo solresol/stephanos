@@ -6,6 +6,10 @@ from place_cluster_extraction import (
     place_cluster_queue_priority,
     rank_place_candidates,
 )
+from link_wikidata_places import (
+    has_disqualifying_place_context,
+    has_positive_ancient_place_signal,
+)
 
 
 class PlaceClusterExtractionTests(unittest.TestCase):
@@ -116,6 +120,27 @@ class PlaceClusterExtractionTests(unittest.TestCase):
         )
 
         self.assertGreater(high_priority, low_priority)
+
+    def test_wikidata_place_filter_requires_positive_ancient_signal(self):
+        titular_see = {
+            "label": "Caesarea",
+            "description": "Roman Catholic titular see",
+            "types": [],
+            "type_labels": ["titular see"],
+            "pleiades_id": None,
+        }
+        ancient_city = {
+            "label": "Caesarea Mazaca",
+            "description": "ancient city in Cappadocia",
+            "types": [],
+            "type_labels": ["ancient city"],
+            "pleiades_id": None,
+        }
+
+        self.assertTrue(has_disqualifying_place_context(titular_see))
+        self.assertFalse(has_positive_ancient_place_signal(titular_see))
+        self.assertFalse(has_disqualifying_place_context(ancient_city))
+        self.assertTrue(has_positive_ancient_place_signal(ancient_city))
 
 
 if __name__ == "__main__":

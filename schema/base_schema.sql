@@ -310,6 +310,7 @@ CREATE TABLE public.place_clusters (
     wikidata_confidence text,
     topostext_id text,
     pleiades_id text,
+    manto_id text,
     resolution_status text,
     human_display_label text,
     human_inferred_canonical_name text,
@@ -321,6 +322,10 @@ CREATE TABLE public.place_clusters (
     human_wikidata_qid text,
     human_topostext_id text,
     human_pleiades_id text,
+    human_manto_id text,
+    human_original_id text,
+    human_jbk_id text,
+    human_final_id text,
     human_resolution_status text,
     human_resolution_notes text,
     human_resolved_by text,
@@ -362,6 +367,7 @@ CREATE VIEW public.effective_place_clusters AS
     wikidata_confidence,
     topostext_id,
     pleiades_id,
+    manto_id,
     resolution_status,
     human_display_label,
     human_inferred_canonical_name,
@@ -373,6 +379,10 @@ CREATE VIEW public.effective_place_clusters AS
     human_wikidata_qid,
     human_topostext_id,
     human_pleiades_id,
+    human_manto_id,
+    human_original_id,
+    human_jbk_id,
+    human_final_id,
     human_resolution_status,
     human_resolution_notes,
     human_resolved_by,
@@ -388,6 +398,7 @@ CREATE VIEW public.effective_place_clusters AS
             WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_type), ''::text),
             CASE
                 WHEN (NULLIF(btrim(human_topostext_id), ''::text) IS NOT NULL) THEN 'topostext'::text
+                WHEN (NULLIF(btrim(human_manto_id), ''::text) IS NOT NULL) THEN 'manto'::text
                 WHEN (NULLIF(btrim(human_wikidata_qid), ''::text) IS NOT NULL) THEN 'wikidata'::text
                 WHEN (NULLIF(btrim(human_pleiades_id), ''::text) IS NOT NULL) THEN 'pleiades'::text
                 ELSE NULL::text
@@ -395,9 +406,11 @@ CREATE VIEW public.effective_place_clusters AS
             WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_type), ''::text), NULLIF(btrim(preferred_external_id_type), ''::text),
             CASE
                 WHEN (NULLIF(btrim(human_topostext_id), ''::text) IS NOT NULL) THEN 'topostext'::text
+                WHEN (NULLIF(btrim(human_manto_id), ''::text) IS NOT NULL) THEN 'manto'::text
                 WHEN (NULLIF(btrim(human_wikidata_qid), ''::text) IS NOT NULL) THEN 'wikidata'::text
                 WHEN (NULLIF(btrim(human_pleiades_id), ''::text) IS NOT NULL) THEN 'pleiades'::text
                 WHEN (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) THEN 'topostext'::text
+                WHEN (NULLIF(btrim(manto_id), ''::text) IS NOT NULL) THEN 'manto'::text
                 WHEN (NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) THEN 'wikidata'::text
                 WHEN (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL) THEN 'pleiades'::text
                 ELSE NULL::text
@@ -406,16 +419,17 @@ CREATE VIEW public.effective_place_clusters AS
             ELSE COALESCE(NULLIF(btrim(preferred_external_id_type), ''::text),
             CASE
                 WHEN (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) THEN 'topostext'::text
+                WHEN (NULLIF(btrim(manto_id), ''::text) IS NOT NULL) THEN 'manto'::text
                 WHEN (NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) THEN 'wikidata'::text
                 WHEN (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL) THEN 'pleiades'::text
                 ELSE NULL::text
             END)
         END AS effective_preferred_external_id_type,
         CASE
-            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_value), ''::text), NULLIF(btrim(human_topostext_id), ''::text), NULLIF(btrim(human_wikidata_qid), ''::text), NULLIF(btrim(human_pleiades_id), ''::text))
-            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_value), ''::text), NULLIF(btrim(preferred_external_id_value), ''::text), NULLIF(btrim(human_topostext_id), ''::text), NULLIF(btrim(human_wikidata_qid), ''::text), NULLIF(btrim(human_pleiades_id), ''::text), NULLIF(btrim(topostext_id), ''::text), NULLIF(btrim(wikidata_qid), ''::text), NULLIF(btrim(pleiades_id), ''::text))
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_value), ''::text), NULLIF(btrim(human_topostext_id), ''::text), NULLIF(btrim(human_manto_id), ''::text), NULLIF(btrim(human_wikidata_qid), ''::text), NULLIF(btrim(human_pleiades_id), ''::text))
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_preferred_external_id_value), ''::text), NULLIF(btrim(preferred_external_id_value), ''::text), NULLIF(btrim(human_topostext_id), ''::text), NULLIF(btrim(human_manto_id), ''::text), NULLIF(btrim(human_wikidata_qid), ''::text), NULLIF(btrim(human_pleiades_id), ''::text), NULLIF(btrim(topostext_id), ''::text), NULLIF(btrim(manto_id), ''::text), NULLIF(btrim(wikidata_qid), ''::text), NULLIF(btrim(pleiades_id), ''::text))
             WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
-            ELSE COALESCE(NULLIF(btrim(preferred_external_id_value), ''::text), NULLIF(btrim(topostext_id), ''::text), NULLIF(btrim(wikidata_qid), ''::text), NULLIF(btrim(pleiades_id), ''::text))
+            ELSE COALESCE(NULLIF(btrim(preferred_external_id_value), ''::text), NULLIF(btrim(topostext_id), ''::text), NULLIF(btrim(manto_id), ''::text), NULLIF(btrim(wikidata_qid), ''::text), NULLIF(btrim(pleiades_id), ''::text))
         END AS effective_preferred_external_id_value,
         CASE
             WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(human_wikidata_qid), ''::text)
@@ -436,14 +450,23 @@ CREATE VIEW public.effective_place_clusters AS
             ELSE NULLIF(btrim(pleiades_id), ''::text)
         END AS effective_pleiades_id,
         CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(human_manto_id), ''::text)
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_manto_id), ''::text), NULLIF(btrim(manto_id), ''::text))
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
+            ELSE NULLIF(btrim(manto_id), ''::text)
+        END AS effective_manto_id,
+    NULLIF(btrim(human_original_id), ''::text) AS effective_original_id,
+    NULLIF(btrim(human_jbk_id), ''::text) AS effective_jbk_id,
+    NULLIF(btrim(human_final_id), ''::text) AS effective_final_id,
+        CASE
             WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'approved'::text, 'added'::text, 'not_alignable'::text, 'removed'::text])) THEN human_resolution_status
             WHEN (NULLIF(btrim(resolution_status), ''::text) IS NOT NULL) THEN resolution_status
-            WHEN ((NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL)) THEN 'candidate'::text
+            WHEN ((NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(manto_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL)) THEN 'candidate'::text
             ELSE 'unresolved'::text
         END AS effective_resolution_status,
         CASE
             WHEN (NULLIF(btrim(human_resolution_status), ''::text) IS NOT NULL) THEN 'human'::text
-            WHEN ((NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL)) THEN 'machine'::text
+            WHEN ((NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(manto_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL)) THEN 'machine'::text
             ELSE ''::text
         END AS effective_resolution_source
    FROM public.place_clusters pc

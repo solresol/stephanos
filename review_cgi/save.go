@@ -78,6 +78,16 @@ func main() {
 	guidanceNotes := strings.TrimSpace(formData.Get("guidance_notes"))
 	guidanceRuleCode := strings.TrimSpace(formData.Get("guidance_rule_code"))
 	guidanceFilterKind := strings.TrimSpace(formData.Get("guidance_filter_kind"))
+	guidanceImpactAction := strings.TrimSpace(strings.ToLower(formData.Get("guidance_impact_action")))
+	guidanceImpactReturnURL := strings.TrimSpace(formData.Get("guidance_impact_return_url"))
+	guidanceImpactLemmaIDStr := strings.TrimSpace(formData.Get("guidance_impact_lemma_id"))
+	guidanceImpactSourceTextVersionID := strings.TrimSpace(formData.Get("guidance_impact_source_text_version_id"))
+	guidanceImpactVariantKind := strings.TrimSpace(formData.Get("guidance_impact_translation_variant_kind"))
+	guidanceImpactVariantID := strings.TrimSpace(formData.Get("guidance_impact_translation_variant_id"))
+	guidanceImpactMatchIDStr := strings.TrimSpace(formData.Get("guidance_impact_match_id"))
+	guidanceImpactRuleRevisionIDStr := strings.TrimSpace(formData.Get("guidance_impact_rule_revision_id"))
+	guidanceImpactReason := strings.TrimSpace(formData.Get("guidance_impact_reason"))
+	guidanceImpactNotes := strings.TrimSpace(formData.Get("guidance_impact_notes"))
 	scanTargetRuleKey := strings.TrimSpace(formData.Get("scan_target_rule_key"))
 	scanRuleLabel := strings.TrimSpace(formData.Get("scan_rule_label"))
 	scanSampleSizeStr := strings.TrimSpace(formData.Get("scan_sample_size"))
@@ -104,11 +114,75 @@ func main() {
 	placeWikidataQID := strings.TrimSpace(formData.Get("place_wikidata_qid"))
 	placeToposTextID := strings.TrimSpace(formData.Get("place_topostext_id"))
 	placePleiadesID := strings.TrimSpace(formData.Get("place_pleiades_id"))
+	placeMantoID := strings.TrimSpace(formData.Get("place_manto_id"))
+	placeOriginalID := strings.TrimSpace(formData.Get("place_original_id"))
+	placeJBKID := strings.TrimSpace(formData.Get("place_jbk_id"))
+	placeFinalID := strings.TrimSpace(formData.Get("place_final_id"))
 	placeResolutionStatus := strings.TrimSpace(formData.Get("place_resolution_status"))
 	action := formData.Get("action") // "stay" or "continue" (default)
 	remoteUser := os.Getenv("REMOTE_USER")
 	setCanonical := setCanonicalRaw == "1" || strings.EqualFold(setCanonicalRaw, "true") || strings.EqualFold(setCanonicalRaw, "on")
 	clearCanonical := clearCanonicalRaw == "1" || strings.EqualFold(clearCanonicalRaw, "true") || strings.EqualFold(clearCanonicalRaw, "on")
+
+	if formMode == "guidance_impact" {
+		config := GetConfig()
+		db, err := OpenDatabase(config.DBPath)
+		if err != nil {
+			showGuidanceImpactErrorAndExit(fmt.Sprintf("Failed to open database: %v", err), guidanceImpactReturnURL)
+			return
+		}
+		defer db.Close()
+
+		guidanceImpactLemmaID, err := strconv.Atoi(guidanceImpactLemmaIDStr)
+		if err != nil || guidanceImpactLemmaID <= 0 {
+			showGuidanceImpactErrorAndExit("Invalid guidance impact lemma ID", guidanceImpactReturnURL)
+			return
+		}
+		guidanceImpactMatchID, err := strconv.Atoi(guidanceImpactMatchIDStr)
+		if err != nil || guidanceImpactMatchID <= 0 {
+			showGuidanceImpactErrorAndExit("Invalid guidance impact match ID", guidanceImpactReturnURL)
+			return
+		}
+		guidanceImpactRuleRevisionID, err := strconv.Atoi(guidanceImpactRuleRevisionIDStr)
+		if err != nil || guidanceImpactRuleRevisionID <= 0 {
+			showGuidanceImpactErrorAndExit("Invalid guidance impact rule revision ID", guidanceImpactReturnURL)
+			return
+		}
+
+		ack := GuidanceImpactAcknowledgement{
+			LemmaID:                guidanceImpactLemmaID,
+			SourceTextVersionID:    guidanceImpactSourceTextVersionID,
+			TranslationVariantKind: guidanceImpactVariantKind,
+			TranslationVariantID:   guidanceImpactVariantID,
+			MatchID:                guidanceImpactMatchID,
+			RuleRevisionID:         guidanceImpactRuleRevisionID,
+			ImpactReason:           guidanceImpactReason,
+			Notes:                  guidanceImpactNotes,
+		}
+		switch guidanceImpactAction {
+		case "acknowledge":
+			err = SaveGuidanceImpactAcknowledgement(db, ack, remoteUser)
+		case "unacknowledge":
+			err = DeleteGuidanceImpactAcknowledgement(db, ack)
+		default:
+			err = fmt.Errorf("invalid guidance impact action: %s", guidanceImpactAction)
+		}
+		if err != nil {
+			showGuidanceImpactErrorAndExit(err.Error(), guidanceImpactReturnURL)
+			return
+		}
+
+		writeGuidanceImpactRedirect(guidanceImpactReturnURL)
+		log.Printf(
+			"Guidance impact %s: lemma_id=%d, match_id=%d, rule_revision_id=%d, user=%s",
+			guidanceImpactAction,
+			guidanceImpactLemmaID,
+			guidanceImpactMatchID,
+			guidanceImpactRuleRevisionID,
+			remoteUser,
+		)
+		return
+	}
 
 	if formMode == "guidance_scan" {
 		config := GetConfig()
@@ -369,6 +443,10 @@ func main() {
 			ChosenWikidataQID:        placeWikidataQID,
 			ChosenToposTextID:        placeToposTextID,
 			ChosenPleiadesID:         placePleiadesID,
+			ChosenMantoID:            placeMantoID,
+			OriginalID:               placeOriginalID,
+			JBKID:                    placeJBKID,
+			FinalID:                  placeFinalID,
 			ResolutionStatus:         placeResolutionStatus,
 			Notes:                    notes,
 		}
@@ -383,6 +461,7 @@ func main() {
 			review.ChosenWikidataQID = ""
 			review.ChosenToposTextID = ""
 			review.ChosenPleiadesID = ""
+			review.ChosenMantoID = ""
 		case "removed":
 			review.ResolutionStatus = "removed"
 			review.PreferredExternalIDType = ""
@@ -390,6 +469,10 @@ func main() {
 			review.ChosenWikidataQID = ""
 			review.ChosenToposTextID = ""
 			review.ChosenPleiadesID = ""
+			review.ChosenMantoID = ""
+			review.OriginalID = ""
+			review.JBKID = ""
+			review.FinalID = ""
 		case "clear_override":
 			review.DisplayLabel = ""
 			review.InferredCanonicalName = ""
@@ -401,10 +484,14 @@ func main() {
 			review.ChosenWikidataQID = ""
 			review.ChosenToposTextID = ""
 			review.ChosenPleiadesID = ""
+			review.ChosenMantoID = ""
+			review.OriginalID = ""
+			review.JBKID = ""
+			review.FinalID = ""
 			review.ResolutionStatus = ""
 			review.Notes = ""
 		default:
-			if review.ResolutionStatus == "" && (review.PreferredExternalIDType != "" || review.PreferredExternalIDValue != "" || review.ChosenWikidataQID != "" || review.ChosenToposTextID != "" || review.ChosenPleiadesID != "" || review.DisplayLabel != "" || review.InferredCanonicalName != "" || review.PlaceType != "" || review.Region != "" || review.Notes != "") {
+			if review.ResolutionStatus == "" && (review.PreferredExternalIDType != "" || review.PreferredExternalIDValue != "" || review.ChosenWikidataQID != "" || review.ChosenToposTextID != "" || review.ChosenPleiadesID != "" || review.ChosenMantoID != "" || review.OriginalID != "" || review.JBKID != "" || review.FinalID != "" || review.DisplayLabel != "" || review.InferredCanonicalName != "" || review.PlaceType != "" || review.Region != "" || review.Notes != "") {
 				review.ResolutionStatus = "corrected"
 			}
 		}
@@ -773,6 +860,72 @@ func writeGuidanceRedirect(filterKind string, targetRuleKey string) {
     <p><a href="%s">Click here if not redirected</a></p>
 </body>
 </html>`, location, location)
+}
+
+func guidanceImpactRedirectPath(returnURL string) string {
+	returnURL = strings.TrimSpace(returnURL)
+	if returnURL == "" {
+		return "/cgi-bin/guidance_impacts.cgi"
+	}
+	if returnURL == "/cgi-bin/guidance_impacts.cgi" || strings.HasPrefix(returnURL, "/cgi-bin/guidance_impacts.cgi?") {
+		return returnURL
+	}
+	return "/cgi-bin/guidance_impacts.cgi"
+}
+
+func writeGuidanceImpactRedirect(returnURL string) {
+	location := guidanceImpactRedirectPath(returnURL)
+	fmt.Println("Status: 303 See Other")
+	fmt.Printf("Location: %s\n", location)
+	fmt.Println("Content-Type: text/html; charset=utf-8")
+	fmt.Println()
+	fmt.Printf(`<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="refresh" content="0;url=%s">
+    <title>Redirecting...</title>
+</head>
+<body>
+    <p>Guidance impact updated. Redirecting...</p>
+    <p><a href="%s">Click here if not redirected</a></p>
+</body>
+</html>`, location, location)
+}
+
+func showGuidanceImpactErrorAndExit(message string, returnURL string) {
+	location := guidanceImpactRedirectPath(returnURL)
+	fmt.Println("Content-Type: text/html; charset=utf-8")
+	fmt.Println()
+	fmt.Printf(`<!DOCTYPE html>
+<html>
+<head>
+    <title>Error - Save Guidance Impact</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .error {
+            background: #fee;
+            border: 2px solid #c00;
+            padding: 20px;
+            border-radius: 8px;
+        }
+        h1 { color: #c00; }
+    </style>
+</head>
+<body>
+    <div class="error">
+        <h1>Error Saving Guidance Impact</h1>
+        <p>%s</p>
+        <p><a href="%s">← Return to rule impacts</a></p>
+    </div>
+</body>
+</html>`, HTMLEscape(message), location)
+
+	log.Printf("Guidance impact error: %s", message)
 }
 
 func showGuidanceErrorAndExit(message string, filterKind string) {

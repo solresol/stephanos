@@ -1631,7 +1631,7 @@ const entityResolutionTemplate = `<!DOCTYPE html>
             <div class="entity-help">Resolve each distinct place separately. One lemma may describe multiple places with the same headword, including later implicit mentions.</div>
             {{if .Lemma.PlaceClusters}}
                 {{range .Lemma.PlaceClusters}}
-                <div class="place-card {{if eq .EffectiveResolutionStatus "removed"}}removed{{end}}">
+                <div id="place-cluster-{{.ID}}" class="place-card {{if eq .EffectiveResolutionStatus "removed"}}removed{{end}}">
                     <div class="place-card-header">
                         <div>
                             <div class="place-title-row">
@@ -1767,12 +1767,13 @@ const entityResolutionTemplate = `<!DOCTYPE html>
                                 <label for="place_preferred_external_id_type_{{.ID}}">Preferred authority type</label>
                                 <select name="place_preferred_external_id_type" id="place_preferred_external_id_type_{{.ID}}">
                                     <option value="">Auto / inherit</option>
-                                    <option value="topostext" {{if eq .HumanPreferredExternalIDType "topostext"}}selected{{end}}>topostext</option>
-                                    <option value="wikidata" {{if eq .HumanPreferredExternalIDType "wikidata"}}selected{{end}}>wikidata</option>
-                                    <option value="pleiades" {{if eq .HumanPreferredExternalIDType "pleiades"}}selected{{end}}>pleiades</option>
-                                    <option value="re" {{if eq .HumanPreferredExternalIDType "re"}}selected{{end}}>re</option>
-                                    <option value="none" {{if eq .HumanPreferredExternalIDType "none"}}selected{{end}}>none</option>
-                                </select>
+	                                    <option value="topostext" {{if eq .HumanPreferredExternalIDType "topostext"}}selected{{end}}>topostext</option>
+	                                    <option value="wikidata" {{if eq .HumanPreferredExternalIDType "wikidata"}}selected{{end}}>wikidata</option>
+	                                    <option value="pleiades" {{if eq .HumanPreferredExternalIDType "pleiades"}}selected{{end}}>pleiades</option>
+	                                    <option value="manto" {{if eq .HumanPreferredExternalIDType "manto"}}selected{{end}}>manto</option>
+	                                    <option value="re" {{if eq .HumanPreferredExternalIDType "re"}}selected{{end}}>re</option>
+	                                    <option value="none" {{if eq .HumanPreferredExternalIDType "none"}}selected{{end}}>none</option>
+	                                </select>
                             </div>
                             <div class="form-group">
                                 <label for="place_preferred_external_id_value_{{.ID}}">Preferred authority value</label>
@@ -1787,11 +1788,27 @@ const entityResolutionTemplate = `<!DOCTYPE html>
                                 <input class="text-input" type="text" name="place_topostext_id" id="place_topostext_id_{{.ID}}" value="{{.HumanToposTextID}}" placeholder="204EKo">
                             </div>
                             <div class="form-group">
-                                <label for="place_pleiades_id_{{.ID}}">Pleiades ID</label>
-                                <input class="text-input" type="text" name="place_pleiades_id" id="place_pleiades_id_{{.ID}}" value="{{if .HumanPleiadesID}}{{.HumanPleiadesID}}{{else}}{{.PleiadesID}}{{end}}">
-                            </div>
-                            <div class="form-group" style="grid-column: 1 / -1;">
-                                <label for="place_notes_{{.ID}}">Reviewer notes</label>
+	                                <label for="place_pleiades_id_{{.ID}}">Pleiades ID</label>
+	                                <input class="text-input" type="text" name="place_pleiades_id" id="place_pleiades_id_{{.ID}}" value="{{if .HumanPleiadesID}}{{.HumanPleiadesID}}{{else}}{{.PleiadesID}}{{end}}">
+	                            </div>
+	                            <div class="form-group">
+	                                <label for="place_manto_id_{{.ID}}">Manto ID</label>
+	                                <input class="text-input" type="text" name="place_manto_id" id="place_manto_id_{{.ID}}" value="{{if .HumanMantoID}}{{.HumanMantoID}}{{else}}{{.MantoID}}{{end}}">
+	                            </div>
+	                            <div class="form-group">
+	                                <label for="place_original_id_{{.ID}}">Original ID</label>
+	                                <input class="text-input" type="text" name="place_original_id" id="place_original_id_{{.ID}}" value="{{.HumanOriginalID}}">
+	                            </div>
+	                            <div class="form-group">
+	                                <label for="place_jbk_id_{{.ID}}">JBK ID</label>
+	                                <input class="text-input" type="text" name="place_jbk_id" id="place_jbk_id_{{.ID}}" value="{{.HumanJBKID}}">
+	                            </div>
+	                            <div class="form-group">
+	                                <label for="place_final_id_{{.ID}}">Final ID</label>
+	                                <input class="text-input" type="text" name="place_final_id" id="place_final_id_{{.ID}}" value="{{.HumanFinalID}}">
+	                            </div>
+	                            <div class="form-group" style="grid-column: 1 / -1;">
+	                                <label for="place_notes_{{.ID}}">Reviewer notes</label>
                                 <textarea class="notes-area" name="notes" id="place_notes_{{.ID}}">{{.HumanResolutionNotes}}</textarea>
                             </div>
                         </div>
@@ -1817,7 +1834,7 @@ const entityResolutionTemplate = `<!DOCTYPE html>
                 <summary>Legacy / unclustered place mentions ({{len .LegacyPlaceEntities}})</summary>
                 <div class="commentary-list" style="margin-top: 14px;">
                     {{range .LegacyPlaceEntities}}
-                    <div class="entity-card">
+                    <div id="entity-{{.ID}}" class="entity-card">
                         <div class="entity-main-line">
                             <span class="entity-name">{{if .English}}{{.English}}{{else}}{{.LemmaForm}}{{end}}</span>
                             {{if .LemmaForm}}<span class="entity-greek">{{.LemmaForm}}</span>{{end}}
@@ -1837,7 +1854,7 @@ const entityResolutionTemplate = `<!DOCTYPE html>
             {{if .PrimaryEntities}}
             <div class="commentary-list">
                 {{range .PrimaryEntities}}
-                <div class="entity-card {{if eq .HumanResolutionStatus "removed"}}removed{{end}}">
+                <div id="entity-{{.ID}}" class="entity-card {{if eq .HumanResolutionStatus "removed"}}removed{{end}}">
                     <div class="entity-card-header">
                         <div>
                             <div class="entity-main-line">
@@ -1902,6 +1919,35 @@ const entityResolutionTemplate = `<!DOCTYPE html>
 
                         <div class="entity-form-grid">
                             <div class="form-group">
+                                <label for="entity_text_form_{{.ID}}">Text form</label>
+                                <input class="text-input" type="text" name="entity_text_form" id="entity_text_form_{{.ID}}" value="{{.TextForm}}">
+                            </div>
+                            <div class="form-group">
+                                <label for="entity_lemma_form_{{.ID}}">Lemma form</label>
+                                <input class="text-input" type="text" name="entity_lemma_form" id="entity_lemma_form_{{.ID}}" value="{{.LemmaForm}}">
+                            </div>
+                            <div class="form-group">
+                                <label for="entity_english_{{.ID}}">English</label>
+                                <input class="text-input" type="text" name="entity_english" id="entity_english_{{.ID}}" value="{{.English}}">
+                            </div>
+                            <div class="form-group">
+                                <label for="entity_type_{{.ID}}">Type</label>
+                                <select name="entity_type" id="entity_type_{{.ID}}">
+                                    <option value="person" {{if eq .Type "person"}}selected{{end}}>person</option>
+                                    <option value="place" {{if eq .Type "place"}}selected{{end}}>place</option>
+                                    <option value="people" {{if eq .Type "people"}}selected{{end}}>people</option>
+                                    <option value="deity" {{if eq .Type "deity"}}selected{{end}}>deity</option>
+                                    <option value="other" {{if eq .Type "other"}}selected{{end}}>other</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="entity_role_{{.ID}}">Role</label>
+                                <select name="entity_role" id="entity_role_{{.ID}}">
+                                    <option value="entity" {{if eq .Role "entity"}}selected{{end}}>entity</option>
+                                    <option value="source" {{if eq .Role "source"}}selected{{end}}>source</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
                                 <label for="entity_qid_{{.ID}}">Wikidata QID</label>
                                 <input class="text-input" type="text" name="entity_qid" id="entity_qid_{{.ID}}" value="{{if .HumanWikidataQID}}{{.HumanWikidataQID}}{{else}}{{.EffectiveWikidataQID}}{{end}}" placeholder="Q12345">
                             </div>
@@ -1936,7 +1982,7 @@ const entityResolutionTemplate = `<!DOCTYPE html>
                 <summary>Secondary / lower-priority entities ({{len .SecondaryEntities}})</summary>
                 <div class="commentary-list" style="margin-top: 14px;">
                     {{range .SecondaryEntities}}
-                    <div class="entity-card">
+                    <div id="entity-{{.ID}}" class="entity-card">
                         <div class="entity-main-line">
                             <span class="entity-name">{{if .English}}{{.English}}{{else if .LemmaForm}}{{.LemmaForm}}{{else}}{{.TextForm}}{{end}}</span>
                             {{if .LemmaForm}}<span class="entity-greek">{{.LemmaForm}}</span>{{end}}
