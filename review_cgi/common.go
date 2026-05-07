@@ -98,6 +98,7 @@ type GuidanceHit struct {
 	ContextCondition     string              `json:"context_condition"`
 	BiasStrength         string              `json:"bias_strength"`
 	LifecycleStage       string              `json:"lifecycle_stage"`
+	RuleStatus           string              `json:"rule_status"`
 	ApplicationMode      string              `json:"application_mode"`
 	MatchStatus          string              `json:"match_status"`
 	Confidence           string              `json:"confidence"`

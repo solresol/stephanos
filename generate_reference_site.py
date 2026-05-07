@@ -97,6 +97,13 @@ GUIDANCE_STAGE_LABELS = {
     "inactive": "Inactive",
 }
 
+GUIDANCE_RULE_STATUS_LABELS = {
+    "in_progress": "In progress",
+    "settled": "Settled",
+    "unsure": "Unsure",
+    "retired": "Retired",
+}
+
 
 def normalize_whitespace(text: str) -> str:
     """Normalize whitespace for robust string comparison (collapse runs, trim)."""
@@ -544,7 +551,7 @@ def fetch_public_translation_guidance_hits(cur) -> dict[int, list[dict]]:
         else "'' AS lifecycle_stage"
     )
     public_lifecycle_condition = (
-        "AND COALESCE(r.lifecycle_stage, 'guidance') = 'guidance'"
+        "AND COALESCE(r.lifecycle_stage, 'guidance') IN ('recognizer', 'guidance')"
         if has_lifecycle_stage
         else ""
     )
@@ -576,6 +583,7 @@ def fetch_public_translation_guidance_hits(cur) -> dict[int, list[dict]]:
                 {context_select},
                 {bias_select},
                 {lifecycle_select},
+                COALESCE(r.status, '') AS rule_status,
                 COALESCE(r.application_mode, '') AS application_mode,
                 CASE
                     WHEN BOOL_OR(m.match_status = 'matched') THEN 'matched'
@@ -602,7 +610,7 @@ def fetch_public_translation_guidance_hits(cur) -> dict[int, list[dict]]:
             JOIN translation_guidance_rules r ON r.id = m.rule_id
             JOIN lemma_source_text_versions stv ON stv.id = m.source_text_version_id
             WHERE m.match_status = 'matched'
-              AND COALESCE(r.status, '') = 'settled'
+              AND COALESCE(r.status, '') <> 'retired'
               {public_lifecycle_condition}
               AND r.kind IN ('formula', 'gloss', 'contextual_bias', 'proper_noun')
               AND stv.source_document = 'meineke'
@@ -615,6 +623,7 @@ def fetch_public_translation_guidance_hits(cur) -> dict[int, list[dict]]:
                 r.kind,
                 r.label,
                 r.preferred_translation,
+                r.status,
                 r.application_mode
                 {optional_group_by}
         )
@@ -632,6 +641,7 @@ def fetch_public_translation_guidance_hits(cur) -> dict[int, list[dict]]:
                     'context_condition', context_condition,
                     'bias_strength', bias_strength,
                     'lifecycle_stage', lifecycle_stage,
+                    'rule_status', rule_status,
                     'application_mode', application_mode,
                     'match_status', match_status,
                     'confidence', confidence,
@@ -1351,9 +1361,17 @@ def render_translation_guidance_metadata(hits: list[dict]) -> str:
         semantic_domain = str(hit.get("semantic_domain") or "").strip()
         if semantic_domain:
             guidance_bits.append(f"Domain: {html_module.escape(semantic_domain)}")
+        lifecycle_stage = str(hit.get("lifecycle_stage") or "").strip()
+        if lifecycle_stage and lifecycle_stage != "guidance":
+            stage = guidance_label(GUIDANCE_STAGE_LABELS, lifecycle_stage)
+            guidance_bits.append(f"Stage: {html_module.escape(stage)}")
+        rule_status = str(hit.get("rule_status") or "").strip()
+        if rule_status and rule_status not in {"settled", "retired"}:
+            status = guidance_label(GUIDANCE_RULE_STATUS_LABELS, rule_status)
+            guidance_bits.append(f"Rule status: {html_module.escape(status)}")
         if not guidance_bits:
             mode = guidance_label(GUIDANCE_MODE_LABELS, hit.get("application_mode"))
-            stage = guidance_label(GUIDANCE_STAGE_LABELS, hit.get("lifecycle_stage"))
+            stage = guidance_label(GUIDANCE_STAGE_LABELS, lifecycle_stage)
             guidance_bits.append(html_module.escape(" · ".join(part for part in (mode, stage) if part) or "Recognized guidance"))
 
         match_status = guidance_label(GUIDANCE_STATUS_LABELS, hit.get("match_status"))

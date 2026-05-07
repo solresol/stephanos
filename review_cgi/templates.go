@@ -631,6 +631,15 @@ const sharedPageStyles = `
             background: #eef2ff;
             color: #3730a3;
         }
+        .status-pill.guidance-stage {
+            background: #fef3c7;
+            color: #92400e;
+            font-style: italic;
+        }
+        .status-pill.guidance-rule-status {
+            background: #f3f4f6;
+            color: #52525b;
+        }
         .status-pill.status-unresolved {
             background: #f3f4f6;
             color: #6b7280;
@@ -995,6 +1004,8 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                 <span class="guidance-hit-summary">
                                     <span class="guidance-hit-code">{{.RuleDisplay}}</span>
                                     <span class="status-pill">{{.KindLabel}}</span>
+                                    {{if .StageLabel}}<span class="status-pill guidance-stage">{{.StageLabel}}</span>{{end}}
+                                    {{if .RuleStatusLabel}}<span class="status-pill guidance-rule-status">{{.RuleStatusLabel}}</span>{{end}}
                                     <span class="guidance-hit-label">{{.Hit.Label}}</span>
                                     <span class="guidance-hit-meta">{{.StatusLabel}} · {{.ConfidenceLabel}}</span>
                                 </span>
@@ -1023,6 +1034,8 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                 <span class="guidance-hit-summary">
                                     <span class="guidance-hit-code">{{.RuleDisplay}}</span>
                                     <span class="status-pill">{{.KindLabel}}</span>
+                                    {{if .StageLabel}}<span class="status-pill guidance-stage">{{.StageLabel}}</span>{{end}}
+                                    {{if .RuleStatusLabel}}<span class="status-pill guidance-rule-status">{{.RuleStatusLabel}}</span>{{end}}
                                     <span class="guidance-hit-label">{{.Hit.Label}}</span>
                                     <span class="guidance-hit-meta">{{.StatusLabel}} · {{.ConfidenceLabel}}</span>
                                 </span>
@@ -1052,6 +1065,8 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                     <span class="guidance-hit-summary">
                                         <span class="guidance-hit-code">{{.RuleDisplay}}</span>
                                         <span class="status-pill">{{.KindLabel}}</span>
+                                        {{if .StageLabel}}<span class="status-pill guidance-stage">{{.StageLabel}}</span>{{end}}
+                                        {{if .RuleStatusLabel}}<span class="status-pill guidance-rule-status">{{.RuleStatusLabel}}</span>{{end}}
                                         <span class="guidance-hit-label">{{.Hit.Label}}</span>
                                         <span class="guidance-hit-meta">{{.StatusLabel}} · {{.ConfidenceLabel}}</span>
                                     </span>

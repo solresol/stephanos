@@ -21,6 +21,8 @@ type GuidanceHitView struct {
 	KindLabel                 string
 	StatusLabel               string
 	ConfidenceLabel           string
+	StageLabel                string
+	RuleStatusLabel           string
 	PreferredLabel            string
 	RevisionLabel             string
 	SourceLabel               string
@@ -305,6 +307,30 @@ func reviewGuidanceStatusLabel(status string) string {
 	}
 }
 
+func reviewGuidanceLifecycleLabel(stage string) string {
+	switch strings.TrimSpace(stage) {
+	case "recognizer":
+		return "Recognizer"
+	case "investigate":
+		return "Investigate"
+	case "inactive":
+		return "Inactive"
+	default:
+		return ""
+	}
+}
+
+func reviewGuidanceRuleStatusLabel(status string) string {
+	switch strings.TrimSpace(status) {
+	case "in_progress":
+		return "In progress"
+	case "unsure":
+		return "Unsure"
+	default:
+		return ""
+	}
+}
+
 func reviewGuidanceConfidenceLabel(confidence string) string {
 	if strings.TrimSpace(confidence) == "" {
 		return "confidence unknown"
@@ -421,6 +447,8 @@ func buildGuidanceHitView(hit GuidanceHit, latestRunID int) GuidanceHitView {
 		KindLabel:                 reviewGuidanceKindLabel(hit.Kind),
 		StatusLabel:               reviewGuidanceStatusLabel(hit.MatchStatus),
 		ConfidenceLabel:           reviewGuidanceConfidenceLabel(hit.Confidence),
+		StageLabel:                reviewGuidanceLifecycleLabel(hit.LifecycleStage),
+		RuleStatusLabel:           reviewGuidanceRuleStatusLabel(hit.RuleStatus),
 		PreferredLabel:            reviewGuidancePreferredLabel(hit),
 		RevisionLabel:             reviewGuidanceRevisionLabel(hit),
 		SourceLabel:               reviewGuidanceSourceLabel(hit),

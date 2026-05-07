@@ -273,6 +273,8 @@ func EnsureGuidanceSchema(db *sql.DB) error {
 			rule_key TEXT NOT NULL,
 			rule_label TEXT NOT NULL,
 			preferred_translation TEXT,
+			rule_lifecycle_stage TEXT,
+			rule_status TEXT,
 			rule_notes TEXT,
 			lemma_id INTEGER NOT NULL,
 			lemma TEXT NOT NULL,
@@ -331,6 +333,12 @@ func EnsureGuidanceSchema(db *sql.DB) error {
 		return err
 	}
 	if err := ensureSQLiteColumn(db, "translation_guidance_urgent_scan_items", "preferred_translation", "TEXT"); err != nil {
+		return err
+	}
+	if err := ensureSQLiteColumn(db, "translation_guidance_urgent_scan_items", "rule_lifecycle_stage", "TEXT"); err != nil {
+		return err
+	}
+	if err := ensureSQLiteColumn(db, "translation_guidance_urgent_scan_items", "rule_status", "TEXT"); err != nil {
 		return err
 	}
 	if err := ensureSQLiteColumn(db, "translation_guidance_urgent_scan_items", "rule_notes", "TEXT"); err != nil {
@@ -1007,6 +1015,8 @@ func FetchUrgentGuidanceHitsForLemma(db *sql.DB, lemmaID int) ([]GuidanceHit, er
 			rule_key,
 			rule_label,
 			COALESCE(preferred_translation, ''),
+			COALESCE(rule_lifecycle_stage, ''),
+			COALESCE(rule_status, ''),
 			lemma_id,
 			source_text_version_id,
 			COALESCE(source_document, ''),
@@ -1043,6 +1053,8 @@ func FetchUrgentGuidanceHitsForLemma(db *sql.DB, lemmaID int) ([]GuidanceHit, er
 			ruleKey              string
 			ruleLabel            string
 			preferredTranslation string
+			ruleLifecycleStage   string
+			ruleStatus           string
 			rowLemmaID           int
 			sourceTextVersionID  int
 			sourceDocument       string
@@ -1062,6 +1074,8 @@ func FetchUrgentGuidanceHitsForLemma(db *sql.DB, lemmaID int) ([]GuidanceHit, er
 			&ruleKey,
 			&ruleLabel,
 			&preferredTranslation,
+			&ruleLifecycleStage,
+			&ruleStatus,
 			&rowLemmaID,
 			&sourceTextVersionID,
 			&sourceDocument,
@@ -1099,6 +1113,8 @@ func FetchUrgentGuidanceHitsForLemma(db *sql.DB, lemmaID int) ([]GuidanceHit, er
 			Kind:                 "formula",
 			Label:                label,
 			PreferredTranslation: preferredTranslation,
+			LifecycleStage:       normalizeGuidanceLifecycleStage(ruleStatus, preferredTranslation, ruleLifecycleStage),
+			RuleStatus:           ruleStatus,
 			ApplicationMode:      "advisory",
 			MatchStatus:          status,
 			Confidence:           confidence,

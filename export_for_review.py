@@ -1685,7 +1685,7 @@ def export_lemmas():
             """
         )
         hit_lifecycle_condition = (
-            "AND COALESCE(r.lifecycle_stage, 'guidance') = 'guidance'"
+            "AND COALESCE(r.lifecycle_stage, 'guidance') IN ('recognizer', 'guidance')"
             if has_hit_lifecycle_stage
             else ""
         )
@@ -1727,6 +1727,7 @@ def export_lemmas():
                 {hit_context_condition_select},
                 {hit_bias_strength_select},
                 {hit_lifecycle_stage_select},
+                COALESCE(r.status, '') AS rule_status,
                 COALESCE(r.application_mode, '') AS application_mode,
                 COALESCE(m.match_status, '') AS match_status,
                 COALESCE(m.confidence, '') AS confidence,
@@ -1744,7 +1745,7 @@ def export_lemmas():
             LEFT JOIN lemma_source_text_versions stv ON stv.id = m.source_text_version_id
             {prompt_usage_join}
             WHERE m.match_status = 'matched'
-              AND COALESCE(r.status, '') = 'settled'
+              AND COALESCE(r.status, '') <> 'retired'
               {hit_lifecycle_condition}
               AND r.kind IN ('formula', 'gloss', 'contextual_bias', 'proper_noun')
               AND COALESCE(stv.source_document, '') = 'meineke'
@@ -1790,17 +1791,18 @@ def export_lemmas():
                     "context_condition": row[12] or "",
                     "bias_strength": row[13] or "normal",
                     "lifecycle_stage": row[14] or "",
-                    "application_mode": row[15] or "",
-                    "match_status": row[16] or "",
-                    "confidence": row[17] or "",
-                    "occurrence_count": int(row[18] or 0),
-                    "evidence_text": row[19] or "",
-                    "detector_kind": row[20] or "",
-                    "detected_at": row[21] or "",
-                    "updated_at": row[22] or "",
-                    "rule_revision_id": int(row[23] or 0),
-                    "rule_revision_number": int(row[24] or 0),
-                    "prompt_runs": coerce_json_list(row[25]),
+                    "rule_status": row[15] or "",
+                    "application_mode": row[16] or "",
+                    "match_status": row[17] or "",
+                    "confidence": row[18] or "",
+                    "occurrence_count": int(row[19] or 0),
+                    "evidence_text": row[20] or "",
+                    "detector_kind": row[21] or "",
+                    "detected_at": row[22] or "",
+                    "updated_at": row[23] or "",
+                    "rule_revision_id": int(row[24] or 0),
+                    "rule_revision_number": int(row[25] or 0),
+                    "prompt_runs": coerce_json_list(row[26]),
                 }
             )
 

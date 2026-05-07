@@ -93,6 +93,9 @@ func main() {
 		"guidanceHref":      finalReviewGuidanceHref,
 		"reviewHref":        finalReviewReviewHref,
 		"filterHref":        finalReviewFilterHref,
+		"guidanceStage":     finalReviewGuidanceStageMarker,
+		"guidanceRuleState": finalReviewGuidanceRuleStatusMarker,
+		"guidanceChipClass": finalReviewGuidanceChipClass,
 		"eq":                func(a, b string) bool { return a == b },
 	}).Parse(finalReviewTemplate)
 	if err != nil {
@@ -566,6 +569,42 @@ func finalReviewKindLabel(kind string) string {
 	}
 }
 
+func finalReviewGuidanceStageMarker(stage string) string {
+	switch strings.TrimSpace(stage) {
+	case "recognizer":
+		return "Recognizer"
+	case "investigate":
+		return "Investigate"
+	case "inactive":
+		return "Inactive"
+	default:
+		return ""
+	}
+}
+
+func finalReviewGuidanceRuleStatusMarker(status string) string {
+	switch strings.TrimSpace(status) {
+	case "in_progress":
+		return "In progress"
+	case "unsure":
+		return "Unsure"
+	default:
+		return ""
+	}
+}
+
+func finalReviewGuidanceChipClass(stage string, status string) string {
+	classes := []string{}
+	if strings.TrimSpace(stage) == "recognizer" {
+		classes = append(classes, "recognizer")
+	}
+	switch strings.TrimSpace(status) {
+	case "in_progress", "unsure":
+		classes = append(classes, "unsettled")
+	}
+	return strings.Join(classes, " ")
+}
+
 func finalReviewImpactReasonLabel(reason string) string {
 	switch strings.TrimSpace(reason) {
 	case "rule_after_translation":
@@ -829,6 +868,15 @@ const finalReviewTemplate = `<!DOCTYPE html>
             color: #153e68;
             border: 1px solid #bdd1ed;
         }
+        .guidance-chip.recognizer {
+            background: #fff7ed;
+            color: #8a4300;
+            border-color: #f3c27b;
+            font-style: italic;
+        }
+        .guidance-chip.unsettled {
+            border-style: dashed;
+        }
         .empty {
             background: white;
             border: 1px solid #deded5;
@@ -954,7 +1002,7 @@ const finalReviewTemplate = `<!DOCTYPE html>
                     <a class="impact-badge" href="{{guidanceHref .RuleKey .Kind}}" title="{{.EvidenceText}}">{{impactReasonLabel .ImpactReason}} · {{.Label}}</a>
                     {{end}}
                     {{range .GuidanceHits}}
-                    <a class="guidance-chip" href="{{filterHref $.Filters "rule" .RuleKey}}" title="{{.EvidenceText}}">{{kindLabel .Kind}} · {{.Label}}{{if .PreferredTranslation}} · {{.PreferredTranslation}}{{end}}</a>
+                    <a class="guidance-chip {{guidanceChipClass .LifecycleStage .RuleStatus}}" href="{{filterHref $.Filters "rule" .RuleKey}}" title="{{.EvidenceText}}">{{kindLabel .Kind}}{{with guidanceStage .LifecycleStage}} · {{.}}{{end}}{{with guidanceRuleState .RuleStatus}} · {{.}}{{end}} · {{.Label}}{{if .PreferredTranslation}} · {{.PreferredTranslation}}{{end}}</a>
                     {{end}}
                     {{if gt .ExtraGuidanceHitCount 0}}<span class="guidance-chip">+{{.ExtraGuidanceHitCount}} more guidance hits</span>{{end}}
                 </div>
