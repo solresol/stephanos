@@ -76,6 +76,24 @@ CREATE TABLE IF NOT EXISTS canonical_variant_actions (
 CREATE INDEX IF NOT EXISTS idx_canonical_actions_lemma
 ON canonical_variant_actions(lemma_id, reviewed_at, id);
 
+-- Per-entry edit history for the final translation workspace.
+-- The reviews table remains the current state; this table records every save
+-- from final_review.cgi so late-stage editing has an audit trail.
+CREATE TABLE IF NOT EXISTS final_translation_edit_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lemma_id INTEGER NOT NULL,
+    old_reviewed_english_translation TEXT,
+    new_reviewed_english_translation TEXT,
+    old_notes TEXT,
+    new_notes TEXT,
+    edit_source TEXT NOT NULL DEFAULT 'final_review',
+    reviewer_username TEXT,
+    edited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_final_translation_edit_history_lemma
+ON final_translation_edit_history(lemma_id, edited_at, id);
+
 -- Named-entity resolution actions (append-only log).
 -- These express "human overrides machine linking" for Wikidata QIDs.
 -- Imported daily into PostgreSQL (raksasa).

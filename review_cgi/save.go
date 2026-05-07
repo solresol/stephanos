@@ -48,6 +48,7 @@ func main() {
 	reviewedEnglish := strings.TrimSpace(formData.Get("reviewed_english"))
 	notes := strings.TrimSpace(formData.Get("notes"))
 	returnView := normalizeReturnView(formData.Get("return_view"))
+	finalReviewReturnURL := strings.TrimSpace(formData.Get("return_url"))
 	variantKind := strings.TrimSpace(formData.Get("variant_kind"))
 	variantID := strings.TrimSpace(formData.Get("variant_id"))
 	variantStatus := strings.TrimSpace(formData.Get("variant_status"))
@@ -225,6 +226,57 @@ func main() {
 	lemmaID, err := strconv.Atoi(lemmaIDStr)
 	if err != nil {
 		showErrorAndExit("Invalid lemma ID", returnView)
+		return
+	}
+
+	if formMode == "final_review_row" {
+		config := GetConfig()
+		db, err := OpenDatabase(config.DBPath)
+		if err != nil {
+			showErrorAndExit(fmt.Sprintf("Failed to open database: %v", err), "final_review")
+			return
+		}
+		defer db.Close()
+
+		oldReview, err := GetReview(db, lemmaID)
+		if err != nil {
+			showErrorAndExit(fmt.Sprintf("Failed to get existing review: %v", err), "final_review")
+			return
+		}
+		review := &Review{
+			LemmaID:                     lemmaID,
+			ReviewStatus:                oldReview.ReviewStatus,
+			CorrectedGreekText:          oldReview.CorrectedGreekText,
+			CorrectedEnglishTranslation: oldReview.CorrectedEnglishTranslation,
+			ReviewedEnglishTranslation:  reviewedEnglish,
+			ReviewerUsername:            remoteUser,
+			Notes:                       notes,
+			GreekCorrectedBy:            oldReview.GreekCorrectedBy,
+			InitialTranslationBy:        oldReview.InitialTranslationBy,
+			ReviewedTranslationBy:       oldReview.ReviewedTranslationBy,
+		}
+
+		if err := InsertFinalTranslationEditHistory(
+			db,
+			lemmaID,
+			oldReview.ReviewedEnglishTranslation,
+			reviewedEnglish,
+			oldReview.Notes,
+			notes,
+			"final_review",
+			remoteUser,
+		); err != nil {
+			showErrorAndExit(fmt.Sprintf("Failed to record final translation edit history: %v", err), "final_review")
+			return
+		}
+
+		if err := SaveReview(db, review, oldReview, remoteUser); err != nil {
+			showErrorAndExit(fmt.Sprintf("Failed to save final translation: %v", err), "final_review")
+			return
+		}
+
+		writeFinalReviewRedirect(finalReviewReturnURL, lemmaID)
+		log.Printf("Final translation saved: lemma_id=%d, user=%s", lemmaID, remoteUser)
 		return
 	}
 
@@ -572,12 +624,17 @@ func normalizeReturnView(returnView string) string {
 		return "entities"
 	case "guidance":
 		return "guidance"
+	case "final_review", "final":
+		return "final_review"
 	default:
 		return "translation"
 	}
 }
 
 func redirectPath(returnView string, redirectID int) string {
+	if normalizeReturnView(returnView) == "final_review" {
+		return "/cgi-bin/final_review.cgi"
+	}
 	if normalizeReturnView(returnView) == "entities" {
 		if redirectID <= 0 {
 			return "/cgi-bin/entities.cgi"
@@ -609,7 +666,43 @@ func writeRedirect(redirectID int, returnView string) {
     <p>Review saved. Redirecting...</p>
     <p><a href="%s">Click here if not redirected</a></p>
 </body>
-</html>`, location, location)
+	</html>`, location, location)
+}
+
+func sanitizeFinalReviewReturnURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "/cgi-bin/final_review.cgi"
+	}
+	if strings.HasPrefix(raw, "http://") ||
+		strings.HasPrefix(raw, "https://") ||
+		strings.HasPrefix(raw, "//") ||
+		!strings.HasPrefix(raw, "/cgi-bin/final_review.cgi") {
+		return "/cgi-bin/final_review.cgi"
+	}
+	return raw
+}
+
+func writeFinalReviewRedirect(returnURL string, lemmaID int) {
+	location := sanitizeFinalReviewReturnURL(returnURL)
+	if lemmaID > 0 && !strings.Contains(location, "#") {
+		location = fmt.Sprintf("%s#entry-%d", location, lemmaID)
+	}
+	fmt.Println("Status: 303 See Other")
+	fmt.Printf("Location: %s\n", location)
+	fmt.Println("Content-Type: text/html; charset=utf-8")
+	fmt.Println()
+	fmt.Printf(`<!DOCTYPE html>
+	<html>
+	<head>
+	    <meta http-equiv="refresh" content="0;url=%s">
+	    <title>Redirecting...</title>
+	</head>
+	<body>
+	    <p>Final translation saved. Redirecting...</p>
+	    <p><a href="%s">Click here if not redirected</a></p>
+	</body>
+	</html>`, location, location)
 }
 
 func showErrorAndExit(message string, returnView string) {

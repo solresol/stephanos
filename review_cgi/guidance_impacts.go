@@ -298,6 +298,7 @@ const guidanceImpactsTemplate = `<!DOCTYPE html>
             <a class="view-tab" href="/cgi-bin/entities.cgi">Entity resolution</a>
             <a class="view-tab" href="/cgi-bin/guidance.cgi">Translation guidance</a>
             <span class="view-tab active">Rule impacts</span>
+            <a class="view-tab" href="/cgi-bin/final_review.cgi">Final workspace</a>
         </div>
         <div class="summary-grid">
             <div class="summary-card"><strong>{{.TotalCount}}</strong>Total impacts</div>

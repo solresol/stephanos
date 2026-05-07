@@ -112,37 +112,37 @@ type GuidanceHit struct {
 }
 
 type GuidanceRuleImpact struct {
-	LemmaID                 int    `json:"lemma_id"`
-	Lemma                   string `json:"lemma"`
-	EntryNumber             int    `json:"entry_number"`
-	SourceTextVersionID     string `json:"source_text_version_id"`
-	TranslationVariantKind  string `json:"translation_variant_kind"`
-	TranslationVariantID    string `json:"translation_variant_id"`
-	TranslationProfileName  string `json:"translation_profile_name"`
-	TranslationProfileVer   *int   `json:"translation_profile_version"`
-	TranslationStatus       string `json:"translation_status"`
-	TranslationReviewer     string `json:"translation_reviewer"`
-	TranslationAt           string `json:"translation_at"`
-	TranslationPreview      string `json:"translation_preview"`
-	MatchID                 int    `json:"match_id"`
-	DetectedAt              string `json:"detected_at"`
-	MatchUpdatedAt          string `json:"match_updated_at"`
-	EvidenceText            string `json:"evidence_text"`
-	Confidence              string `json:"confidence"`
-	OccurrenceCount         int    `json:"occurrence_count"`
-	RuleID                  int    `json:"rule_id"`
-	RuleKey                 string `json:"rule_key"`
-	RuleCode                string `json:"rule_code"`
-	Kind                    string `json:"kind"`
-	Label                   string `json:"label"`
-	PreferredTranslation    string `json:"preferred_translation"`
-	ApplicationMode         string `json:"application_mode"`
-	LifecycleStage          string `json:"lifecycle_stage"`
-	RuleStatus              string `json:"rule_status"`
-	RuleRevisionID          int    `json:"rule_revision_id"`
-	RuleRevisionNumber      int    `json:"rule_revision_number"`
-	RuleRevisionCreatedAt   string `json:"rule_revision_created_at"`
-	ImpactReason            string `json:"impact_reason"`
+	LemmaID                int    `json:"lemma_id"`
+	Lemma                  string `json:"lemma"`
+	EntryNumber            int    `json:"entry_number"`
+	SourceTextVersionID    string `json:"source_text_version_id"`
+	TranslationVariantKind string `json:"translation_variant_kind"`
+	TranslationVariantID   string `json:"translation_variant_id"`
+	TranslationProfileName string `json:"translation_profile_name"`
+	TranslationProfileVer  *int   `json:"translation_profile_version"`
+	TranslationStatus      string `json:"translation_status"`
+	TranslationReviewer    string `json:"translation_reviewer"`
+	TranslationAt          string `json:"translation_at"`
+	TranslationPreview     string `json:"translation_preview"`
+	MatchID                int    `json:"match_id"`
+	DetectedAt             string `json:"detected_at"`
+	MatchUpdatedAt         string `json:"match_updated_at"`
+	EvidenceText           string `json:"evidence_text"`
+	Confidence             string `json:"confidence"`
+	OccurrenceCount        int    `json:"occurrence_count"`
+	RuleID                 int    `json:"rule_id"`
+	RuleKey                string `json:"rule_key"`
+	RuleCode               string `json:"rule_code"`
+	Kind                   string `json:"kind"`
+	Label                  string `json:"label"`
+	PreferredTranslation   string `json:"preferred_translation"`
+	ApplicationMode        string `json:"application_mode"`
+	LifecycleStage         string `json:"lifecycle_stage"`
+	RuleStatus             string `json:"rule_status"`
+	RuleRevisionID         int    `json:"rule_revision_id"`
+	RuleRevisionNumber     int    `json:"rule_revision_number"`
+	RuleRevisionCreatedAt  string `json:"rule_revision_created_at"`
+	ImpactReason           string `json:"impact_reason"`
 }
 
 type PlaceMention struct {
@@ -464,10 +464,22 @@ func OpenDatabase(dbPath string) (*sql.DB, error) {
 			)
 		)`,
 		"CREATE INDEX IF NOT EXISTS idx_canonical_actions_lemma ON canonical_variant_actions(lemma_id, reviewed_at, id)",
+		`CREATE TABLE IF NOT EXISTS final_translation_edit_history (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				lemma_id INTEGER NOT NULL,
+				old_reviewed_english_translation TEXT,
+				new_reviewed_english_translation TEXT,
+				old_notes TEXT,
+				new_notes TEXT,
+				edit_source TEXT NOT NULL DEFAULT 'final_review',
+				reviewer_username TEXT,
+				edited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			)`,
+		"CREATE INDEX IF NOT EXISTS idx_final_translation_edit_history_lemma ON final_translation_edit_history(lemma_id, edited_at, id)",
 		`CREATE TABLE IF NOT EXISTS commentary_entries (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			entry_key TEXT NOT NULL UNIQUE,
-			lemma_id INTEGER NOT NULL,
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				entry_key TEXT NOT NULL UNIQUE,
+				lemma_id INTEGER NOT NULL,
 			source_text_version_id TEXT,
 			phrase_text TEXT NOT NULL,
 			commentary_text TEXT NOT NULL,
@@ -1989,6 +2001,50 @@ func SaveReview(db *sql.DB, review *Review, oldReview *Review, username string) 
 		return fmt.Errorf("failed to save review: %w", err)
 	}
 
+	return nil
+}
+
+func InsertFinalTranslationEditHistory(
+	db *sql.DB,
+	lemmaID int,
+	oldReviewed string,
+	newReviewed string,
+	oldNotes string,
+	newNotes string,
+	editSource string,
+	username string,
+) error {
+	if db == nil || lemmaID <= 0 {
+		return nil
+	}
+	if strings.TrimSpace(editSource) == "" {
+		editSource = "final_review"
+	}
+	_, err := db.Exec(
+		`
+		INSERT INTO final_translation_edit_history (
+			lemma_id,
+			old_reviewed_english_translation,
+			new_reviewed_english_translation,
+			old_notes,
+			new_notes,
+			edit_source,
+			reviewer_username,
+			edited_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+		lemmaID,
+		oldReviewed,
+		newReviewed,
+		oldNotes,
+		newNotes,
+		editSource,
+		username,
+		time.Now(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to insert final translation edit history: %w", err)
+	}
 	return nil
 }
 

@@ -951,6 +951,7 @@ const guidanceTemplate = `<!DOCTYPE html>
                 <a class="view-tab" href="/cgi-bin/entities.cgi">Entity Resolution</a>
                 <span class="view-tab active">Translation Guidance</span>
                 <a class="view-tab" href="/cgi-bin/guidance_impacts.cgi">Rule Impacts</a>
+                <a class="view-tab" href="/cgi-bin/final_review.cgi">Final Workspace</a>
             </div>
             <div class="metadata">
                 <a href="/translation_guidance.html" target="_blank">Public read-only page →</a>
