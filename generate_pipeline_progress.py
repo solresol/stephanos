@@ -10,7 +10,8 @@ Usage:
 """
 import json
 import html as html_module
-from datetime import datetime, timedelta
+import hashlib
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import db
@@ -155,33 +156,108 @@ def get_progress_stats(conn) -> dict:
     stats["proper_nouns"]["rate_7d"] = cur.fetchone()[0]
 
     # 3. Structured source-citation extraction
-    cur.execute("""
-        SELECT COUNT(DISTINCT lemma_id)
-        FROM effective_proper_nouns
-        WHERE role = 'source'
-    """)
-    source_lemma_total = cur.fetchone()[0]
+    if pg_table_exists(cur, "source_citation_extraction_runs"):
+        cur.execute("""
+            SELECT
+                a.id,
+                COALESCE(a.corrected_greek_scan, a.human_greek_text, a.greek_text) AS greek_text
+            FROM assembled_lemmas a
+            WHERE COALESCE(a.quarantined, FALSE) = FALSE
+              AND COALESCE(a.corrected_greek_scan, a.human_greek_text, a.greek_text, '') <> ''
+        """)
+        source_candidate_hashes = {
+            (
+                int(lemma_id),
+                hashlib.sha256((greek_text or "").strip().encode("utf-8")).hexdigest(),
+            )
+            for lemma_id, greek_text in cur.fetchall()
+            if (greek_text or "").strip()
+        }
 
-    cur.execute("""
-        SELECT COUNT(DISTINCT lemma_id)
-        FROM lemma_source_citation_mentions
-    """)
-    source_lemma_completed = cur.fetchone()[0]
+        cur.execute("""
+            SELECT
+                lemma_id,
+                input_text_sha256,
+                status,
+                units_extracted,
+                mentions_inserted,
+                tokens_used,
+                created_at
+            FROM source_citation_extraction_runs
+        """)
+        recent_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        completed_current: set[tuple[int, str]] = set()
+        failed_current: set[tuple[int, str]] = set()
+        zero_unit_current: set[tuple[int, str]] = set()
+        positive_current: set[tuple[int, str]] = set()
+        recent_completed_current: set[tuple[int, str]] = set()
+        total_tokens = 0
+        recent_tokens = 0
+        for lemma_id, input_hash, status, units, mentions, tokens, created_at in cur.fetchall():
+            key = (int(lemma_id), str(input_hash))
+            if key not in source_candidate_hashes:
+                continue
+            tokens = int(tokens or 0)
+            if status == "completed":
+                completed_current.add(key)
+                total_tokens += tokens
+                if int(units or 0) == 0 and int(mentions or 0) == 0:
+                    zero_unit_current.add(key)
+                else:
+                    positive_current.add(key)
+                if created_at and created_at > recent_cutoff:
+                    recent_completed_current.add(key)
+                    recent_tokens += tokens
+            elif status == "failed":
+                failed_current.add(key)
 
-    stats["source_citations"] = {
-        "name": "Structured Source Citations",
-        "total": source_lemma_total,
-        "completed": min(source_lemma_completed, source_lemma_total),
-        "pending": max(source_lemma_total - source_lemma_completed, 0),
-        "unit": "lemmas",
-    }
+        source_lemma_total = len(source_candidate_hashes)
+        source_lemma_completed = len(completed_current)
+        source_lemma_pending = max(source_lemma_total - source_lemma_completed, 0)
+        failed_without_completed = len(failed_current - completed_current)
+        stats["source_citations"] = {
+            "name": "Structured Source Citations",
+            "total": source_lemma_total,
+            "completed": source_lemma_completed,
+            "pending": source_lemma_pending,
+            "unit": "lemmas",
+            "rate_7d": len(recent_completed_current),
+            "planned_rate_per_day": 300,
+            "detail": (
+                f"{len(positive_current):,} current texts with citations; "
+                f"{len(zero_unit_current):,} completed with zero units; "
+                f"{failed_without_completed:,} failed without a later completed run; "
+                f"{total_tokens:,} tokens recorded, {recent_tokens:,} in the last 7 days"
+            ),
+        }
+    else:
+        cur.execute("""
+            SELECT COUNT(DISTINCT lemma_id)
+            FROM effective_proper_nouns
+            WHERE role = 'source'
+        """)
+        source_lemma_total = cur.fetchone()[0]
 
-    cur.execute("""
-        SELECT COUNT(DISTINCT lemma_id)
-        FROM lemma_source_citation_mentions
-        WHERE created_at > NOW() - INTERVAL '7 days'
-    """)
-    stats["source_citations"]["rate_7d"] = cur.fetchone()[0]
+        cur.execute("""
+            SELECT COUNT(DISTINCT lemma_id)
+            FROM lemma_source_citation_mentions
+        """)
+        source_lemma_completed = cur.fetchone()[0]
+
+        stats["source_citations"] = {
+            "name": "Structured Source Citations",
+            "total": source_lemma_total,
+            "completed": min(source_lemma_completed, source_lemma_total),
+            "pending": max(source_lemma_total - source_lemma_completed, 0),
+            "unit": "lemmas",
+        }
+
+        cur.execute("""
+            SELECT COUNT(DISTINCT lemma_id)
+            FROM lemma_source_citation_mentions
+            WHERE created_at > NOW() - INTERVAL '7 days'
+        """)
+        stats["source_citations"]["rate_7d"] = cur.fetchone()[0]
 
     # 4. Wikidata linking - sources
     cur.execute("""
