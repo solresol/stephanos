@@ -121,12 +121,15 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
                 tr.source_text_version_id,
                 COALESCE(tr.model, ''),
                 COALESCE(p.name, ''),
-                pv.version
+                pv.version,
+                COALESCE(stv.source_document, '')
             FROM translation_runs tr
             LEFT JOIN translation_prompt_profiles p
               ON p.id = tr.profile_id
             LEFT JOIN translation_prompt_profile_versions pv
               ON pv.id = tr.profile_version_id
+            LEFT JOIN lemma_source_text_versions stv
+              ON stv.id = tr.source_text_version_id
             WHERE tr.id = %s
               AND tr.lemma_id = %s
             LIMIT 1
@@ -173,7 +176,7 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
             "status": status,
             "kind": variant_kind,
             "id": variant_id,
-            "source_document": "billerbeck",
+            "source_document": (row[9] or "").strip(),
             "source_text_version_id": str(row[5] or ""),
             "model": (row[6] or "").strip(),
             "profile_name": (row[7] or "").strip(),
@@ -189,13 +192,16 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
             }
         cur.execute(
             """
-            SELECT id,
+            SELECT ht.id,
                    COALESCE(translation_text, ''),
                    COALESCE(status, ''),
-                   source_text_version_id
+                   ht.source_text_version_id,
+                   COALESCE(stv.source_document, '')
             FROM human_translations
-            WHERE id = %s
-              AND lemma_id = %s
+            LEFT JOIN lemma_source_text_versions stv
+              ON stv.id = ht.source_text_version_id
+            WHERE ht.id = %s
+              AND ht.lemma_id = %s
             LIMIT 1
             """,
             (variant_id, lemma_id),
@@ -225,7 +231,7 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
             "status": status,
             "kind": variant_kind,
             "id": variant_id,
-            "source_document": "billerbeck",
+            "source_document": (row[4] or "").strip(),
             "source_text_version_id": str(row[3] or ""),
             "model": "",
             "profile_name": "",

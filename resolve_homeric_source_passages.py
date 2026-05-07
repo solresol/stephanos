@@ -430,7 +430,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--lemma-id", type=int, help="Process only one lemma")
     parser.add_argument("--mention-id", type=int, help="Process only one source-citation mention")
-    parser.add_argument("--source-document", default="billerbeck", choices=["billerbeck", "meineke"])
+    parser.add_argument("--source-document", default="meineke", choices=["billerbeck", "meineke"])
     parser.add_argument("--force", action="store_true", help="Re-fetch existing passage rows")
     parser.add_argument("--dry-run", action="store_true", help="Parse and fetch without writing")
     parser.add_argument("--delay", type=float, default=0.25)

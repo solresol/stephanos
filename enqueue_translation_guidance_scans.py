@@ -11,13 +11,11 @@ from __future__ import annotations
 
 import argparse
 
-
-DETECTOR_BY_KIND = {
-    "gloss": "lexical_prefilter",
-    "formula": "formula_prefilter",
-    "proper_noun": "proper_noun_lookup",
-    "contextual_bias": "contextual_bias_prefilter",
-}
+from translation_guidance_coverage import (
+    CURRENT_DETECTOR_VERSION,
+    DETECTOR_BY_KIND,
+    PROMPT_GUIDANCE_KINDS,
+)
 
 
 def column_exists(cur, table_name: str, column_name: str) -> bool:
@@ -60,6 +58,10 @@ def resolve_rules(cur, args) -> list[tuple[int, str, int]]:
     params: list[object] = []
     if column_exists(cur, "translation_guidance_rules", "lifecycle_stage"):
         where.append("COALESCE(r.lifecycle_stage, 'guidance') <> 'inactive'")
+    if args.prompt_eligible_rules:
+        where.append("COALESCE(r.lifecycle_stage, 'guidance') = 'guidance'")
+        where.append("r.kind = ANY(%s)")
+        params.append(list(PROMPT_GUIDANCE_KINDS))
 
     if args.rule_id:
         where.append("r.id = ANY(%s)")
@@ -70,9 +72,9 @@ def resolve_rules(cur, args) -> list[tuple[int, str, int]]:
     if args.kind:
         where.append("r.kind = %s")
         params.append(args.kind)
-    if not (args.rule_id or args.rule_key or args.kind or args.all_active_rules):
+    if not (args.rule_id or args.rule_key or args.kind or args.all_active_rules or args.prompt_eligible_rules):
         raise RuntimeError(
-            "Refusing to enqueue without a rule filter. Pass --rule-id, --rule-key, --kind, or --all-active-rules."
+            "Refusing to enqueue without a rule filter. Pass --rule-id, --rule-key, --kind, --all-active-rules, or --prompt-eligible-rules."
         )
 
     cur.execute(
@@ -194,6 +196,7 @@ def enqueue_one(
                     AND m.lemma_id = %s
                     AND m.source_text_version_id = %s
                     AND m.detector_kind = %s
+                    AND m.detector_version = %s
               )
           )
         """,
@@ -214,6 +217,7 @@ def enqueue_one(
             lemma_id,
             source_text_version_id,
             detector_kind,
+            CURRENT_DETECTOR_VERSION,
         ),
     )
     return cur.rowcount > 0
@@ -225,6 +229,11 @@ def main() -> None:
     parser.add_argument("--rule-key", action="append", help="Rule key to enqueue")
     parser.add_argument("--kind", choices=["gloss", "formula", "proper_noun", "contextual_bias"], help="Enqueue all active rules of this kind")
     parser.add_argument("--all-active-rules", action="store_true", help="Allow enqueueing every active rule")
+    parser.add_argument(
+        "--prompt-eligible-rules",
+        action="store_true",
+        help="Enqueue settled guidance rules that can be added to translation prompts",
+    )
     parser.add_argument("--lemma-id", type=int, action="append", help="Restrict to one or more lemma ids")
     parser.add_argument("--source-document", default="meineke", choices=["billerbeck", "meineke"])
     parser.add_argument("--limit", type=int, help="Max source lemmas to enqueue per run")

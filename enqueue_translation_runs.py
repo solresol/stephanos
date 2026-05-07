@@ -5,6 +5,10 @@ Queue translation run requests for the new parallel translation pipeline.
 import argparse
 
 from db import get_connection
+from translation_guidance_coverage import (
+    enqueue_missing_guidance,
+    guidance_coverage_counts,
+)
 
 
 def resolve_profile(cur, profile_name: str):
@@ -179,7 +183,7 @@ def main():
     parser = argparse.ArgumentParser(description="Enqueue translation run requests.")
     parser.add_argument("--profile", required=True, help="Prompt profile name")
     parser.add_argument("--profile-version", type=int, help="Prompt profile version (default: latest active)")
-    parser.add_argument("--source-document", default="billerbeck", choices=["billerbeck", "meineke"])
+    parser.add_argument("--source-document", default="meineke", choices=["billerbeck", "meineke"])
     parser.add_argument("--lemma-id", type=int, help="Queue only a single lemma id")
     parser.add_argument("--limit", type=int, help="Max lemmas to queue")
     parser.add_argument("--repeat", type=int, default=1, help="Runs requested per lemma")
@@ -193,6 +197,23 @@ def main():
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--created-by", default="enqueue_translation_runs.py")
+    parser.add_argument(
+        "--prepare-guidance-first",
+        action="store_true",
+        help="Queue missing prompt-eligible guidance checks for selected candidates before enqueueing translations",
+    )
+    parser.add_argument(
+        "--require-guidance-complete",
+        action="store_true",
+        help="Only enqueue translation requests whose prompt-eligible guidance coverage is complete",
+    )
+    parser.add_argument(
+        "--guidance-queue-priority",
+        type=int,
+        default=20,
+        help="Priority for guidance rows queued by --prepare-guidance-first",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Print candidate/coverage summary without writing")
     args = parser.parse_args()
 
     conn = get_connection()
@@ -237,6 +258,62 @@ def main():
 
     if not candidates:
         print("No candidate lemmas found for enqueue.")
+        conn.close()
+        return
+
+    if args.prepare_guidance_first or args.require_guidance_complete:
+        ready = []
+        incomplete = []
+        guidance_rows_inserted = 0
+        for lemma_id, source_text_version_id in candidates:
+            coverage = guidance_coverage_counts(
+                cur,
+                source_text_version_id=int(source_text_version_id),
+            )
+            if args.prepare_guidance_first and int(coverage.get("missing", 0)) > 0:
+                queued = enqueue_missing_guidance(
+                    cur,
+                    lemma_id=int(lemma_id),
+                    source_text_version_id=int(source_text_version_id),
+                    requested_by=args.created_by,
+                    priority=args.guidance_queue_priority,
+                    notes="queued before translation request because guidance-first mode is enabled",
+                )
+                guidance_rows_inserted += queued["inserted"]
+                coverage = guidance_coverage_counts(
+                    cur,
+                    source_text_version_id=int(source_text_version_id),
+                )
+
+            if (
+                coverage.get("available")
+                and int(coverage.get("required", 0)) > 0
+                and int(coverage.get("missing", 0)) == 0
+            ):
+                ready.append((lemma_id, source_text_version_id))
+            else:
+                incomplete.append((lemma_id, source_text_version_id, coverage))
+
+        print(f"Translation candidates selected: {len(candidates)}")
+        print(f"Guidance-complete candidates: {len(ready)}")
+        print(f"Guidance-incomplete candidates: {len(incomplete)}")
+        if args.prepare_guidance_first:
+            print(f"Missing guidance queue rows inserted: {guidance_rows_inserted}")
+
+        if args.require_guidance_complete:
+            candidates = ready
+            if not candidates:
+                print("No guidance-complete translation candidates to enqueue.")
+                if args.dry_run:
+                    conn.rollback()
+                else:
+                    conn.commit()
+                conn.close()
+                return
+
+    if args.dry_run:
+        print(f"Would queue translation requests: {len(candidates)}")
+        conn.rollback()
         conn.close()
         return
 

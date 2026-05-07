@@ -20,12 +20,13 @@ from openai import OpenAI
 
 from api_keys import load_api_key
 from db import get_connection
+from translation_guidance_coverage import CURRENT_DETECTOR_VERSION
 
 
 DEFAULT_MODEL = "gpt-5.4-mini"
-DEFAULT_DAILY_TOKEN_LIMIT = 250_000
-DEFAULT_FORMULA_AI_LIMIT = 500
-DETECTOR_VERSION = "translation_guidance_scan_v2"
+DEFAULT_DAILY_TOKEN_LIMIT = 2_000_000
+DEFAULT_GUIDANCE_AI_LIMIT = 2_000
+DETECTOR_VERSION = CURRENT_DETECTOR_VERSION
 
 GREEK_ARTICLE_CANDIDATES = {
     "ο",
@@ -156,7 +157,8 @@ def build_candidates(label: str) -> list[str]:
 def extract_excerpt(source_text: str, normalized_source: str, index_map: list[int], candidate: str) -> str:
     if not candidate:
         return ""
-    start = normalized_source.find(candidate)
+    spans = find_candidate_spans(normalized_source, candidate)
+    start = spans[0][0] if spans else -1
     if start < 0:
         return ""
     end = start + len(candidate) - 1
@@ -165,6 +167,32 @@ def extract_excerpt(source_text: str, normalized_source: str, index_map: list[in
     raw_start = max(0, index_map[start] - 60)
     raw_end = min(len(source_text), index_map[end] + 61)
     return (source_text or "")[raw_start:raw_end].strip()
+
+
+def is_normalized_token_char(char: str) -> bool:
+    return bool(char) and (char.isalnum() or char == "_")
+
+
+def has_token_boundaries(normalized_source: str, start: int, end: int) -> bool:
+    before = normalized_source[start - 1] if start > 0 else ""
+    after = normalized_source[end] if end < len(normalized_source) else ""
+    return not is_normalized_token_char(before) and not is_normalized_token_char(after)
+
+
+def find_candidate_spans(normalized_source: str, candidate: str) -> list[tuple[int, int]]:
+    if not normalized_source or not candidate:
+        return []
+    spans: list[tuple[int, int]] = []
+    start = 0
+    while True:
+        found = normalized_source.find(candidate, start)
+        if found < 0:
+            break
+        end = found + len(candidate)
+        if has_token_boundaries(normalized_source, found, end):
+            spans.append((found, end))
+        start = found + max(len(candidate), 1)
+    return spans
 
 
 def find_deterministic_match(source_text: str, label: str) -> dict[str, object]:
@@ -180,7 +208,8 @@ def find_deterministic_match(source_text: str, label: str) -> dict[str, object]:
         }
 
     for candidate in candidates:
-        count = normalized_source.count(candidate)
+        spans = find_candidate_spans(normalized_source, candidate)
+        count = len(spans)
         if count <= 0:
             continue
         return {
@@ -202,22 +231,6 @@ def find_deterministic_match(source_text: str, label: str) -> dict[str, object]:
         "evidence_text": "",
         "evidence_json": {"method": "normalized_substring", "candidates": candidates},
     }
-
-
-def significant_tokens(text: str) -> set[str]:
-    return {
-        token
-        for token in re.findall(r"[\w']+", normalize_text(text), flags=re.UNICODE)
-        if len(token) >= 3
-    }
-
-
-def should_escalate_formula(rule_label: str, source_text: str) -> bool:
-    if re.search(r"\bX\b|\bY\b|\[", rule_label or ""):
-        return True
-    rule_tokens = significant_tokens(rule_label)
-    source_tokens = significant_tokens(source_text)
-    return bool(rule_tokens and source_tokens and (rule_tokens & source_tokens))
 
 
 def call_formula_model(
@@ -242,11 +255,12 @@ def call_formula_model(
                     "are variable slots, but every fixed Greek word, particle, or phrase in the "
                     "rule label must be present in the relevant local order. Do not accept a merely "
                     "semantic resemblance or an implicit equivalent when the fixed wording is absent. "
-                    "Return JSON only with keys match_status, confidence, evidence_text, notes. "
+                    "Return JSON only with keys match_status, confidence, evidence_text, occurrence_count, notes. "
                     "match_status must be matched, not_matched, or uncertain. "
-                    "confidence must be high, medium, or low. evidence_text must quote the exact "
-                    "Greek words that instantiate the formula; if there is no exact surface evidence, "
-                    "return not_matched."
+                    "confidence must be high, medium, or low. occurrence_count must be an integer "
+                    "count of real occurrences when matched, otherwise 0. evidence_text must quote "
+                    "the exact Greek words that instantiate the formula; if there is no exact "
+                    "surface evidence, return not_matched."
                 ),
             },
             {
@@ -263,18 +277,13 @@ def call_formula_model(
     )
     tokens_used = response.usage.total_tokens if response.usage else 0
     payload = json.loads(response.choices[0].message.content or "{}")
-    match_status = str(payload.get("match_status") or "uncertain").strip().lower()
-    if match_status not in {"matched", "not_matched", "uncertain"}:
-        match_status = "uncertain"
-    confidence = str(payload.get("confidence") or "low").strip().lower()
-    if confidence not in {"high", "medium", "low"}:
-        confidence = "low"
+    match_status, confidence, occurrence_count = normalize_guidance_payload(payload)
     evidence_text = str(payload.get("evidence_text") or "").strip()
     notes_text = str(payload.get("notes") or "").strip()
     return (
         {
             "match_status": match_status,
-            "occurrence_count": 1 if match_status == "matched" else 0,
+            "occurrence_count": occurrence_count,
             "confidence": confidence,
             "evidence_text": evidence_text,
             "evidence_json": {
@@ -286,18 +295,62 @@ def call_formula_model(
     )
 
 
-def call_contextual_bias_model(
+def normalize_guidance_payload(payload: dict[str, object]) -> tuple[str, str, int]:
+    match_status = str(payload.get("match_status") or "uncertain").strip().lower()
+    if match_status not in {"matched", "not_matched", "uncertain"}:
+        match_status = "uncertain"
+    confidence = str(payload.get("confidence") or "low").strip().lower()
+    if confidence not in {"high", "medium", "low"}:
+        confidence = "low"
+    if match_status != "matched":
+        return match_status, confidence, 0
+    try:
+        occurrence_count = int(payload.get("occurrence_count") or 1)
+    except (TypeError, ValueError):
+        occurrence_count = 1
+    return match_status, confidence, max(occurrence_count, 1)
+
+
+def call_lexical_guidance_model(
     client: OpenAI,
     *,
     model: str,
     lemma: str,
     source_text: str,
+    rule_kind: str,
     rule_label: str,
     preferred_translation: str,
-    context_condition: str,
     bias_strength: str,
     notes: str,
+    context_condition: str = "",
+    lexical_prefilter: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], int]:
+    if rule_kind == "proper_noun":
+        guidance_description = (
+            "The rule describes a Greek proper noun or named entity. Accept real Greek "
+            "occurrences of that entity, including inflected, dialectal, enclitic/article-free, "
+            "or common orthographic variants. Reject accidental substrings inside longer "
+            "unrelated words, and reject matching only an article or grammatical marker from "
+            "the rule label. The target entity is the rule label, not the headword; do not "
+            "match the headword or its derivative forms unless the rule label itself names "
+            "that same entity."
+        )
+    elif rule_kind == "contextual_bias":
+        guidance_description = (
+            "The rule describes a vocabulary-bias item. Decide whether the Greek term or "
+            "phrase appears in a relevant form and whether the local context satisfies the "
+            "stated condition."
+        )
+    else:
+        guidance_description = (
+            "The rule describes a gloss or lexical expression. Accept any genuine Greek "
+            "form that instantiates the expression, including inflected, contracted, "
+            "dialectal, or orthographic variants. Reject accidental substrings inside longer "
+            "unrelated words. The target expression is the rule label, not the headword; do "
+            "not match the headword or its derivative forms unless they instantiate the rule "
+            "label itself."
+        )
+    lexical_hint = json.dumps(lexical_prefilter or {}, ensure_ascii=False)
     response = client.chat.completions.create(
         model=model,
         response_format={"type": "json_object"},
@@ -305,23 +358,36 @@ def call_contextual_bias_model(
             {
                 "role": "system",
                 "content": (
-                    "You judge whether a Stephanos entry matches the context condition for a "
-                    "vocabulary-bias translation guidance rule. The Greek term or phrase has "
-                    "already been found by a lexical prefilter; decide only whether the local "
-                    "context satisfies the stated condition. Return JSON only with keys "
-                    "match_status, confidence, evidence_text, notes. match_status must be "
-                    "matched, not_matched, or uncertain. confidence must be high, medium, or low."
+                    "You judge whether a Stephanos entry matches a translation-guidance rule. "
+                    "Use Greek morphology and philological judgment rather than raw substring "
+                    "matching. A normalized lexical prefilter may be supplied as a hint, but it "
+                    "is not authoritative and may contain false positives or miss inflected "
+                    "forms. Judge the rule label, not the headword. Do not return matched "
+                    "because the headword, an inflected headword, or a derivative of the "
+                    "headword appears in the source unless that is also a genuine occurrence "
+                    "of the rule label. If evidence_text would not contain the target rule "
+                    "expression or a clear inflected/orthographic form of it, return not_matched. "
+                    "If your notes say the rule label itself is not the matched entity, the "
+                    "only valid match_status is not_matched. "
+                    "Return JSON only with keys match_status, confidence, evidence_text, "
+                    "occurrence_count, notes. match_status must be matched, not_matched, or "
+                    "uncertain. confidence must be high, medium, or low. occurrence_count must "
+                    "be an integer count of real occurrences when matched, otherwise 0. "
+                    "evidence_text must quote the exact Greek words that justify the judgement."
                 ),
             },
             {
                 "role": "user",
                 "content": (
                     f"Headword: {lemma}\n"
-                    f"Vocabulary term/phrase: {rule_label}\n"
-                    f"Context condition: {context_condition}\n"
-                    f"Preferred bias: {preferred_translation}\n"
+                    f"Rule kind: {rule_kind}\n"
+                    f"Rule label: {rule_label}\n"
+                    f"Preferred English guidance: {preferred_translation}\n"
+                    f"Context condition: {context_condition or '(none)'}\n"
                     f"Bias strength: {bias_strength or 'normal'}\n"
                     f"Rule notes: {notes}\n\n"
+                    f"Detection instructions: {guidance_description}\n\n"
+                    f"Lexical prefilter hint:\n{lexical_hint}\n\n"
                     f"Source Greek text:\n{source_text}"
                 ),
             },
@@ -329,25 +395,21 @@ def call_contextual_bias_model(
     )
     tokens_used = response.usage.total_tokens if response.usage else 0
     payload = json.loads(response.choices[0].message.content or "{}")
-    match_status = str(payload.get("match_status") or "uncertain").strip().lower()
-    if match_status not in {"matched", "not_matched", "uncertain"}:
-        match_status = "uncertain"
-    confidence = str(payload.get("confidence") or "low").strip().lower()
-    if confidence not in {"high", "medium", "low"}:
-        confidence = "low"
+    match_status, confidence, occurrence_count = normalize_guidance_payload(payload)
     evidence_text = str(payload.get("evidence_text") or "").strip()
     notes_text = str(payload.get("notes") or "").strip()
     return (
         {
             "match_status": match_status,
-            "occurrence_count": 1 if match_status == "matched" else 0,
+            "occurrence_count": occurrence_count,
             "confidence": confidence,
             "evidence_text": evidence_text,
             "evidence_json": {
-                "method": "contextual_bias_ai_judgement",
+                "method": f"{rule_kind}_ai_judgement",
                 "context_condition": context_condition,
                 "bias_strength": bias_strength or "normal",
                 "notes": notes_text,
+                "lexical_prefilter": lexical_prefilter or {},
             },
         },
         tokens_used,
@@ -624,10 +686,12 @@ def main() -> None:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--daily-token-limit", type=int, default=DEFAULT_DAILY_TOKEN_LIMIT)
     parser.add_argument(
+        "--guidance-ai-limit",
         "--formula-ai-limit",
+        dest="guidance_ai_limit",
         type=int,
-        default=DEFAULT_FORMULA_AI_LIMIT,
-        help="Max AI judgements per run for formula and contextual-bias scans.",
+        default=DEFAULT_GUIDANCE_AI_LIMIT,
+        help="Max AI judgements per run across all guidance scan kinds.",
     )
     args = parser.parse_args()
     args.model = ensure_mini_model(args.model)
@@ -681,109 +745,72 @@ def main() -> None:
         try:
             context_condition = str(context_condition or "").strip()
             bias_strength = str(bias_strength or "normal").strip() or "normal"
-            result = find_deterministic_match(source_text, rule_label)
-            needs_formula_ai = (
-                rule_kind == "formula"
-                and (
-                    result["match_status"] == "not_matched"
-                    or re.search(r"\bX\b|\bY\b|\[", rule_label or "")
+            lexical_prefilter = find_deterministic_match(source_text, rule_label)
+            if guidance_ai_used >= args.guidance_ai_limit:
+                defer_job(
+                    cur,
+                    int(queue_id),
+                    f"Guidance AI call limit reached for this run: {guidance_ai_used} >= {args.guidance_ai_limit}",
                 )
-                and should_escalate_formula(rule_label, source_text)
-            )
-            needs_contextual_bias_ai = False
-            if rule_kind == "contextual_bias":
-                evidence_json = dict(result.get("evidence_json") or {})
-                evidence_json.update(
-                    {
+                conn.commit()
+                deferred += 1
+                continue
+            if tokens_today + ai_tokens >= args.daily_token_limit:
+                defer_job(
+                    cur,
+                    int(queue_id),
+                    f"Daily token limit reached for {args.model}: {tokens_today + ai_tokens} >= {args.daily_token_limit}",
+                )
+                conn.commit()
+                deferred += 1
+                continue
+            if client is not None:
+                if rule_kind == "formula":
+                    ai_result, tokens_used = call_formula_model(
+                        client,
+                        model=args.model,
+                        lemma=lemma,
+                        source_text=source_text,
+                        rule_label=rule_label,
+                        preferred_translation=preferred_translation,
+                        notes=rule_notes,
+                    )
+                    evidence_json = dict(ai_result.get("evidence_json") or {})
+                    evidence_json["lexical_prefilter"] = lexical_prefilter.get("evidence_json") or {}
+                    ai_result["evidence_json"] = evidence_json
+                else:
+                    ai_result, tokens_used = call_lexical_guidance_model(
+                        client,
+                        model=args.model,
+                        lemma=lemma,
+                        source_text=source_text,
+                        rule_kind=rule_kind,
+                        rule_label=rule_label,
+                        preferred_translation=preferred_translation,
+                        context_condition=context_condition,
+                        bias_strength=bias_strength,
+                        notes=rule_notes,
+                        lexical_prefilter=lexical_prefilter.get("evidence_json") or {},
+                    )
+                result = ai_result
+                job_model = args.model
+                job_tokens = int(tokens_used or 0)
+                guidance_ai_used += 1
+                ai_tokens += job_tokens
+            else:
+                result = {
+                    "match_status": "uncertain",
+                    "occurrence_count": 0,
+                    "confidence": "low",
+                    "evidence_text": "",
+                    "evidence_json": {
+                        "method": f"{rule_kind or 'guidance'}_ai_unavailable",
                         "context_condition": context_condition,
                         "bias_strength": bias_strength,
-                    }
-                )
-                if result["match_status"] == "matched" and context_condition:
-                    needs_contextual_bias_ai = True
-                elif result["match_status"] == "matched":
-                    evidence_json["method"] = "contextual_bias_lexical_no_context_condition"
-                    result["confidence"] = "medium"
-                else:
-                    evidence_json["method"] = "contextual_bias_lexical_prefilter"
-                result["evidence_json"] = evidence_json
-
-            needs_guidance_ai = needs_formula_ai or needs_contextual_bias_ai
-            if needs_guidance_ai:
-                if guidance_ai_used >= args.formula_ai_limit:
-                    defer_job(
-                        cur,
-                        int(queue_id),
-                        f"Guidance AI call limit reached for this run: {guidance_ai_used} >= {args.formula_ai_limit}",
-                    )
-                    conn.commit()
-                    deferred += 1
-                    continue
-                if tokens_today + ai_tokens >= args.daily_token_limit:
-                    defer_job(
-                        cur,
-                        int(queue_id),
-                        f"Daily token limit reached for {args.model}: {tokens_today + ai_tokens} >= {args.daily_token_limit}",
-                    )
-                    conn.commit()
-                    deferred += 1
-                    continue
-                if client is not None:
-                    if needs_contextual_bias_ai:
-                        ai_result, tokens_used = call_contextual_bias_model(
-                            client,
-                            model=args.model,
-                            lemma=lemma,
-                            source_text=source_text,
-                            rule_label=rule_label,
-                            preferred_translation=preferred_translation,
-                            context_condition=context_condition,
-                            bias_strength=bias_strength,
-                            notes=rule_notes,
-                        )
-                        if not ai_result.get("evidence_text") and result.get("evidence_text"):
-                            ai_result["evidence_text"] = result["evidence_text"]
-                        evidence_json = dict(ai_result.get("evidence_json") or {})
-                        evidence_json["lexical_prefilter"] = result.get("evidence_json") or {}
-                        ai_result["evidence_json"] = evidence_json
-                    else:
-                        ai_result, tokens_used = call_formula_model(
-                            client,
-                            model=args.model,
-                            lemma=lemma,
-                            source_text=source_text,
-                            rule_label=rule_label,
-                            preferred_translation=preferred_translation,
-                            notes=rule_notes,
-                        )
-                    result = ai_result
-                    job_model = args.model
-                    job_tokens = int(tokens_used or 0)
-                    guidance_ai_used += 1
-                    ai_tokens += job_tokens
-                else:
-                    unavailable_method = (
-                        "contextual_bias_ai_unavailable"
-                        if needs_contextual_bias_ai
-                        else "formula_ai_unavailable"
-                    )
-                    unavailable_notes = (
-                        "OpenAI client unavailable for contextual-bias escalation."
-                        if needs_contextual_bias_ai
-                        else "OpenAI client unavailable for formula escalation."
-                    )
-                    result = {
-                        "match_status": "uncertain",
-                        "occurrence_count": 0,
-                        "confidence": "low",
-                        "evidence_text": "",
-                        "evidence_json": {
-                            "method": unavailable_method,
-                            "context_condition": context_condition if needs_contextual_bias_ai else "",
-                            "bias_strength": bias_strength if needs_contextual_bias_ai else "",
-                            "notes": unavailable_notes,
-                        },
-                    }
+                        "lexical_prefilter": lexical_prefilter.get("evidence_json") or {},
+                        "notes": "OpenAI client unavailable for guidance scan.",
+                    },
+                }
 
             upsert_match(cur, job, result)
             mark_job(cur, int(queue_id), status="completed", model=job_model, tokens_used=job_tokens)

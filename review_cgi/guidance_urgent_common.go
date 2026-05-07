@@ -11,12 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
-	"unicode"
 )
 
 const defaultUrgentGuidanceScanModel = "gpt-5.4-mini"
@@ -615,21 +613,15 @@ func claimNextUrgentGuidanceScanItem(db *sql.DB, jobID int64) (urgentGuidanceSca
 }
 
 func processUrgentGuidanceScanItem(db *sql.DB, item urgentGuidanceScanItem, model string) error {
-	result := findUrgentDeterministicFormulaMatch(item.SourceText, item.RuleLabel)
-	needsAI := (result.MatchStatus == "not_matched" || urgentFormulaLabelHasVariables(item.RuleLabel)) &&
-		shouldEscalateUrgentFormula(item.RuleLabel, item.SourceText)
-	if needsAI {
-		key, err := loadUrgentOpenAIKey()
-		if err != nil {
-			return err
-		}
-		aiResult, err := callUrgentFormulaModel(key, model, item)
-		if err != nil {
-			return err
-		}
-		result = aiResult
+	key, err := loadUrgentOpenAIKey()
+	if err != nil {
+		return err
 	}
-	_, err := db.Exec(
+	result, err := callUrgentFormulaModel(key, model, item)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(
 		`
 		UPDATE translation_guidance_urgent_scan_items
 		SET status = 'completed',
@@ -833,195 +825,6 @@ func parseSQLiteTime(value string) (time.Time, error) {
 func pidIsAlive(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
-}
-
-var urgentParentheticalPattern = regexp.MustCompile(`\([^)]*\)`)
-var urgentCandidateSplitPattern = regexp.MustCompile(`/|;|,|·`)
-
-func findUrgentDeterministicFormulaMatch(sourceText string, label string) formulaScanResult {
-	normalizedSource, indexMap := normalizeUrgentTextWithMap(sourceText)
-	candidates := buildUrgentFormulaCandidates(label)
-	if normalizedSource == "" || len(candidates) == 0 {
-		return formulaScanResult{MatchStatus: "not_matched", OccurrenceCount: 0, Confidence: "low"}
-	}
-	for _, candidate := range candidates {
-		count := strings.Count(normalizedSource, candidate)
-		if count <= 0 {
-			continue
-		}
-		return formulaScanResult{
-			MatchStatus:     "matched",
-			OccurrenceCount: count,
-			Confidence:      "high",
-			EvidenceText:    urgentExcerpt(sourceText, normalizedSource, indexMap, candidate),
-		}
-	}
-	return formulaScanResult{MatchStatus: "not_matched", OccurrenceCount: 0, Confidence: "high"}
-}
-
-func normalizeUrgentTextWithMap(text string) (string, []int) {
-	var builder strings.Builder
-	indexMap := make([]int, 0, len(text))
-	previousSpace := true
-	for rawIndex, r := range text {
-		r = normalizeUrgentRune(r)
-		if r == 0 {
-			continue
-		}
-		if unicode.IsSpace(r) {
-			if !previousSpace {
-				builder.WriteRune(' ')
-				indexMap = append(indexMap, rawIndex)
-				previousSpace = true
-			}
-			continue
-		}
-		builder.WriteRune(r)
-		indexMap = append(indexMap, rawIndex)
-		previousSpace = false
-	}
-	normalized := builder.String()
-	if strings.HasSuffix(normalized, " ") && len(indexMap) > 0 {
-		normalized = strings.TrimSuffix(normalized, " ")
-		indexMap = indexMap[:len(indexMap)-1]
-	}
-	return normalized, indexMap
-}
-
-func normalizeUrgentText(text string) string {
-	normalized, _ := normalizeUrgentTextWithMap(text)
-	return normalized
-}
-
-func normalizeUrgentRune(r rune) rune {
-	r = unicode.ToLower(r)
-	if unicode.Is(unicode.Mn, r) {
-		return 0
-	}
-	switch r {
-	case 'ς':
-		return 'σ'
-	case 'ά', 'ὰ', 'ά', 'ᾶ', 'ᾷ', 'ἀ', 'ἁ', 'ἂ', 'ἃ', 'ἄ', 'ἅ', 'ἆ', 'ἇ', 'ᾳ', 'ᾀ', 'ᾁ', 'ᾂ', 'ᾃ', 'ᾄ', 'ᾅ', 'ᾆ', 'ᾇ', 'ᾰ', 'ᾱ', 'ᾲ', 'ᾴ':
-		return 'α'
-	case 'έ', 'ὲ', 'ἐ', 'ἑ', 'ἒ', 'ἓ', 'ἔ', 'ἕ':
-		return 'ε'
-	case 'ή', 'ὴ', 'ῆ', 'ῇ', 'ἠ', 'ἡ', 'ἢ', 'ἣ', 'ἤ', 'ἥ', 'ἦ', 'ἧ', 'ῃ', 'ᾐ', 'ᾑ', 'ᾒ', 'ᾓ', 'ᾔ', 'ᾕ', 'ᾖ', 'ᾗ', 'ῂ', 'ῄ':
-		return 'η'
-	case 'ί', 'ὶ', 'ῖ', 'ἰ', 'ἱ', 'ἲ', 'ἳ', 'ἴ', 'ἵ', 'ἶ', 'ἷ', 'ϊ', 'ΐ', 'ῒ', 'ΐ', 'ῗ', 'ῐ', 'ῑ':
-		return 'ι'
-	case 'ό', 'ὸ', 'ὀ', 'ὁ', 'ὂ', 'ὃ', 'ὄ', 'ὅ':
-		return 'ο'
-	case 'ύ', 'ὺ', 'ῦ', 'ὐ', 'ὑ', 'ὒ', 'ὓ', 'ὔ', 'ὕ', 'ὖ', 'ὗ', 'ϋ', 'ΰ', 'ῢ', 'ΰ', 'ῧ', 'ῠ', 'ῡ':
-		return 'υ'
-	case 'ώ', 'ὼ', 'ῶ', 'ῷ', 'ὠ', 'ὡ', 'ὢ', 'ὣ', 'ὤ', 'ὥ', 'ὦ', 'ὧ', 'ῳ', 'ᾠ', 'ᾡ', 'ᾢ', 'ᾣ', 'ᾤ', 'ᾥ', 'ᾦ', 'ᾧ', 'ῲ', 'ῴ':
-		return 'ω'
-	case 'ῤ', 'ῥ':
-		return 'ρ'
-	default:
-		return r
-	}
-}
-
-func buildUrgentFormulaCandidates(label string) []string {
-	raw := strings.TrimSpace(label)
-	if raw == "" {
-		return nil
-	}
-	seen := make(map[string]bool)
-	candidates := make([]string, 0)
-	add := func(value string) {
-		normalized := strings.Join(strings.Fields(normalizeUrgentText(value)), " ")
-		if normalized == "" || seen[normalized] {
-			return
-		}
-		seen[normalized] = true
-		candidates = append(candidates, normalized)
-	}
-	add(raw)
-	add(urgentParentheticalPattern.ReplaceAllString(raw, ""))
-	for _, piece := range urgentCandidateSplitPattern.Split(raw, -1) {
-		piece = strings.TrimSpace(piece)
-		if piece == "" {
-			continue
-		}
-		add(piece)
-		add(urgentParentheticalPattern.ReplaceAllString(piece, ""))
-	}
-	for i := 0; i < len(candidates); i++ {
-		for j := i + 1; j < len(candidates); j++ {
-			if len([]rune(candidates[j])) > len([]rune(candidates[i])) {
-				candidates[i], candidates[j] = candidates[j], candidates[i]
-			}
-		}
-	}
-	return candidates
-}
-
-func urgentExcerpt(sourceText string, normalizedSource string, indexMap []int, candidate string) string {
-	if candidate == "" {
-		return ""
-	}
-	start := strings.Index(normalizedSource, candidate)
-	if start < 0 {
-		return ""
-	}
-	end := start + len(candidate) - 1
-	if start >= len(indexMap) || end >= len(indexMap) {
-		return candidate
-	}
-	rawStart := indexMap[start] - 60
-	if rawStart < 0 {
-		rawStart = 0
-	}
-	rawEnd := indexMap[end] + 61
-	if rawEnd > len(sourceText) {
-		rawEnd = len(sourceText)
-	}
-	return strings.TrimSpace(sourceText[rawStart:rawEnd])
-}
-
-func urgentFormulaLabelHasVariables(label string) bool {
-	return strings.Contains(label, "[") ||
-		strings.Contains(label, " X ") ||
-		strings.Contains(label, " Y ")
-}
-
-func shouldEscalateUrgentFormula(ruleLabel string, sourceText string) bool {
-	if urgentFormulaLabelHasVariables(ruleLabel) {
-		return true
-	}
-	ruleTokens := urgentSignificantTokens(ruleLabel)
-	if len(ruleTokens) == 0 {
-		return false
-	}
-	for token := range urgentSignificantTokens(sourceText) {
-		if ruleTokens[token] {
-			return true
-		}
-	}
-	return false
-}
-
-func urgentSignificantTokens(text string) map[string]bool {
-	normalized := normalizeUrgentText(text)
-	tokens := make(map[string]bool)
-	var builder strings.Builder
-	flush := func() {
-		token := builder.String()
-		if len([]rune(token)) >= 3 {
-			tokens[token] = true
-		}
-		builder.Reset()
-	}
-	for _, r := range normalized {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '\'' {
-			builder.WriteRune(r)
-			continue
-		}
-		flush()
-	}
-	flush()
-	return tokens
 }
 
 func loadUrgentOpenAIKey() (string, error) {

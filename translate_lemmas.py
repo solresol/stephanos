@@ -15,9 +15,15 @@ from openai import OpenAI
 from api_keys import load_api_key
 from db import get_connection
 from translation_run_utils import DEFAULT_TRANSLATION_MODEL, lookup_public_block
+from translation_guidance_coverage import (
+    CURRENT_DETECTOR_VERSION,
+    PROMPT_GUIDANCE_KINDS,
+    enqueue_missing_guidance,
+    guidance_coverage_counts,
+)
 
 DEFAULT_DAILY_TOKEN_LIMIT = 100_000
-MAX_GUIDANCE_CONTEXT_ROWS = 8
+MAX_GUIDANCE_CONTEXT_ROWS = 24
 MAX_SOURCE_PASSAGE_CONTEXT_ROWS = 4
 MAX_CONTEXT_FIELD_CHARS = 900
 
@@ -180,7 +186,14 @@ def guidance_prompt_excerpt(row: dict) -> str:
     return truncate_field(" | ".join(bit for bit in bits if bit), 900)
 
 
-def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, limit: int = MAX_GUIDANCE_CONTEXT_ROWS):
+def fetch_guidance_context(
+    cur,
+    *,
+    lemma_id: int,
+    source_text_version_id: int,
+    limit: int = MAX_GUIDANCE_CONTEXT_ROWS,
+    detector_version: str = CURRENT_DETECTOR_VERSION,
+):
     if not table_exists(cur, "translation_guidance_rules") or not table_exists(cur, "translation_guidance_matches"):
         return []
     lifecycle_filter = (
@@ -220,9 +233,10 @@ def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, l
         WHERE m.lemma_id = %s
           AND m.source_text_version_id = %s
           AND m.match_status = 'matched'
+          AND m.detector_version = %s
           AND r.status <> 'retired'
           {lifecycle_filter}
-          AND r.kind IN ('formula', 'gloss', 'contextual_bias')
+          AND r.kind = ANY(%s)
         ORDER BY
             CASE r.application_mode
                 WHEN 'required' THEN 0
@@ -240,7 +254,13 @@ def fetch_guidance_context(cur, *, lemma_id: int, source_text_version_id: int, l
             r.label
         LIMIT %s
         """,
-        (lemma_id, source_text_version_id, int(limit)),
+        (
+            lemma_id,
+            source_text_version_id,
+            detector_version,
+            list(PROMPT_GUIDANCE_KINDS),
+            int(limit),
+        ),
     )
     return [
         {
@@ -431,6 +451,7 @@ def fetch_requests(cur, request_limit: int | None):
             pv.prompt_text,
             stv.id AS source_text_version_id,
             stv.text_body AS source_text,
+            stv.source_document,
             a.lemma,
             a.entry_number
         FROM translation_run_requests r
@@ -642,6 +663,11 @@ def main():
     parser.add_argument("--daily-token-limit", type=int, default=DEFAULT_DAILY_TOKEN_LIMIT)
     parser.add_argument("--delay", type=float, default=1.0)
     parser.add_argument("--no-guidance-context", action="store_true", help="Do not add matched translation-guidance rows to prompts")
+    parser.add_argument(
+        "--allow-incomplete-guidance",
+        action="store_true",
+        help="Translate even if prompt-eligible guidance has not been fully evaluated for the source text",
+    )
     parser.add_argument("--no-source-passage-context", action="store_true", help="Do not add resolved external source passages to prompts")
     args = parser.parse_args()
 
@@ -704,6 +730,7 @@ def main():
         prompt_text,
         source_text_version_id,
         source_text,
+        source_document,
         lemma,
         entry_number,
     ) in requests:
@@ -718,11 +745,46 @@ def main():
             conn.commit()
             continue
 
+        if not args.no_guidance_context and not args.allow_incomplete_guidance:
+            coverage = guidance_coverage_counts(
+                cur,
+                source_text_version_id=source_text_version_id,
+            )
+            if (
+                not coverage.get("available")
+                or int(coverage.get("required", 0)) <= 0
+                or int(coverage.get("missing", 0)) > 0
+            ):
+                queued = {"needed": 0, "inserted": 0, "skipped": 0}
+                if coverage.get("available") and int(coverage.get("missing", 0)) > 0:
+                    queued = enqueue_missing_guidance(
+                        cur,
+                        lemma_id=lemma_id,
+                        source_text_version_id=source_text_version_id,
+                        requested_by="translate_lemmas.py",
+                        priority=20,
+                        notes="queued while deferring translation until guidance coverage is complete",
+                    )
+                    conn.commit()
+                print(
+                    "Request "
+                    f"{request_id}: defer translation until guidance coverage is complete "
+                    f"(source={source_document or 'unknown'} "
+                    f"completed={int(coverage.get('completed', 0))}/"
+                    f"{int(coverage.get('required', 0))}, "
+                    f"missing={int(coverage.get('missing', 0))}, "
+                    f"pending={int(coverage.get('pending', 0))}, "
+                    f"running={int(coverage.get('running', 0))}, "
+                    f"failed={int(coverage.get('failed', 0))}, "
+                    f"queued_missing={queued['inserted']})"
+                )
+                continue
+
         mark_request_running(cur, request_id)
         conn.commit()
 
         print(
-            f"Request {request_id}: lemma={lemma} profile={profile_name} "
+            f"Request {request_id}: lemma={lemma} source={source_document} profile={profile_name} "
             f"v{profile_version_number} remaining_runs={remaining}"
         )
 
@@ -769,7 +831,14 @@ def main():
                 public_eligible = True
                 public_block_reason = None
                 if int(requested_runs or 0) == 1:
-                    public_eligible, public_block_reason = lookup_public_block(cur, lemma_id=lemma_id)
+                    public_eligible, public_block_reason = lookup_public_block(
+                        cur,
+                        lemma_id=lemma_id,
+                        source_document=source_document,
+                    )
+                run_status = "approved" if int(requested_runs or 0) == 1 else "completed"
+                if (source_document or "").strip().lower() != "meineke":
+                    run_status = "hidden"
 
                 run_id = insert_run(
                     cur,
@@ -784,7 +853,7 @@ def main():
                     top_p=top_p,
                     translation_text=translation,
                     tokens_used=tokens_used,
-                    status="approved" if int(requested_runs or 0) == 1 else "completed",
+                    status=run_status,
                     public_eligible=public_eligible,
                     public_block_reason=public_block_reason,
                 )
@@ -793,7 +862,7 @@ def main():
 
                 # Back-compat projection: only for single-run requests so we don't
                 # accidentally "pick a winner" among multiple variants.
-                if int(requested_runs or 0) == 1:
+                if int(requested_runs or 0) == 1 and (source_document or "").strip().lower() == "meineke":
                     project_legacy_translation(
                         cur,
                         lemma_id=lemma_id,

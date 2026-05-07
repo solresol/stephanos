@@ -232,30 +232,89 @@ uv run seed_translation_styles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: s
 echo "Step 4d3: Backfilling authoritative translation runs..." | tee -a "$LOGFILE"
 uv run backfill_legacy_translation_runs.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation backfill failed" | tee -a "$LOGFILE"
 
+# Step 4d3a: Ensure Billerbeck-sourced AI translations stay hidden/non-public
+echo "Step 4d3a: Hiding Billerbeck-sourced AI translation runs..." | tee -a "$LOGFILE"
+uv run mark_billerbeck_translation_runs_nonpublic.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Billerbeck translation visibility update failed" | tee -a "$LOGFILE"
+
 # Step 4d4: Resolve already-detected Homeric citations into source-passage prompt context
 HOMERIC_SOURCE_RESOLVE_LIMIT="${HOMERIC_SOURCE_RESOLVE_LIMIT:-25}"
 HOMERIC_SOURCE_RESOLVE_DELAY="${HOMERIC_SOURCE_RESOLVE_DELAY:-0.25}"
 if [ "$HOMERIC_SOURCE_RESOLVE_LIMIT" -gt 0 ]; then
     echo "Step 4d4: Resolving Homeric source passages..." | tee -a "$LOGFILE"
     uv run resolve_homeric_source_passages.py \
+        --source-document meineke \
         --limit "$HOMERIC_SOURCE_RESOLVE_LIMIT" \
         --delay "$HOMERIC_SOURCE_RESOLVE_DELAY" \
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: Homeric source passage resolution failed" | tee -a "$LOGFILE"
 fi
 
-# Step 4e: Enqueue translation run requests (set TRANSLATION_ENQUEUE_LIMIT=0 to disable)
+# Step 4d5: Sync review database from merah before guidance/translation
+echo "Step 4d5: Syncing review database from merah..." | tee -a "$LOGFILE"
+./sync_review_db.sh 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to sync review database" | tee -a "$LOGFILE"
+
+# Step 4d6: Import reviews into PostgreSQL before guidance/translation
+echo "Step 4d6: Importing reviews into PostgreSQL..." | tee -a "$LOGFILE"
+uv run import_reviews.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 4d7: Incrementally queue prompt-eligible guidance scans before translation
+TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT="${TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT:-2000}"
+TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT="${TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT:-}"
+if [ "$TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT" -gt 0 ]; then
+    echo "Step 4d7: Queueing translation-guidance scans before translation..." | tee -a "$LOGFILE"
+    guidance_enqueue_args=(
+        --prompt-eligible-rules
+        --source-document meineke
+        --max-queue-rows "$TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT"
+        --prioritize-kappa-untranslated
+        --created-by "run_daily_pipeline.sh"
+        --notes "daily pipeline guidance-first scan"
+    )
+    if [ -n "$TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT" ]; then
+        guidance_enqueue_args+=(--limit "$TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT")
+    fi
+    uv run enqueue_translation_guidance_scans.py "${guidance_enqueue_args[@]}" \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation-guidance enqueue step failed" | tee -a "$LOGFILE"
+fi
+
+# Step 4d8: Process a bounded translation-guidance scan batch before translation
+TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT="${TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT:-2000}"
+TRANSLATION_GUIDANCE_SCAN_MODEL="${TRANSLATION_GUIDANCE_SCAN_MODEL:-gpt-5.4-mini}"
+TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT="${TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT:-2000000}"
+TRANSLATION_GUIDANCE_SCAN_GUIDANCE_AI_LIMIT="${TRANSLATION_GUIDANCE_SCAN_GUIDANCE_AI_LIMIT:-${TRANSLATION_GUIDANCE_SCAN_FORMULA_AI_LIMIT:-$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT}}"
+TRANSLATION_GUIDANCE_SCAN_DELAY="${TRANSLATION_GUIDANCE_SCAN_DELAY:-0}"
+case "$TRANSLATION_GUIDANCE_SCAN_MODEL" in
+    *-mini*) ;;
+    *)
+        echo "  ERROR: TRANSLATION_GUIDANCE_SCAN_MODEL must be a *-mini model, got ${TRANSLATION_GUIDANCE_SCAN_MODEL}" | tee -a "$LOGFILE"
+        TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT=0
+        ;;
+esac
+if [ "$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT" -gt 0 ]; then
+    echo "Step 4d8: Processing translation-guidance scans before translation..." | tee -a "$LOGFILE"
+    uv run process_translation_guidance_scans.py \
+        --limit "$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT" \
+        --model "$TRANSLATION_GUIDANCE_SCAN_MODEL" \
+        --daily-token-limit "$TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT" \
+        --guidance-ai-limit "$TRANSLATION_GUIDANCE_SCAN_GUIDANCE_AI_LIMIT" \
+        --delay "$TRANSLATION_GUIDANCE_SCAN_DELAY" \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation-guidance scan step failed" | tee -a "$LOGFILE"
+fi
+
+# Step 4e: Enqueue Meineke translation run requests (set TRANSLATION_ENQUEUE_LIMIT=0 to disable)
 TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-20}"
 if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
     echo "Step 4e: Enqueuing translation run requests..." | tee -a "$LOGFILE"
     uv run enqueue_translation_runs.py \
         --profile legacy_scholarly \
-        --source-document billerbeck \
+        --source-document meineke \
         --limit "$TRANSLATION_ENQUEUE_LIMIT" \
         --repeat 1 \
+        --prepare-guidance-first \
+        --require-guidance-complete \
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: enqueue step failed" | tee -a "$LOGFILE"
 fi
 
-# Step 5: Translate lemmas with gpt-5.5
+# Step 5: Translate Meineke lemmas with gpt-5.5 after guidance coverage is complete
 echo "Step 5: Translating lemmas with gpt-5.5..." | tee -a "$LOGFILE"
 uv run translate_lemmas.py \
     --delay 1 \
@@ -364,58 +423,6 @@ uv run sync_translation_risk_flags.py 2>&1 | tee -a "$LOGFILE"
 # Step 5i: Refresh legacy canonical fields from publication pointers
 echo "Step 5i: Refreshing legacy canonical fields..." | tee -a "$LOGFILE"
 uv run refresh_legacy_canonical_fields.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: legacy canonical refresh failed" | tee -a "$LOGFILE"
-
-# Step 5j: Sync review database from merah before site generation
-echo "Step 5j: Syncing review database from merah..." | tee -a "$LOGFILE"
-./sync_review_db.sh 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to sync review database" | tee -a "$LOGFILE"
-
-# Step 5k: Import reviews into PostgreSQL before site generation
-echo "Step 5k: Importing reviews into PostgreSQL..." | tee -a "$LOGFILE"
-uv run import_reviews.py 2>&1 | tee -a "$LOGFILE"
-
-# Step 5k1: Incrementally queue translation-guidance scans against current source texts
-TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT="${TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT:-2000}"
-TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT="${TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT:-}"
-if [ "$TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT" -gt 0 ]; then
-    echo "Step 5k1: Queueing translation-guidance scans..." | tee -a "$LOGFILE"
-    guidance_enqueue_args=(
-        --all-active-rules
-        --source-document meineke
-        --max-queue-rows "$TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT"
-        --prioritize-kappa-untranslated
-        --created-by "run_daily_pipeline.sh"
-        --notes "daily pipeline incremental scan"
-    )
-    if [ -n "$TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT" ]; then
-        guidance_enqueue_args+=(--limit "$TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT")
-    fi
-    uv run enqueue_translation_guidance_scans.py "${guidance_enqueue_args[@]}" \
-        2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation-guidance enqueue step failed" | tee -a "$LOGFILE"
-fi
-
-# Step 5k2: Process a bounded translation-guidance scan batch
-TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT="${TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT:-2000}"
-TRANSLATION_GUIDANCE_SCAN_MODEL="${TRANSLATION_GUIDANCE_SCAN_MODEL:-gpt-5.4-mini}"
-TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT="${TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT:-250000}"
-TRANSLATION_GUIDANCE_SCAN_FORMULA_AI_LIMIT="${TRANSLATION_GUIDANCE_SCAN_FORMULA_AI_LIMIT:-500}"
-TRANSLATION_GUIDANCE_SCAN_DELAY="${TRANSLATION_GUIDANCE_SCAN_DELAY:-0}"
-case "$TRANSLATION_GUIDANCE_SCAN_MODEL" in
-    *-mini*) ;;
-    *)
-        echo "  ERROR: TRANSLATION_GUIDANCE_SCAN_MODEL must be a *-mini model, got ${TRANSLATION_GUIDANCE_SCAN_MODEL}" | tee -a "$LOGFILE"
-        TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT=0
-        ;;
-esac
-if [ "$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT" -gt 0 ]; then
-    echo "Step 5k2: Processing translation-guidance scans..." | tee -a "$LOGFILE"
-    uv run process_translation_guidance_scans.py \
-        --limit "$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT" \
-        --model "$TRANSLATION_GUIDANCE_SCAN_MODEL" \
-        --daily-token-limit "$TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT" \
-        --formula-ai-limit "$TRANSLATION_GUIDANCE_SCAN_FORMULA_AI_LIMIT" \
-        --delay "$TRANSLATION_GUIDANCE_SCAN_DELAY" \
-        2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation-guidance scan step failed" | tee -a "$LOGFILE"
-fi
 
 # Step 5l: Sync with nodegoat before progress/site generation
 echo "Step 5l: Syncing with nodegoat..." | tee -a "$LOGFILE"

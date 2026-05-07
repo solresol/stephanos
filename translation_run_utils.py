@@ -3,9 +3,20 @@ from __future__ import annotations
 
 DEFAULT_TRANSLATION_MODEL = "gpt-5.5"
 RISK_BLOCK_REASON_PREFIX = "Blocked by risk gating: "
+PUBLIC_SOURCE_DOCUMENT = "meineke"
 
 
-def lookup_public_block(cur, *, lemma_id: int) -> tuple[bool, str]:
+def source_public_block(source_document: str | None) -> tuple[bool, str]:
+    source_document = (source_document or "").strip().lower()
+    if source_document and source_document != PUBLIC_SOURCE_DOCUMENT:
+        return (
+            False,
+            f"Source document '{source_document}' is not licensed for public publication",
+        )
+    return True, ""
+
+
+def lookup_public_block(cur, *, lemma_id: int, source_document: str | None = None) -> tuple[bool, str]:
     """
     Mirror current risk gating onto translation_runs.
 
@@ -13,6 +24,10 @@ def lookup_public_block(cur, *, lemma_id: int) -> tuple[bool, str]:
     legacy assembled translation lane. New authoritative translation_runs should
     inherit the same public block state until risk detection is moved over.
     """
+    source_public_eligible, source_block_reason = source_public_block(source_document)
+    if not source_public_eligible:
+        return source_public_eligible, source_block_reason
+
     cur.execute("SELECT to_regclass('public.translation_risk_flags') IS NOT NULL")
     if not bool(cur.fetchone()[0]):
         return True, ""

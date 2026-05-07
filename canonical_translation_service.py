@@ -139,8 +139,8 @@ def choose_default_source_text_version(cur, lemma_id: int) -> int | None:
           AND is_current = TRUE
         ORDER BY
           CASE source_document
-            WHEN 'billerbeck' THEN 0
-            WHEN 'meineke' THEN 1
+            WHEN 'meineke' THEN 0
+            WHEN 'billerbeck' THEN 1
             ELSE 2
           END,
           id DESC

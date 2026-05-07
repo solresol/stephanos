@@ -16,6 +16,12 @@ from db import get_connection
 from translation_run_utils import DEFAULT_TRANSLATION_MODEL, lookup_public_block
 
 
+def run_status_for_source(source_document: str) -> str:
+    if (source_document or "").strip().lower() != "meineke":
+        return "hidden"
+    return "approved"
+
+
 def resolve_profile(cur, profile_name: str) -> int:
     cur.execute(
         """
@@ -125,12 +131,13 @@ def normalize_existing_run(
     model: str,
     public_eligible: bool,
     public_block_reason: str,
+    status: str,
     translated_at,
 ):
     cur.execute(
         """
         UPDATE translation_runs
-        SET status = 'approved',
+        SET status = %s,
             public_eligible = %s,
             public_block_reason = %s,
             model = CASE WHEN COALESCE(model, '') = '' THEN %s ELSE model END,
@@ -138,6 +145,7 @@ def normalize_existing_run(
         WHERE id = %s
         """,
         (
+            status,
             bool(public_eligible),
             (public_block_reason or "").strip() or None,
             model,
@@ -170,6 +178,7 @@ def insert_backfill_run(
     model: str,
     public_eligible: bool,
     public_block_reason: str,
+    status: str,
     translated_at,
 ):
     cur.execute(
@@ -224,7 +233,7 @@ def insert_backfill_run(
             created_at,
             completed_at
         )
-        VALUES (%s, %s, %s, %s, %s, 1, %s, NULL, NULL, %s, %s, 'approved', %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, 1, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             request_id,
@@ -235,6 +244,7 @@ def insert_backfill_run(
             model,
             translation_text,
             int(translation_tokens or 0),
+            status,
             bool(public_eligible),
             (public_block_reason or "").strip() or None,
             translated_at,
@@ -246,7 +256,11 @@ def insert_backfill_run(
 def main():
     parser = argparse.ArgumentParser(description="Backfill authoritative translation runs from legacy AI text.")
     parser.add_argument("--profile", default="legacy_scholarly", help="Prompt profile name to attach")
-    parser.add_argument("--source-document", default="billerbeck", help="Source document for source_text_version lookup")
+    parser.add_argument(
+        "--source-document",
+        default="billerbeck",
+        help="Source document for source_text_version lookup; legacy Billerbeck rows are backfilled as hidden/non-public",
+    )
     parser.add_argument("--model", default=DEFAULT_TRANSLATION_MODEL, help="Model name for backfilled rows")
     parser.add_argument("--limit", type=int, help="Max candidate lemmas to inspect")
     parser.add_argument("--dry-run", action="store_true", help="Report what would change without writing")
@@ -295,7 +309,12 @@ def main():
             print(f"  lemma {lemma_id}: no profile version mapping for v{prompt_version}")
             continue
 
-        public_eligible, public_block_reason = lookup_public_block(cur, lemma_id=lemma_id)
+        public_eligible, public_block_reason = lookup_public_block(
+            cur,
+            lemma_id=lemma_id,
+            source_document=args.source_document,
+        )
+        run_status = run_status_for_source(args.source_document)
         existing = find_matching_run(
             cur,
             lemma_id=int(lemma_id),
@@ -305,7 +324,7 @@ def main():
         )
         if existing:
             already_normalized = (
-                existing["status"] == "approved"
+                existing["status"] == run_status
                 and existing["public_eligible"] == bool(public_eligible)
                 and existing["public_block_reason"] == (public_block_reason or "").strip()
                 and bool(existing["model"])
@@ -313,7 +332,7 @@ def main():
             if already_normalized:
                 skipped_existing += 1
                 continue
-            print(f"  lemma {lemma_id}: normalize run {existing['id']} as approved authoritative AI")
+            print(f"  lemma {lemma_id}: normalize run {existing['id']} as {run_status} authoritative AI")
             if not args.dry_run:
                 normalize_existing_run(
                     cur,
@@ -322,12 +341,13 @@ def main():
                     model=args.model,
                     public_eligible=public_eligible,
                     public_block_reason=public_block_reason,
+                    status=run_status,
                     translated_at=translated_at,
                 )
             normalized += 1
             continue
 
-        print(f"  lemma {lemma_id}: backfill authoritative AI run for v{prompt_version}")
+        print(f"  lemma {lemma_id}: backfill {run_status} authoritative AI run for v{prompt_version}")
         if not args.dry_run:
             insert_backfill_run(
                 cur,
@@ -340,6 +360,7 @@ def main():
                 model=args.model,
                 public_eligible=public_eligible,
                 public_block_reason=public_block_reason,
+                status=run_status,
                 translated_at=translated_at,
             )
         inserted += 1
