@@ -15,6 +15,15 @@ from pathlib import Path
 
 import db
 from generate_spelling_variants import generate_variants
+from translation_guidance_coverage import (
+    CURRENT_DETECTOR_VERSION,
+    PROMPT_GUIDANCE_KINDS,
+    required_guidance_rules_sql,
+)
+
+NIGHTLY_GUIDANCE_CHECK_LIMIT = 2000
+BILLERBECK_GERMAN_OCR_NIGHTLY_LIMIT = 3
+BILLERBECK_GERMAN_TRANSLATE_NIGHTLY_LIMIT = 5
 
 
 def pg_table_exists(cur, table_name: str) -> bool:
@@ -79,6 +88,33 @@ def get_progress_stats(conn) -> dict:
           AND translated_at > NOW() - INTERVAL '7 days'
     """)
     stats["translation_ai"]["rate_7d"] = cur.fetchone()[0]
+
+    if pg_table_exists(cur, "images") and pg_column_exists(cur, "images", "source_document"):
+        cur.execute("""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE processed = 1) AS completed,
+                COUNT(*) FILTER (WHERE processed = 0) AS pending
+            FROM images
+            WHERE COALESCE(source_document, 'billerbeck') = 'meineke'
+        """)
+        row = cur.fetchone()
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM images
+            WHERE COALESCE(source_document, 'billerbeck') = 'meineke'
+              AND processed = 1
+              AND processed_at > NOW() - INTERVAL '7 days'
+        """)
+        stats["meineke_page_ocr"] = {
+            "name": "Meineke Page OCR",
+            "total": row[0],
+            "completed": row[1],
+            "pending": row[2],
+            "unit": "pages",
+            "rate_7d": cur.fetchone()[0],
+            "detail": "Queued missing-page OCR for the public Meineke source text",
+        }
 
     # Human review rate (last 7 days)
     cur.execute("""
@@ -461,22 +497,24 @@ def get_progress_stats(conn) -> dict:
     stats["translation_risk"]["rate_7d"] = cur.fetchone()[0]
 
     # 13. Translation-guidance scan coverage
-    if pg_table_exists(cur, "translation_guidance_rules") and pg_table_exists(cur, "translation_guidance_matches"):
-        rule_filters = ["COALESCE(status, '') <> 'retired'"]
-        if pg_column_exists(cur, "translation_guidance_rules", "lifecycle_stage"):
-            rule_filters.append("COALESCE(lifecycle_stage, 'guidance') <> 'inactive'")
+    if all(
+        pg_table_exists(cur, table_name)
+        for table_name in (
+            "translation_guidance_rules",
+            "translation_guidance_rule_revisions",
+            "translation_guidance_matches",
+            "translation_guidance_scan_queue",
+            "lemma_source_text_versions",
+        )
+    ):
+        required_rules_cte = required_guidance_rules_sql()
         cur.execute(
             f"""
-            SELECT COUNT(*)
-            FROM translation_guidance_rules
-            WHERE {' AND '.join(rule_filters)}
-            """
-        )
-        guidance_rule_total = cur.fetchone()[0]
-
-        if pg_table_exists(cur, "lemma_source_text_versions"):
-            cur.execute("""
-                SELECT COUNT(*)
+            WITH required_rules AS (
+                {required_rules_cte}
+            ),
+            current_sources AS (
+                SELECT stv.id AS source_text_version_id
                 FROM assembled_lemmas a
                 JOIN lemma_source_text_versions stv
                   ON stv.lemma_id = a.id
@@ -484,54 +522,254 @@ def get_progress_stats(conn) -> dict:
                  AND stv.is_current = TRUE
                 WHERE COALESCE(stv.text_body, '') <> ''
                   AND COALESCE(a.quarantined, FALSE) = FALSE
-            """)
-        else:
-            cur.execute("""
-                SELECT COUNT(*)
-                FROM assembled_lemmas
-                WHERE billerbeck_id IS NOT NULL
-            """)
-        guidance_headword_total = cur.fetchone()[0]
-        guidance_potential_total = guidance_headword_total * guidance_rule_total
-
-        cur.execute("SELECT COUNT(*) FROM translation_guidance_matches")
-        guidance_checked_total = cur.fetchone()[0]
-
-        cur.execute("""
-            SELECT COUNT(*)
-            FROM translation_guidance_matches
-            WHERE updated_at > NOW() - INTERVAL '7 days'
-        """)
-        guidance_checked_rate = cur.fetchone()[0]
-        guidance_token_detail = ""
-        if pg_table_exists(cur, "translation_guidance_scan_queue") and pg_column_exists(
-            cur, "translation_guidance_scan_queue", "tokens_used"
-        ):
-            cur.execute("""
+            ),
+            matched_checks AS (
+                SELECT DISTINCT
+                    m.source_text_version_id,
+                    m.rule_revision_id
+                FROM translation_guidance_matches m
+                JOIN current_sources cs
+                  ON cs.source_text_version_id = m.source_text_version_id
+                JOIN required_rules rr
+                  ON rr.revision_id = m.rule_revision_id
+                WHERE m.detector_version = %s
+            ),
+            recent_checks AS (
+                SELECT DISTINCT
+                    m.source_text_version_id,
+                    m.rule_revision_id
+                FROM translation_guidance_matches m
+                JOIN current_sources cs
+                  ON cs.source_text_version_id = m.source_text_version_id
+                JOIN required_rules rr
+                  ON rr.revision_id = m.rule_revision_id
+                WHERE m.detector_version = %s
+                  AND m.updated_at > NOW() - INTERVAL '7 days'
+            ),
+            queue_counts AS (
                 SELECT
-                    COALESCE(SUM(tokens_used), 0),
-                    COALESCE(SUM(tokens_used) FILTER (
-                        WHERE finished_at > NOW() - INTERVAL '7 days'
-                    ), 0)
-                FROM translation_guidance_scan_queue
-            """)
-            total_tokens, recent_tokens = cur.fetchone()
-            guidance_token_detail = (
-                f"; {int(total_tokens or 0):,} guidance AI tokens recorded, "
-                f"{int(recent_tokens or 0):,} in the last 7 days"
+                    COUNT(*) FILTER (WHERE q.status = 'pending') AS pending,
+                    COUNT(*) FILTER (WHERE q.status = 'running') AS running,
+                    COUNT(*) FILTER (WHERE q.status = 'completed') AS completed,
+                    COUNT(*) FILTER (WHERE q.status = 'failed') AS failed,
+                    COUNT(*) FILTER (WHERE q.status = 'cancelled') AS cancelled,
+                    COALESCE(SUM(q.tokens_used), 0) AS total_tokens,
+                    COALESCE(SUM(q.tokens_used) FILTER (
+                        WHERE q.finished_at > NOW() - INTERVAL '7 days'
+                    ), 0) AS recent_tokens
+                FROM translation_guidance_scan_queue q
+                JOIN current_sources cs
+                  ON cs.source_text_version_id = q.source_text_version_id
+                JOIN required_rules rr
+                  ON rr.revision_id = q.rule_revision_id
             )
+            SELECT
+                (SELECT COUNT(*) FROM current_sources) AS headword_count,
+                (SELECT COUNT(*) FROM required_rules) AS rule_count,
+                (SELECT COUNT(*) FROM matched_checks) AS completed_checks,
+                (SELECT COUNT(*) FROM recent_checks) AS recent_checks,
+                COALESCE(qc.pending, 0) AS queued_pending,
+                COALESCE(qc.running, 0) AS queued_running,
+                COALESCE(qc.completed, 0) AS queued_completed,
+                COALESCE(qc.failed, 0) AS queued_failed,
+                COALESCE(qc.cancelled, 0) AS queued_cancelled,
+                COALESCE(qc.total_tokens, 0) AS total_tokens,
+                COALESCE(qc.recent_tokens, 0) AS recent_tokens
+            FROM queue_counts qc
+            """,
+            (
+                list(PROMPT_GUIDANCE_KINDS),
+                CURRENT_DETECTOR_VERSION,
+                CURRENT_DETECTOR_VERSION,
+            ),
+        )
+        row = cur.fetchone()
+        guidance_headword_total = int(row[0] or 0)
+        guidance_rule_total = int(row[1] or 0)
+        guidance_potential_total = guidance_headword_total * guidance_rule_total
+        guidance_checked_total = int(row[2] or 0)
+        guidance_checked_rate = int(row[3] or 0)
+        queue_pending = int(row[4] or 0)
+        queue_running = int(row[5] or 0)
+        queue_completed = int(row[6] or 0)
+        queue_failed = int(row[7] or 0)
+        queue_cancelled = int(row[8] or 0)
+        total_tokens = int(row[9] or 0)
+        recent_tokens = int(row[10] or 0)
+        queue_detail = (
+            f"; queue pending/running/completed/failed/cancelled: "
+            f"{queue_pending:,}/{queue_running:,}/{queue_completed:,}/{queue_failed:,}/{queue_cancelled:,}"
+        )
+        guidance_token_detail = (
+            f"; {total_tokens:,} guidance AI tokens recorded, {recent_tokens:,} in the last 7 days"
+        )
+        kind_detail = ", ".join(PROMPT_GUIDANCE_KINDS)
 
         stats["translation_guidance_checks"] = {
-            "name": "Translation Guidance Checks",
+            "name": "Prompt Guidance Checks",
             "total": guidance_potential_total,
-            "completed": guidance_checked_total,
+            "completed": min(guidance_checked_total, guidance_potential_total),
             "pending": max(guidance_potential_total - guidance_checked_total, 0),
             "unit": "rule/headword checks",
             "rate_7d": guidance_checked_rate,
-            "detail": f"{guidance_headword_total:,} headwords x {guidance_rule_total:,} guidance rules{guidance_token_detail}",
+            "planned_rate_per_day": NIGHTLY_GUIDANCE_CHECK_LIMIT,
+            "detail": (
+                f"{guidance_headword_total:,} current Meineke headwords x "
+                f"{guidance_rule_total:,} prompt guidance rules "
+                f"({kind_detail}; {CURRENT_DETECTOR_VERSION})"
+                f"; default nightly limit {NIGHTLY_GUIDANCE_CHECK_LIMIT:,} checks"
+                f"{queue_detail}{guidance_token_detail}"
+            ),
         }
 
-    # 14. nodegoat sync
+    # 14. Billerbeck German reference lane, kept internal and low priority
+    if pg_table_exists(cur, "images") and pg_table_exists(cur, "billerbeck_german_pages"):
+        cur.execute("""
+            WITH pending_candidates AS (
+                SELECT i.id
+                FROM images i
+                LEFT JOIN billerbeck_german_pages bgp ON bgp.image_id = i.id
+                WHERE bgp.image_id IS NULL
+                  AND COALESCE(i.source_document, 'billerbeck') IN ('billerbeck', 'billerbeck_german')
+                  AND (
+                        COALESCE(i.source_document, 'billerbeck') = 'billerbeck_german'
+                        OR (
+                            i.lemma_json IS NOT NULL
+                            AND i.lemma_json::text LIKE '%%"status": "non_greek_error"%%'
+                        )
+                        OR i.page_number IS NOT NULL
+                  )
+            ),
+            processed_pages AS (
+                SELECT *
+                FROM billerbeck_german_pages
+            )
+            SELECT
+                (SELECT COUNT(*) FROM pending_candidates) AS pending,
+                COUNT(*) AS processed,
+                COUNT(*) FILTER (WHERE processed_at > NOW() - INTERVAL '7 days') AS processed_7d,
+                COUNT(*) FILTER (WHERE status = 'entries_present') AS entries_present,
+                COUNT(*) FILTER (WHERE status = 'no_headword_entries') AS no_headword_entries,
+                COUNT(*) FILTER (WHERE status = 'not_german') AS not_german,
+                COUNT(*) FILTER (
+                    WHERE status NOT IN ('entries_present', 'no_headword_entries', 'not_german')
+                ) AS other_status,
+                COALESCE(SUM(ocr_tokens), 0) AS total_tokens
+            FROM processed_pages
+        """)
+        row = cur.fetchone()
+        german_pending = int(row[0] or 0)
+        german_processed = int(row[1] or 0)
+        german_rate = int(row[2] or 0)
+        entries_present = int(row[3] or 0)
+        no_headword_entries = int(row[4] or 0)
+        not_german = int(row[5] or 0)
+        other_status = int(row[6] or 0)
+        german_tokens = int(row[7] or 0)
+        stats["billerbeck_german_page_ocr"] = {
+            "name": "Billerbeck German Page OCR",
+            "total": german_pending + german_processed,
+            "completed": german_processed,
+            "pending": german_pending,
+            "unit": "candidate pages",
+            "rate_7d": german_rate,
+            "planned_rate_per_day": BILLERBECK_GERMAN_OCR_NIGHTLY_LIMIT,
+            "detail": (
+                "Internal reference lane only; statuses entries/no-headword/not-German/other: "
+                f"{entries_present:,}/{no_headword_entries:,}/{not_german:,}/{other_status:,}; "
+                f"default nightly limit {BILLERBECK_GERMAN_OCR_NIGHTLY_LIMIT:,} pages; "
+                f"{german_tokens:,} OCR tokens recorded"
+            ),
+        }
+
+    if pg_table_exists(cur, "lemma_billerbeck_german_refs"):
+        cur.execute("""
+            SELECT
+                COUNT(*) FILTER (WHERE COALESCE(german_text, '') <> '') AS total,
+                COUNT(*) FILTER (
+                    WHERE COALESCE(german_text, '') <> ''
+                      AND translation_status = 'completed'
+                      AND COALESCE(english_translation, '') <> ''
+                ) AS completed,
+                COUNT(*) FILTER (
+                    WHERE COALESCE(german_text, '') <> ''
+                      AND translation_status = 'failed'
+                ) AS failed,
+                COUNT(*) FILTER (
+                    WHERE COALESCE(german_text, '') <> ''
+                      AND translated_at > NOW() - INTERVAL '7 days'
+                ) AS translated_7d,
+                COALESCE(SUM(translation_tokens), 0) AS total_tokens,
+                COALESCE(SUM(translation_tokens) FILTER (
+                    WHERE translated_at > NOW() - INTERVAL '7 days'
+                ), 0) AS recent_tokens
+            FROM lemma_billerbeck_german_refs
+        """)
+        row = cur.fetchone()
+        german_translation_total = int(row[0] or 0)
+        german_translation_completed = int(row[1] or 0)
+        german_translation_failed = int(row[2] or 0)
+        german_translation_rate = int(row[3] or 0)
+        german_translation_tokens = int(row[4] or 0)
+        german_translation_recent_tokens = int(row[5] or 0)
+        stats["billerbeck_german_translation"] = {
+            "name": "Billerbeck German Translation",
+            "total": german_translation_total,
+            "completed": german_translation_completed,
+            "pending": max(german_translation_total - german_translation_completed, 0),
+            "unit": "reference rows",
+            "rate_7d": german_translation_rate,
+            "planned_rate_per_day": BILLERBECK_GERMAN_TRANSLATE_NIGHTLY_LIMIT,
+            "detail": (
+                "Internal reference lane only; not public and not part of the main translation queue; "
+                f"failed: {german_translation_failed:,}; "
+                f"default nightly limit {BILLERBECK_GERMAN_TRANSLATE_NIGHTLY_LIMIT:,} refs; "
+                f"{german_translation_tokens:,} tokens recorded, {german_translation_recent_tokens:,} in the last 7 days"
+            ),
+        }
+
+    if pg_table_exists(cur, "meineke_word_lemma_documents"):
+        cur.execute("""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status IN ('completed', 'skipped')) AS completed,
+                COUNT(*) FILTER (WHERE status = 'pending') AS pending,
+                COUNT(*) FILTER (WHERE status = 'processing') AS processing,
+                COUNT(*) FILTER (WHERE status = 'error') AS error,
+                COUNT(*) FILTER (
+                    WHERE status IN ('completed', 'skipped')
+                      AND processed_at > NOW() - INTERVAL '7 days'
+                ) AS completed_7d,
+                COALESCE(SUM(tokens_used), 0) AS total_tokens,
+                COALESCE(SUM(tokens_used) FILTER (
+                    WHERE processed_at > NOW() - INTERVAL '7 days'
+                ), 0) AS recent_tokens
+            FROM meineke_word_lemma_documents
+        """)
+        row = cur.fetchone()
+        word_lemma_total = int(row[0] or 0)
+        word_lemma_completed = int(row[1] or 0)
+        word_lemma_pending = int(row[2] or 0)
+        word_lemma_processing = int(row[3] or 0)
+        word_lemma_error = int(row[4] or 0)
+        word_lemma_rate = int(row[5] or 0)
+        word_lemma_tokens = int(row[6] or 0)
+        word_lemma_recent_tokens = int(row[7] or 0)
+        stats["meineke_word_lemmatization"] = {
+            "name": "Meineke Word Lemmatization",
+            "total": word_lemma_total,
+            "completed": word_lemma_completed,
+            "pending": max(word_lemma_total - word_lemma_completed, 0),
+            "unit": "documents",
+            "rate_7d": word_lemma_rate,
+            "detail": (
+                f"status pending/processing/error: "
+                f"{word_lemma_pending:,}/{word_lemma_processing:,}/{word_lemma_error:,}; "
+                f"{word_lemma_tokens:,} tokens recorded, {word_lemma_recent_tokens:,} in the last 7 days"
+            ),
+        }
+
+    # 15. nodegoat sync
     cur.execute("""
         SELECT
             COUNT(*) as total,
@@ -557,14 +795,17 @@ def get_progress_stats(conn) -> dict:
     return stats
 
 
-def estimate_completion(pending: int, rate_7d: int) -> str:
-    """Estimate days to completion based on 7-day rate."""
+def estimate_completion(pending: int, rate_7d: int, planned_rate_per_day: int | None = None) -> str:
+    """Estimate days to completion based on observed rate or configured nightly capacity."""
     if pending == 0:
         return "complete"
-    if rate_7d == 0:
+    observed_rate_per_day = rate_7d / 7 if rate_7d > 0 else 0
+    configured_rate_per_day = planned_rate_per_day or 0
+    effective_rate_per_day = max(observed_rate_per_day, configured_rate_per_day)
+    if effective_rate_per_day <= 0:
         return "stalled"
 
-    days = pending / (rate_7d / 7)
+    days = pending / effective_rate_per_day
     if days < 1:
         return "< 1 day"
     elif days < 7:
@@ -590,7 +831,7 @@ def generate_html(stats: dict) -> str:
 
         pct = (completed / total * 100) if total > 0 else 0
         bar_pct = max(0, min(pct, 100))
-        eta = estimate_completion(pending, rate_7d)
+        eta = estimate_completion(pending, rate_7d, data.get("planned_rate_per_day"))
 
         # Color based on progress
         if pct >= 100:
@@ -704,11 +945,13 @@ def generate_html(stats: dict) -> str:
     </table>
 
     <div class="note">
-        <strong>Note:</strong> ETA estimates are based on the processing rate over the past 7 days.
-        "Stalled" means no progress in the last week. Proper-noun and etymology extraction
+        <strong>Note:</strong> ETA estimates use the faster of the observed 7-day rate and any configured
+        nightly cron limit known to this page. "Stalled" means no observed progress and no configured
+        nightly rate is known. Proper-noun and etymology extraction
         are measured over translated lemmas, matching the nightly jobs. Wikidata stages count
         rows once they have a recorded outcome, including not-found, ambiguous, and
-        human-reviewed cases. Retired stages such as finished Billerbeck OCR are intentionally omitted.
+        human-reviewed cases. Retired Greek Billerbeck OCR stages are intentionally omitted;
+        the active German-reference lane is internal and reported separately when present.
     </div>
 
     <p style="margin-top: 20px;">
@@ -748,7 +991,7 @@ def main():
     print("-" * 60)
     for key, data in stats.items():
         pct = (data["completed"] / data["total"] * 100) if data["total"] > 0 else 0
-        eta = estimate_completion(data["pending"], data.get("rate_7d", 0))
+        eta = estimate_completion(data["pending"], data.get("rate_7d", 0), data.get("planned_rate_per_day"))
         print(f"  {data['name']:25} {pct:5.1f}%  ({eta})")
 
 
