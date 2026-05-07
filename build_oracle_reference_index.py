@@ -290,7 +290,6 @@ def main() -> None:
             conn.rollback()
             return
 
-        cur.execute("DELETE FROM oracle_references WHERE created_by = %s", (CREATED_BY,))
         for ref in unique.values():
             insert_reference(cur, ref)
         conn.commit()
