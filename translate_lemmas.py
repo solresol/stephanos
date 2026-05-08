@@ -77,6 +77,57 @@ def column_exists(cur, table_name: str, column_name: str) -> bool:
     return cur.fetchone() is not None
 
 
+def human_translation_exists_sql(cur) -> str:
+    if table_exists(cur, "human_translations"):
+        human_table_clause = """
+            OR EXISTS (
+                SELECT 1
+                FROM human_translations ht
+                WHERE ht.lemma_id = a.id
+                  AND ht.status IN ('draft', 'approved')
+                  AND COALESCE(ht.translation_text, '') != ''
+            )
+        """
+    else:
+        human_table_clause = ""
+    return f"""
+        (
+            COALESCE(a.reviewed_english_translation, '') != ''
+            OR COALESCE(a.corrected_english_translation, '') != ''
+            {human_table_clause}
+        )
+    """
+
+
+def has_human_translation(cur, lemma_id: int) -> bool:
+    if table_exists(cur, "human_translations"):
+        human_table_clause = """
+            OR EXISTS (
+                SELECT 1
+                FROM human_translations ht
+                WHERE ht.lemma_id = a.id
+                  AND ht.status IN ('draft', 'approved')
+                  AND COALESCE(ht.translation_text, '') != ''
+            )
+        """
+    else:
+        human_table_clause = ""
+
+    cur.execute(
+        f"""
+        SELECT
+            COALESCE(a.reviewed_english_translation, '') != ''
+            OR COALESCE(a.corrected_english_translation, '') != ''
+            {human_table_clause}
+        FROM assembled_lemmas a
+        WHERE a.id = %s
+        """,
+        (int(lemma_id),),
+    )
+    row = cur.fetchone()
+    return bool(row[0]) if row else False
+
+
 def ensure_translation_run_guidance_matches(cur) -> bool:
     if not (
         table_exists(cur, "translation_guidance_matches")
@@ -436,7 +487,12 @@ def format_context_sections(guidance_rows, source_passage_rows) -> str:
 
 
 def fetch_requests(cur, request_limit: int | None):
-    order_by = "r.priority ASC, r.created_at, r.id" if column_exists(cur, "translation_run_requests", "priority") else "r.created_at, r.id"
+    has_human_translation_expr = human_translation_exists_sql(cur)
+    kappa_headword_expr = "left(trim(COALESCE(a.lemma, '')), 1) IN ('Κ', 'κ')"
+    if column_exists(cur, "translation_run_requests", "priority"):
+        order_by = "r.priority ASC, has_human_translation ASC, kappa_headword DESC, r.created_at, r.id"
+    else:
+        order_by = "has_human_translation ASC, kappa_headword DESC, r.created_at, r.id"
     query = f"""
         SELECT
             r.id AS request_id,
@@ -454,7 +510,9 @@ def fetch_requests(cur, request_limit: int | None):
             stv.text_body AS source_text,
             stv.source_document,
             a.lemma,
-            a.entry_number
+            a.entry_number,
+            {has_human_translation_expr} AS has_human_translation,
+            {kappa_headword_expr} AS kappa_headword
         FROM translation_run_requests r
         JOIN translation_prompt_profiles p ON p.id = r.profile_id
         JOIN translation_prompt_profile_versions pv ON pv.id = r.profile_version_id
@@ -734,10 +792,23 @@ def main():
         source_document,
         lemma,
         entry_number,
+        request_has_human_translation,
+        _kappa_headword,
     ) in requests:
         if args.run_limit is not None and total_runs >= args.run_limit:
             print(f"Reached run limit ({args.run_limit}).")
             break
+
+        if request_has_human_translation or has_human_translation(cur, lemma_id):
+            mark_request_done(
+                cur,
+                request_id,
+                "cancelled",
+                "Skipped because the lemma already has a human translation.",
+            )
+            conn.commit()
+            print(f"Request {request_id}: skipped {lemma} because it already has a human translation.")
+            continue
 
         existing_count = completed_run_count(cur, request_id)
         remaining = max(0, requested_runs - existing_count)
