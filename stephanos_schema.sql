@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict dDz7OX1wehXVhdSKeAR3Xe0SDeOKZ6zheRfLmJ2CuxBMciJisuPndKIgncEVhUM
+\restrict 4mAbkJDn9k3m0sqWqlNd8azZzQtcZM91OSQtzjhfvzCYRwh0zLndQAfHTa1hddA
 
 -- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
@@ -310,7 +310,6 @@ CREATE TABLE public.place_clusters (
     wikidata_confidence text,
     topostext_id text,
     pleiades_id text,
-    manto_id text,
     resolution_status text,
     human_display_label text,
     human_inferred_canonical_name text,
@@ -322,16 +321,17 @@ CREATE TABLE public.place_clusters (
     human_wikidata_qid text,
     human_topostext_id text,
     human_pleiades_id text,
-    human_manto_id text,
-    human_original_id text,
-    human_jbk_id text,
-    human_final_id text,
     human_resolution_status text,
     human_resolution_notes text,
     human_resolved_by text,
     human_resolved_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    manto_id text,
+    human_manto_id text,
+    human_original_id text,
+    human_jbk_id text,
+    human_final_id text,
     CONSTRAINT place_clusters_human_resolution_status_check CHECK (((human_resolution_status IS NULL) OR (human_resolution_status = ANY (ARRAY['approved'::text, 'corrected'::text, 'not_alignable'::text, 'removed'::text, 'added'::text])))),
     CONSTRAINT place_clusters_wikidata_confidence_check CHECK (((wikidata_confidence IS NULL) OR (wikidata_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'ambiguous'::text, 'not_found'::text]))))
 );
@@ -367,7 +367,6 @@ CREATE VIEW public.effective_place_clusters AS
     wikidata_confidence,
     topostext_id,
     pleiades_id,
-    manto_id,
     resolution_status,
     human_display_label,
     human_inferred_canonical_name,
@@ -379,10 +378,6 @@ CREATE VIEW public.effective_place_clusters AS
     human_wikidata_qid,
     human_topostext_id,
     human_pleiades_id,
-    human_manto_id,
-    human_original_id,
-    human_jbk_id,
-    human_final_id,
     human_resolution_status,
     human_resolution_notes,
     human_resolved_by,
@@ -450,15 +445,6 @@ CREATE VIEW public.effective_place_clusters AS
             ELSE NULLIF(btrim(pleiades_id), ''::text)
         END AS effective_pleiades_id,
         CASE
-            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(human_manto_id), ''::text)
-            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_manto_id), ''::text), NULLIF(btrim(manto_id), ''::text))
-            WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
-            ELSE NULLIF(btrim(manto_id), ''::text)
-        END AS effective_manto_id,
-    NULLIF(btrim(human_original_id), ''::text) AS effective_original_id,
-    NULLIF(btrim(human_jbk_id), ''::text) AS effective_jbk_id,
-    NULLIF(btrim(human_final_id), ''::text) AS effective_final_id,
-        CASE
             WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'approved'::text, 'added'::text, 'not_alignable'::text, 'removed'::text])) THEN human_resolution_status
             WHEN (NULLIF(btrim(resolution_status), ''::text) IS NOT NULL) THEN resolution_status
             WHEN ((NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(manto_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL)) THEN 'candidate'::text
@@ -468,7 +454,21 @@ CREATE VIEW public.effective_place_clusters AS
             WHEN (NULLIF(btrim(human_resolution_status), ''::text) IS NOT NULL) THEN 'human'::text
             WHEN ((NULLIF(btrim(wikidata_qid), ''::text) IS NOT NULL) OR (NULLIF(btrim(topostext_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(manto_id), ''::text) IS NOT NULL) OR (NULLIF(btrim(pleiades_id), ''::text) IS NOT NULL)) THEN 'machine'::text
             ELSE ''::text
-        END AS effective_resolution_source
+        END AS effective_resolution_source,
+    manto_id,
+    human_manto_id,
+    human_original_id,
+    human_jbk_id,
+    human_final_id,
+        CASE
+            WHEN (human_resolution_status = ANY (ARRAY['corrected'::text, 'added'::text])) THEN NULLIF(btrim(human_manto_id), ''::text)
+            WHEN (human_resolution_status = 'approved'::text) THEN COALESCE(NULLIF(btrim(human_manto_id), ''::text), NULLIF(btrim(manto_id), ''::text))
+            WHEN (human_resolution_status = 'not_alignable'::text) THEN NULL::text
+            ELSE NULLIF(btrim(manto_id), ''::text)
+        END AS effective_manto_id,
+    NULLIF(btrim(human_original_id), ''::text) AS effective_original_id,
+    NULLIF(btrim(human_jbk_id), ''::text) AS effective_jbk_id,
+    NULLIF(btrim(human_final_id), ''::text) AS effective_final_id
    FROM public.place_clusters pc
   WHERE (COALESCE(human_resolution_status, ''::text) <> 'removed'::text);
 
@@ -1295,6 +1295,57 @@ CREATE SEQUENCE public.ocr_generations_id_seq
 --
 
 ALTER SEQUENCE public.ocr_generations_id_seq OWNED BY public.ocr_generations.id;
+
+
+--
+-- Name: oracle_references; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.oracle_references (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    source_text_version_id integer,
+    evidence_scope text NOT NULL,
+    evidence_id integer,
+    source_document text,
+    oracle_label text NOT NULL,
+    raw_reference_text text NOT NULL,
+    modern_references_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    visibility text DEFAULT 'private'::text NOT NULL,
+    notes text,
+    created_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT oracle_references_evidence_scope_check CHECK ((evidence_scope = ANY (ARRAY['source_text'::text, 'apparatus'::text, 'source_citation'::text]))),
+    CONSTRAINT oracle_references_visibility_check CHECK ((visibility = ANY (ARRAY['private'::text, 'public_factual'::text])))
+);
+
+
+--
+-- Name: TABLE oracle_references; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.oracle_references IS 'Private factual index of oracle cross-references; Billerbeck-derived snippets and modern Parke/Wormell/Fontenrose labels are not public source-author records.';
+
+
+--
+-- Name: oracle_references_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.oracle_references_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: oracle_references_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.oracle_references_id_seq OWNED BY public.oracle_references.id;
 
 
 --
@@ -2443,6 +2494,13 @@ ALTER TABLE ONLY public.ocr_generations ALTER COLUMN id SET DEFAULT nextval('pub
 
 
 --
+-- Name: oracle_references id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.oracle_references ALTER COLUMN id SET DEFAULT nextval('public.oracle_references_id_seq'::regclass);
+
+
+--
 -- Name: pdf_files id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -2857,6 +2915,14 @@ ALTER TABLE ONLY public.ocr_generations
 
 ALTER TABLE ONLY public.ocr_generations
     ADD CONSTRAINT ocr_generations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: oracle_references oracle_references_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.oracle_references
+    ADD CONSTRAINT oracle_references_pkey PRIMARY KEY (id);
 
 
 --
@@ -3583,6 +3649,27 @@ CREATE INDEX meineke_word_lemma_occurrences_word_idx ON public.meineke_word_lemm
 
 
 --
+-- Name: oracle_references_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX oracle_references_lemma_idx ON public.oracle_references USING btree (lemma_id, evidence_scope);
+
+
+--
+-- Name: oracle_references_unique_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX oracle_references_unique_idx ON public.oracle_references USING btree (lemma_id, COALESCE(source_text_version_id, 0), evidence_scope, COALESCE(evidence_id, 0), md5(raw_reference_text));
+
+
+--
+-- Name: oracle_references_visibility_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX oracle_references_visibility_idx ON public.oracle_references USING btree (visibility, source_document);
+
+
+--
 -- Name: source_citation_extraction_runs_lemma_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4172,6 +4259,22 @@ ALTER TABLE ONLY public.meineke_word_lemma_occurrences
 
 
 --
+-- Name: oracle_references oracle_references_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.oracle_references
+    ADD CONSTRAINT oracle_references_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: oracle_references oracle_references_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.oracle_references
+    ADD CONSTRAINT oracle_references_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE SET NULL;
+
+
+--
 -- Name: place_cluster_candidates place_cluster_candidates_place_cluster_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4535,4 +4638,4 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict dDz7OX1wehXVhdSKeAR3Xe0SDeOKZ6zheRfLmJ2CuxBMciJisuPndKIgncEVhUM
+\unrestrict 4mAbkJDn9k3m0sqWqlNd8azZzQtcZM91OSQtzjhfvzCYRwh0zLndQAfHTa1hddA
