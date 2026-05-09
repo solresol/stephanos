@@ -20,6 +20,21 @@ from openai import OpenAI
 
 from api_keys import load_api_key
 from db import get_connection
+from openai_batch_utils import (
+    create_batch_job,
+    ensure_openai_batch_tables,
+    file_content_text,
+    get_batch_items,
+    get_batch_job,
+    get_recoverable_batch_job_ids,
+    insert_batch_item,
+    iter_jsonl,
+    mark_batch_item,
+    mark_batch_job_error,
+    submit_batch,
+    update_batch_status,
+    write_batch_output,
+)
 from translation_guidance_coverage import CURRENT_DETECTOR_VERSION
 
 
@@ -27,6 +42,7 @@ DEFAULT_MODEL = "gpt-5.4-mini"
 DEFAULT_DAILY_TOKEN_LIMIT = 2_000_000
 DEFAULT_GUIDANCE_AI_LIMIT = 2_000
 DETECTOR_VERSION = CURRENT_DETECTOR_VERSION
+TERMINAL_BATCH_STATUSES = {"completed", "failed", "expired", "cancelled"}
 
 GREEK_ARTICLE_CANDIDATES = {
     "ο",
@@ -244,52 +260,114 @@ def call_formula_model(
     notes: str,
 ) -> tuple[dict[str, object], int]:
     response = client.chat.completions.create(
-        model=model,
-        response_format={"type": "json_object"},
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You judge whether a Greek translation formula applies to a Stephanos entry. "
-                    "Match only the Greek surface pattern described by the rule. X/Y placeholders "
-                    "are variable slots, but every fixed Greek word, particle, or phrase in the "
-                    "rule label must be present in the relevant local order. Do not accept a merely "
-                    "semantic resemblance or an implicit equivalent when the fixed wording is absent. "
-                    "Return JSON only with keys match_status, confidence, evidence_text, occurrence_count, notes. "
-                    "match_status must be matched, not_matched, or uncertain. "
-                    "confidence must be high, medium, or low. occurrence_count must be an integer "
-                    "count of real occurrences when matched, otherwise 0. evidence_text must quote "
-                    "the exact Greek words that instantiate the formula; if there is no exact "
-                    "surface evidence, return not_matched."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Headword: {lemma}\n"
-                    f"Formula rule: {rule_label}\n"
-                    f"Preferred English translation: {preferred_translation}\n"
-                    f"Rule notes: {notes}\n\n"
-                    f"Source Greek text:\n{source_text}"
-                ),
-            },
-        ],
+        **build_formula_chat_completion_body(
+            model=model,
+            lemma=lemma,
+            source_text=source_text,
+            rule_label=rule_label,
+            preferred_translation=preferred_translation,
+            notes=notes,
+        )
     )
-    tokens_used = response.usage.total_tokens if response.usage else 0
-    payload = json.loads(response.choices[0].message.content or "{}")
+    return extract_formula_result(response.model_dump())
+
+
+def build_formula_messages(
+    *,
+    lemma: str,
+    source_text: str,
+    rule_label: str,
+    preferred_translation: str,
+    notes: str,
+) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You judge whether a Greek translation formula applies to a Stephanos entry. "
+                "Match only the Greek surface pattern described by the rule. X/Y placeholders "
+                "are variable slots, but every fixed Greek word, particle, or phrase in the "
+                "rule label must be present in the relevant local order. Do not accept a merely "
+                "semantic resemblance or an implicit equivalent when the fixed wording is absent. "
+                "Return JSON only with keys match_status, confidence, evidence_text, occurrence_count, notes. "
+                "match_status must be matched, not_matched, or uncertain. "
+                "confidence must be high, medium, or low. occurrence_count must be an integer "
+                "count of real occurrences when matched, otherwise 0. evidence_text must quote "
+                "the exact Greek words that instantiate the formula; if there is no exact "
+                "surface evidence, return not_matched."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Headword: {lemma}\n"
+                f"Formula rule: {rule_label}\n"
+                f"Preferred English translation: {preferred_translation}\n"
+                f"Rule notes: {notes}\n\n"
+                f"Source Greek text:\n{source_text}"
+            ),
+        },
+    ]
+
+
+def build_formula_chat_completion_body(
+    *,
+    model: str,
+    lemma: str,
+    source_text: str,
+    rule_label: str,
+    preferred_translation: str,
+    notes: str,
+) -> dict:
+    return {
+        "model": model,
+        "response_format": {"type": "json_object"},
+        "messages": build_formula_messages(
+            lemma=lemma,
+            source_text=source_text,
+            rule_label=rule_label,
+            preferred_translation=preferred_translation,
+            notes=notes,
+        ),
+    }
+
+
+def response_tokens_used(body: dict) -> int:
+    usage = body.get("usage") or {}
+    return int(usage.get("total_tokens") or 0)
+
+
+def response_message_content(body: dict) -> str:
+    choices = body.get("choices") or []
+    if not choices:
+        raise RuntimeError("Batch response has no choices")
+    message = (choices[0] or {}).get("message") or {}
+    return str(message.get("content") or "")
+
+
+def extract_formula_result(
+    body: dict,
+    *,
+    lexical_prefilter: dict[str, object] | None = None,
+) -> tuple[dict[str, object], int]:
+    tokens_used = response_tokens_used(body)
+    payload = json.loads(response_message_content(body) or "{}")
     match_status, confidence, occurrence_count = normalize_guidance_payload(payload)
     evidence_text = str(payload.get("evidence_text") or "").strip()
     notes_text = str(payload.get("notes") or "").strip()
+    evidence_json = {
+        "method": "formula_ai_judgement",
+        "notes": notes_text,
+    }
+    if lexical_prefilter is not None:
+        evidence_json["lexical_prefilter"] = lexical_prefilter
     return (
         {
             "match_status": match_status,
             "occurrence_count": occurrence_count,
             "confidence": confidence,
             "evidence_text": evidence_text,
-            "evidence_json": {
-                "method": "formula_ai_judgement",
-                "notes": notes_text,
-            },
+            "evidence_json": evidence_json,
         },
         tokens_used,
     )
@@ -325,8 +403,32 @@ def call_lexical_guidance_model(
     context_condition: str = "",
     lexical_prefilter: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], int]:
+    response = client.chat.completions.create(
+        **build_lexical_guidance_chat_completion_body(
+            model=model,
+            lemma=lemma,
+            source_text=source_text,
+            rule_kind=rule_kind,
+            rule_label=rule_label,
+            preferred_translation=preferred_translation,
+            context_condition=context_condition,
+            bias_strength=bias_strength,
+            notes=notes,
+            lexical_prefilter=lexical_prefilter,
+        )
+    )
+    return extract_lexical_guidance_result(
+        response.model_dump(),
+        rule_kind=rule_kind,
+        context_condition=context_condition,
+        bias_strength=bias_strength,
+        lexical_prefilter=lexical_prefilter,
+    )
+
+
+def guidance_description_for_rule_kind(rule_kind: str) -> str:
     if rule_kind == "proper_noun":
-        guidance_description = (
+        return (
             "The rule describes a Greek proper noun or named entity. Accept real Greek "
             "occurrences of that entity, including inflected, dialectal, enclitic/article-free, "
             "or common orthographic variants. Reject accidental substrings inside longer "
@@ -335,66 +437,116 @@ def call_lexical_guidance_model(
             "match the headword or its derivative forms unless the rule label itself names "
             "that same entity."
         )
-    elif rule_kind == "contextual_bias":
-        guidance_description = (
+    if rule_kind == "contextual_bias":
+        return (
             "The rule describes a vocabulary-bias item. Decide whether the Greek term or "
             "phrase appears in a relevant form and whether the local context satisfies the "
             "stated condition."
         )
-    else:
-        guidance_description = (
-            "The rule describes a gloss or lexical expression. Accept any genuine Greek "
-            "form that instantiates the expression, including inflected, contracted, "
-            "dialectal, or orthographic variants. Reject accidental substrings inside longer "
-            "unrelated words. The target expression is the rule label, not the headword; do "
-            "not match the headword or its derivative forms unless they instantiate the rule "
-            "label itself."
-        )
-    lexical_hint = json.dumps(lexical_prefilter or {}, ensure_ascii=False)
-    response = client.chat.completions.create(
-        model=model,
-        response_format={"type": "json_object"},
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You judge whether a Stephanos entry matches a translation-guidance rule. "
-                    "Use Greek morphology and philological judgment rather than raw substring "
-                    "matching. A normalized lexical prefilter may be supplied as a hint, but it "
-                    "is not authoritative and may contain false positives or miss inflected "
-                    "forms. Judge the rule label, not the headword. Do not return matched "
-                    "because the headword, an inflected headword, or a derivative of the "
-                    "headword appears in the source unless that is also a genuine occurrence "
-                    "of the rule label. If evidence_text would not contain the target rule "
-                    "expression or a clear inflected/orthographic form of it, return not_matched. "
-                    "If your notes say the rule label itself is not the matched entity, the "
-                    "only valid match_status is not_matched. "
-                    "Return JSON only with keys match_status, confidence, evidence_text, "
-                    "occurrence_count, notes. match_status must be matched, not_matched, or "
-                    "uncertain. confidence must be high, medium, or low. occurrence_count must "
-                    "be an integer count of real occurrences when matched, otherwise 0. "
-                    "evidence_text must quote the exact Greek words that justify the judgement."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Headword: {lemma}\n"
-                    f"Rule kind: {rule_kind}\n"
-                    f"Rule label: {rule_label}\n"
-                    f"Preferred English guidance: {preferred_translation}\n"
-                    f"Context condition: {context_condition or '(none)'}\n"
-                    f"Bias strength: {bias_strength or 'normal'}\n"
-                    f"Rule notes: {notes}\n\n"
-                    f"Detection instructions: {guidance_description}\n\n"
-                    f"Lexical prefilter hint:\n{lexical_hint}\n\n"
-                    f"Source Greek text:\n{source_text}"
-                ),
-            },
-        ],
+    return (
+        "The rule describes a gloss or lexical expression. Accept any genuine Greek "
+        "form that instantiates the expression, including inflected, contracted, "
+        "dialectal, or orthographic variants. Reject accidental substrings inside longer "
+        "unrelated words. The target expression is the rule label, not the headword; do "
+        "not match the headword or its derivative forms unless they instantiate the rule "
+        "label itself."
     )
-    tokens_used = response.usage.total_tokens if response.usage else 0
-    payload = json.loads(response.choices[0].message.content or "{}")
+
+
+def build_lexical_guidance_messages(
+    *,
+    lemma: str,
+    source_text: str,
+    rule_kind: str,
+    rule_label: str,
+    preferred_translation: str,
+    bias_strength: str,
+    notes: str,
+    context_condition: str = "",
+    lexical_prefilter: dict[str, object] | None = None,
+) -> list[dict[str, str]]:
+    guidance_description = guidance_description_for_rule_kind(rule_kind)
+    lexical_hint = json.dumps(lexical_prefilter or {}, ensure_ascii=False)
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You judge whether a Stephanos entry matches a translation-guidance rule. "
+                "Use Greek morphology and philological judgment rather than raw substring "
+                "matching. A normalized lexical prefilter may be supplied as a hint, but it "
+                "is not authoritative and may contain false positives or miss inflected "
+                "forms. Judge the rule label, not the headword. Do not return matched "
+                "because the headword, an inflected headword, or a derivative of the "
+                "headword appears in the source unless that is also a genuine occurrence "
+                "of the rule label. If evidence_text would not contain the target rule "
+                "expression or a clear inflected/orthographic form of it, return not_matched. "
+                "If your notes say the rule label itself is not the matched entity, the "
+                "only valid match_status is not_matched. "
+                "Return JSON only with keys match_status, confidence, evidence_text, "
+                "occurrence_count, notes. match_status must be matched, not_matched, or "
+                "uncertain. confidence must be high, medium, or low. occurrence_count must "
+                "be an integer count of real occurrences when matched, otherwise 0. "
+                "evidence_text must quote the exact Greek words that justify the judgement."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Headword: {lemma}\n"
+                f"Rule kind: {rule_kind}\n"
+                f"Rule label: {rule_label}\n"
+                f"Preferred English guidance: {preferred_translation}\n"
+                f"Context condition: {context_condition or '(none)'}\n"
+                f"Bias strength: {bias_strength or 'normal'}\n"
+                f"Rule notes: {notes}\n\n"
+                f"Detection instructions: {guidance_description}\n\n"
+                f"Lexical prefilter hint:\n{lexical_hint}\n\n"
+                f"Source Greek text:\n{source_text}"
+            ),
+        },
+    ]
+
+
+def build_lexical_guidance_chat_completion_body(
+    *,
+    model: str,
+    lemma: str,
+    source_text: str,
+    rule_kind: str,
+    rule_label: str,
+    preferred_translation: str,
+    bias_strength: str,
+    notes: str,
+    context_condition: str = "",
+    lexical_prefilter: dict[str, object] | None = None,
+) -> dict:
+    return {
+        "model": model,
+        "response_format": {"type": "json_object"},
+        "messages": build_lexical_guidance_messages(
+            lemma=lemma,
+            source_text=source_text,
+            rule_kind=rule_kind,
+            rule_label=rule_label,
+            preferred_translation=preferred_translation,
+            bias_strength=bias_strength,
+            notes=notes,
+            context_condition=context_condition,
+            lexical_prefilter=lexical_prefilter,
+        ),
+    }
+
+
+def extract_lexical_guidance_result(
+    body: dict,
+    *,
+    rule_kind: str,
+    context_condition: str = "",
+    bias_strength: str = "normal",
+    lexical_prefilter: dict[str, object] | None = None,
+) -> tuple[dict[str, object], int]:
+    tokens_used = response_tokens_used(body)
+    payload = json.loads(response_message_content(body) or "{}")
     match_status, confidence, occurrence_count = normalize_guidance_payload(payload)
     evidence_text = str(payload.get("evidence_text") or "").strip()
     notes_text = str(payload.get("notes") or "").strip()
@@ -494,6 +646,51 @@ def claim_jobs(cur, limit: int) -> list[tuple]:
         (int(limit),),
     )
     return cur.fetchall()
+
+
+def fetch_job_by_id(cur, queue_id: int) -> tuple | None:
+    scan_batch_select = (
+        "q.scan_batch_id"
+        if column_exists(cur, "translation_guidance_scan_queue", "scan_batch_id")
+        else "NULL::integer AS scan_batch_id"
+    )
+    context_condition_select = (
+        "COALESCE(r.context_condition, '') AS context_condition"
+        if column_exists(cur, "translation_guidance_rules", "context_condition")
+        else "'' AS context_condition"
+    )
+    bias_strength_select = (
+        "COALESCE(r.bias_strength, 'normal') AS bias_strength"
+        if column_exists(cur, "translation_guidance_rules", "bias_strength")
+        else "'normal' AS bias_strength"
+    )
+    cur.execute(
+        f"""
+        SELECT
+            q.id,
+            q.rule_id,
+            q.rule_revision_id,
+            q.lemma_id,
+            q.source_text_version_id,
+            {scan_batch_select},
+            COALESCE(q.detector_kind, '') AS detector_kind,
+            COALESCE(r.kind, '') AS rule_kind,
+            COALESCE(r.label, '') AS rule_label,
+            COALESCE(r.preferred_translation, '') AS preferred_translation,
+            COALESCE(r.notes, '') AS rule_notes,
+            {context_condition_select},
+            {bias_strength_select},
+            COALESCE(stv.text_body, '') AS source_text,
+            COALESCE(a.lemma, '') AS lemma
+        FROM translation_guidance_scan_queue q
+        JOIN translation_guidance_rules r ON r.id = q.rule_id
+        JOIN lemma_source_text_versions stv ON stv.id = q.source_text_version_id
+        JOIN assembled_lemmas a ON a.id = q.lemma_id
+        WHERE q.id = %s
+        """,
+        (int(queue_id),),
+    )
+    return cur.fetchone()
 
 
 def ensure_token_accounting_columns(cur) -> None:
@@ -652,6 +849,7 @@ def defer_job(cur, queue_id: int, reason: str) -> None:
             WITH updated AS (
                 UPDATE translation_guidance_scan_queue
                 SET status = 'pending',
+                    started_at = NULL,
                     finished_at = NULL,
                     updated_at = NOW(),
                     error_message = %s
@@ -670,6 +868,7 @@ def defer_job(cur, queue_id: int, reason: str) -> None:
             """
             UPDATE translation_guidance_scan_queue
             SET status = 'pending',
+                started_at = NULL,
                 finished_at = NULL,
                 updated_at = NOW(),
                 error_message = %s
@@ -677,6 +876,407 @@ def defer_job(cur, queue_id: int, reason: str) -> None:
             """,
             (reason, queue_id),
         )
+
+
+def wait_for_openai_batch(
+    client: OpenAI,
+    cur,
+    conn,
+    *,
+    job_id: int,
+    poll_interval: float,
+    timeout: float | None,
+) -> str:
+    start = time.monotonic()
+    while True:
+        job = get_batch_job(cur, job_id=job_id)
+        if not job:
+            raise RuntimeError(f"Missing openai_batch_jobs row {job_id}")
+        openai_batch_id = job[4]
+        if not openai_batch_id:
+            raise RuntimeError(f"Batch job {job_id} has not been submitted")
+        batch = client.batches.retrieve(openai_batch_id)
+        update_batch_status(cur, job_id=job_id, batch=batch)
+        conn.commit()
+        counts = getattr(batch, "request_counts", None)
+        print(
+            f"Guidance batch job {job_id} ({batch.id}) status={batch.status} "
+            f"completed={getattr(counts, 'completed', 0) or 0} "
+            f"failed={getattr(counts, 'failed', 0) or 0}"
+        )
+        if batch.status in TERMINAL_BATCH_STATUSES:
+            return batch.status
+        if timeout is not None and time.monotonic() - start >= timeout:
+            return batch.status
+        time.sleep(max(1.0, poll_interval))
+
+
+def submit_guidance_batch(
+    conn,
+    cur,
+    client: OpenAI,
+    *,
+    jobs: list[tuple],
+    args,
+    tokens_today: int,
+) -> int | None:
+    records: list[dict] = []
+    selected = 0
+    deferred = 0
+    submitted_queue_ids: list[int] = []
+    job_id = create_batch_job(
+        cur,
+        purpose="translation_guidance_scan",
+        model=args.model,
+        metadata={
+            "limit": args.limit,
+            "daily_token_limit": args.daily_token_limit,
+            "guidance_ai_limit": args.guidance_ai_limit,
+            "detector_version": DETECTOR_VERSION,
+        },
+    )
+    conn.commit()
+
+    for job in jobs:
+        (
+            queue_id,
+            _rule_id,
+            _rule_revision_id,
+            _lemma_id,
+            _source_text_version_id,
+            _scan_batch_id,
+            detector_kind,
+            rule_kind,
+            rule_label,
+            preferred_translation,
+            rule_notes,
+            context_condition,
+            bias_strength,
+            source_text,
+            lemma,
+        ) = job
+        queue_id = int(queue_id)
+        context_condition = str(context_condition or "").strip()
+        bias_strength = str(bias_strength or "normal").strip() or "normal"
+
+        if selected >= args.guidance_ai_limit:
+            defer_job(
+                cur,
+                queue_id,
+                f"Guidance AI call limit reached for this run: {selected} >= {args.guidance_ai_limit}",
+            )
+            deferred += 1
+            continue
+        if tokens_today >= args.daily_token_limit:
+            defer_job(
+                cur,
+                queue_id,
+                f"Daily token limit reached for {args.model}: {tokens_today} >= {args.daily_token_limit}",
+            )
+            deferred += 1
+            continue
+
+        lexical_prefilter = find_deterministic_match(source_text, rule_label)
+        lexical_prefilter_evidence = lexical_prefilter.get("evidence_json") or {}
+        if rule_kind == "formula":
+            body = build_formula_chat_completion_body(
+                model=args.model,
+                lemma=lemma,
+                source_text=source_text,
+                rule_label=rule_label,
+                preferred_translation=preferred_translation,
+                notes=rule_notes,
+            )
+        else:
+            body = build_lexical_guidance_chat_completion_body(
+                model=args.model,
+                lemma=lemma,
+                source_text=source_text,
+                rule_kind=rule_kind,
+                rule_label=rule_label,
+                preferred_translation=preferred_translation,
+                context_condition=context_condition,
+                bias_strength=bias_strength,
+                notes=rule_notes,
+                lexical_prefilter=lexical_prefilter_evidence,
+            )
+
+        custom_id = f"guidance-batch-{job_id}-scan-{queue_id}"
+        records.append(
+            {
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": body,
+            }
+        )
+        insert_batch_item(
+            cur,
+            batch_job_id=job_id,
+            custom_id=custom_id,
+            purpose="translation_guidance_scan",
+            local_id=queue_id,
+            metadata={
+                "queue_id": queue_id,
+                "rule_kind": rule_kind,
+                "detector_kind": detector_kind,
+                "model": args.model,
+                "context_condition": context_condition,
+                "bias_strength": bias_strength,
+                "lexical_prefilter": lexical_prefilter_evidence,
+            },
+        )
+        selected += 1
+        submitted_queue_ids.append(queue_id)
+
+    if not records:
+        mark_batch_job_error(
+            cur,
+            job_id=job_id,
+            status="cancelled",
+            error_message="No guidance scan jobs selected.",
+        )
+        conn.commit()
+        print(f"No guidance batch records to submit; deferred={deferred}.")
+        return None
+
+    try:
+        batch_id = submit_batch(client, cur, job_id=job_id, records=records)
+    except Exception as exc:
+        for queue_id in submitted_queue_ids:
+            defer_job(cur, queue_id, f"Batch API submission failed: {type(exc).__name__}: {exc}")
+        mark_batch_job_error(
+            cur,
+            job_id=job_id,
+            status="failed",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
+        conn.commit()
+        raise
+
+    conn.commit()
+    print(
+        f"Submitted guidance batch job {job_id}: {batch_id} "
+        f"({len(records)} requests, deferred={deferred})"
+    )
+    return job_id
+
+
+def collect_guidance_batch(conn, cur, client: OpenAI, *, job_id: int) -> tuple[int, int, int]:
+    job = get_batch_job(cur, job_id=job_id)
+    if not job:
+        raise RuntimeError(f"Missing openai_batch_jobs row {job_id}")
+    openai_batch_id = job[4]
+    if not openai_batch_id:
+        raise RuntimeError(f"Batch job {job_id} has not been submitted")
+
+    batch = client.batches.retrieve(openai_batch_id)
+    update_batch_status(cur, job_id=job_id, batch=batch)
+    conn.commit()
+    if batch.status not in TERMINAL_BATCH_STATUSES:
+        print(f"Guidance batch job {job_id} is not terminal yet: {batch.status}")
+        return 0, 0, 0
+
+    items = get_batch_items(cur, job_id=job_id)
+    completed = failed = expired = 0
+
+    output_file_id = getattr(batch, "output_file_id", None)
+    if output_file_id:
+        output_text = file_content_text(client, output_file_id)
+        output_path = write_batch_output(job_id, kind="output", text=output_text)
+        cur.execute(
+            "UPDATE openai_batch_jobs SET output_path = %s, updated_at = NOW() WHERE id = %s",
+            (str(output_path), job_id),
+        )
+        conn.commit()
+        for _line_number, payload in iter_jsonl(output_text):
+            custom_id = payload.get("custom_id")
+            item = items.get(custom_id or "")
+            if not item or item.get("status") != "submitted":
+                continue
+            metadata = item["metadata"]
+            queue_id = int(metadata.get("queue_id") or item["local_id"])
+            response = payload.get("response") or {}
+            error = payload.get("error")
+            if error or int(response.get("status_code") or 0) >= 400:
+                error_json = error or response
+                mark_job(
+                    cur,
+                    queue_id,
+                    status="failed",
+                    error_message=json.dumps(error_json, ensure_ascii=False),
+                    model=metadata.get("model"),
+                    tokens_used=0,
+                )
+                mark_batch_item(cur, custom_id=custom_id, status="failed", error_json=error_json)
+                conn.commit()
+                items[custom_id]["status"] = "failed"
+                failed += 1
+                continue
+
+            try:
+                live_job = fetch_job_by_id(cur, queue_id)
+                if not live_job:
+                    raise RuntimeError(f"Guidance scan queue row {queue_id} no longer exists")
+                body = response.get("body") or {}
+                lexical_prefilter = metadata.get("lexical_prefilter") or {}
+                if metadata.get("rule_kind") == "formula":
+                    result, tokens_used = extract_formula_result(
+                        body,
+                        lexical_prefilter=lexical_prefilter,
+                    )
+                else:
+                    result, tokens_used = extract_lexical_guidance_result(
+                        body,
+                        rule_kind=metadata.get("rule_kind") or "guidance",
+                        context_condition=metadata.get("context_condition") or "",
+                        bias_strength=metadata.get("bias_strength") or "normal",
+                        lexical_prefilter=lexical_prefilter,
+                    )
+                upsert_match(cur, live_job, result)
+                mark_job(
+                    cur,
+                    queue_id,
+                    status="completed",
+                    model=metadata.get("model"),
+                    tokens_used=tokens_used,
+                )
+                mark_batch_item(
+                    cur,
+                    custom_id=custom_id,
+                    status="completed",
+                    tokens_used=tokens_used,
+                    response_json=body,
+                )
+                conn.commit()
+                items[custom_id]["status"] = "completed"
+                completed += 1
+            except Exception as exc:
+                conn.rollback()
+                error_json = {"message": f"{type(exc).__name__}: {exc}"}
+                mark_job(
+                    cur,
+                    queue_id,
+                    status="failed",
+                    error_message=error_json["message"],
+                    model=metadata.get("model"),
+                    tokens_used=0,
+                )
+                mark_batch_item(cur, custom_id=custom_id, status="failed", error_json=error_json)
+                conn.commit()
+                items[custom_id]["status"] = "failed"
+                failed += 1
+
+    error_file_id = getattr(batch, "error_file_id", None)
+    if error_file_id:
+        error_text = file_content_text(client, error_file_id)
+        error_path = write_batch_output(job_id, kind="error", text=error_text)
+        cur.execute(
+            "UPDATE openai_batch_jobs SET error_path = %s, updated_at = NOW() WHERE id = %s",
+            (str(error_path), job_id),
+        )
+        conn.commit()
+        for _line_number, payload in iter_jsonl(error_text):
+            custom_id = payload.get("custom_id")
+            item = items.get(custom_id or "")
+            if not item or item.get("status") != "submitted":
+                continue
+            metadata = item["metadata"]
+            queue_id = int(metadata.get("queue_id") or item["local_id"])
+            error = payload.get("error") or {}
+            if error.get("code") == "batch_expired":
+                defer_job(
+                    cur,
+                    queue_id,
+                    "Batch API expired before completing this guidance scan; row returned to pending.",
+                )
+                mark_batch_item(cur, custom_id=custom_id, status="expired", error_json=error)
+                expired += 1
+                items[custom_id]["status"] = "expired"
+            else:
+                mark_job(
+                    cur,
+                    queue_id,
+                    status="failed",
+                    error_message=json.dumps(error, ensure_ascii=False),
+                    model=metadata.get("model"),
+                    tokens_used=0,
+                )
+                mark_batch_item(cur, custom_id=custom_id, status="failed", error_json=error)
+                failed += 1
+                items[custom_id]["status"] = "failed"
+            conn.commit()
+
+    items = get_batch_items(cur, job_id=job_id)
+    for custom_id, item in items.items():
+        if item.get("status") != "submitted":
+            continue
+        metadata = item["metadata"]
+        queue_id = int(metadata.get("queue_id") or item["local_id"])
+        if batch.status in {"expired", "cancelled"}:
+            defer_job(
+                cur,
+                queue_id,
+                f"Batch API ended with status={batch.status}; guidance scan returned to pending.",
+            )
+            mark_batch_item(
+                cur,
+                custom_id=custom_id,
+                status="expired",
+                error_json={"message": f"Batch API ended with status={batch.status}"},
+            )
+            expired += 1
+        else:
+            mark_job(
+                cur,
+                queue_id,
+                status="failed",
+                error_message=f"Batch API ended with status={batch.status} without an item response.",
+                model=metadata.get("model"),
+                tokens_used=0,
+            )
+            mark_batch_item(
+                cur,
+                custom_id=custom_id,
+                status="failed",
+                error_json={"message": f"Batch API ended with status={batch.status} without an item response."},
+            )
+            failed += 1
+        conn.commit()
+
+    print(f"Collected guidance batch job {job_id}: completed={completed} failed={failed} expired={expired}")
+    return completed, failed, expired
+
+
+def recover_guidance_batches(conn, cur, client: OpenAI, *, args) -> int:
+    active = 0
+    for job_id in get_recoverable_batch_job_ids(cur, purpose="translation_guidance_scan"):
+        job = get_batch_job(cur, job_id=job_id)
+        if not job or not job[4]:
+            continue
+        batch = client.batches.retrieve(job[4])
+        update_batch_status(cur, job_id=job_id, batch=batch)
+        conn.commit()
+        if batch.status in TERMINAL_BATCH_STATUSES:
+            collect_guidance_batch(conn, cur, client, job_id=job_id)
+            continue
+        if args.batch_wait:
+            status = wait_for_openai_batch(
+                client,
+                cur,
+                conn,
+                job_id=job_id,
+                poll_interval=args.batch_poll_interval,
+                timeout=args.batch_timeout or None,
+            )
+            if status in TERMINAL_BATCH_STATUSES:
+                collect_guidance_batch(conn, cur, client, job_id=job_id)
+            else:
+                active += 1
+        else:
+            print(f"Guidance batch job {job_id} is still {batch.status}; not submitting a duplicate.")
+            active += 1
+    return active
 
 
 def main() -> None:
@@ -693,20 +1293,40 @@ def main() -> None:
         default=DEFAULT_GUIDANCE_AI_LIMIT,
         help="Max AI judgements per run across all guidance scan kinds.",
     )
+    parser.add_argument("--batch", action="store_true", help="Submit guidance scans through the OpenAI Batch API")
+    parser.add_argument("--batch-wait", action="store_true", help="Poll the submitted batch and collect results before exiting")
+    parser.add_argument("--batch-poll-interval", type=float, default=30.0)
+    parser.add_argument(
+        "--batch-timeout",
+        type=float,
+        default=0.0,
+        help="Seconds to wait for a batch before returning; 0 waits until the Batch API reaches a terminal state",
+    )
     args = parser.parse_args()
     args.model = ensure_mini_model(args.model)
 
     client = None
     guidance_ai_used = 0
-    try:
+    if args.batch:
         client = OpenAI(api_key=load_api_key())
-    except Exception:
-        client = None
+    else:
+        try:
+            client = OpenAI(api_key=load_api_key())
+        except Exception:
+            client = None
 
     conn = get_connection()
     cur = conn.cursor()
     ensure_token_accounting_columns(cur)
+    if args.batch:
+        ensure_openai_batch_tables(cur)
     conn.commit()
+    if args.batch:
+        active_batches = recover_guidance_batches(conn, cur, client, args=args)
+        if active_batches > 0:
+            print(f"{active_batches} guidance Batch API job(s) still active; not submitting duplicates.")
+            conn.close()
+            return
     tokens_today = get_tokens_used_today(cur, args.model)
     jobs = claim_jobs(cur, args.limit)
     conn.commit()
@@ -716,6 +1336,29 @@ def main() -> None:
         print("No pending guidance scans.")
         print(f"Guidance AI model: {args.model}")
         print(f"Guidance AI tokens used today: {tokens_today:,} / {args.daily_token_limit:,}")
+        return
+
+    if args.batch:
+        job_id = submit_guidance_batch(
+            conn,
+            cur,
+            client,
+            jobs=jobs,
+            args=args,
+            tokens_today=tokens_today,
+        )
+        if job_id and args.batch_wait:
+            status = wait_for_openai_batch(
+                client,
+                cur,
+                conn,
+                job_id=job_id,
+                poll_interval=args.batch_poll_interval,
+                timeout=args.batch_timeout or None,
+            )
+            if status in TERMINAL_BATCH_STATUSES:
+                collect_guidance_batch(conn, cur, client, job_id=job_id)
+        conn.close()
         return
 
     completed = failed = 0

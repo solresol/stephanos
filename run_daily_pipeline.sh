@@ -282,6 +282,10 @@ TRANSLATION_GUIDANCE_SCAN_MODEL="${TRANSLATION_GUIDANCE_SCAN_MODEL:-gpt-5.4-mini
 TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT="${TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT:-2000000}"
 TRANSLATION_GUIDANCE_SCAN_GUIDANCE_AI_LIMIT="${TRANSLATION_GUIDANCE_SCAN_GUIDANCE_AI_LIMIT:-${TRANSLATION_GUIDANCE_SCAN_FORMULA_AI_LIMIT:-$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT}}"
 TRANSLATION_GUIDANCE_SCAN_DELAY="${TRANSLATION_GUIDANCE_SCAN_DELAY:-0}"
+TRANSLATION_GUIDANCE_SCAN_USE_BATCH="${TRANSLATION_GUIDANCE_SCAN_USE_BATCH:-1}"
+TRANSLATION_GUIDANCE_SCAN_BATCH_WAIT="${TRANSLATION_GUIDANCE_SCAN_BATCH_WAIT:-1}"
+TRANSLATION_GUIDANCE_SCAN_BATCH_POLL_INTERVAL="${TRANSLATION_GUIDANCE_SCAN_BATCH_POLL_INTERVAL:-30}"
+TRANSLATION_GUIDANCE_SCAN_BATCH_TIMEOUT="${TRANSLATION_GUIDANCE_SCAN_BATCH_TIMEOUT:-0}"
 case "$TRANSLATION_GUIDANCE_SCAN_MODEL" in
     *-mini*) ;;
     *)
@@ -291,13 +295,25 @@ case "$TRANSLATION_GUIDANCE_SCAN_MODEL" in
 esac
 if [ "$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT" -gt 0 ]; then
     echo "Step 4d8: Processing translation-guidance scans before translation..." | tee -a "$LOGFILE"
-    uv run process_translation_guidance_scans.py \
+    guidance_process_args=(
+        uv run process_translation_guidance_scans.py
         --limit "$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT" \
         --model "$TRANSLATION_GUIDANCE_SCAN_MODEL" \
         --daily-token-limit "$TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT" \
-        --guidance-ai-limit "$TRANSLATION_GUIDANCE_SCAN_GUIDANCE_AI_LIMIT" \
-        --delay "$TRANSLATION_GUIDANCE_SCAN_DELAY" \
-        2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation-guidance scan step failed" | tee -a "$LOGFILE"
+        --guidance-ai-limit "$TRANSLATION_GUIDANCE_SCAN_GUIDANCE_AI_LIMIT"
+    )
+    if [ "$TRANSLATION_GUIDANCE_SCAN_USE_BATCH" != "0" ]; then
+        guidance_process_args+=(--batch)
+        if [ "$TRANSLATION_GUIDANCE_SCAN_BATCH_WAIT" != "0" ]; then
+            guidance_process_args+=(--batch-wait --batch-poll-interval "$TRANSLATION_GUIDANCE_SCAN_BATCH_POLL_INTERVAL")
+            if [ "$TRANSLATION_GUIDANCE_SCAN_BATCH_TIMEOUT" != "0" ]; then
+                guidance_process_args+=(--batch-timeout "$TRANSLATION_GUIDANCE_SCAN_BATCH_TIMEOUT")
+            fi
+        fi
+    else
+        guidance_process_args+=(--delay "$TRANSLATION_GUIDANCE_SCAN_DELAY")
+    fi
+    "${guidance_process_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation-guidance scan step failed" | tee -a "$LOGFILE"
 fi
 
 # Step 4e: Enqueue Meineke translation run requests (set TRANSLATION_ENQUEUE_LIMIT=0 to disable)
@@ -333,9 +349,23 @@ fi
 
 # Step 5: Translate Meineke lemmas with gpt-5.5 after guidance coverage is complete
 echo "Step 5: Translating lemmas with gpt-5.5..." | tee -a "$LOGFILE"
-uv run translate_lemmas.py \
-    --delay 1 \
-    2>&1 | tee -a "$LOGFILE"
+TRANSLATION_USE_BATCH="${TRANSLATION_USE_BATCH:-1}"
+TRANSLATION_BATCH_WAIT="${TRANSLATION_BATCH_WAIT:-1}"
+TRANSLATION_BATCH_POLL_INTERVAL="${TRANSLATION_BATCH_POLL_INTERVAL:-30}"
+TRANSLATION_BATCH_TIMEOUT="${TRANSLATION_BATCH_TIMEOUT:-0}"
+translation_args=(uv run translate_lemmas.py)
+if [ "$TRANSLATION_USE_BATCH" != "0" ]; then
+    translation_args+=(--batch)
+    if [ "$TRANSLATION_BATCH_WAIT" != "0" ]; then
+        translation_args+=(--batch-wait --batch-poll-interval "$TRANSLATION_BATCH_POLL_INTERVAL")
+        if [ "$TRANSLATION_BATCH_TIMEOUT" != "0" ]; then
+            translation_args+=(--batch-timeout "$TRANSLATION_BATCH_TIMEOUT")
+        fi
+    fi
+else
+    translation_args+=(--delay 1)
+fi
+"${translation_args[@]}" 2>&1 | tee -a "$LOGFILE"
 
 # Step 5aa: Translate assembled Billerbeck German references to English
 BILLERBECK_GERMAN_TRANSLATE_LIMIT="${BILLERBECK_GERMAN_TRANSLATE_LIMIT:-5}"

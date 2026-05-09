@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict 4mAbkJDn9k3m0sqWqlNd8azZzQtcZM91OSQtzjhfvzCYRwh0zLndQAfHTa1hddA
+\restrict iT2YkId0WgJYswxTUfuLRlbu8tU8OjYCbxeLn6VNKXVCI1uw1tKrwMlAyf4O7ov
 
 -- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
@@ -1298,6 +1298,103 @@ ALTER SEQUENCE public.ocr_generations_id_seq OWNED BY public.ocr_generations.id;
 
 
 --
+-- Name: openai_batch_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.openai_batch_items (
+    id integer NOT NULL,
+    batch_job_id integer NOT NULL,
+    custom_id text NOT NULL,
+    purpose text NOT NULL,
+    local_id integer NOT NULL,
+    status text DEFAULT 'submitted'::text NOT NULL,
+    tokens_used integer DEFAULT 0 NOT NULL,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    response_json jsonb,
+    error_json jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT openai_batch_items_purpose_check CHECK ((purpose = ANY (ARRAY['translation'::text, 'translation_guidance_scan'::text]))),
+    CONSTRAINT openai_batch_items_status_check CHECK ((status = ANY (ARRAY['submitted'::text, 'completed'::text, 'failed'::text, 'expired'::text]))),
+    CONSTRAINT openai_batch_items_tokens_used_check CHECK ((tokens_used >= 0))
+);
+
+
+--
+-- Name: openai_batch_items_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.openai_batch_items_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: openai_batch_items_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.openai_batch_items_id_seq OWNED BY public.openai_batch_items.id;
+
+
+--
+-- Name: openai_batch_jobs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.openai_batch_jobs (
+    id integer NOT NULL,
+    purpose text NOT NULL,
+    endpoint text NOT NULL,
+    model text,
+    openai_batch_id text,
+    input_file_id text,
+    output_file_id text,
+    error_file_id text,
+    status text DEFAULT 'creating'::text NOT NULL,
+    request_count integer DEFAULT 0 NOT NULL,
+    completed_count integer DEFAULT 0 NOT NULL,
+    failed_count integer DEFAULT 0 NOT NULL,
+    input_path text,
+    output_path text,
+    error_path text,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    error_message text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    submitted_at timestamp with time zone,
+    last_polled_at timestamp with time zone,
+    completed_at timestamp with time zone,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT openai_batch_jobs_completed_count_check CHECK ((completed_count >= 0)),
+    CONSTRAINT openai_batch_jobs_failed_count_check CHECK ((failed_count >= 0)),
+    CONSTRAINT openai_batch_jobs_purpose_check CHECK ((purpose = ANY (ARRAY['translation'::text, 'translation_guidance_scan'::text]))),
+    CONSTRAINT openai_batch_jobs_request_count_check CHECK ((request_count >= 0))
+);
+
+
+--
+-- Name: openai_batch_jobs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.openai_batch_jobs_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: openai_batch_jobs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.openai_batch_jobs_id_seq OWNED BY public.openai_batch_jobs.id;
+
+
+--
 -- Name: oracle_references; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2494,6 +2591,20 @@ ALTER TABLE ONLY public.ocr_generations ALTER COLUMN id SET DEFAULT nextval('pub
 
 
 --
+-- Name: openai_batch_items id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.openai_batch_items ALTER COLUMN id SET DEFAULT nextval('public.openai_batch_items_id_seq'::regclass);
+
+
+--
+-- Name: openai_batch_jobs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.openai_batch_jobs ALTER COLUMN id SET DEFAULT nextval('public.openai_batch_jobs_id_seq'::regclass);
+
+
+--
 -- Name: oracle_references id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -2915,6 +3026,38 @@ ALTER TABLE ONLY public.ocr_generations
 
 ALTER TABLE ONLY public.ocr_generations
     ADD CONSTRAINT ocr_generations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: openai_batch_items openai_batch_items_custom_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.openai_batch_items
+    ADD CONSTRAINT openai_batch_items_custom_id_key UNIQUE (custom_id);
+
+
+--
+-- Name: openai_batch_items openai_batch_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.openai_batch_items
+    ADD CONSTRAINT openai_batch_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: openai_batch_jobs openai_batch_jobs_openai_batch_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.openai_batch_jobs
+    ADD CONSTRAINT openai_batch_jobs_openai_batch_id_key UNIQUE (openai_batch_id);
+
+
+--
+-- Name: openai_batch_jobs openai_batch_jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.openai_batch_jobs
+    ADD CONSTRAINT openai_batch_jobs_pkey PRIMARY KEY (id);
 
 
 --
@@ -3649,6 +3792,27 @@ CREATE INDEX meineke_word_lemma_occurrences_word_idx ON public.meineke_word_lemm
 
 
 --
+-- Name: openai_batch_items_job_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX openai_batch_items_job_status_idx ON public.openai_batch_items USING btree (batch_job_id, status, local_id);
+
+
+--
+-- Name: openai_batch_items_purpose_local_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX openai_batch_items_purpose_local_idx ON public.openai_batch_items USING btree (purpose, local_id, created_at DESC);
+
+
+--
+-- Name: openai_batch_jobs_purpose_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX openai_batch_jobs_purpose_status_idx ON public.openai_batch_jobs USING btree (purpose, status, created_at DESC);
+
+
+--
 -- Name: oracle_references_lemma_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4259,6 +4423,14 @@ ALTER TABLE ONLY public.meineke_word_lemma_occurrences
 
 
 --
+-- Name: openai_batch_items openai_batch_items_batch_job_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.openai_batch_items
+    ADD CONSTRAINT openai_batch_items_batch_job_id_fkey FOREIGN KEY (batch_job_id) REFERENCES public.openai_batch_jobs(id) ON DELETE CASCADE;
+
+
+--
 -- Name: oracle_references oracle_references_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4638,4 +4810,4 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 4mAbkJDn9k3m0sqWqlNd8azZzQtcZM91OSQtzjhfvzCYRwh0zLndQAfHTa1hddA
+\unrestrict iT2YkId0WgJYswxTUfuLRlbu8tU8OjYCbxeLn6VNKXVCI1uw1tKrwMlAyf4O7ov

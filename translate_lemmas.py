@@ -14,6 +14,21 @@ from openai import OpenAI
 
 from api_keys import load_api_key
 from db import get_connection
+from openai_batch_utils import (
+    create_batch_job,
+    ensure_openai_batch_tables,
+    file_content_text,
+    get_batch_items,
+    get_batch_job,
+    get_recoverable_batch_job_ids,
+    insert_batch_item,
+    iter_jsonl,
+    mark_batch_item,
+    mark_batch_job_error,
+    submit_batch,
+    update_batch_status,
+    write_batch_output,
+)
 from translation_run_utils import DEFAULT_TRANSLATION_MODEL, lookup_public_block
 from translation_guidance_coverage import (
     CURRENT_DETECTOR_VERSION,
@@ -486,6 +501,84 @@ def format_context_sections(guidance_rows, source_passage_rows) -> str:
     return "\n\n".join(sections)
 
 
+def build_translation_prompt(
+    *,
+    lemma: str,
+    entry_number: int | None,
+    source_text: str,
+    guidance_context=None,
+    source_passage_context=None,
+) -> str:
+    context_sections = format_context_sections(guidance_context or [], source_passage_context or [])
+    prompt = f"""Translate this Stephanos entry.
+
+Headword: {lemma}
+Entry number: {entry_number or 0}
+
+Source Greek text:
+{source_text}
+"""
+    if context_sections:
+        prompt += f"""
+Additional translation context:
+{context_sections}
+"""
+    return prompt
+
+
+def build_chat_completion_body(
+    *,
+    model: str,
+    temperature: float,
+    top_p: float,
+    system_prompt: str,
+    lemma: str,
+    entry_number: int | None,
+    source_text: str,
+    guidance_context=None,
+    source_passage_context=None,
+) -> dict:
+    return {
+        "model": model,
+        "temperature": temperature,
+        "top_p": top_p,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": build_translation_prompt(
+                    lemma=lemma,
+                    entry_number=entry_number,
+                    source_text=source_text,
+                    guidance_context=guidance_context,
+                    source_passage_context=source_passage_context,
+                ),
+            },
+        ],
+        "tools": [TRANSLATE_TOOL],
+        "tool_choice": {"type": "function", "function": {"name": "submit_translation"}},
+    }
+
+
+def extract_translation_from_response_body(body: dict) -> tuple[str, int]:
+    usage = body.get("usage") or {}
+    tokens_used = int(usage.get("total_tokens") or 0)
+    choices = body.get("choices") or []
+    if not choices:
+        raise RuntimeError("Batch response has no choices")
+    message = (choices[0] or {}).get("message") or {}
+    tool_calls = message.get("tool_calls") or []
+    if not tool_calls:
+        raise RuntimeError("Batch response has no translation tool call")
+    function = (tool_calls[0] or {}).get("function") or {}
+    raw_args = function.get("arguments") or "{}"
+    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+    translation = (args.get("translation") or "").strip()
+    if not translation:
+        raise RuntimeError("Empty translation result")
+    return translation, tokens_used
+
+
 def fetch_requests(cur, request_limit: int | None):
     has_human_translation_expr = human_translation_exists_sql(cur)
     kappa_headword_expr = "left(trim(COALESCE(a.lemma, '')), 1) IN ('Κ', 'κ')"
@@ -566,6 +659,21 @@ def mark_request_done(cur, request_id: int, status: str, error_message: str | No
         WHERE id = %s
         """,
         (status, error_message, request_id),
+    )
+
+
+def mark_request_pending(cur, request_id: int, error_message: str | None = None):
+    cur.execute(
+        """
+        UPDATE translation_run_requests
+        SET status = 'pending',
+            started_at = NULL,
+            finished_at = NULL,
+            updated_at = NOW(),
+            error_message = %s
+        WHERE id = %s
+        """,
+        (error_message, request_id),
     )
 
 
@@ -683,36 +791,543 @@ def call_model(
     guidance_context=None,
     source_passage_context=None,
 ):
-    context_sections = format_context_sections(guidance_context or [], source_passage_context or [])
-    prompt = f"""Translate this Stephanos entry.
-
-Headword: {lemma}
-Entry number: {entry_number or 0}
-
-Source Greek text:
-{source_text}
-"""
-    if context_sections:
-        prompt += f"""
-Additional translation context:
-{context_sections}
-"""
     response = client.chat.completions.create(
-        model=model,
-        temperature=temperature,
-        top_p=top_p,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ],
-        tools=[TRANSLATE_TOOL],
-        tool_choice={"type": "function", "function": {"name": "submit_translation"}},
+        **build_chat_completion_body(
+            model=model,
+            temperature=temperature,
+            top_p=top_p,
+            system_prompt=system_prompt,
+            lemma=lemma,
+            entry_number=entry_number,
+            source_text=source_text,
+            guidance_context=guidance_context,
+            source_passage_context=source_passage_context,
+        )
     )
-    tokens_used = response.usage.total_tokens if response.usage else 0
-    tool_call = response.choices[0].message.tool_calls[0]
-    args = json.loads(tool_call.function.arguments)
-    translation = (args.get("translation") or "").strip()
-    return translation, tokens_used
+    return extract_translation_from_response_body(response.model_dump())
+
+
+def wait_for_openai_batch(client: OpenAI, cur, conn, *, job_id: int, poll_interval: float, timeout: float | None) -> str:
+    start = time.monotonic()
+    while True:
+        job = get_batch_job(cur, job_id=job_id)
+        if not job:
+            raise RuntimeError(f"Missing openai_batch_jobs row {job_id}")
+        if not job[4]:
+            raise RuntimeError(f"Batch job {job_id} has not been submitted")
+        batch = client.batches.retrieve(job[4])
+        update_batch_status(cur, job_id=job_id, batch=batch)
+        conn.commit()
+        status = batch.status
+        print(
+            f"Batch job {job_id} ({batch.id}) status={status} "
+            f"completed={getattr(getattr(batch, 'request_counts', None), 'completed', 0) or 0} "
+            f"failed={getattr(getattr(batch, 'request_counts', None), 'failed', 0) or 0}"
+        )
+        if status in {"completed", "failed", "expired", "cancelled"}:
+            return status
+        if timeout is not None and time.monotonic() - start >= timeout:
+            return status
+        time.sleep(max(1.0, poll_interval))
+
+
+def submit_translation_batch(
+    conn,
+    cur,
+    client: OpenAI,
+    *,
+    requests: list[tuple],
+    args,
+    tokens_today: int,
+    guidance_provenance_enabled: bool,
+) -> int | None:
+    records: list[dict] = []
+    total_runs = 0
+    batch_model = None
+
+    job_id = create_batch_job(
+        cur,
+        purpose="translation",
+        model=None,
+        metadata={
+            "request_limit": args.request_limit,
+            "run_limit": args.run_limit,
+            "daily_token_limit": args.daily_token_limit,
+            "guidance_provenance": guidance_provenance_enabled,
+        },
+    )
+    conn.commit()
+
+    for (
+        request_id,
+        lemma_id,
+        requested_runs,
+        model_name,
+        temperature,
+        top_p,
+        profile_id,
+        profile_name,
+        profile_version_id,
+        profile_version_number,
+        prompt_text,
+        source_text_version_id,
+        source_text,
+        source_document,
+        lemma,
+        entry_number,
+        request_has_human_translation,
+        _kappa_headword,
+    ) in requests:
+        if args.run_limit is not None and total_runs >= args.run_limit:
+            break
+        if tokens_today >= args.daily_token_limit:
+            print("Daily token limit already reached; not submitting a translation batch.")
+            break
+
+        if request_has_human_translation or has_human_translation(cur, lemma_id):
+            mark_request_done(
+                cur,
+                request_id,
+                "cancelled",
+                "Skipped because the lemma already has a human translation.",
+            )
+            conn.commit()
+            print(f"Request {request_id}: skipped {lemma} because it already has a human translation.")
+            continue
+
+        existing_count = completed_run_count(cur, request_id)
+        remaining = max(0, requested_runs - existing_count)
+        if remaining == 0:
+            mark_request_done(cur, request_id, "completed")
+            conn.commit()
+            continue
+        if batch_model is not None and model_name != batch_model:
+            mark_request_pending(
+                cur,
+                request_id,
+                "Deferred because OpenAI Batch input files can only contain one model; "
+                f"current batch model is {batch_model}.",
+            )
+            conn.commit()
+            print(
+                f"Request {request_id}: deferred {lemma} because model {model_name} "
+                f"does not match current batch model {batch_model}."
+            )
+            continue
+
+        if not args.no_guidance_context and not args.allow_incomplete_guidance:
+            coverage = guidance_coverage_counts(
+                cur,
+                source_text_version_id=source_text_version_id,
+            )
+            if (
+                not coverage.get("available")
+                or int(coverage.get("required", 0)) <= 0
+                or int(coverage.get("missing", 0)) > 0
+            ):
+                queued = {"needed": 0, "inserted": 0, "skipped": 0}
+                if coverage.get("available") and int(coverage.get("missing", 0)) > 0:
+                    queued = enqueue_missing_guidance(
+                        cur,
+                        lemma_id=lemma_id,
+                        source_text_version_id=source_text_version_id,
+                        requested_by="translate_lemmas.py",
+                        priority=20,
+                        notes="queued while deferring translation until guidance coverage is complete",
+                    )
+                    conn.commit()
+                print(
+                    "Request "
+                    f"{request_id}: defer translation until guidance coverage is complete "
+                    f"(source={source_document or 'unknown'} "
+                    f"completed={int(coverage.get('completed', 0))}/"
+                    f"{int(coverage.get('required', 0))}, "
+                    f"missing={int(coverage.get('missing', 0))}, "
+                    f"pending={int(coverage.get('pending', 0))}, "
+                    f"running={int(coverage.get('running', 0))}, "
+                    f"failed={int(coverage.get('failed', 0))}, "
+                    f"queued_missing={queued['inserted']})"
+                )
+                continue
+
+        mark_request_running(cur, request_id)
+        conn.commit()
+
+        for run_offset in range(1, remaining + 1):
+            if args.run_limit is not None and total_runs >= args.run_limit:
+                break
+            run_index = existing_count + run_offset
+            guidance_context = []
+            source_passage_context = []
+            if not args.no_guidance_context:
+                guidance_context = fetch_guidance_context(
+                    cur,
+                    lemma_id=lemma_id,
+                    source_text_version_id=source_text_version_id,
+                )
+            if not args.no_source_passage_context:
+                source_passage_context = fetch_source_passage_context(
+                    cur,
+                    lemma_id=lemma_id,
+                    source_text_version_id=source_text_version_id,
+                )
+            body = build_chat_completion_body(
+                model=model_name,
+                temperature=temperature,
+                top_p=top_p,
+                system_prompt=prompt_text,
+                lemma=lemma or "",
+                entry_number=entry_number,
+                source_text=source_text or "",
+                guidance_context=guidance_context,
+                source_passage_context=source_passage_context,
+            )
+            custom_id = f"translation-batch-{job_id}-request-{request_id}-run-{run_index}"
+            records.append(
+                {
+                    "custom_id": custom_id,
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": body,
+                }
+            )
+            insert_batch_item(
+                cur,
+                batch_job_id=job_id,
+                custom_id=custom_id,
+                purpose="translation",
+                local_id=request_id,
+                metadata={
+                    "request_id": request_id,
+                    "lemma_id": lemma_id,
+                    "profile_id": profile_id,
+                    "profile_version_id": profile_version_id,
+                    "profile_version_number": profile_version_number,
+                    "source_text_version_id": source_text_version_id,
+                    "source_document": source_document,
+                    "requested_runs": requested_runs,
+                    "run_index": run_index,
+                    "model": model_name,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                    "guidance_context": guidance_context,
+                },
+            )
+            batch_model = model_name if batch_model is None else batch_model
+            total_runs += 1
+        conn.commit()
+
+    if not records:
+        mark_batch_job_error(cur, job_id=job_id, status="cancelled", error_message="No translation requests selected.")
+        conn.commit()
+        print("No translation batch records to submit.")
+        return None
+
+    cur.execute("UPDATE openai_batch_jobs SET model = %s, request_count = %s, updated_at = NOW() WHERE id = %s", (batch_model, len(records), job_id))
+    conn.commit()
+    try:
+        batch_id = submit_batch(client, cur, job_id=job_id, records=records)
+    except Exception as exc:
+        cur.execute(
+            """
+            SELECT DISTINCT local_id
+            FROM openai_batch_items
+            WHERE batch_job_id = %s
+            """,
+            (job_id,),
+        )
+        for (request_id,) in cur.fetchall():
+            mark_request_pending(
+                cur,
+                int(request_id),
+                f"Batch API submission failed: {type(exc).__name__}: {exc}",
+            )
+        mark_batch_job_error(
+            cur,
+            job_id=job_id,
+            status="failed",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
+        conn.commit()
+        raise
+    conn.commit()
+    print(f"Submitted translation batch job {job_id}: {batch_id} ({len(records)} requests)")
+    return job_id
+
+
+def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tuple[int, int, int]:
+    job = get_batch_job(cur, job_id=job_id)
+    if not job:
+        raise RuntimeError(f"Missing openai_batch_jobs row {job_id}")
+    if not job[4]:
+        raise RuntimeError(f"Batch job {job_id} has not been submitted")
+    batch = client.batches.retrieve(job[4])
+    update_batch_status(cur, job_id=job_id, batch=batch)
+    conn.commit()
+    if batch.status not in {"completed", "failed", "expired", "cancelled"}:
+        print(f"Batch job {job_id} is not terminal yet: {batch.status}")
+        return 0, 0, 0
+
+    items = get_batch_items(cur, job_id=job_id)
+    processed = failed = expired = 0
+    affected_requests: dict[int, dict[str, object]] = {}
+
+    output_file_id = getattr(batch, "output_file_id", None)
+    if output_file_id:
+        output_text = file_content_text(client, output_file_id)
+        output_path = write_batch_output(job_id, kind="output", text=output_text)
+        cur.execute("UPDATE openai_batch_jobs SET output_path = %s, updated_at = NOW() WHERE id = %s", (str(output_path), job_id))
+        conn.commit()
+        for _line_number, payload in iter_jsonl(output_text):
+            custom_id = payload.get("custom_id")
+            item = items.get(custom_id or "")
+            if not item or item.get("status") != "submitted":
+                continue
+            metadata = item["metadata"]
+            request_id = int(metadata["request_id"])
+            affected_requests.setdefault(request_id, {"failed": False, "expired": False})
+            response = payload.get("response") or {}
+            error = payload.get("error")
+            if error or int(response.get("status_code") or 0) >= 400:
+                error_json = error or response
+                mark_batch_item(cur, custom_id=custom_id, status="failed", error_json=error_json)
+                failed += 1
+                affected_requests[request_id]["failed"] = True
+                insert_run(
+                    cur,
+                    request_id=request_id,
+                    lemma_id=int(metadata["lemma_id"]),
+                    profile_id=int(metadata["profile_id"]),
+                    profile_version_id=int(metadata["profile_version_id"]),
+                    source_text_version_id=int(metadata["source_text_version_id"]),
+                    run_index=int(metadata["run_index"]),
+                    model=metadata["model"],
+                    temperature=float(metadata["temperature"]),
+                    top_p=float(metadata["top_p"]),
+                    translation_text="",
+                    tokens_used=0,
+                    status="failed",
+                    error_message=json.dumps(error_json, ensure_ascii=False),
+                )
+                conn.commit()
+                items[custom_id]["status"] = "failed"
+                continue
+            body = response.get("body") or {}
+            try:
+                translation, tokens_used = extract_translation_from_response_body(body)
+                requested_runs = int(metadata["requested_runs"] or 0)
+                source_document = (metadata.get("source_document") or "").strip().lower()
+                public_eligible = True
+                public_block_reason = None
+                if requested_runs == 1:
+                    public_eligible, public_block_reason = lookup_public_block(
+                        cur,
+                        lemma_id=int(metadata["lemma_id"]),
+                        source_document=metadata.get("source_document"),
+                    )
+                run_status = "approved" if requested_runs == 1 else "completed"
+                if source_document != "meineke":
+                    run_status = "hidden"
+                run_id = insert_run(
+                    cur,
+                    request_id=request_id,
+                    lemma_id=int(metadata["lemma_id"]),
+                    profile_id=int(metadata["profile_id"]),
+                    profile_version_id=int(metadata["profile_version_id"]),
+                    source_text_version_id=int(metadata["source_text_version_id"]),
+                    run_index=int(metadata["run_index"]),
+                    model=metadata["model"],
+                    temperature=float(metadata["temperature"]),
+                    top_p=float(metadata["top_p"]),
+                    translation_text=translation,
+                    tokens_used=tokens_used,
+                    status=run_status,
+                    public_eligible=public_eligible,
+                    public_block_reason=public_block_reason,
+                )
+                if metadata.get("guidance_context"):
+                    record_translation_run_guidance_matches(cur, run_id, metadata["guidance_context"])
+                if requested_runs == 1 and source_document == "meineke":
+                    project_legacy_translation(
+                        cur,
+                        lemma_id=int(metadata["lemma_id"]),
+                        translation_text=translation,
+                        tokens_used=tokens_used,
+                        prompt_version=int(metadata["profile_version_number"] or 0),
+                    )
+                mark_batch_item(
+                    cur,
+                    custom_id=custom_id,
+                    status="completed",
+                    tokens_used=tokens_used,
+                    response_json=body,
+                )
+                conn.commit()
+                items[custom_id]["status"] = "completed"
+                processed += 1
+            except Exception as exc:
+                conn.rollback()
+                mark_batch_item(
+                    cur,
+                    custom_id=custom_id,
+                    status="failed",
+                    error_json={"message": f"{type(exc).__name__}: {exc}"},
+                )
+                insert_run(
+                    cur,
+                    request_id=request_id,
+                    lemma_id=int(metadata["lemma_id"]),
+                    profile_id=int(metadata["profile_id"]),
+                    profile_version_id=int(metadata["profile_version_id"]),
+                    source_text_version_id=int(metadata["source_text_version_id"]),
+                    run_index=int(metadata["run_index"]),
+                    model=metadata["model"],
+                    temperature=float(metadata["temperature"]),
+                    top_p=float(metadata["top_p"]),
+                    translation_text="",
+                    tokens_used=0,
+                    status="failed",
+                    error_message=f"{type(exc).__name__}: {exc}",
+                )
+                conn.commit()
+                items[custom_id]["status"] = "failed"
+                failed += 1
+                affected_requests[request_id]["failed"] = True
+
+    error_file_id = getattr(batch, "error_file_id", None)
+    if error_file_id:
+        error_text = file_content_text(client, error_file_id)
+        error_path = write_batch_output(job_id, kind="error", text=error_text)
+        cur.execute("UPDATE openai_batch_jobs SET error_path = %s, updated_at = NOW() WHERE id = %s", (str(error_path), job_id))
+        conn.commit()
+        for _line_number, payload in iter_jsonl(error_text):
+            custom_id = payload.get("custom_id")
+            item = items.get(custom_id or "")
+            if not item or item.get("status") in {"completed", "failed", "expired"}:
+                continue
+            metadata = item["metadata"]
+            request_id = int(metadata["request_id"])
+            error = payload.get("error") or {}
+            status = "expired" if error.get("code") == "batch_expired" else "failed"
+            mark_batch_item(cur, custom_id=custom_id, status=status, error_json=error)
+            if status == "failed":
+                insert_run(
+                    cur,
+                    request_id=request_id,
+                    lemma_id=int(metadata["lemma_id"]),
+                    profile_id=int(metadata["profile_id"]),
+                    profile_version_id=int(metadata["profile_version_id"]),
+                    source_text_version_id=int(metadata["source_text_version_id"]),
+                    run_index=int(metadata["run_index"]),
+                    model=metadata["model"],
+                    temperature=float(metadata["temperature"]),
+                    top_p=float(metadata["top_p"]),
+                    translation_text="",
+                    tokens_used=0,
+                    status="failed",
+                    error_message=json.dumps(error, ensure_ascii=False),
+                )
+            conn.commit()
+            items[custom_id]["status"] = status
+            affected_requests.setdefault(request_id, {"failed": False, "expired": False})
+            affected_requests[request_id]["expired" if status == "expired" else "failed"] = True
+            expired += status == "expired"
+            failed += status == "failed"
+
+    items = get_batch_items(cur, job_id=job_id)
+    for custom_id, item in items.items():
+        if item.get("status") != "submitted":
+            continue
+        metadata = item["metadata"]
+        request_id = int(metadata["request_id"])
+        affected_requests.setdefault(request_id, {"failed": False, "expired": False})
+        if batch.status in {"expired", "cancelled"}:
+            mark_batch_item(
+                cur,
+                custom_id=custom_id,
+                status="expired",
+                error_json={"message": f"Batch API ended with status={batch.status}"},
+            )
+            affected_requests[request_id]["expired"] = True
+            expired += 1
+        else:
+            error_message = f"Batch API ended with status={batch.status} without an item response."
+            mark_batch_item(
+                cur,
+                custom_id=custom_id,
+                status="failed",
+                error_json={"message": error_message},
+            )
+            insert_run(
+                cur,
+                request_id=request_id,
+                lemma_id=int(metadata["lemma_id"]),
+                profile_id=int(metadata["profile_id"]),
+                profile_version_id=int(metadata["profile_version_id"]),
+                source_text_version_id=int(metadata["source_text_version_id"]),
+                run_index=int(metadata["run_index"]),
+                model=metadata["model"],
+                temperature=float(metadata["temperature"]),
+                top_p=float(metadata["top_p"]),
+                translation_text="",
+                tokens_used=0,
+                status="failed",
+                error_message=error_message,
+            )
+            affected_requests[request_id]["failed"] = True
+            failed += 1
+        conn.commit()
+
+    for request_id, state in affected_requests.items():
+        cur.execute("SELECT requested_runs FROM translation_run_requests WHERE id = %s", (request_id,))
+        row = cur.fetchone()
+        requested_runs = int(row[0] or 0) if row else 0
+        final_completed = completed_run_count(cur, request_id)
+        if requested_runs and final_completed >= requested_runs:
+            mark_request_done(cur, request_id, "completed")
+        elif state.get("failed"):
+            mark_request_done(cur, request_id, "failed", "One or more Batch API translation runs failed")
+        else:
+            mark_request_pending(
+                cur,
+                request_id,
+                "Batch API did not complete all requested translation runs; request returned to pending.",
+            )
+        conn.commit()
+
+    print(f"Collected translation batch job {job_id}: completed={processed} failed={failed} expired={expired}")
+    return processed, failed, expired
+
+
+def recover_translation_batches(conn, cur, client: OpenAI, *, args) -> int:
+    active = 0
+    for job_id in get_recoverable_batch_job_ids(cur, purpose="translation"):
+        job = get_batch_job(cur, job_id=job_id)
+        if not job or not job[4]:
+            continue
+        batch = client.batches.retrieve(job[4])
+        update_batch_status(cur, job_id=job_id, batch=batch)
+        conn.commit()
+        if batch.status in {"completed", "failed", "expired", "cancelled"}:
+            collect_translation_batch(conn, cur, client, job_id=job_id)
+            continue
+        if args.batch_wait:
+            status = wait_for_openai_batch(
+                client,
+                cur,
+                conn,
+                job_id=job_id,
+                poll_interval=args.batch_poll_interval,
+                timeout=args.batch_timeout or None,
+            )
+            if status in {"completed", "failed", "expired", "cancelled"}:
+                collect_translation_batch(conn, cur, client, job_id=job_id)
+            else:
+                active += 1
+        else:
+            print(f"Translation batch job {job_id} is still {batch.status}; not submitting a duplicate.")
+            active += 1
+    return active
 
 
 def main():
@@ -721,6 +1336,15 @@ def main():
     parser.add_argument("--run-limit", type=int, help="Max generated runs in this invocation")
     parser.add_argument("--daily-token-limit", type=int, default=DEFAULT_DAILY_TOKEN_LIMIT)
     parser.add_argument("--delay", type=float, default=1.0)
+    parser.add_argument("--batch", action="store_true", help="Submit translation requests through the OpenAI Batch API")
+    parser.add_argument("--batch-wait", action="store_true", help="Poll the submitted batch and collect results before exiting")
+    parser.add_argument("--batch-poll-interval", type=float, default=30.0)
+    parser.add_argument(
+        "--batch-timeout",
+        type=float,
+        default=0.0,
+        help="Seconds to wait for a batch before returning; 0 waits until the Batch API reaches a terminal state",
+    )
     parser.add_argument("--no-guidance-context", action="store_true", help="Do not add matched translation-guidance rows to prompts")
     parser.add_argument(
         "--allow-incomplete-guidance",
@@ -753,6 +1377,17 @@ def main():
         conn.close()
         return
 
+    client = None
+    if args.batch:
+        ensure_openai_batch_tables(cur)
+        conn.commit()
+        client = OpenAI(api_key=load_api_key())
+        active_batches = recover_translation_batches(conn, cur, client, args=args)
+        if active_batches > 0:
+            print(f"{active_batches} translation Batch API job(s) still active; not submitting duplicates.")
+            conn.close()
+            return
+
     tokens_today = get_tokens_today(cur)
     print(f"Tokens used today: {tokens_today:,} / {args.daily_token_limit:,}")
     if tokens_today >= args.daily_token_limit:
@@ -771,7 +1406,33 @@ def main():
         conn.close()
         return
 
-    client = OpenAI(api_key=load_api_key())
+    if client is None:
+        client = OpenAI(api_key=load_api_key())
+
+    if args.batch:
+        job_id = submit_translation_batch(
+            conn,
+            cur,
+            client,
+            requests=requests,
+            args=args,
+            tokens_today=tokens_today,
+            guidance_provenance_enabled=guidance_provenance_enabled,
+        )
+        if job_id and args.batch_wait:
+            status = wait_for_openai_batch(
+                client,
+                cur,
+                conn,
+                job_id=job_id,
+                poll_interval=args.batch_poll_interval,
+                timeout=args.batch_timeout or None,
+            )
+            if status in {"completed", "failed", "expired", "cancelled"}:
+                collect_translation_batch(conn, cur, client, job_id=job_id)
+        conn.close()
+        return
+
     total_runs = 0
     total_tokens_run = 0
 
@@ -978,7 +1639,11 @@ def main():
         elif failed:
             mark_request_done(cur, request_id, "failed", "One or more runs failed")
         else:
-            mark_request_done(cur, request_id, "running")
+            mark_request_pending(
+                cur,
+                request_id,
+                "Translation worker stopped before completing this request; request returned to pending.",
+            )
         conn.commit()
 
     conn.close()
