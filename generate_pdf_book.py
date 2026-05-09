@@ -123,6 +123,25 @@ def get_letter_from_headword(headword):
     return letter_map.get(first_char, 'unknown')
 
 
+def pg_table_exists(cur, table_name):
+    cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table_name}",))
+    return bool(cur.fetchone()[0])
+
+
+def pg_column_exists(cur, table_name, column_name):
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s
+          AND column_name = %s
+        """,
+        (table_name, column_name),
+    )
+    return cur.fetchone() is not None
+
+
 def normalize_pdf_source_index_label(label: str) -> str | None:
     """Apply a small manual cleanup layer for the PDF source index."""
     label = (label or "").strip()
@@ -192,6 +211,8 @@ def fetch_lemmas():
     """)
 
     rows = cur.fetchall()
+    lemma_ids = [int(row[0]) for row in rows]
+    footnotes_by_lemma = fetch_pdf_footnotes(cur, lemma_ids)
     conn.close()
 
     lemmas = []
@@ -226,9 +247,78 @@ def fetch_lemmas():
                 'pleiades_id': row[13],
                 'wikidata_place_qid': row[14],
                 'wikidata_place_label': row[15],
+                'footnotes': footnotes_by_lemma.get(int(row[0]), []),
             })
 
     return lemmas
+
+
+def fetch_pdf_footnotes(cur, lemma_ids):
+    """Fetch publishable translation-anchored footnotes for PDF rendering."""
+    if not lemma_ids or not pg_table_exists(cur, "lemma_commentary_entries"):
+        return {}
+    required_columns = [
+        "anchor_source",
+        "anchor_start",
+        "anchor_end",
+        "publication_status",
+        "generation_source",
+        "review_status",
+        "stale_at",
+    ]
+    if not all(pg_column_exists(cur, "lemma_commentary_entries", column) for column in required_columns):
+        return {}
+
+    cur.execute(
+        """
+        SELECT
+            lemma_id,
+            id,
+            COALESCE(phrase_text, '') AS phrase_text,
+            COALESCE(commentary_text, '') AS commentary_text,
+            anchor_start,
+            anchor_end,
+            COALESCE(note_kind, '') AS note_kind,
+            COALESCE(generation_source, '') AS generation_source,
+            COALESCE(publication_status, '') AS publication_status,
+            COALESCE(confidence, '') AS confidence
+        FROM lemma_commentary_entries
+        WHERE lemma_id = ANY(%s)
+          AND COALESCE(anchor_source, '') = 'translation'
+          AND COALESCE(publication_status, '') IN ('public_ai', 'public_reviewed')
+          AND COALESCE(review_status, '') NOT IN ('rejected', 'needs_revision', 'stale')
+          AND stale_at IS NULL
+        ORDER BY lemma_id, COALESCE(anchor_start, 2147483647), id
+        """,
+        (lemma_ids,),
+    )
+    grouped = defaultdict(list)
+    for (
+        lemma_id,
+        entry_id,
+        phrase_text,
+        commentary_text,
+        anchor_start,
+        anchor_end,
+        note_kind,
+        generation_source,
+        publication_status,
+        confidence,
+    ) in cur.fetchall():
+        grouped[int(lemma_id)].append(
+            {
+                "id": int(entry_id),
+                "phrase_text": phrase_text or "",
+                "commentary_text": commentary_text or "",
+                "anchor_start": int(anchor_start) if anchor_start is not None else None,
+                "anchor_end": int(anchor_end) if anchor_end is not None else None,
+                "note_kind": note_kind or "",
+                "generation_source": generation_source or "",
+                "publication_status": publication_status or "",
+                "confidence": confidence or "",
+            }
+        )
+    return grouped
 
 
 def fetch_index_data(lemma_ids):
@@ -418,8 +508,58 @@ def render_translation_inline_latex(text):
     )
 
 
-def format_translation_for_latex(text):
+def normalize_anchor_text(text):
+    return " ".join((text or "").split())
+
+
+def render_translation_inline_latex_with_footnotes(text, footnotes):
+    """Render translation text and insert LaTeX footnotes after anchored spans."""
+    usable = []
+    for note in footnotes or []:
+        start = note.get("anchor_start")
+        end = note.get("anchor_end")
+        phrase = (note.get("phrase_text") or "").strip()
+        commentary = (note.get("commentary_text") or "").strip()
+        if start is None or end is None or not commentary:
+            continue
+        if start < 0 or end <= start or end > len(text or ""):
+            continue
+        text_slice = (text or "")[start:end]
+        if phrase and text_slice != phrase and normalize_anchor_text(text_slice) != normalize_anchor_text(phrase):
+            continue
+        usable.append((int(start), int(end), commentary, note.get("id")))
+
+    if not usable:
+        return render_translation_inline_latex(text)
+
+    usable.sort(key=lambda item: (item[0], item[1]))
+    parts = []
+    cursor = 0
+    last_end = 0
+    for start, end, commentary, _note_id in usable:
+        if start < last_end:
+            continue
+        if start > cursor:
+            parts.append(render_translation_inline_latex(text[cursor:start]))
+        parts.append(render_translation_inline_latex(text[start:end]))
+        parts.append(rf"\footnote{{{escape_latex(commentary)}}}")
+        cursor = end
+        last_end = end
+    if cursor < len(text):
+        parts.append(render_translation_inline_latex(text[cursor:]))
+
+    return "".join(parts)
+
+
+def format_translation_for_latex(text, footnotes=None):
     """Format prose/verse translation blocks for LaTeX output."""
+    footnotes = footnotes or []
+    if footnotes:
+        # Most Stephanos entries are prose. For the low-volume AI footnote lane,
+        # preserving the inline footnote anchor is more important than verse block
+        # layout; verse-heavy entries can still be manually reviewed later.
+        return render_translation_inline_latex_with_footnotes(text or "", footnotes), False
+
     blocks = split_translation_blocks(text or '')
     if not blocks:
         return '', False
@@ -585,7 +725,10 @@ def generate_latex(
 
         for lemma in letters[letter_code]:
             headword = escape_latex(lemma['lemma'])
-            translation, use_block_layout = format_translation_for_latex(lemma['translation'])
+            translation, use_block_layout = format_translation_for_latex(
+                lemma['translation'],
+                lemma.get('footnotes') or [],
+            )
             lemma_id = lemma['id']
 
             # Type annotation

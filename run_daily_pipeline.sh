@@ -116,6 +116,10 @@ else
     echo "Git working tree has local changes; skipping git pull" | tee -a "$LOGFILE"
 fi
 
+# Step 0a0: Ensure low-priority AI footnote schema before strict preflight
+echo "Step 0a0: Ensuring AI footnote schema..." | tee -a "$LOGFILE"
+uv run detect_footnotes.py --ensure-schema --limit 0 2>&1 | tee -a "$LOGFILE"
+
 	# Step 0a: Schema preflight gate (strict by default)
 	# Set SCHEMA_PREFLIGHT=0 to bypass in emergencies.
 	SCHEMA_PREFLIGHT="${SCHEMA_PREFLIGHT:-1}"
@@ -366,6 +370,19 @@ else
     translation_args+=(--delay 1)
 fi
 "${translation_args[@]}" 2>&1 | tee -a "$LOGFILE"
+
+# Step 5a0: Low-priority AI footnote detection (default: one check per run)
+FOOTNOTE_DETECTION_LIMIT="${FOOTNOTE_DETECTION_LIMIT:-1}"
+FOOTNOTE_DETECTION_MODEL="${FOOTNOTE_DETECTION_MODEL:-gpt-5.4-mini}"
+FOOTNOTE_DETECTION_DAILY_TOKEN_LIMIT="${FOOTNOTE_DETECTION_DAILY_TOKEN_LIMIT:-20000}"
+if [ "$FOOTNOTE_DETECTION_LIMIT" -gt 0 ]; then
+    echo "Step 5a0: Detecting AI footnotes slowly..." | tee -a "$LOGFILE"
+    uv run detect_footnotes.py \
+        --limit "$FOOTNOTE_DETECTION_LIMIT" \
+        --model "$FOOTNOTE_DETECTION_MODEL" \
+        --daily-token-limit "$FOOTNOTE_DETECTION_DAILY_TOKEN_LIMIT" \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: AI footnote detection step failed" | tee -a "$LOGFILE"
+fi
 
 # Step 5aa: Translate assembled Billerbeck German references to English
 BILLERBECK_GERMAN_TRANSLATE_LIMIT="${BILLERBECK_GERMAN_TRANSLATE_LIMIT:-5}"

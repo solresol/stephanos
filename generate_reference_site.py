@@ -924,8 +924,17 @@ def get_all_lemmas(cur):
     cur.execute("SELECT to_regclass('public.lemma_commentary_entries') IS NOT NULL")
     has_commentary_entries = bool(cur.fetchone()[0])
     if has_commentary_entries:
+        has_publication_status = pg_column_exists(cur, "lemma_commentary_entries", "publication_status")
+        has_generation_source = pg_column_exists(cur, "lemma_commentary_entries", "generation_source")
+        has_note_kind = pg_column_exists(cur, "lemma_commentary_entries", "note_kind")
+        has_confidence = pg_column_exists(cur, "lemma_commentary_entries", "confidence")
+        publication_filter = (
+            "WHERE COALESCE(publication_status, 'public_reviewed') IN ('public_ai', 'public_reviewed')"
+            if has_publication_status
+            else ""
+        )
         cur.execute(
-            """
+            f"""
             SELECT
                 lemma_id,
                 json_agg(json_build_object(
@@ -933,9 +942,14 @@ def get_all_lemmas(cur):
                     'phrase_text', phrase_text,
                     'commentary_text', commentary_text,
                     'created_by', COALESCE(created_by, ''),
-                    'created_at', created_at
+                    'created_at', created_at,
+                    'publication_status', {("COALESCE(publication_status, '')" if has_publication_status else "''")},
+                    'generation_source', {("COALESCE(generation_source, '')" if has_generation_source else "''")},
+                    'note_kind', {("COALESCE(note_kind, '')" if has_note_kind else "''")},
+                    'confidence', {("COALESCE(confidence, '')" if has_confidence else "''")}
                 ) ORDER BY id) AS comments
             FROM lemma_commentary_entries
+            {publication_filter}
             GROUP BY lemma_id
             """
         )
@@ -1596,17 +1610,35 @@ def render_lemma_cards(lemmas):
                 note = html_module.escape((entry.get("commentary_text") or "").strip())
                 if not phrase and not note:
                     continue
+                generation_source = (entry.get("generation_source") or "").strip()
+                publication_status = (entry.get("publication_status") or "").strip()
+                note_kind = html_module.escape((entry.get("note_kind") or "").strip())
+                confidence = html_module.escape((entry.get("confidence") or "").strip())
+                meta_parts = []
+                if generation_source.startswith("ai_") or publication_status == "public_ai":
+                    meta_parts.append("AI-detected")
+                if note_kind:
+                    meta_parts.append(note_kind.replace("_", " "))
+                if confidence:
+                    meta_parts.append(f"confidence: {confidence}")
+                meta_html = (
+                    f"<div class='commentary-meta'>{html_module.escape(' · '.join(meta_parts))}</div>"
+                    if meta_parts
+                    else ""
+                )
                 if phrase:
                     rows.append(
                         f"<div class='commentary-entry'>"
                         f"<div class='commentary-phrase'>{phrase}</div>"
                         f"<div class='commentary-text'>{note}</div>"
+                        f"{meta_html}"
                         f"</div>"
                     )
                 else:
                     rows.append(
                         f"<div class='commentary-entry'>"
                         f"<div class='commentary-text'>{note}</div>"
+                        f"{meta_html}"
                         f"</div>"
                     )
             if rows:
@@ -2633,6 +2665,11 @@ def common_styles():
         .commentary-text {
             color: #2c2c2c;
             line-height: 1.55;
+        }
+        .commentary-meta {
+            margin-top: 4px;
+            color: #6b6254;
+            font-size: 0.78rem;
         }
         .lemma-metadata {
             display: grid;

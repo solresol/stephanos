@@ -934,8 +934,20 @@ def export_lemmas():
     cur.execute("SELECT to_regclass('public.lemma_commentary_entries') IS NOT NULL")
     has_commentary_entries = bool(cur.fetchone()[0])
     if has_commentary_entries:
+        has_anchor_source = pg_column_exists(cur, "lemma_commentary_entries", "anchor_source")
+        has_anchor_start = pg_column_exists(cur, "lemma_commentary_entries", "anchor_start")
+        has_anchor_end = pg_column_exists(cur, "lemma_commentary_entries", "anchor_end")
+        has_variant_kind = pg_column_exists(cur, "lemma_commentary_entries", "translation_variant_kind")
+        has_variant_id = pg_column_exists(cur, "lemma_commentary_entries", "translation_variant_id")
+        has_note_kind = pg_column_exists(cur, "lemma_commentary_entries", "note_kind")
+        has_generation_source = pg_column_exists(cur, "lemma_commentary_entries", "generation_source")
+        has_review_status = pg_column_exists(cur, "lemma_commentary_entries", "review_status")
+        has_publication_status = pg_column_exists(cur, "lemma_commentary_entries", "publication_status")
+        has_confidence = pg_column_exists(cur, "lemma_commentary_entries", "confidence")
+        has_evidence_text = pg_column_exists(cur, "lemma_commentary_entries", "evidence_text")
+        has_detector_version = pg_column_exists(cur, "lemma_commentary_entries", "detector_version")
         cur.execute(
-            """
+            f"""
             SELECT
                 lemma_id,
                 json_agg(json_build_object(
@@ -950,7 +962,19 @@ def export_lemmas():
                     'commentary_text', commentary_text,
                     'created_by', COALESCE(created_by, ''),
                     'created_at', created_at,
-                    'updated_by', COALESCE(updated_by, '')
+                    'updated_by', COALESCE(updated_by, ''),
+                    'anchor_source', {("COALESCE(anchor_source, '')" if has_anchor_source else "''")},
+                    'anchor_start', {("anchor_start" if has_anchor_start else "NULL")},
+                    'anchor_end', {("anchor_end" if has_anchor_end else "NULL")},
+                    'translation_variant_kind', {("COALESCE(translation_variant_kind, '')" if has_variant_kind else "''")},
+                    'translation_variant_id', {("COALESCE(translation_variant_id, '')" if has_variant_id else "''")},
+                    'note_kind', {("COALESCE(note_kind, '')" if has_note_kind else "''")},
+                    'generation_source', {("COALESCE(generation_source, '')" if has_generation_source else "''")},
+                    'review_status', {("COALESCE(review_status, '')" if has_review_status else "''")},
+                    'publication_status', {("COALESCE(publication_status, '')" if has_publication_status else "''")},
+                    'confidence', {("COALESCE(confidence, '')" if has_confidence else "''")},
+                    'evidence_text', {("COALESCE(evidence_text, '')" if has_evidence_text else "''")},
+                    'detector_version', {("COALESCE(detector_version, '')" if has_detector_version else "''")}
                 ) ORDER BY id) AS comments
             FROM lemma_commentary_entries
             GROUP BY lemma_id
