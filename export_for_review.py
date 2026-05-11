@@ -517,6 +517,13 @@ def fetch_guidance_rule_impacts(cur) -> list[dict]:
         WITH finalized_translations AS (
             {translations_cte}
         ),
+        latest_rule_revisions AS (
+            SELECT DISTINCT ON (rule_id)
+                rule_id,
+                id AS rule_revision_id
+            FROM translation_guidance_rule_revisions
+            ORDER BY rule_id, revision_number DESC
+        ),
         impact_rows AS (
             SELECT
                 ft.lemma_id,
@@ -559,6 +566,9 @@ def fetch_guidance_rule_impacts(cur) -> list[dict]:
               ON m.lemma_id = ft.lemma_id
              AND m.source_text_version_id = ft.source_text_version_id
             JOIN translation_guidance_rules r ON r.id = m.rule_id
+            JOIN latest_rule_revisions lr
+              ON lr.rule_id = r.id
+             AND lr.rule_revision_id = m.rule_revision_id
             JOIN translation_guidance_rule_revisions rr ON rr.id = m.rule_revision_id
             JOIN assembled_lemmas a ON a.id = ft.lemma_id
             WHERE ft.translation_at IS NOT NULL
@@ -1375,7 +1385,9 @@ def export_lemmas():
                 COALESCE(tr.translation_text, '') AS translation_text,
                 COALESCE(tr.public_eligible, TRUE) AS public_eligible,
                 COALESCE(tr.public_block_reason, '') AS public_block_reason,
-                COALESCE(stv.source_document, '') AS source_document
+                COALESCE(stv.source_document, '') AS source_document,
+                COALESCE(tr.reviewed_by, '') AS reviewed_by,
+                COALESCE(tr.reviewed_at::text, '') AS reviewed_at
             FROM translation_runs tr
             LEFT JOIN translation_prompt_profiles p
               ON p.id = tr.profile_id
@@ -1399,6 +1411,8 @@ def export_lemmas():
             public_eligible,
             public_block_reason,
             source_document,
+            reviewed_by,
+            reviewed_at,
         ) in cur.fetchall():
             translation_variants_by_lemma.setdefault(lemma_id, []).append(
                 {
@@ -1414,6 +1428,8 @@ def export_lemmas():
                     "text": translation_text or "",
                     "public_eligible": bool(public_eligible),
                     "public_block_reason": public_block_reason or "",
+                    "reviewed_by": reviewed_by or "",
+                    "reviewed_at": reviewed_at or "",
                     "preview": preview_text(translation_text),
                     "deprecated": False,
                 }
@@ -1432,7 +1448,9 @@ def export_lemmas():
                 ht.source_text_version_id,
                 ht.updated_at,
                 COALESCE(ht.translation_text, '') AS translation_text,
-                COALESCE(stv.source_document, '') AS source_document
+                COALESCE(stv.source_document, '') AS source_document,
+                COALESCE(ht.reviewed_by, ht.updated_by, ht.created_by, '') AS reviewed_by,
+                COALESCE(ht.reviewed_at::text, ht.updated_at::text, ht.created_at::text, '') AS reviewed_at
             FROM human_translations ht
             LEFT JOIN lemma_source_text_versions stv
               ON stv.id = ht.source_text_version_id
@@ -1448,6 +1466,8 @@ def export_lemmas():
             updated_at,
             translation_text,
             source_document,
+            reviewed_by,
+            reviewed_at,
         ) in cur.fetchall():
             translation_variants_by_lemma.setdefault(lemma_id, []).append(
                 {
@@ -1459,6 +1479,8 @@ def export_lemmas():
                     "source_document": source_document or "",
                     "updated_at": str(updated_at) if updated_at else "",
                     "text": translation_text or "",
+                    "reviewed_by": reviewed_by or "",
+                    "reviewed_at": reviewed_at or "",
                     "preview": preview_text(translation_text),
                     "deprecated": False,
                 }
@@ -1775,6 +1797,13 @@ def export_lemmas():
 
         cur.execute(
             f"""
+            WITH latest_revisions AS (
+                SELECT DISTINCT ON (rule_id)
+                    rule_id,
+                    id AS rule_revision_id
+                FROM translation_guidance_rule_revisions
+                ORDER BY rule_id, revision_number DESC
+            )
             SELECT
                 m.id AS match_id,
                 m.lemma_id,
@@ -1805,6 +1834,9 @@ def export_lemmas():
                 {prompt_usage_select}
             FROM translation_guidance_matches m
             JOIN translation_guidance_rules r ON r.id = m.rule_id
+            JOIN latest_revisions lr
+              ON lr.rule_id = r.id
+             AND lr.rule_revision_id = m.rule_revision_id
             LEFT JOIN translation_guidance_rule_revisions rr ON rr.id = m.rule_revision_id
             LEFT JOIN lemma_source_text_versions stv ON stv.id = m.source_text_version_id
             {prompt_usage_join}

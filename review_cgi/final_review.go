@@ -15,6 +15,7 @@ import (
 type FinalReviewFilters struct {
 	Letter     string
 	Status     string
+	Sort       string
 	ImpactOnly bool
 	RuleKey    string
 	Query      string
@@ -114,9 +115,16 @@ func parseFinalReviewFilters(values url.Values) FinalReviewFilters {
 	default:
 		status = "finished"
 	}
+	sortMode := strings.TrimSpace(values.Get("sort"))
+	switch sortMode {
+	case "headword", "entry_number":
+	default:
+		sortMode = "headword"
+	}
 	return FinalReviewFilters{
 		Letter:     strings.TrimSpace(values.Get("letter")),
 		Status:     status,
+		Sort:       sortMode,
 		ImpactOnly: values.Get("impact") == "1",
 		RuleKey:    strings.TrimSpace(values.Get("rule")),
 		Query:      strings.TrimSpace(values.Get("q")),
@@ -228,6 +236,7 @@ func buildFinalReviewPageData(data *LemmaData, reviews map[int]*Review, filters 
 	}
 
 	sort.Strings(letters)
+	sortFinalReviewRows(rows, filters.Sort)
 	page.Letters = letters
 	page.Rows = rows
 	page.DisplayedRows = len(rows)
@@ -294,16 +303,23 @@ func finalReviewTranslationState(lemma Lemma, review *Review) (string, string, s
 		if text := strings.TrimSpace(lemma.EnglishTranslation); text != "" {
 			variant := findFinalReviewVariant(lemma, selectedKind, mapStringValue(lemma.CanonicalVariantRef, "id"))
 			label := "Exported canonical"
+			hasFinished := false
 			if selectedKind == "human_translation" {
 				label = "Exported human translation"
+				hasFinished = finalReviewHumanVariantIsFinal(variant)
 			} else if selectedKind == "translation_run" {
-				label = "Approved AI translation"
+				if finalReviewVariantHasHumanReview(variant) {
+					label = "Reviewed AI translation"
+					hasFinished = true
+				} else {
+					label = "AI translation candidate"
+				}
 			}
 			return text,
 				label,
 				mapStringValue(variant, "reviewed_by"),
 				firstNonEmpty(mapStringValue(variant, "reviewed_at"), mapStringValue(variant, "created_at")),
-				true,
+				hasFinished,
 				false
 		}
 	}
@@ -318,6 +334,19 @@ func finalReviewTranslationState(lemma Lemma, review *Review) (string, string, s
 		}
 	}
 	return "", "No final text", "", "", false, false
+}
+
+func finalReviewVariantHasHumanReview(variant map[string]interface{}) bool {
+	return firstNonEmpty(
+		mapStringValue(variant, "reviewed_by"),
+		mapStringValue(variant, "reviewed_at"),
+	) != ""
+}
+
+func finalReviewHumanVariantIsFinal(variant map[string]interface{}) bool {
+	status := strings.TrimSpace(mapStringValue(variant, "status"))
+	stage := strings.TrimSpace(mapStringValue(variant, "stage"))
+	return status == "approved" && (stage == "reviewed" || stage == "final")
 }
 
 func findFinalReviewVariant(lemma Lemma, kind string, id string) map[string]interface{} {
@@ -396,6 +425,43 @@ func finalReviewRowHasRule(row FinalReviewRow, ruleKey string) bool {
 		}
 	}
 	return false
+}
+
+func sortFinalReviewRows(rows []FinalReviewRow, sortMode string) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		left := rows[i]
+		right := rows[j]
+		switch sortMode {
+		case "entry_number":
+			leftEntry := left.Lemma.EntryNumber
+			rightEntry := right.Lemma.EntryNumber
+			if leftEntry > 0 && rightEntry > 0 && leftEntry != rightEntry {
+				return leftEntry < rightEntry
+			}
+			if leftEntry > 0 && rightEntry <= 0 {
+				return true
+			}
+			if leftEntry <= 0 && rightEntry > 0 {
+				return false
+			}
+		default:
+			if left.Lemma.SortOrder != right.Lemma.SortOrder {
+				return left.Lemma.SortOrder < right.Lemma.SortOrder
+			}
+			leftLemma := strings.ToLower(strings.TrimSpace(left.Lemma.Lemma))
+			rightLemma := strings.ToLower(strings.TrimSpace(right.Lemma.Lemma))
+			if leftLemma != rightLemma {
+				return leftLemma < rightLemma
+			}
+		}
+		if left.Lemma.Lemma != right.Lemma.Lemma {
+			return left.Lemma.Lemma < right.Lemma.Lemma
+		}
+		if left.Lemma.EntryNumber != right.Lemma.EntryNumber {
+			return left.Lemma.EntryNumber < right.Lemma.EntryNumber
+		}
+		return left.Lemma.ID < right.Lemma.ID
+	})
 }
 
 func buildFinalReviewRuleOptions(data *LemmaData, impactByLemma map[int][]GuidanceRuleImpact) []FinalReviewRuleOption {
@@ -507,6 +573,9 @@ func finalReviewFilterHref(current FinalReviewFilters, key string, value string)
 	if current.Status != "" && current.Status != "finished" {
 		values.Set("status", current.Status)
 	}
+	if current.Sort != "" && current.Sort != "headword" {
+		values.Set("sort", current.Sort)
+	}
 	if current.ImpactOnly {
 		values.Set("impact", "1")
 	}
@@ -528,6 +597,12 @@ func finalReviewFilterHref(current FinalReviewFilters, key string, value string)
 			values.Del("status")
 		} else {
 			values.Set("status", value)
+		}
+	case "sort":
+		if value == "" || value == "headword" {
+			values.Del("sort")
+		} else {
+			values.Set("sort", value)
 		}
 	case "impact":
 		if value == "1" {
@@ -691,7 +766,7 @@ const finalReviewTemplate = `<!DOCTYPE html>
             top: 0;
             z-index: 5;
             display: grid;
-            grid-template-columns: minmax(110px, 150px) minmax(150px, 190px) minmax(220px, 1fr) minmax(260px, 1.4fr) auto;
+            grid-template-columns: minmax(110px, 150px) minmax(150px, 190px) minmax(150px, 180px) minmax(220px, 1fr) minmax(260px, 1.4fr) auto;
             gap: 9px;
             align-items: end;
             background: #f7f7f4;
@@ -914,7 +989,7 @@ const finalReviewTemplate = `<!DOCTYPE html>
         </div>
         <div class="summary-grid">
             <div class="summary-item"><strong>{{.DisplayedRows}}</strong>Displayed entries</div>
-            <div class="summary-item"><strong>{{.FinishedRows}}</strong>Finished/exported entries</div>
+            <div class="summary-item"><strong>{{.FinishedRows}}</strong>Reviewed/final entries</div>
             <div class="summary-item"><strong>{{.LocalReviewedRows}}</strong>Local reviewed texts</div>
             <div class="summary-item"><strong>{{.ImpactRows}}</strong>Entries with rule impacts</div>
         </div>
@@ -929,10 +1004,17 @@ const finalReviewTemplate = `<!DOCTYPE html>
             <div>
                 <label for="status">Status</label>
                 <select name="status" id="status">
-                    <option value="finished" {{if eq .Filters.Status "finished"}}selected{{end}}>Finished/reviewed</option>
+                    <option value="finished" {{if eq .Filters.Status "finished"}}selected{{end}}>Reviewed/final</option>
                     <option value="local_reviewed" {{if eq .Filters.Status "local_reviewed"}}selected{{end}}>Local reviewed only</option>
                     <option value="needs_final" {{if eq .Filters.Status "needs_final"}}selected{{end}}>Needs final text</option>
                     <option value="all" {{if eq .Filters.Status "all"}}selected{{end}}>All entries</option>
+                </select>
+            </div>
+            <div>
+                <label for="sort">Sort</label>
+                <select name="sort" id="sort">
+                    <option value="headword" {{if eq .Filters.Sort "headword"}}selected{{end}}>Headword</option>
+                    <option value="entry_number" {{if eq .Filters.Sort "entry_number"}}selected{{end}}>Entry number</option>
                 </select>
             </div>
             <div>
