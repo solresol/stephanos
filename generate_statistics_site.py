@@ -2052,7 +2052,29 @@ def format_p_value(value):
     return f"{value:.4f}"
 
 
-def generate_translation_length_scatter_plot(df, baseline_info, filename):
+def translation_length_chart_annotation(baseline_info, n_samples):
+    return (
+        f"<b>OLS fit:</b> y = {baseline_info['intercept']:.2f} + "
+        f"{baseline_info['slope']:.3f}x<br>"
+        f"<b>n:</b> {n_samples:,}<br>"
+        f"<b>R²:</b> {format_stat(baseline_info['r2'], decimal_places=4)}; "
+        f"<b>r:</b> {format_stat(baseline_info['pearson_r'], decimal_places=4)}<br>"
+        f"<b>p:</b> {format_p_value(baseline_info['slope_p_value'])}; "
+        f"<b>slope SE:</b> {format_stat(baseline_info['slope_stderr'], decimal_places=4)}<br>"
+        f"<b>English/Greek:</b> {format_stat(baseline_info['aggregate_english_per_greek'], decimal_places=3)} "
+        f"aggregate; {format_stat(baseline_info['mean_entry_english_per_greek'], decimal_places=3)} mean entry"
+    )
+
+
+def generate_translation_length_scatter_plot(
+    df,
+    baseline_info,
+    filename,
+    *,
+    title,
+    point_name,
+    y_axis_title,
+):
     if df.empty or baseline_info is None:
         return None
 
@@ -2087,7 +2109,7 @@ def generate_translation_length_scatter_plot(df, baseline_info, filename):
                 for row in plot_df.itertuples(index=False)
             ],
             hovertemplate="%{text}<extra></extra>",
-            name="Selected translations",
+            name=point_name,
         )
     )
     fig.add_trace(
@@ -2095,19 +2117,41 @@ def generate_translation_length_scatter_plot(df, baseline_info, filename):
             x=x_line,
             y=y_line,
             mode="lines",
-            line=dict(color="#2c3e50", width=3),
-            name="OLS fit",
+            line=dict(color="#d35400", width=4),
+            name=f"OLS fit: y={baseline_info['intercept']:.2f}+{baseline_info['slope']:.3f}x",
             hovertemplate="Greek words: %{x:.1f}<br>Expected English words: %{y:.1f}<extra></extra>",
         )
     )
+    fig.add_annotation(
+        x=0.02,
+        y=0.98,
+        xref="paper",
+        yref="paper",
+        text=translation_length_chart_annotation(baseline_info, len(plot_df)),
+        showarrow=False,
+        align="left",
+        bgcolor="rgba(255,255,255,0.92)",
+        bordercolor="#95a5a6",
+        borderwidth=1,
+        borderpad=8,
+        font=dict(size=13, color="#2c3e50"),
+    )
     fig.update_layout(
-        title="Greek Source Length vs English Translation Length",
-        height=650,
-        width=1000,
+        title=dict(text=title, x=0.02, xanchor="left"),
+        height=700,
+        autosize=True,
         plot_bgcolor="white",
         paper_bgcolor="white",
         xaxis_title="Greek words in source passage",
-        yaxis_title="English words in selected translation",
+        yaxis_title=y_axis_title,
+        margin=dict(l=70, r=35, t=90, b=70),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+        ),
     )
     fig.update_xaxes(gridcolor="lightgray", zeroline=True)
     fig.update_yaxes(gridcolor="lightgray", zeroline=True)
@@ -2128,7 +2172,8 @@ def generate_translation_length_page(
     greek_img,
     greek_particleless_img,
     english_img,
-    length_scatter_img,
+    best_available_scatter_img,
+    human_scatter_img,
     geo_analysis,
 ):
     """Generate translation length vocabulary analysis page."""
@@ -2207,11 +2252,34 @@ def generate_translation_length_page(
     The residual is actual English words minus the fitted expected count.</p>
 
     <h3>Greek vs English Word Counts</h3>
-    <p>Each point is a selected translation. The line is the ordinary least squares fit used for the residual
-    analysis below.</p>
+    <p>Each point is one translation. The line is an ordinary least squares fit. The fit equation,
+    sample size, R², Pearson r, slope p-value, slope standard error, and English-per-Greek ratios
+    are printed inside each chart.</p>
 """
-    if length_scatter_img:
-        html += generate_chart_embed(length_scatter_img, "Greek source words versus English translation words")
+    if best_available_scatter_img:
+        html += """
+    <h4>Best Available Translation</h4>
+    <p>This is the same cohort used for the residual and vocabulary analyses: the current selected
+    translation where available, with the legacy assembled translation used as a statistical fallback.</p>
+"""
+        html += generate_chart_embed(
+            best_available_scatter_img,
+            "Greek source words versus English words in the best available translation",
+            height=700,
+        )
+
+    html += """
+    <h4>Human Translations Only</h4>
+    <p>This chart fits the same Greek-word to English-word model using only selected human translation variants.</p>
+"""
+    if human_scatter_img:
+        html += generate_chart_embed(
+            human_scatter_img,
+            "Greek source words versus English words in human translations",
+            height=700,
+        )
+    else:
+        html += "    <p>No selected human translations were available for this chart.</p>\n"
 
     html += f"""
 
@@ -3119,11 +3187,35 @@ def main():
     if not translation_df.empty:
         translation_df, translation_baseline = add_translation_length_residuals(translation_df)
         print(f"    translation-length entries: {len(translation_df):,}")
-        translation_length_scatter_img = generate_translation_length_scatter_plot(
+        translation_best_available_scatter_img = generate_translation_length_scatter_plot(
             translation_df,
             translation_baseline,
-            "translation_length_scatter.html",
+            "translation_length_scatter_best_available.html",
+            title="Best Available Translation Lengths",
+            point_name="Best available translations",
+            y_axis_title="English words in best available translation",
         )
+
+        human_translation_df = translation_df[
+            translation_df["translation_kind"] == "human_translation"
+        ].copy()
+        if not human_translation_df.empty:
+            human_translation_df, human_translation_baseline = add_translation_length_residuals(
+                human_translation_df
+            )
+            print(f"    human translation-length entries: {len(human_translation_df):,}")
+            translation_human_scatter_img = generate_translation_length_scatter_plot(
+                human_translation_df,
+                human_translation_baseline,
+                "translation_length_scatter_human.html",
+                title="Human Translation Lengths",
+                point_name="Human translations",
+                y_axis_title="English words in human translation",
+            )
+        else:
+            human_translation_df = pd.DataFrame()
+            human_translation_baseline = None
+            translation_human_scatter_img = None
 
         greek_vocab_model = fit_translation_length_vocab_model(
             translation_df,
@@ -3213,7 +3305,8 @@ def main():
         greek_vocab_img = None
         greek_particleless_vocab_img = None
         english_vocab_img = None
-        translation_length_scatter_img = None
+        translation_best_available_scatter_img = None
+        translation_human_scatter_img = None
         geographic_length_analysis = None
 
     # 4. Ridge regression analysis
@@ -3438,7 +3531,8 @@ def main():
         greek_vocab_img,
         greek_particleless_vocab_img,
         english_vocab_img,
-        translation_length_scatter_img,
+        translation_best_available_scatter_img,
+        translation_human_scatter_img,
         geographic_length_analysis,
     )
     (stats_dir / "translation_length.html").write_text(translation_length_html, encoding='utf-8')
