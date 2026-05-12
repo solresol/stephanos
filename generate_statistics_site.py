@@ -12,6 +12,7 @@ from pathlib import Path
 from datetime import datetime
 import html as html_module
 import re
+import unicodedata
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -34,6 +35,127 @@ ENGLISH_WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?|\d+")
 GREEK_TFIDF_TOKEN_PATTERN = r"(?u)[\u0370-\u03FF\u1F00-\u1FFF]{2,}"
 ENGLISH_TFIDF_TOKEN_PATTERN = r"(?u)[A-Za-z][A-Za-z'’\-]*"
 
+OBSERVED_TRANSLATION_LENGTH_STOP_WORD_CLASSES = {
+    "εστι": "copula",
+    "δε": "particle",
+    "γαρ": "particle",
+    "αλλη": "pronominal adjective",
+    "ειναι": "copula",
+    "τουτου": "demonstrative pronoun",
+    "παλιν": "discourse adverb",
+    "αυτους": "pronoun",
+    "οσα": "relative pronoun",
+    "οτι": "conjunction",
+    "αυτος": "pronoun",
+    "ως": "conjunction/adverb",
+    "ουκ": "negative particle",
+    "εισι": "copula",
+    "ωστε": "conjunction",
+    "την": "article",
+    "ετερα": "pronominal adjective",
+    "τον": "article",
+    "της": "article",
+    "εκ": "preposition",
+    "ων": "relative pronoun",
+    "τι": "indefinite/interrogative pronoun",
+    "τοις": "article",
+    "τους": "article",
+    "ει": "conditional particle/conjunction",
+    "κατα": "preposition",
+    "μεταξυ": "preposition/adverb",
+    "εν": "preposition",
+    "ου": "negative particle",
+    "οι": "article",
+    "προς": "preposition",
+    "καθ": "preposition",
+    "του": "article",
+    "ταυτην": "demonstrative pronoun",
+    "προτερον": "temporal adverb",
+    "μιας": "numeral/pronominal adjective",
+    "αν": "modal particle",
+    "αλλ": "conjunction/particle",
+    "τας": "article",
+    "τινες": "indefinite pronoun",
+    "το": "article",
+    "τη": "article",
+}
+
+GREEK_TRANSLATION_LENGTH_STOP_WORDS = frozenset({
+    # Observed in the original top/bottom-50 translation-length model.
+    *OBSERVED_TRANSLATION_LENGTH_STOP_WORD_CLASSES.keys(),
+    # Articles.
+    "ο", "η", "το", "οι", "αι", "τα", "του", "της", "τω", "τη", "τον", "την",
+    "των", "τοις", "ταις", "τους", "τας",
+    # Particles, conjunctions, and common discourse words.
+    "και", "δε", "γαρ", "μεν", "τε", "γε", "δη", "ουν", "αρα", "αρ", "περ",
+    "που", "πως", "ποτε", "η", "ει", "εαν", "αν", "οτι", "ως", "ωστε", "ινα",
+    "επει", "επειδη", "ειτε", "ητοι", "καθα", "αλλ", "αλλα", "ουδε", "μηδε",
+    # Negatives.
+    "ου", "ουκ", "ουχ", "μη", "μην",
+    # Prepositions and common elided forms.
+    "εν", "εκ", "εξ", "απο", "απ", "αφ", "δια", "δι", "εις", "εσ", "επι", "επ",
+    "κατα", "καθ", "μετα", "μεθ", "παρα", "παρ", "περι", "προς", "προ",
+    "υπο", "υφ", "υπερ", "αντι", "ανα", "συν", "μεταξυ",
+    # Copula forms.
+    "εστι", "εστιν", "εισι", "εισιν", "ειναι", "ην", "ησαν", "εσται",
+    # High-frequency pronouns, determiners, and pronominal adjectives.
+    "ος", "οσ", "ητις", "οστις", "οστι", "ου", "ω", "ον", "οις", "ους", "ων",
+    "τι", "τις", "τινα", "τινος", "τινι", "τινες", "τινων", "τισι", "οσα",
+    "οσος", "οση", "οσον", "οσοι", "οσων", "αυτος", "αυτη", "αυτο", "αυτον",
+    "αυτην", "αυτου", "αυτης", "αυτω", "αυτη", "αυτοι", "αυται", "αυτα",
+    "αυτοις", "αυταις", "αυτους", "αυτας", "αυτων", "τουτο", "τουτου",
+    "τουτω", "ταυτα", "ταυτην", "ταυτης", "ταυτη", "ταυτας", "τοδε", "τηδε",
+    "οδε", "ηδε", "αλλη", "αλλην", "αλλος", "αλλου", "αλλων", "αλλοι",
+    "αλλοις", "ετερα", "ετεραν", "ετερος", "ετερον", "ετερου", "ετεροι",
+    "μια", "μιαν", "μιας", "ενι", "παλιν", "προτερον",
+})
+
+GREEK_GEOGRAPHIC_DESCRIPTOR_GROUPS = [
+    ("city/town", {
+        "πολις", "πολιν", "πολεως", "πολει", "πολεις", "πολεων", "πολεσι",
+        "πολεσιν", "πολιχνιον", "κωμη", "κωμης", "κωμην", "κωμαι",
+    }),
+    ("country/land/region", {
+        "χωρα", "χωρας", "χωραν", "χωραι", "γη", "γης", "γην", "τοπος",
+        "τοπου", "τοπον", "τοπω", "τοποι", "τοπικον", "περιοικις", "περιοικιδος",
+    }),
+    ("people/nation", {
+        "εθνος", "εθνους", "εθνει", "εθνη", "εθνικον", "φυλον", "φυλου",
+        "δημος", "δημου",
+    }),
+    ("island/water", {
+        "νησος", "νησου", "νησον", "νησω", "νησοι", "νησων", "ποταμος",
+        "ποταμου", "ποταμον", "λιμην", "λιμενος", "θαλασσα", "θαλασσης",
+    }),
+    ("mountain/promontory", {
+        "ορος", "ορους", "ορει", "ορων", "ακρα", "ακραν", "ακρας",
+        "χερρονησος", "χερρονησου",
+    }),
+]
+
+ENGLISH_GEOGRAPHIC_DESCRIPTOR_GROUPS = [
+    ("place", {"place", "places", "site", "sites"}),
+    ("city/town", {
+        "city", "cities", "town", "towns", "village", "villages", "settlement",
+        "settlements",
+    }),
+    ("country/land/region", {
+        "country", "countries", "land", "lands", "region", "regions", "district",
+        "districts", "territory", "territories", "area", "areas",
+    }),
+    ("people/nation", {
+        "people", "peoples", "nation", "nations", "tribe", "tribes", "ethnic",
+        "ethnicon", "ethnics",
+    }),
+    ("island/water", {
+        "island", "islands", "river", "rivers", "harbor", "harbors", "harbour",
+        "harbours", "sea", "seas", "lake", "lakes", "spring", "springs",
+    }),
+    ("mountain/promontory", {
+        "mountain", "mountains", "mount", "promontory", "promontories",
+    }),
+]
+
 
 def count_greek_words(text: str) -> int:
     if not text:
@@ -45,6 +167,25 @@ def count_english_words(text: str) -> int:
     if not text:
         return 0
     return len(ENGLISH_WORD_RE.findall(text))
+
+
+def normalize_search_text(text: str) -> str:
+    if not text:
+        return ""
+    normalized = unicodedata.normalize("NFKD", text)
+    stripped = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return stripped.lower()
+
+
+def count_descriptor_tokens(text: str, descriptor_groups, *, token_re) -> tuple[int, dict[str, int]]:
+    tokens = token_re.findall(normalize_search_text(text))
+    counts = {}
+    total = 0
+    for label, terms in descriptor_groups:
+        count = sum(1 for token in tokens if token in terms)
+        counts[label] = count
+        total += count
+    return total, counts
 
 
 def save_plot_to_file(fig, filename):
@@ -466,6 +607,138 @@ def fit_translation_length_vocab_model(
         "term_index": {term: idx for idx, term in enumerate(terms)},
         "X": X,
         "df": df.reset_index(drop=True),
+    }
+
+
+def add_geographic_length_features(df, cur):
+    """Add source/translation geographic descriptor counts and extracted place-name counts."""
+    if df.empty:
+        return df.copy()
+
+    analysis_df = df.copy().reset_index(drop=True)
+
+    greek_descriptor_totals = []
+    greek_descriptor_breakdowns = []
+    english_descriptor_totals = []
+    english_descriptor_breakdowns = []
+    for _, row in analysis_df.iterrows():
+        greek_total, greek_counts = count_descriptor_tokens(
+            row.get("source_text", ""),
+            GREEK_GEOGRAPHIC_DESCRIPTOR_GROUPS,
+            token_re=GREEK_WORD_RE,
+        )
+        english_total, english_counts = count_descriptor_tokens(
+            row.get("translation_text", ""),
+            ENGLISH_GEOGRAPHIC_DESCRIPTOR_GROUPS,
+            token_re=ENGLISH_WORD_RE,
+        )
+        greek_descriptor_totals.append(greek_total)
+        greek_descriptor_breakdowns.append(greek_counts)
+        english_descriptor_totals.append(english_total)
+        english_descriptor_breakdowns.append(english_counts)
+
+    analysis_df["source_geo_descriptor_count"] = greek_descriptor_totals
+    analysis_df["source_geo_descriptor_breakdown"] = greek_descriptor_breakdowns
+    analysis_df["translation_geo_descriptor_count"] = english_descriptor_totals
+    analysis_df["translation_geo_descriptor_breakdown"] = english_descriptor_breakdowns
+
+    lemma_ids = [int(value) for value in analysis_df["id"].tolist()]
+    place_counts = {lemma_id: (0, 0) for lemma_id in lemma_ids}
+    if lemma_ids:
+        cur.execute(
+            """
+            SELECT
+                lemma_id,
+                COUNT(*) AS place_name_mentions,
+                COUNT(DISTINCT NULLIF(BTRIM(lemma_form), '')) AS distinct_place_names
+            FROM effective_proper_nouns
+            WHERE noun_type = 'place'
+              AND lemma_id = ANY(%s)
+            GROUP BY lemma_id
+            """,
+            (lemma_ids,),
+        )
+        for lemma_id, mention_count, distinct_count in cur.fetchall():
+            place_counts[int(lemma_id)] = (int(mention_count or 0), int(distinct_count or 0))
+
+    analysis_df["place_name_mention_count"] = [
+        place_counts.get(int(lemma_id), (0, 0))[0] for lemma_id in analysis_df["id"]
+    ]
+    analysis_df["distinct_place_name_count"] = [
+        place_counts.get(int(lemma_id), (0, 0))[1] for lemma_id in analysis_df["id"]
+    ]
+
+    return analysis_df
+
+
+def analyze_geographic_translation_length(df):
+    """Measure how geographic descriptors and place-name mentions relate to length residuals."""
+    if df.empty or "translation_length_residual" not in df.columns:
+        return None
+
+    feature_specs = [
+        ("source_geo_descriptor_count", "Greek geographic descriptor tokens", "source"),
+        ("place_name_mention_count", "Extracted place-name mentions", "source/entity"),
+        ("distinct_place_name_count", "Distinct extracted place names", "source/entity"),
+        ("translation_geo_descriptor_count", "English geographic descriptor tokens", "translation"),
+    ]
+
+    available = [
+        (column, label, feature_kind)
+        for column, label, feature_kind in feature_specs
+        if column in df.columns and np.nanvar(df[column].astype(float).to_numpy()) > 0
+    ]
+    if not available:
+        return None
+
+    y = df["translation_length_residual"].astype(float).to_numpy()
+    X = df[[column for column, _, _ in available]].astype(float).to_numpy()
+
+    model = LinearRegression()
+    model.fit(X, y)
+    r2 = float(model.score(X, y)) if np.nanvar(y) > 0 else np.nan
+
+    rows = []
+    for idx, (column, label, feature_kind) in enumerate(available):
+        values = df[column].astype(float).to_numpy()
+        present = values > 0
+        present_count = int(present.sum())
+        absent_count = int((~present).sum())
+        mean_present = float(np.mean(y[present])) if present_count else np.nan
+        mean_absent = float(np.mean(y[~present])) if absent_count else np.nan
+        difference = mean_present - mean_absent if present_count and absent_count else np.nan
+        if present_count and absent_count:
+            try:
+                _, p_value = stats.mannwhitneyu(y[present], y[~present], alternative="two-sided")
+                p_value = float(p_value)
+            except ValueError:
+                p_value = np.nan
+        else:
+            p_value = np.nan
+
+        rows.append({
+            "feature": column,
+            "label": label,
+            "feature_kind": feature_kind,
+            "entries_present": present_count,
+            "entries_absent": absent_count,
+            "mean_count_when_present": float(np.mean(values[present])) if present_count else np.nan,
+            "mean_residual_present": mean_present,
+            "mean_residual_absent": mean_absent,
+            "difference": difference,
+            "multivariate_coefficient": float(model.coef_[idx]),
+            "std_dev": float(np.std(values)),
+            "std_dev_impact": float(model.coef_[idx] * np.std(values)),
+            "p_value": p_value,
+        })
+
+    table = pd.DataFrame(rows)
+    return {
+        "df": df,
+        "feature_table": table,
+        "model": model,
+        "r2": r2,
+        "n_samples": len(df),
     }
 
 
@@ -1578,11 +1851,122 @@ def generate_translation_length_vocab_visualization(model_result, filename):
     return f"statistics_images/{filename}"
 
 
-def generate_translation_length_vocab_table(model_result, *, direction, title):
+def generate_observed_translation_length_stop_word_table(model_result):
+    if model_result is None:
+        return ""
+
+    positive, negative = vocab_extremes(model_result, n=50)
+    rows = []
+    for direction_label, direction_rows in (
+        ("Longer-than-expected", positive),
+        ("Shorter-than-expected", negative),
+    ):
+        for rank, (_, row) in enumerate(direction_rows.iterrows(), 1):
+            term = str(row["term"])
+            if term not in OBSERVED_TRANSLATION_LENGTH_STOP_WORD_CLASSES:
+                continue
+            rows.append({
+                "rank": rank,
+                "direction": direction_label,
+                "term": term,
+                "classification": OBSERVED_TRANSLATION_LENGTH_STOP_WORD_CLASSES[term],
+                "coefficient": float(row["coefficient"]),
+                "document_count": int(row["document_count"]),
+                "mean_residual_when_present": float(row["mean_residual_when_present"]),
+            })
+
+    if not rows:
+        return ""
+
+    html = """
+    <h2>Stop Words Found in the Original Top/Bottom 50</h2>
+    <p>This table is generated from the unfiltered Greek model. These are the particle-like and other
+    high-frequency function words I identified in the current top 50 longer and bottom 50 shorter
+    predictors. The stop-word filtered model below removes these words plus common inflectional variants.</p>
+    <table>
+        <tr>
+            <th>Original rank</th>
+            <th>Direction</th>
+            <th>Word</th>
+            <th>Classification</th>
+            <th>Coefficient</th>
+            <th>Entries</th>
+            <th>Mean residual when present</th>
+        </tr>
+"""
+    for row in rows:
+        html += f"""        <tr>
+            <td>{row["rank"]}</td>
+            <td>{html_module.escape(row["direction"])}</td>
+            <td><strong>{html_module.escape(row["term"])}</strong></td>
+            <td>{html_module.escape(row["classification"])}</td>
+            <td><strong>{format_signed_float(row["coefficient"], 3)}</strong></td>
+            <td>{row["document_count"]}</td>
+            <td>{format_signed_float(row["mean_residual_when_present"], 2)}</td>
+        </tr>
+"""
+
+    html += "    </table>\n"
+    return html
+
+
+def generate_geographic_length_table(geo_analysis):
+    if not geo_analysis:
+        return ""
+
+    table = geo_analysis["feature_table"]
+    if table.empty:
+        return ""
+
+    html = f"""
+    <h2>Geographic Terms and Translation Length</h2>
+    <p>This focused model measures how place-name mentions and geographic descriptor words are associated
+    with the translation-length residual. The residual has already controlled for Greek source length, so
+    coefficients are additional English words above or below that baseline. English descriptor tokens are
+    descriptive of the translation footprint rather than source-only predictors, because they are themselves
+    part of the English word count.</p>
+    <div class="stats-box">
+        <div class="metric"><span class="metric-label">Entries analyzed:</span> <span class="metric-value">{geo_analysis["n_samples"]:,}</span></div>
+        <div class="metric"><span class="metric-label">Combined geographic-feature R²:</span> <span class="metric-value">{format_stat(geo_analysis["r2"])}</span></div>
+    </div>
+    <table>
+        <tr>
+            <th>Feature</th>
+            <th>Kind</th>
+            <th>Entries with feature</th>
+            <th>Mean count when present</th>
+            <th>Mean residual present</th>
+            <th>Mean residual absent</th>
+            <th>Difference</th>
+            <th>Coefficient per count</th>
+            <th>One-SD impact</th>
+            <th>Mann-Whitney p</th>
+        </tr>
+"""
+    for _, row in table.iterrows():
+        html += f"""        <tr>
+            <td>{html_module.escape(str(row["label"]))}</td>
+            <td>{html_module.escape(str(row["feature_kind"]))}</td>
+            <td>{int(row["entries_present"]):,}</td>
+            <td>{format_stat(row["mean_count_when_present"])}</td>
+            <td>{format_signed_float(row["mean_residual_present"], 2)}</td>
+            <td>{format_signed_float(row["mean_residual_absent"], 2)}</td>
+            <td><strong>{format_signed_float(row["difference"], 2)}</strong></td>
+            <td><strong>{format_signed_float(row["multivariate_coefficient"], 3)}</strong></td>
+            <td>{format_signed_float(row["std_dev_impact"], 2)}</td>
+            <td>{format_stat(row["p_value"], decimal_places=4)}</td>
+        </tr>
+"""
+
+    html += "    </table>\n"
+    return html
+
+
+def generate_translation_length_vocab_table(model_result, *, direction, title, n=50):
     if model_result is None:
         return f"<h3>{html_module.escape(title)}</h3><p>No model was available for this vocabulary.</p>"
 
-    positive, negative = vocab_extremes(model_result, n=25)
+    positive, negative = vocab_extremes(model_result, n=n)
     rows = positive if direction == "positive" else negative
 
     html = f"""
@@ -1630,7 +2014,17 @@ def cv_summary(cv_scores):
     return f"{np.mean(cv_scores):.4f} +/- {np.std(cv_scores):.4f}"
 
 
-def generate_translation_length_page(translation_df, baseline_info, greek_model, english_model, greek_img, english_img):
+def generate_translation_length_page(
+    translation_df,
+    baseline_info,
+    greek_model,
+    greek_particleless_model,
+    english_model,
+    greek_img,
+    greek_particleless_img,
+    english_img,
+    geo_analysis,
+):
     """Generate translation length vocabulary analysis page."""
     html = generate_page_header('Translation Length Vocabulary', 'translation_length', in_subdirectory=True)
 
@@ -1686,6 +2080,9 @@ def generate_translation_length_page(translation_df, baseline_info, greek_model,
     </table>
 """
 
+    html += generate_observed_translation_length_stop_word_table(greek_model)
+    html += generate_geographic_length_table(geo_analysis)
+
     html += """
     <h2>Greek Vocabulary Predictors</h2>
     <p>Terms here come from the Greek source text. Positive coefficients are associated with longer-than-expected
@@ -1712,6 +2109,35 @@ def generate_translation_length_page(translation_df, baseline_info, greek_model,
         greek_model,
         direction="negative",
         title="Greek words associated with shorter translations",
+    )
+
+    html += """
+    <h2>Greek Vocabulary Predictors Without Stop Words</h2>
+    <p>This repeats the Greek vocabulary model after removing the particle-like and other high-frequency
+    function words identified above, plus common article, preposition, pronoun, conjunction, negative, and
+    copula variants. The original model is kept unchanged for comparison.</p>
+"""
+    if greek_particleless_model:
+        alpha = float(greek_particleless_model["model"].alpha_)
+        html += f"""
+    <div class="stats-box">
+        <div class="metric"><span class="metric-label">Features:</span> <span class="metric-value">{greek_particleless_model['n_features']:,}</span></div>
+        <div class="metric"><span class="metric-label">Minimum document frequency:</span> <span class="metric-value">{greek_particleless_model['min_df']}</span></div>
+        <div class="metric"><span class="metric-label">Ridge alpha:</span> <span class="metric-value">{alpha:.4f}</span></div>
+        <div class="metric"><span class="metric-label">CV R²:</span> <span class="metric-value">{cv_summary(greek_particleless_model['cv_scores'])}</span></div>
+    </div>
+"""
+    if greek_particleless_img:
+        html += generate_chart_embed(greek_particleless_img, "Greek particleless vocabulary translation-length coefficients")
+    html += generate_translation_length_vocab_table(
+        greek_particleless_model,
+        direction="positive",
+        title="Greek words associated with longer translations, stop words removed",
+    )
+    html += generate_translation_length_vocab_table(
+        greek_particleless_model,
+        direction="negative",
+        title="Greek words associated with shorter translations, stop words removed",
     )
 
     html += """
@@ -2573,6 +2999,43 @@ def main():
             print("    Greek source vocabulary: insufficient data")
             greek_vocab_img = None
 
+        print("    Analyzing geographic translation-length features...")
+        translation_df = add_geographic_length_features(translation_df, cur)
+        geographic_length_analysis = analyze_geographic_translation_length(translation_df)
+
+        greek_particleless_vocab_model = fit_translation_length_vocab_model(
+            translation_df,
+            text_column="source_text",
+            label="Greek source vocabulary without stop words",
+            token_pattern=GREEK_TFIDF_TOKEN_PATTERN,
+            min_df=5,
+            max_features=5000,
+            stop_words=sorted(GREEK_TRANSLATION_LENGTH_STOP_WORDS),
+        )
+        if greek_particleless_vocab_model:
+            print(
+                f"    Greek source vocabulary without stop words: "
+                f"{greek_particleless_vocab_model['n_features']:,} features, "
+                f"CV R² = {greek_particleless_vocab_model['cv_scores'].mean():.4f}"
+            )
+            positive_50, negative_50 = vocab_extremes(greek_particleless_vocab_model, n=50)
+            remaining_stop_words = sorted(
+                (set(positive_50["term"]) | set(negative_50["term"]))
+                & GREEK_TRANSLATION_LENGTH_STOP_WORDS
+            )
+            if remaining_stop_words:
+                print(
+                    "    WARNING: stop words still present in particleless top/bottom 50: "
+                    + ", ".join(remaining_stop_words)
+                )
+            greek_particleless_vocab_img = generate_translation_length_vocab_visualization(
+                greek_particleless_vocab_model,
+                "translation_length_greek_vocab_particleless.html",
+            )
+        else:
+            print("    Greek source vocabulary without stop words: insufficient data")
+            greek_particleless_vocab_img = None
+
         english_vocab_model = fit_translation_length_vocab_model(
             translation_df,
             text_column="translation_text",
@@ -2598,9 +3061,12 @@ def main():
         print("    no selected public translations available")
         translation_baseline = None
         greek_vocab_model = None
+        greek_particleless_vocab_model = None
         english_vocab_model = None
         greek_vocab_img = None
+        greek_particleless_vocab_img = None
         english_vocab_img = None
+        geographic_length_analysis = None
 
     # 4. Ridge regression analysis
     print("  Building feature matrix for ridge regression...")
@@ -2819,9 +3285,12 @@ def main():
         translation_df,
         translation_baseline,
         greek_vocab_model,
+        greek_particleless_vocab_model,
         english_vocab_model,
         greek_vocab_img,
+        greek_particleless_vocab_img,
         english_vocab_img,
+        geographic_length_analysis,
     )
     (stats_dir / "translation_length.html").write_text(translation_length_html, encoding='utf-8')
 
