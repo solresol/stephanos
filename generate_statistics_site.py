@@ -2046,7 +2046,7 @@ def format_p_value(value):
         return "N/A"
     value = float(value)
     if value == 0.0:
-        return "< 1e-300"
+        return "&lt; 1e-300"
     if value < 0.0001:
         return f"{value:.3e}"
     return f"{value:.4f}"
