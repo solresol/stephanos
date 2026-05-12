@@ -506,6 +506,10 @@ def add_translation_length_residuals(df):
 
     analysis_df["expected_english_word_count"] = predicted
     analysis_df["translation_length_residual"] = residual
+    analysis_df["english_per_greek_word"] = (
+        analysis_df["english_word_count"].astype(float)
+        / analysis_df["greek_word_count"].astype(float)
+    )
 
     if len(analysis_df) >= 5 and np.nanvar(y) > 0:
         cv_folds = min(5, len(analysis_df))
@@ -513,12 +517,35 @@ def add_translation_length_residuals(df):
     else:
         cv_scores = np.array([])
 
+    x = analysis_df["greek_word_count"].astype(float).to_numpy()
+    if len(analysis_df) >= 2 and np.nanvar(x) > 0 and np.nanvar(y) > 0:
+        linear_stats = stats.linregress(x, y)
+        slope_p_value = float(linear_stats.pvalue)
+        slope_stderr = float(linear_stats.stderr)
+        pearson_r = float(linear_stats.rvalue)
+    else:
+        slope_p_value = np.nan
+        slope_stderr = np.nan
+        pearson_r = np.nan
+
+    total_greek_words = float(analysis_df["greek_word_count"].sum())
+    total_english_words = float(analysis_df["english_word_count"].sum())
     baseline_info = {
         "model": baseline,
         "intercept": float(baseline.intercept_),
         "slope": float(baseline.coef_[0]),
         "r2": float(baseline.score(X, y)) if np.nanvar(y) > 0 else np.nan,
         "cv_scores": cv_scores,
+        "slope_p_value": slope_p_value,
+        "slope_stderr": slope_stderr,
+        "pearson_r": pearson_r,
+        "total_greek_words": total_greek_words,
+        "total_english_words": total_english_words,
+        "aggregate_english_per_greek": (
+            total_english_words / total_greek_words if total_greek_words else np.nan
+        ),
+        "mean_entry_english_per_greek": float(analysis_df["english_per_greek_word"].mean()),
+        "median_entry_english_per_greek": float(analysis_df["english_per_greek_word"].median()),
     }
 
     return analysis_df, baseline_info
@@ -2014,6 +2041,84 @@ def cv_summary(cv_scores):
     return f"{np.mean(cv_scores):.4f} +/- {np.std(cv_scores):.4f}"
 
 
+def format_p_value(value):
+    if pd.isna(value):
+        return "N/A"
+    value = float(value)
+    if value == 0.0:
+        return "< 1e-300"
+    if value < 0.0001:
+        return f"{value:.3e}"
+    return f"{value:.4f}"
+
+
+def generate_translation_length_scatter_plot(df, baseline_info, filename):
+    if df.empty or baseline_info is None:
+        return None
+
+    plot_df = df.copy()
+    plot_df["residual_display"] = plot_df["translation_length_residual"].map(lambda value: f"{value:+.1f}")
+    plot_df["kind_display"] = plot_df["translation_kind"].replace("", "unknown")
+
+    x_values = plot_df["greek_word_count"].astype(float)
+    x_line = np.linspace(float(x_values.min()), float(x_values.max()), 100)
+    y_line = baseline_info["intercept"] + baseline_info["slope"] * x_line
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scattergl(
+            x=plot_df["greek_word_count"],
+            y=plot_df["english_word_count"],
+            mode="markers",
+            marker=dict(
+                size=7,
+                color=plot_df["translation_length_residual"],
+                colorscale="RdBu",
+                reversescale=True,
+                colorbar=dict(title="Residual"),
+                opacity=0.72,
+            ),
+            text=[
+                f"<b>{html_module.escape(str(row.lemma))}</b><br>"
+                f"Greek words: {int(row.greek_word_count)}<br>"
+                f"English words: {int(row.english_word_count)}<br>"
+                f"Residual: {row.residual_display}<br>"
+                f"Variant: {html_module.escape(str(row.kind_display))}"
+                for row in plot_df.itertuples(index=False)
+            ],
+            hovertemplate="%{text}<extra></extra>",
+            name="Selected translations",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x_line,
+            y=y_line,
+            mode="lines",
+            line=dict(color="#2c3e50", width=3),
+            name="OLS fit",
+            hovertemplate="Greek words: %{x:.1f}<br>Expected English words: %{y:.1f}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title="Greek Source Length vs English Translation Length",
+        height=650,
+        width=1000,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        xaxis_title="Greek words in source passage",
+        yaxis_title="English words in selected translation",
+    )
+    fig.update_xaxes(gridcolor="lightgray", zeroline=True)
+    fig.update_yaxes(gridcolor="lightgray", zeroline=True)
+
+    output_dir = Path("reference_site/statistics_images")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    html_path = output_dir / filename
+    fig.write_html(str(html_path), include_plotlyjs="cdn")
+    return f"statistics_images/{filename}"
+
+
 def generate_translation_length_page(
     translation_df,
     baseline_info,
@@ -2023,6 +2128,7 @@ def generate_translation_length_page(
     greek_img,
     greek_particleless_img,
     english_img,
+    length_scatter_img,
     geo_analysis,
 ):
     """Generate translation length vocabulary analysis page."""
@@ -2060,8 +2166,32 @@ def generate_translation_length_page(
             <span class="metric-value">{translation_df['english_word_count'].mean():.2f}</span>
         </div>
         <div class="metric">
+            <span class="metric-label">Aggregate English words per Greek word:</span>
+            <span class="metric-value">{format_stat(baseline_info['aggregate_english_per_greek'])}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">Mean entry English/Greek ratio:</span>
+            <span class="metric-value">{format_stat(baseline_info['mean_entry_english_per_greek'])}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">Regression slope:</span>
+            <span class="metric-value">{format_stat(baseline_info['slope'], decimal_places=3)}</span>
+        </div>
+        <div class="metric">
             <span class="metric-label">Baseline R²:</span>
             <span class="metric-value">{format_stat(baseline_info['r2'])}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">Pearson r:</span>
+            <span class="metric-value">{format_stat(baseline_info['pearson_r'])}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">Slope p-value:</span>
+            <span class="metric-value">{format_p_value(baseline_info['slope_p_value'])}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">Slope standard error:</span>
+            <span class="metric-value">{format_stat(baseline_info['slope_stderr'], decimal_places=4)}</span>
         </div>
         <div class="metric">
             <span class="metric-label">Baseline CV R²:</span>
@@ -2070,8 +2200,20 @@ def generate_translation_length_page(
     </div>
 
     <p><strong>Baseline:</strong> expected English words =
-    {baseline_info['intercept']:.2f} + {baseline_info['slope']:.3f} * Greek words.
-    The residual is actual English words minus this expected count.</p>
+    {baseline_info['intercept']:.2f} + {baseline_info['slope']:.3f} * Greek words. The fitted slope means that,
+    on average, one additional Greek word adds about {baseline_info['slope']:.3f} English words in the selected
+    translations. Across the whole analyzed corpus there are {baseline_info['aggregate_english_per_greek']:.3f}
+    English words per Greek word; the median entry-level ratio is {baseline_info['median_entry_english_per_greek']:.3f}.
+    The residual is actual English words minus the fitted expected count.</p>
+
+    <h3>Greek vs English Word Counts</h3>
+    <p>Each point is a selected translation. The line is the ordinary least squares fit used for the residual
+    analysis below.</p>
+"""
+    if length_scatter_img:
+        html += generate_chart_embed(length_scatter_img, "Greek source words versus English translation words")
+
+    html += f"""
 
     <h3>Translation sources used</h3>
     <table>
@@ -2977,6 +3119,11 @@ def main():
     if not translation_df.empty:
         translation_df, translation_baseline = add_translation_length_residuals(translation_df)
         print(f"    translation-length entries: {len(translation_df):,}")
+        translation_length_scatter_img = generate_translation_length_scatter_plot(
+            translation_df,
+            translation_baseline,
+            "translation_length_scatter.html",
+        )
 
         greek_vocab_model = fit_translation_length_vocab_model(
             translation_df,
@@ -3066,6 +3213,7 @@ def main():
         greek_vocab_img = None
         greek_particleless_vocab_img = None
         english_vocab_img = None
+        translation_length_scatter_img = None
         geographic_length_analysis = None
 
     # 4. Ridge regression analysis
@@ -3290,6 +3438,7 @@ def main():
         greek_vocab_img,
         greek_particleless_vocab_img,
         english_vocab_img,
+        translation_length_scatter_img,
         geographic_length_analysis,
     )
     (stats_dir / "translation_length.html").write_text(translation_length_html, encoding='utf-8')
