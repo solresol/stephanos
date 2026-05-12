@@ -241,6 +241,36 @@ def write_csv(path: Path, rows: list[dict[str, object]], *, limit: int) -> None:
         writer.writerows(selected)
 
 
+def write_best_by_greek_csv(
+    path: Path,
+    rows: list[dict[str, object]],
+    *,
+    per_greek_limit: int,
+    max_rows: int,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row["greek"])].append(row)
+
+    selected = []
+    for greek in sorted(grouped):
+        ranked = sorted(
+            grouped[greek],
+            key=lambda row: (float(row["score"]), int(row["cooccurring_passages"])),
+            reverse=True,
+        )
+        for candidate_rank, row in enumerate(ranked[:per_greek_limit], 1):
+            selected.append({"candidate_rank": candidate_rank, **row})
+
+    selected.sort(key=lambda row: (str(row["greek"]), int(row["candidate_rank"])))
+    selected = selected[:max_rows]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(selected[0].keys()) if selected else ["empty"])
+        writer.writeheader()
+        writer.writerows(selected)
+
+
 def print_preview(title: str, rows: list[dict[str, object]], *, limit: int = 30) -> None:
     print(f"\n{title}")
     print("rank\tgreek\tenglish\tcooc\tp(e|g)\tp(g|e)\tPMI\tscore\texamples")
@@ -262,6 +292,7 @@ def main() -> None:
     parser.add_argument("--min-pair-count", type=int, default=3)
     parser.add_argument("--min-greek-count", type=int, default=3)
     parser.add_argument("--min-english-count", type=int, default=3)
+    parser.add_argument("--per-greek-limit", type=int, default=5)
     args = parser.parse_args()
 
     conn = get_connection()
@@ -292,11 +323,19 @@ def main() -> None:
         )
         output_path = args.output_dir / f"{label}_translation_candidates.csv"
         write_csv(output_path, scored, limit=args.limit)
+        dictionary_path = args.output_dir / f"{label}_best_by_greek.csv"
+        write_best_by_greek_csv(
+            dictionary_path,
+            scored,
+            per_greek_limit=args.per_greek_limit,
+            max_rows=args.limit,
+        )
         print(
             f"{label}: {len(greek_doc_counts):,} Greek keys, "
             f"{len(english_doc_counts):,} English keys, {len(scored):,} scored pairs."
         )
         print(f"Wrote {output_path}")
+        print(f"Wrote {dictionary_path}")
         print_preview(f"{label} top candidates", scored)
 
 
