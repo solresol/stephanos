@@ -11,6 +11,11 @@ from pathlib import Path
 from psycopg2.extras import Json
 
 from db import get_connection
+from translate_lemmas import (
+    build_translation_request_artifact,
+    fetch_guidance_context,
+    fetch_source_passage_context,
+)
 
 CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
 
@@ -112,6 +117,7 @@ def build_request_payload(candidate: dict, batch_record: dict) -> dict:
         "method": batch_record.get("method") or "POST",
         "url": batch_record.get("url") or CHAT_COMPLETIONS_ENDPOINT,
         "transport": "openai_batch",
+        "exact_payload": True,
         "custom_id": candidate["custom_id"],
         "captured_at": captured_at,
         "backfilled_at": datetime.now(timezone.utc).isoformat(),
@@ -123,12 +129,107 @@ def build_request_payload(candidate: dict, batch_record: dict) -> dict:
     }
 
 
+def fetch_reconstruct_candidates(cur, headwords: list[str]) -> list[dict]:
+    if not headwords:
+        return []
+    cur.execute(
+        """
+        SELECT
+            tr.id AS run_id,
+            tr.request_id,
+            tr.run_index,
+            tr.model,
+            tr.temperature,
+            tr.top_p,
+            pv.prompt_text,
+            stv.id AS source_text_version_id,
+            stv.text_body AS source_text,
+            stv.source_document,
+            a.id AS lemma_id,
+            a.lemma,
+            a.entry_number
+        FROM translation_runs tr
+        JOIN translation_prompt_profile_versions pv ON pv.id = tr.profile_version_id
+        JOIN lemma_source_text_versions stv ON stv.id = tr.source_text_version_id
+        JOIN assembled_lemmas a ON a.id = tr.lemma_id
+        WHERE COALESCE(tr.request_payload_json, '{}'::jsonb) = '{}'::jsonb
+          AND a.lemma = ANY(%s)
+        ORDER BY a.lemma, tr.created_at DESC, tr.id DESC
+        """,
+        (headwords,),
+    )
+    return [
+        {
+            "run_id": int(row[0]),
+            "request_id": int(row[1]),
+            "run_index": int(row[2]),
+            "model": row[3] or "",
+            "temperature": float(row[4]) if row[4] is not None else 1.0,
+            "top_p": float(row[5]) if row[5] is not None else 1.0,
+            "prompt_text": row[6] or "",
+            "source_text_version_id": int(row[7]),
+            "source_text": row[8] or "",
+            "source_document": row[9] or "",
+            "lemma_id": int(row[10]),
+            "lemma": row[11] or "",
+            "entry_number": int(row[12]) if row[12] is not None else None,
+        }
+        for row in cur.fetchall()
+    ]
+
+
+def reconstruct_request_payload(cur, candidate: dict) -> dict:
+    guidance_context = fetch_guidance_context(
+        cur,
+        lemma_id=candidate["lemma_id"],
+        source_text_version_id=candidate["source_text_version_id"],
+    )
+    source_passage_context = fetch_source_passage_context(
+        cur,
+        lemma_id=candidate["lemma_id"],
+        source_text_version_id=candidate["source_text_version_id"],
+    )
+    artifact = build_translation_request_artifact(
+        model=candidate["model"],
+        temperature=candidate["temperature"],
+        top_p=candidate["top_p"],
+        system_prompt=candidate["prompt_text"],
+        lemma=candidate["lemma"],
+        entry_number=candidate["entry_number"],
+        source_text=candidate["source_text"],
+        guidance_context=guidance_context,
+        source_passage_context=source_passage_context,
+        transport="reconstructed",
+        exact_payload=False,
+    )
+    artifact["reconstructed_at"] = datetime.now(timezone.utc).isoformat()
+    artifact["backfill_source"] = {
+        "kind": "translation_run_metadata",
+        "run_id": candidate["run_id"],
+        "request_id": candidate["request_id"],
+        "run_index": candidate["run_index"],
+        "note": "Reconstructed from the stored prompt profile, source text, and current context tables because the original synchronous API request was not captured.",
+    }
+    return artifact
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Backfill translation_runs.request_payload_json from saved OpenAI Batch request files."
     )
     parser.add_argument("--limit", type=int, help="Maximum runs to inspect")
     parser.add_argument("--dry-run", action="store_true", help="Report possible updates without writing")
+    parser.add_argument(
+        "--reconstruct-missing",
+        action="store_true",
+        help="For explicitly named headwords, reconstruct missing synchronous request artifacts from current metadata.",
+    )
+    parser.add_argument(
+        "--headword",
+        action="append",
+        default=[],
+        help="Headword to reconstruct when --reconstruct-missing is set; may be repeated.",
+    )
     args = parser.parse_args()
 
     conn = get_connection()
@@ -191,13 +292,38 @@ def main() -> None:
         conn.rollback()
     else:
         conn.commit()
-    conn.close()
 
     action = "would update" if args.dry_run else "updated"
     print(
         f"Backfill {action}: {updated}; missing files: {missing_files}; "
         f"missing batch records: {missing_records}"
     )
+
+    if args.reconstruct_missing:
+        candidates = fetch_reconstruct_candidates(cur, args.headword)
+        reconstructed = 0
+        for candidate in candidates:
+            request_payload = reconstruct_request_payload(cur, candidate)
+            if args.dry_run:
+                reconstructed += 1
+                continue
+            cur.execute(
+                """
+                UPDATE translation_runs
+                SET request_payload_json = %s::jsonb
+                WHERE id = %s
+                  AND COALESCE(request_payload_json, '{}'::jsonb) = '{}'::jsonb
+                """,
+                (Json(request_payload), candidate["run_id"]),
+            )
+            reconstructed += cur.rowcount
+        if args.dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+        print(f"Reconstructed missing request artifacts: {reconstructed}")
+
+    conn.close()
 
 
 if __name__ == "__main__":

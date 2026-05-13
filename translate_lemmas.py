@@ -589,12 +589,14 @@ def build_translation_request_artifact(
     source_passage_context=None,
     transport: str,
     custom_id: str | None = None,
+    exact_payload: bool = True,
 ) -> dict:
     artifact = {
         "api": "openai.chat.completions",
         "method": "POST",
         "url": CHAT_COMPLETIONS_ENDPOINT,
         "transport": transport,
+        "exact_payload": exact_payload,
         "captured_at": datetime.now(timezone.utc).isoformat(),
         "body": build_chat_completion_body(
             model=model,

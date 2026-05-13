@@ -963,7 +963,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
                     <div class="translation-block commentary-source" data-commentary-source="translation" tabindex="0" title="Select text here to add commentary">{{.LatestAITranslation}}</div>
                     {{if .LatestAIRequestPayloadPretty}}
                     <details class="prompt-artifact-details">
-                        <summary>Show prompt/request sent to model</summary>
+                        <summary>Show prompt/request artifact</summary>
                         <pre class="prompt-artifact-block">{{.LatestAIRequestPayloadPretty}}</pre>
                     </details>
                     {{else if .LatestAITranslationRunID}}
@@ -1224,7 +1224,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                                 <div class="translation-block">{{index . "text"}}</div>
                                                 {{if index . "request_payload_pretty"}}
                                                 <details class="prompt-artifact-details">
-                                                    <summary>Show prompt/request sent to model</summary>
+                                                    <summary>Show prompt/request artifact</summary>
                                                     <pre class="prompt-artifact-block">{{index . "request_payload_pretty"}}</pre>
                                                 </details>
                                                 {{else if eq (index . "kind") "translation_run"}}
