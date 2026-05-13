@@ -226,6 +226,8 @@ def ensure_translation_run_guidance_matches(cur) -> bool:
 def ensure_translation_run_request_payload(cur) -> bool:
     if not table_exists(cur, "translation_runs"):
         return False
+    if column_exists(cur, "translation_runs", "request_payload_json"):
+        return True
     cur.execute(
         """
         ALTER TABLE public.translation_runs

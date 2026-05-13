@@ -35,6 +35,8 @@ def column_exists(cur, table_name: str, column_name: str) -> bool:
 
 
 def ensure_request_payload_column(cur) -> None:
+    if column_exists(cur, "translation_runs", "request_payload_json"):
+        return
     cur.execute(
         """
         ALTER TABLE public.translation_runs
