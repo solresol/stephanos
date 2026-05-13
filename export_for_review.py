@@ -120,6 +120,25 @@ def coerce_json_list(value) -> list:
     return []
 
 
+def coerce_json_object(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def pretty_json_object(value) -> str:
+    obj = coerce_json_object(value)
+    if not obj:
+        return ""
+    return json.dumps(obj, ensure_ascii=False, indent=2)
+
+
 def fetch_guidance_scan_batches(cur, rule_id: int) -> list[dict]:
     cur.execute(
         """
@@ -1371,8 +1390,13 @@ def export_lemmas():
     cur.execute("SELECT to_regclass('public.translation_runs') IS NOT NULL")
     has_translation_runs = bool(cur.fetchone()[0])
     if has_translation_runs:
+        request_payload_select = (
+            "COALESCE(tr.request_payload_json, '{}'::jsonb)::text AS request_payload_json"
+            if pg_column_exists(cur, "translation_runs", "request_payload_json")
+            else "'{}'::text AS request_payload_json"
+        )
         cur.execute(
-            """
+            f"""
             SELECT
                 tr.lemma_id,
                 tr.id,
@@ -1387,7 +1411,8 @@ def export_lemmas():
                 COALESCE(tr.public_block_reason, '') AS public_block_reason,
                 COALESCE(stv.source_document, '') AS source_document,
                 COALESCE(tr.reviewed_by, '') AS reviewed_by,
-                COALESCE(tr.reviewed_at::text, '') AS reviewed_at
+                COALESCE(tr.reviewed_at::text, '') AS reviewed_at,
+                {request_payload_select}
             FROM translation_runs tr
             LEFT JOIN translation_prompt_profiles p
               ON p.id = tr.profile_id
@@ -1413,7 +1438,9 @@ def export_lemmas():
             source_document,
             reviewed_by,
             reviewed_at,
+            request_payload_json,
         ) in cur.fetchall():
+            request_payload = coerce_json_object(request_payload_json)
             translation_variants_by_lemma.setdefault(lemma_id, []).append(
                 {
                     "kind": "translation_run",
@@ -1430,6 +1457,8 @@ def export_lemmas():
                     "public_block_reason": public_block_reason or "",
                     "reviewed_by": reviewed_by or "",
                     "reviewed_at": reviewed_at or "",
+                    "request_payload_pretty": pretty_json_object(request_payload),
+                    "prompt_recorded": bool(request_payload),
                     "preview": preview_text(translation_text),
                     "deprecated": False,
                 }

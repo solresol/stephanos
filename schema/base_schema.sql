@@ -2461,6 +2461,7 @@ CREATE TABLE public.translation_runs (
     temperature double precision,
     top_p double precision,
     seed integer,
+    request_payload_json jsonb DEFAULT '{}'::jsonb NOT NULL,
     translation_text text,
     tokens_used integer DEFAULT 0 NOT NULL,
     status text DEFAULT 'draft'::text NOT NULL,

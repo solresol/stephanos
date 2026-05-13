@@ -371,6 +371,11 @@ else
 fi
 "${translation_args[@]}" 2>&1 | tee -a "$LOGFILE"
 
+# Step 4e2: Backfill prompt/request artifacts for older Batch translation runs
+echo "Step 4e2: Backfilling translation prompt/request artifacts..." | tee -a "$LOGFILE"
+uv run backfill_translation_run_request_payloads.py \
+    2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation prompt/request artifact backfill failed" | tee -a "$LOGFILE"
+
 # Step 5a0: Low-priority AI footnote detection (default: one check per run)
 FOOTNOTE_DETECTION_LIMIT="${FOOTNOTE_DETECTION_LIMIT:-1}"
 FOOTNOTE_DETECTION_MODEL="${FOOTNOTE_DETECTION_MODEL:-gpt-5.4-mini}"

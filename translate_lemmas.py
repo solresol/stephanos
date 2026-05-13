@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 
 from openai import OpenAI
+from psycopg2.extras import Json
 
 from api_keys import load_api_key
 from db import get_connection
@@ -41,6 +42,7 @@ DEFAULT_DAILY_TOKEN_LIMIT = 100_000
 MAX_GUIDANCE_CONTEXT_ROWS = 24
 MAX_SOURCE_PASSAGE_CONTEXT_ROWS = 4
 MAX_CONTEXT_FIELD_CHARS = 900
+CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
 
 TRANSLATE_TOOL = {
     "type": "function",
@@ -218,6 +220,18 @@ def ensure_translation_run_guidance_matches(cur) -> bool:
         )
         if cur.fetchone() is None:
             cur.execute(ddl)
+    return True
+
+
+def ensure_translation_run_request_payload(cur) -> bool:
+    if not table_exists(cur, "translation_runs"):
+        return False
+    cur.execute(
+        """
+        ALTER TABLE public.translation_runs
+            ADD COLUMN IF NOT EXISTS request_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb
+        """
+    )
     return True
 
 
@@ -560,6 +574,43 @@ def build_chat_completion_body(
     }
 
 
+def build_translation_request_artifact(
+    *,
+    model: str,
+    temperature: float,
+    top_p: float,
+    system_prompt: str,
+    lemma: str,
+    entry_number: int | None,
+    source_text: str,
+    guidance_context=None,
+    source_passage_context=None,
+    transport: str,
+    custom_id: str | None = None,
+) -> dict:
+    artifact = {
+        "api": "openai.chat.completions",
+        "method": "POST",
+        "url": CHAT_COMPLETIONS_ENDPOINT,
+        "transport": transport,
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "body": build_chat_completion_body(
+            model=model,
+            temperature=temperature,
+            top_p=top_p,
+            system_prompt=system_prompt,
+            lemma=lemma,
+            entry_number=entry_number,
+            source_text=source_text,
+            guidance_context=guidance_context,
+            source_passage_context=source_passage_context,
+        ),
+    }
+    if custom_id:
+        artifact["custom_id"] = custom_id
+    return artifact
+
+
 def extract_translation_from_response_body(body: dict) -> tuple[str, int]:
     usage = body.get("usage") or {}
     tokens_used = int(usage.get("total_tokens") or 0)
@@ -695,6 +746,7 @@ def insert_run(
     public_eligible: bool = True,
     public_block_reason: str | None = None,
     error_message: str | None = None,
+    request_payload: dict | None = None,
 ):
     cur.execute(
         """
@@ -702,9 +754,10 @@ def insert_run(
             request_id, lemma_id, profile_id, profile_version_id, source_text_version_id,
             run_index, model, temperature, top_p,
             translation_text, tokens_used, status,
-            public_eligible, public_block_reason, created_at, completed_at, error_message
+            public_eligible, public_block_reason, request_payload_json,
+            created_at, completed_at, error_message
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW(), %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW(), %s)
         RETURNING id
         """,
         (
@@ -722,6 +775,7 @@ def insert_run(
             status,
             bool(public_eligible),
             (public_block_reason or "").strip() or None,
+            Json(request_payload or {}),
             error_message,
         ),
     )
@@ -781,29 +835,9 @@ def project_legacy_translation(
 def call_model(
     client: OpenAI,
     *,
-    model: str,
-    temperature: float,
-    top_p: float,
-    system_prompt: str,
-    lemma: str,
-    entry_number: int | None,
-    source_text: str,
-    guidance_context=None,
-    source_passage_context=None,
+    request_payload: dict,
 ):
-    response = client.chat.completions.create(
-        **build_chat_completion_body(
-            model=model,
-            temperature=temperature,
-            top_p=top_p,
-            system_prompt=system_prompt,
-            lemma=lemma,
-            entry_number=entry_number,
-            source_text=source_text,
-            guidance_context=guidance_context,
-            source_passage_context=source_passage_context,
-        )
-    )
+    response = client.chat.completions.create(**(request_payload.get("body") or {}))
     return extract_translation_from_response_body(response.model_dump())
 
 
@@ -971,7 +1005,8 @@ def submit_translation_batch(
                     lemma_id=lemma_id,
                     source_text_version_id=source_text_version_id,
                 )
-            body = build_chat_completion_body(
+            custom_id = f"translation-batch-{job_id}-request-{request_id}-run-{run_index}"
+            request_payload = build_translation_request_artifact(
                 model=model_name,
                 temperature=temperature,
                 top_p=top_p,
@@ -981,14 +1016,15 @@ def submit_translation_batch(
                 source_text=source_text or "",
                 guidance_context=guidance_context,
                 source_passage_context=source_passage_context,
+                transport="openai_batch",
+                custom_id=custom_id,
             )
-            custom_id = f"translation-batch-{job_id}-request-{request_id}-run-{run_index}"
             records.append(
                 {
                     "custom_id": custom_id,
-                    "method": "POST",
-                    "url": "/v1/chat/completions",
-                    "body": body,
+                    "method": request_payload["method"],
+                    "url": request_payload["url"],
+                    "body": request_payload["body"],
                 }
             )
             insert_batch_item(
@@ -1011,6 +1047,8 @@ def submit_translation_batch(
                     "temperature": temperature,
                     "top_p": top_p,
                     "guidance_context": guidance_context,
+                    "source_passage_context": source_passage_context,
+                    "request_payload": request_payload,
                 },
             )
             batch_model = model_name if batch_model is None else batch_model
@@ -1108,6 +1146,7 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                     tokens_used=0,
                     status="failed",
                     error_message=json.dumps(error_json, ensure_ascii=False),
+                    request_payload=metadata.get("request_payload"),
                 )
                 conn.commit()
                 items[custom_id]["status"] = "failed"
@@ -1144,6 +1183,7 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                     status=run_status,
                     public_eligible=public_eligible,
                     public_block_reason=public_block_reason,
+                    request_payload=metadata.get("request_payload"),
                 )
                 if metadata.get("guidance_context"):
                     record_translation_run_guidance_matches(cur, run_id, metadata["guidance_context"])
@@ -1188,6 +1228,7 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                     tokens_used=0,
                     status="failed",
                     error_message=f"{type(exc).__name__}: {exc}",
+                    request_payload=metadata.get("request_payload"),
                 )
                 conn.commit()
                 items[custom_id]["status"] = "failed"
@@ -1226,6 +1267,7 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                     tokens_used=0,
                     status="failed",
                     error_message=json.dumps(error, ensure_ascii=False),
+                    request_payload=metadata.get("request_payload"),
                 )
             conn.commit()
             items[custom_id]["status"] = status
@@ -1273,6 +1315,7 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                 tokens_used=0,
                 status="failed",
                 error_message=error_message,
+                request_payload=metadata.get("request_payload"),
             )
             affected_requests[request_id]["failed"] = True
             failed += 1
@@ -1376,6 +1419,9 @@ def main():
         print("Run migrations first.")
         conn.close()
         return
+
+    ensure_translation_run_request_payload(cur)
+    conn.commit()
 
     client = None
     if args.batch:
@@ -1531,6 +1577,7 @@ def main():
                 break
 
             run_index = existing_count + run_offset
+            request_payload = None
             try:
                 guidance_context = []
                 source_passage_context = []
@@ -1546,8 +1593,7 @@ def main():
                         lemma_id=lemma_id,
                         source_text_version_id=source_text_version_id,
                     )
-                translation, tokens_used = call_model(
-                    client,
+                request_payload = build_translation_request_artifact(
                     model=model_name,
                     temperature=temperature,
                     top_p=top_p,
@@ -1557,6 +1603,11 @@ def main():
                     source_text=source_text or "",
                     guidance_context=guidance_context,
                     source_passage_context=source_passage_context,
+                    transport="sync",
+                )
+                translation, tokens_used = call_model(
+                    client,
+                    request_payload=request_payload,
                 )
                 if not translation:
                     raise RuntimeError("Empty translation result")
@@ -1589,6 +1640,7 @@ def main():
                     status=run_status,
                     public_eligible=public_eligible,
                     public_block_reason=public_block_reason,
+                    request_payload=request_payload,
                 )
                 if guidance_provenance_enabled:
                     record_translation_run_guidance_matches(cur, run_id, guidance_context)
@@ -1629,6 +1681,7 @@ def main():
                     tokens_used=0,
                     status="failed",
                     error_message=f"{type(exc).__name__}: {exc}",
+                    request_payload=request_payload,
                 )
                 conn.commit()
                 print(f"  run {run_index}: failed ({type(exc).__name__}: {exc})")

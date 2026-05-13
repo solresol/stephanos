@@ -55,6 +55,7 @@ type PageData struct {
 	LatestAITranslation             string
 	LatestAITranslationLabel        string
 	LatestAITranslationRunID        int
+	LatestAIRequestPayloadPretty    string
 	EntityContextTranslation        string
 	EntityContextTranslationLabel   string
 	SourceLookupLinks               []SourceLookupLink
@@ -239,9 +240,9 @@ func latestAILegacyLabel(variant map[string]interface{}) string {
 	return "Showing the legacy assembled AI baseline."
 }
 
-func chooseLatestAITranslation(lemma *Lemma) (string, string, int) {
+func chooseLatestAITranslation(lemma *Lemma) (string, string, int, string) {
 	if lemma == nil {
-		return "", "No stored AI translation available.", 0
+		return "", "No stored AI translation available.", 0, ""
 	}
 
 	var latestRun map[string]interface{}
@@ -268,12 +269,12 @@ func chooseLatestAITranslation(lemma *Lemma) (string, string, int) {
 
 	if latestRun != nil {
 		runID, _ := strconv.Atoi(mapStringValue(latestRun, "id"))
-		return strings.TrimSpace(mapStringValue(latestRun, "text")), latestAITranslationRunLabel(latestRun), runID
+		return strings.TrimSpace(mapStringValue(latestRun, "text")), latestAITranslationRunLabel(latestRun), runID, strings.TrimSpace(mapStringValue(latestRun, "request_payload_pretty"))
 	}
 	if legacyVariant != nil {
-		return strings.TrimSpace(mapStringValue(legacyVariant, "text")), latestAILegacyLabel(legacyVariant), 0
+		return strings.TrimSpace(mapStringValue(legacyVariant, "text")), latestAILegacyLabel(legacyVariant), 0, ""
 	}
-	return "", "No stored AI translation available.", 0
+	return "", "No stored AI translation available.", 0, ""
 }
 
 func reviewGuidanceKindLabel(kind string) string {
@@ -733,7 +734,7 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		len(currentLemma.Apparatus) > 0 ||
 		len(currentLemma.MeinekeScanFilenames) > 0
 	workingGreekTitle, sourceTextVersionID := workingGreekLabel(currentLemma)
-	latestAITranslation, latestAITranslationLabel, latestAITranslationRunID := chooseLatestAITranslation(currentLemma)
+	latestAITranslation, latestAITranslationLabel, latestAITranslationRunID, latestAIRequestPayload := chooseLatestAITranslation(currentLemma)
 	entityTranslation, entityTranslationLabel := chooseEntityContextTranslation(review, currentLemma)
 	primaryEntities, secondaryEntities, legacyPlaceEntities := splitEntityBuckets(currentLemma)
 	localUrgentGuidanceHits, err := FetchUrgentGuidanceHitsForLemma(db, currentLemma.ID)
@@ -764,6 +765,7 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		LatestAITranslation:             latestAITranslation,
 		LatestAITranslationLabel:        latestAITranslationLabel,
 		LatestAITranslationRunID:        latestAITranslationRunID,
+		LatestAIRequestPayloadPretty:    latestAIRequestPayload,
 		EntityContextTranslation:        entityTranslation,
 		EntityContextTranslationLabel:   entityTranslationLabel,
 		SourceLookupLinks:               buildSourceLookupLinks(currentLemma),

@@ -309,6 +309,27 @@ const sharedPageStyles = `
             margin-top: 10px;
             max-height: none;
         }
+        .prompt-artifact-details {
+            margin-top: 12px;
+        }
+        .prompt-artifact-details summary {
+            color: #15324c;
+            cursor: pointer;
+            font-weight: 700;
+        }
+        .prompt-artifact-block {
+            background: #0f172a;
+            border-radius: 8px;
+            color: #e5edf5;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 0.82em;
+            line-height: 1.45;
+            margin-top: 8px;
+            max-height: 520px;
+            overflow: auto;
+            padding: 12px;
+            white-space: pre-wrap;
+        }
         .guidance-hit-panel {
             margin-top: 18px;
         }
@@ -940,6 +961,14 @@ const translationReviewTemplate = `<!DOCTYPE html>
                     <div class="section-title">Latest AI Translation</div>
                     <div class="helper-text" style="margin-bottom: 8px;">{{.LatestAITranslationLabel}}</div>
                     <div class="translation-block commentary-source" data-commentary-source="translation" tabindex="0" title="Select text here to add commentary">{{.LatestAITranslation}}</div>
+                    {{if .LatestAIRequestPayloadPretty}}
+                    <details class="prompt-artifact-details">
+                        <summary>Show prompt/request sent to model</summary>
+                        <pre class="prompt-artifact-block">{{.LatestAIRequestPayloadPretty}}</pre>
+                    </details>
+                    {{else if .LatestAITranslationRunID}}
+                    <div class="helper-text" style="margin-top: 10px;">No prompt/request artifact was recorded for this older AI run.</div>
+                    {{end}}
                 </div>
             </div>
 
@@ -1193,6 +1222,14 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                                     {{if index . "model"}}model: {{index . "model"}}{{else if eq (index . "kind") "legacy_assembled"}}model: gpt-5.2{{end}}{{if index . "profile_name"}} · profile: {{index . "profile_name"}}{{end}}{{if index . "profile_version"}} v{{index . "profile_version"}}{{end}}{{if index . "created_at"}} · created: {{index . "created_at"}}{{end}}
                                                 </div>
                                                 <div class="translation-block">{{index . "text"}}</div>
+                                                {{if index . "request_payload_pretty"}}
+                                                <details class="prompt-artifact-details">
+                                                    <summary>Show prompt/request sent to model</summary>
+                                                    <pre class="prompt-artifact-block">{{index . "request_payload_pretty"}}</pre>
+                                                </details>
+                                                {{else if eq (index . "kind") "translation_run"}}
+                                                <div class="helper-text" style="margin-top: 8px;">No prompt/request artifact recorded for this AI run.</div>
+                                                {{end}}
                                             </details>
                                         </td>
                                         <td style="border-top: 1px solid #e5edf5; padding: 8px;">{{if index . "primary"}}primary{{else if index . "canonical"}}canonical{{else}}–{{end}}</td>
