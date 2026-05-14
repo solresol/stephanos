@@ -13,6 +13,7 @@ logs/
 review_data/
 review_data.json
 guidance_scan_results.db
+data/topostext_snapshots/
 .secrets/
 tmp/
 .playwright-cli/

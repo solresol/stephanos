@@ -103,6 +103,17 @@ Create a CSV with headword, Greek text, and translation:
 uv run generate_csv_export.py --output exports/lemmas.csv
 ```
 
+#### Fetch ToposText HTML Snapshot
+
+Fetch Brady's current working ToposText HTML through the Dropbox shared-link API:
+```bash
+DB_HOST=raksasa DB_USER=stephanos \
+TOPOSTEXT_HTML_FETCH_MODE=dropbox_api \
+uv run fetch_topostext_html.py --output-dir data/topostext_snapshots
+```
+
+The Dropbox app key, app secret, refresh token, and shared link must live outside git under `~/.config/stephanos/`. Use `--dry-run` to validate the configured source without writing a snapshot or database row.
+
 ## Pipeline Architecture
 
 ### Data Model
