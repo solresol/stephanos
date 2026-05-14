@@ -2474,7 +2474,7 @@ CREATE TABLE public.translation_runs (
     completed_at timestamp with time zone,
     error_message text,
     CONSTRAINT translation_runs_run_index_check CHECK ((run_index > 0)),
-    CONSTRAINT translation_runs_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'completed'::text, 'failed'::text, 'approved'::text, 'rejected'::text, 'hidden'::text, 'blocked'::text])))
+    CONSTRAINT translation_runs_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'completed'::text, 'failed'::text, 'approved'::text, 'rejected'::text, 'hidden'::text, 'blocked'::text, 'outdated'::text])))
 );
 
 

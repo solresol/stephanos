@@ -43,6 +43,9 @@ DEFAULT_DAILY_TOKEN_LIMIT = 2_000_000
 DEFAULT_GUIDANCE_AI_LIMIT = 2_000
 DETECTOR_VERSION = CURRENT_DETECTOR_VERSION
 TERMINAL_BATCH_STATUSES = {"completed", "failed", "expired", "cancelled"}
+GUIDANCE_RETRANSLATION_PRIORITY = 20
+GUIDANCE_RETRANSLATION_CREATED_BY = "process_translation_guidance_scans.py:guidance-impact"
+OUTDATABLE_AI_RUN_STATUSES = ("approved", "completed", "hidden")
 
 GREEK_ARTICLE_CANDIDATES = {
     "ο",
@@ -92,6 +95,11 @@ def column_exists(cur, table_name: str, column_name: str) -> bool:
         (table_name, column_name),
     )
     return cur.fetchone() is not None
+
+
+def table_exists(cur, table_name: str) -> bool:
+    cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table_name}",))
+    return bool(cur.fetchone()[0])
 
 
 def normalize_text_with_map(text: str) -> tuple[str, list[int]]:
@@ -741,6 +749,200 @@ def get_tokens_used_today(cur, model: str) -> int:
     return int(cur.fetchone()[0] or 0)
 
 
+def ensure_translation_run_outdated_status(cur) -> None:
+    if not table_exists(cur, "translation_runs"):
+        return
+    cur.execute(
+        """
+        SELECT pg_get_constraintdef(oid)
+        FROM pg_constraint
+        WHERE conrelid = 'public.translation_runs'::regclass
+          AND conname = 'translation_runs_status_check'
+        """
+    )
+    row = cur.fetchone()
+    if row and "outdated" in (row[0] or ""):
+        return
+    cur.execute(
+        """
+        ALTER TABLE public.translation_runs
+        DROP CONSTRAINT IF EXISTS translation_runs_status_check
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE public.translation_runs
+        ADD CONSTRAINT translation_runs_status_check
+        CHECK (
+            status = ANY (
+                ARRAY[
+                    'draft'::text,
+                    'completed'::text,
+                    'failed'::text,
+                    'approved'::text,
+                    'rejected'::text,
+                    'hidden'::text,
+                    'blocked'::text,
+                    'outdated'::text
+                ]
+            )
+        )
+        """
+    )
+
+
+def mark_ai_translations_outdated_for_guidance_match(
+    cur,
+    *,
+    match_id: int,
+    rule_revision_id: int,
+    lemma_id: int,
+    source_text_version_id: int,
+) -> tuple[int, int]:
+    if match_id <= 0 or not table_exists(cur, "translation_runs") or not table_exists(cur, "translation_run_requests"):
+        return 0, 0
+
+    has_human_translations = table_exists(cur, "human_translations")
+    has_run_guidance_matches = table_exists(cur, "translation_run_guidance_matches")
+    has_priority_column = column_exists(cur, "translation_run_requests", "priority")
+    human_translation_filter = ""
+    if has_human_translations:
+        human_translation_filter = """
+          AND NOT EXISTS (
+              SELECT 1
+              FROM human_translations ht
+              WHERE ht.lemma_id = tr.lemma_id
+                AND ht.status IN ('draft', 'approved')
+                AND COALESCE(ht.translation_text, '') != ''
+          )
+        """
+    run_guidance_filter = ""
+    if has_run_guidance_matches:
+        run_guidance_filter = """
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM translation_run_guidance_matches trgm
+                  WHERE trgm.run_id = tr.id
+                    AND trgm.match_id = %s
+                    AND trgm.rule_revision_id = %s
+              )
+        """
+
+    active_request_filter = """
+      AND NOT EXISTS (
+          SELECT 1
+          FROM translation_run_requests trr
+          WHERE trr.lemma_id = ur.lemma_id
+            AND trr.profile_id = ur.profile_id
+            AND trr.profile_version_id = ur.profile_version_id
+            AND trr.source_text_version_id = ur.source_text_version_id
+            AND trr.status IN ('pending', 'running')
+      )
+    """
+    priority_column = ", priority" if has_priority_column else ""
+    priority_value = ", %s" if has_priority_column else ""
+
+    cur.execute(
+        f"""
+        WITH impacted_runs AS (
+            SELECT
+                tr.id,
+                tr.lemma_id,
+                tr.profile_id,
+                tr.profile_version_id,
+                tr.source_text_version_id,
+                tr.model,
+                tr.temperature,
+                tr.top_p,
+                tr.public_block_reason,
+                tr.error_message
+            FROM translation_runs tr
+            JOIN assembled_lemmas a ON a.id = tr.lemma_id
+            WHERE tr.lemma_id = %s
+              AND tr.source_text_version_id = %s
+              AND tr.status = ANY(%s)
+              AND COALESCE(tr.translation_text, '') != ''
+              AND COALESCE(a.reviewed_english_translation, '') = ''
+              AND COALESCE(a.corrected_english_translation, '') = ''
+              {run_guidance_filter}
+              {human_translation_filter}
+        ),
+        updated_runs AS (
+            UPDATE translation_runs tr
+            SET status = 'outdated',
+                public_eligible = FALSE,
+                public_block_reason = CASE
+                    WHEN COALESCE(tr.public_block_reason, '') = ''
+                    THEN 'Outdated by later translation guidance match ' || %s::text
+                    ELSE tr.public_block_reason
+                END,
+                error_message = CASE
+                    WHEN COALESCE(tr.error_message, '') = ''
+                    THEN 'Outdated by later translation guidance match ' || %s::text
+                    ELSE tr.error_message || '; outdated by later translation guidance match ' || %s::text
+                END
+            FROM impacted_runs ir
+            WHERE tr.id = ir.id
+            RETURNING
+                ir.lemma_id,
+                ir.profile_id,
+                ir.profile_version_id,
+                ir.source_text_version_id,
+                ir.model,
+                ir.temperature,
+                ir.top_p
+        ),
+        inserted_requests AS (
+            INSERT INTO translation_run_requests (
+                lemma_id,
+                profile_id,
+                profile_version_id,
+                source_text_version_id,
+                requested_runs,
+                model,
+                temperature,
+                top_p,
+                status,
+                created_by{priority_column}
+            )
+            SELECT DISTINCT
+                ur.lemma_id,
+                ur.profile_id,
+                ur.profile_version_id,
+                ur.source_text_version_id,
+                1,
+                ur.model,
+                ur.temperature,
+                ur.top_p,
+                'pending',
+                %s{priority_value}
+            FROM updated_runs ur
+            WHERE 1=1
+              {active_request_filter}
+            RETURNING id
+        )
+        SELECT
+            (SELECT COUNT(*) FROM updated_runs) AS outdated_count,
+            (SELECT COUNT(*) FROM inserted_requests) AS request_count
+        """,
+        [
+            lemma_id,
+            source_text_version_id,
+            list(OUTDATABLE_AI_RUN_STATUSES),
+            *([match_id, rule_revision_id] if has_run_guidance_matches else []),
+            match_id,
+            match_id,
+            match_id,
+            GUIDANCE_RETRANSLATION_CREATED_BY,
+            *([GUIDANCE_RETRANSLATION_PRIORITY] if has_priority_column else []),
+        ],
+    )
+    row = cur.fetchone()
+    if not row:
+        return 0, 0
+    return int(row[0] or 0), int(row[1] or 0)
+
+
 def upsert_match(cur, job: tuple, result: dict[str, object]) -> None:
     (
         _queue_id,
@@ -779,6 +981,7 @@ def upsert_match(cur, job: tuple, result: dict[str, object]) -> None:
             evidence_json = EXCLUDED.evidence_json,
             detector_version = EXCLUDED.detector_version,
             updated_at = NOW()
+        RETURNING id
         """,
         (
             rule_id,
@@ -794,6 +997,16 @@ def upsert_match(cur, job: tuple, result: dict[str, object]) -> None:
             json.dumps(result["evidence_json"], ensure_ascii=False),
         ),
     )
+    row = cur.fetchone()
+    match_id = int(row[0] or 0) if row else 0
+    if result["match_status"] == "matched":
+        mark_ai_translations_outdated_for_guidance_match(
+            cur,
+            match_id=match_id,
+            rule_revision_id=int(rule_revision_id),
+            lemma_id=int(lemma_id),
+            source_text_version_id=int(source_text_version_id),
+        )
 
 
 def mark_job(
@@ -1318,6 +1531,7 @@ def main() -> None:
     conn = get_connection()
     cur = conn.cursor()
     ensure_token_accounting_columns(cur)
+    ensure_translation_run_outdated_status(cur)
     if args.batch:
         ensure_openai_batch_tables(cur)
     conn.commit()
