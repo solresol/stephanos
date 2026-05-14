@@ -16,6 +16,7 @@ from pathlib import Path
 
 import db
 from generate_spelling_variants import generate_variants
+from source_documents import public_source_document_list_sql, source_document_priority_sql
 from translation_guidance_coverage import (
     CURRENT_DETECTOR_VERSION,
     PROMPT_GUIDANCE_KINDS,
@@ -590,13 +591,18 @@ def get_progress_stats(conn) -> dict:
                 {required_rules_cte}
             ),
             current_sources AS (
-                SELECT stv.id AS source_text_version_id
+                SELECT selected_source.source_text_version_id
                 FROM assembled_lemmas a
-                JOIN lemma_source_text_versions stv
-                  ON stv.lemma_id = a.id
-                 AND stv.source_document = 'meineke'
-                 AND stv.is_current = TRUE
-                WHERE COALESCE(stv.text_body, '') <> ''
+                JOIN LATERAL (
+                    SELECT stv.id AS source_text_version_id, stv.text_body
+                    FROM lemma_source_text_versions stv
+                    WHERE stv.lemma_id = a.id
+                      AND stv.source_document IN ({public_source_document_list_sql()})
+                      AND stv.is_current = TRUE
+                    ORDER BY {source_document_priority_sql("stv.source_document")}, stv.id DESC
+                    LIMIT 1
+                ) selected_source ON TRUE
+                WHERE COALESCE(selected_source.text_body, '') <> ''
                   AND COALESCE(a.quarantined, FALSE) = FALSE
             ),
             matched_checks AS (

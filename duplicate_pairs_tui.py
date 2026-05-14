@@ -48,6 +48,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
 
 from db import get_connection
+from source_documents import public_source_document_list_sql, source_document_priority_sql
 
 
 _DROP_SQUARE_BRACKET_RE = re.compile(r"\[[^\]]*\]")
@@ -398,7 +399,7 @@ def fetch_best_text(cur, *, lemma_id: int) -> str:
     has_source_versions = table_exists(cur, "lemma_source_text_versions")
     if has_source_versions:
         cur.execute(
-            """
+            f"""
             SELECT
                 COALESCE(
                     NULLIF(TRIM(a.human_greek_text), ''),
@@ -407,10 +408,15 @@ def fetch_best_text(cur, *, lemma_id: int) -> str:
                     ''
                 ) AS best_text
             FROM assembled_lemmas a
-            LEFT JOIN lemma_source_text_versions stv
-              ON stv.lemma_id = a.id
-             AND stv.source_document = 'meineke'
-             AND stv.is_current = TRUE
+            LEFT JOIN LATERAL (
+                SELECT stv.text_body
+                FROM lemma_source_text_versions stv
+                WHERE stv.lemma_id = a.id
+                  AND stv.source_document IN ({public_source_document_list_sql()})
+                  AND stv.is_current = TRUE
+                ORDER BY {source_document_priority_sql("stv.source_document")}, stv.id DESC
+                LIMIT 1
+            ) stv ON TRUE
             WHERE a.id = %s
             LIMIT 1
             """,

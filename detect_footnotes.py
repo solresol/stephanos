@@ -23,6 +23,7 @@ from psycopg2.extras import Json
 
 from api_keys import load_api_key
 import canonical_variants
+from source_documents import public_source_document_list_sql, source_document_priority_sql
 
 
 DEFAULT_MODEL = "gpt-5.4-mini"
@@ -368,13 +369,13 @@ def current_source_text(cur, lemma_id: int, preferred_source_text_version_id: st
 
     if table_exists(cur, "lemma_source_text_versions"):
         cur.execute(
-            """
+            f"""
             SELECT id, COALESCE(text_body, '')
             FROM lemma_source_text_versions
             WHERE lemma_id = %s
-              AND source_document = 'meineke'
+              AND source_document IN ({public_source_document_list_sql()})
               AND is_current = TRUE
-            ORDER BY id DESC
+            ORDER BY {source_document_priority_sql("source_document")}, id DESC
             LIMIT 1
             """,
             (lemma_id,),

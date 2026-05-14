@@ -8,7 +8,7 @@ entry texts share substantial n-gram overlap.
 By default it compares a per-lemma "best available" Greek text:
   1) assembled_lemmas.human_greek_text (if present)
   2) assembled_lemmas.greek_text
-  3) current Meineke source text version (if present)
+  3) current preferred source text version (Kiesling, then Meineke)
 
 Results are stored in PostgreSQL so they can be inspected and used by other
 tools/pages.
@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from db import get_connection
+from source_documents import public_source_document_list_sql, source_document_priority_sql
 
 _BRACKETED_TAG_RE = re.compile(r"\[[^\]]+\]")
 _NON_TOKEN_RE = re.compile(r"[^0-9a-z\u0370-\u03FF\u1F00-\u1FFF]+", flags=re.IGNORECASE)
@@ -109,11 +110,16 @@ def fetch_lemma_texts(
     meineke_join = ""
     meineke_col = "''::text"
     if has_source_versions:
-        meineke_join = """
-            LEFT JOIN lemma_source_text_versions stv
-              ON stv.lemma_id = a.id
-             AND stv.source_document = 'meineke'
-             AND stv.is_current = TRUE
+        meineke_join = f"""
+            LEFT JOIN LATERAL (
+                SELECT stv.text_body
+                FROM lemma_source_text_versions stv
+                WHERE stv.lemma_id = a.id
+                  AND stv.source_document IN ({public_source_document_list_sql()})
+                  AND stv.is_current = TRUE
+                ORDER BY {source_document_priority_sql("stv.source_document")}, stv.id DESC
+                LIMIT 1
+            ) stv ON TRUE
         """
         meineke_col = "COALESCE(stv.text_body, '')"
 

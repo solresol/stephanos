@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+from source_documents import is_public_greek_source_document
 
 DEFAULT_TRANSLATION_MODEL = "gpt-5.5"
 RISK_BLOCK_REASON_PREFIX = "Blocked by risk gating: "
-PUBLIC_SOURCE_DOCUMENT = "meineke"
 
 
 def source_public_block(source_document: str | None) -> tuple[bool, str]:
     source_document = (source_document or "").strip().lower()
-    if source_document and source_document != PUBLIC_SOURCE_DOCUMENT:
+    if source_document and not is_public_greek_source_document(source_document):
         return (
             False,
             f"Source document '{source_document}' is not licensed for public publication",

@@ -19,6 +19,7 @@ from db import DB_PORT as STEPHANOS_DB_PORT
 from db import DB_USER as STEPHANOS_DB_USER
 import canonical_variants
 import citation_format
+from source_documents import public_source_document_list_sql, source_document_priority_sql
 from translation_rendering import (
     render_inline_markup,
     sanitize_public_translation_text,
@@ -628,7 +629,7 @@ def fetch_public_translation_guidance_hits(cur) -> dict[int, list[dict]]:
               AND COALESCE(r.status, '') <> 'retired'
               {public_lifecycle_condition}
               AND r.kind IN ('formula', 'gloss', 'contextual_bias', 'proper_noun')
-              AND stv.source_document = 'meineke'
+              AND stv.source_document IN ({public_source_document_list_sql()})
               AND stv.is_current = TRUE
             GROUP BY
                 m.lemma_id,
@@ -796,21 +797,28 @@ def get_all_lemmas(cur):
 
     public_meineke_text_by_lemma = {}
     public_meineke_variant_by_lemma = {}
+    public_meineke_document_by_lemma = {}
     if has_source_text_versions:
         cur.execute(
-            """
-            SELECT lemma_id, text_body, source_variant
+            f"""
+            SELECT DISTINCT ON (lemma_id)
+                lemma_id,
+                text_body,
+                source_variant,
+                source_document
             FROM lemma_source_text_versions
-            WHERE source_document = 'meineke'
+            WHERE source_document IN ({public_source_document_list_sql()})
               AND is_current = TRUE
               AND is_public_greek = TRUE
+            ORDER BY lemma_id, {source_document_priority_sql("source_document")}, id DESC
             """
         )
-        for lemma_id, text_body, source_variant in cur.fetchall():
+        for lemma_id, text_body, source_variant, source_document in cur.fetchall():
             text_body = _MEINEKE_OBJECT_TAG_RE.sub("", text_body or "").strip()
             if text_body:
                 public_meineke_text_by_lemma[lemma_id] = text_body
                 public_meineke_variant_by_lemma[lemma_id] = (source_variant or "").strip()
+                public_meineke_document_by_lemma[lemma_id] = (source_document or "").strip()
 
     cur.execute("SELECT to_regclass('public.meineke_headwords') IS NOT NULL")
     has_meineke_headwords = bool(cur.fetchone()[0])
@@ -849,6 +857,7 @@ def get_all_lemmas(cur):
             if greek_paragraph:
                 public_meineke_text_by_lemma[lemma_id] = greek_paragraph
                 public_meineke_variant_by_lemma[lemma_id] = ""
+                public_meineke_document_by_lemma[lemma_id] = "meineke"
 
     # Fetch proper nouns for all lemmas
     cur.execute("""
@@ -965,7 +974,7 @@ def get_all_lemmas(cur):
         meineke_candidate = (public_meineke_text_by_lemma.get(lemma_id) or "").strip()
         if meineke_candidate:
             greek = meineke_candidate
-            greek_source = "meineke"
+            greek_source = public_meineke_document_by_lemma.get(lemma_id) or "meineke"
             greek_source_variant = (public_meineke_variant_by_lemma.get(lemma_id) or "").strip()
             greek_source_origin = "lemma_source_text_versions" if greek_source_variant else "meineke_headwords"
         else:

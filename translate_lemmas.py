@@ -30,6 +30,7 @@ from openai_batch_utils import (
     update_batch_status,
     write_batch_output,
 )
+from source_documents import is_public_greek_source_document
 from translation_run_utils import DEFAULT_TRANSLATION_MODEL, lookup_public_block
 from translation_guidance_coverage import (
     CURRENT_DETECTOR_VERSION,
@@ -1169,7 +1170,7 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                         source_document=metadata.get("source_document"),
                     )
                 run_status = "approved" if requested_runs == 1 else "completed"
-                if source_document != "meineke":
+                if not is_public_greek_source_document(source_document):
                     run_status = "hidden"
                 run_id = insert_run(
                     cur,
@@ -1191,7 +1192,7 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                 )
                 if metadata.get("guidance_context"):
                     record_translation_run_guidance_matches(cur, run_id, metadata["guidance_context"])
-                if requested_runs == 1 and source_document == "meineke":
+                if requested_runs == 1 and is_public_greek_source_document(source_document):
                     project_legacy_translation(
                         cur,
                         lemma_id=int(metadata["lemma_id"]),
@@ -1625,7 +1626,7 @@ def main():
                         source_document=source_document,
                     )
                 run_status = "approved" if int(requested_runs or 0) == 1 else "completed"
-                if (source_document or "").strip().lower() != "meineke":
+                if not is_public_greek_source_document(source_document):
                     run_status = "hidden"
 
                 run_id = insert_run(
@@ -1651,7 +1652,7 @@ def main():
 
                 # Back-compat projection: only for single-run requests so we don't
                 # accidentally "pick a winner" among multiple variants.
-                if int(requested_runs or 0) == 1 and (source_document or "").strip().lower() == "meineke":
+                if int(requested_runs or 0) == 1 and is_public_greek_source_document(source_document):
                     project_legacy_translation(
                         cur,
                         lemma_id=lemma_id,

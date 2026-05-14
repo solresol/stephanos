@@ -18,7 +18,7 @@ def ensure_tables(cur):
         CREATE TABLE IF NOT EXISTS lemma_source_text_versions (
             id SERIAL PRIMARY KEY,
             lemma_id INTEGER NOT NULL REFERENCES assembled_lemmas(id) ON DELETE CASCADE,
-            source_document TEXT NOT NULL CHECK (source_document IN ('billerbeck', 'meineke')),
+            source_document TEXT NOT NULL CHECK (source_document IN ('billerbeck', 'meineke', 'kiesling')),
             source_variant TEXT NOT NULL CHECK (source_variant IN ('ocr', 'manual', 'csv_fallback')),
             text_body TEXT NOT NULL,
             text_hash TEXT NOT NULL,

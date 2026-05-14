@@ -1095,7 +1095,7 @@ CREATE TABLE public.lemma_source_text_versions (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     notes text,
     CONSTRAINT lemma_source_text_versions_created_by_type_check CHECK ((created_by_type = ANY (ARRAY['ocr'::text, 'human'::text, 'import'::text, 'system'::text]))),
-    CONSTRAINT lemma_source_text_versions_source_document_check CHECK ((source_document = ANY (ARRAY['billerbeck'::text, 'meineke'::text]))),
+    CONSTRAINT lemma_source_text_versions_source_document_check CHECK ((source_document = ANY (ARRAY['billerbeck'::text, 'meineke'::text, 'kiesling'::text]))),
     CONSTRAINT lemma_source_text_versions_source_variant_check CHECK ((source_variant = ANY (ARRAY['ocr'::text, 'manual'::text, 'csv_fallback'::text])))
 );
 
@@ -2143,7 +2143,7 @@ CREATE TABLE public.translation_guidance_scan_batches (
     CONSTRAINT translation_guidance_scan_batches_sample_size_check CHECK ((sample_size > 0)),
     CONSTRAINT translation_guidance_scan_batches_scope_kind_check CHECK ((scope_kind = 'random_sample'::text)),
     CONSTRAINT translation_guidance_scan_batches_selected_count_check CHECK ((selected_count >= 0)),
-    CONSTRAINT translation_guidance_scan_batches_source_document_check CHECK ((source_document = 'meineke'::text))
+    CONSTRAINT translation_guidance_scan_batches_source_document_check CHECK ((source_document = ANY (ARRAY['meineke'::text, 'kiesling'::text])))
 );
 
 
@@ -2337,7 +2337,7 @@ CREATE TABLE public.translation_risk_flags (
     details_json jsonb DEFAULT '{}'::jsonb NOT NULL,
     detected_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT translation_risk_flags_source_document_check CHECK ((source_document = ANY (ARRAY['billerbeck'::text, 'meineke'::text])))
+    CONSTRAINT translation_risk_flags_source_document_check CHECK ((source_document = ANY (ARRAY['billerbeck'::text, 'meineke'::text, 'kiesling'::text])))
 );
 
 

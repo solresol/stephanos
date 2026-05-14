@@ -26,6 +26,7 @@ from scipy import stats
 
 import canonical_variants
 from db import get_connection
+from source_documents import public_source_document_list_sql, source_document_priority_sql
 import plotly.graph_objects as go
 import plotly.express as px
 
@@ -432,24 +433,46 @@ def get_translation_length_data(cur):
     """Fetch source texts and best available PostgreSQL translations for analysis.
 
     Current selected variants are preferred. If no current selected variant exists,
-    the legacy assembled translation is used as a statistical fallback.
+    the legacy assembled translation is used as a statistical fallback. Greek source
+    length is counted from the selected current source text rather than trusting
+    assembled_lemmas.word_count, which can be stale after source remapping.
     """
-    cur.execute("""
+    cur.execute(f"""
         SELECT
-            id,
-            COALESCE(lemma, '') AS lemma,
-            COALESCE(human_greek_text, greek_text, '') AS source_text,
-            COALESCE(word_count, 0) AS word_count,
-            COALESCE(version, '') AS version
-        FROM assembled_lemmas
-        WHERE version IN ('epitome', 'parisinus')
-          AND COALESCE(human_greek_text, greek_text, '') <> ''
-        ORDER BY id
+            a.id,
+            COALESCE(a.lemma, '') AS lemma,
+            COALESCE(
+                NULLIF(TRIM(stv.text_body), ''),
+                NULLIF(TRIM(a.human_greek_text), ''),
+                NULLIF(TRIM(a.greek_text), ''),
+                ''
+            ) AS source_text,
+            COALESCE(stv.source_document, 'assembled') AS source_document,
+            stv.id AS source_text_version_id,
+            COALESCE(a.version, '') AS version
+        FROM assembled_lemmas a
+        LEFT JOIN LATERAL (
+            SELECT stv.id, stv.source_document, stv.text_body
+            FROM lemma_source_text_versions stv
+            WHERE stv.lemma_id = a.id
+              AND stv.source_document IN ({public_source_document_list_sql()})
+              AND stv.is_current = TRUE
+            ORDER BY {source_document_priority_sql("stv.source_document")}, stv.id DESC
+            LIMIT 1
+        ) stv ON TRUE
+        WHERE a.version IN ('epitome', 'parisinus')
+          AND COALESCE(
+              NULLIF(TRIM(stv.text_body), ''),
+              NULLIF(TRIM(a.human_greek_text), ''),
+              NULLIF(TRIM(a.greek_text), ''),
+              ''
+          ) <> ''
+        ORDER BY a.id
     """)
     rows = cur.fetchall()
 
     records = []
-    for idx, (lemma_id, lemma, source_text, word_count, version) in enumerate(rows, 1):
+    for idx, (lemma_id, lemma, source_text, source_document, source_text_version_id, version) in enumerate(rows, 1):
         if idx % 1000 == 0:
             print(f"    resolved canonical translations for {idx:,}/{len(rows):,} lemmas...")
 
@@ -468,7 +491,7 @@ def get_translation_length_data(cur):
         if not translation_text:
             continue
 
-        greek_word_count = int(word_count or 0) or count_greek_words(source_text)
+        greek_word_count = count_greek_words(source_text)
         english_word_count = count_english_words(translation_text)
         if greek_word_count <= 0 or english_word_count <= 0:
             continue
@@ -477,6 +500,8 @@ def get_translation_length_data(cur):
             "id": int(lemma_id),
             "lemma": lemma or "",
             "source_text": source_text or "",
+            "source_document": source_document or "",
+            "source_text_version_id": int(source_text_version_id) if source_text_version_id else None,
             "translation_text": translation_text,
             "greek_word_count": greek_word_count,
             "english_word_count": english_word_count,

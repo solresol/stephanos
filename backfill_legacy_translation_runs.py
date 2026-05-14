@@ -13,11 +13,12 @@ from __future__ import annotations
 import argparse
 
 from db import get_connection
+from source_documents import is_public_greek_source_document
 from translation_run_utils import DEFAULT_TRANSLATION_MODEL, lookup_public_block
 
 
 def run_status_for_source(source_document: str) -> str:
-    if (source_document or "").strip().lower() != "meineke":
+    if not is_public_greek_source_document(source_document):
         return "hidden"
     return "approved"
 
@@ -259,7 +260,8 @@ def main():
     parser.add_argument(
         "--source-document",
         default="billerbeck",
-        help="Source document for source_text_version lookup; legacy Billerbeck rows are backfilled as hidden/non-public",
+        choices=["meineke", "billerbeck", "kiesling"],
+        help="Source document for source_text_version lookup; non-public source documents are backfilled as hidden",
     )
     parser.add_argument("--model", default=DEFAULT_TRANSLATION_MODEL, help="Model name for backfilled rows")
     parser.add_argument("--limit", type=int, help="Max candidate lemmas to inspect")

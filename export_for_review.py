@@ -17,12 +17,17 @@ from pathlib import Path
 
 import canonical_variants
 from db import get_connection
+from source_documents import PREFERRED_GREEK_SOURCE_DOCUMENTS
 import wikidata_entity_cache
 
 OUTPUT_FILE = "review_data.json"
 _MEINEKE_OBJECT_TAG_RE = re.compile(r"\[/?object[^\]]*\]")
 _OCR_IMAGE_NOTE_RE = re.compile(r"OCR from image ([^\s]+)")
 LEGACY_TRANSLATION_MODEL = "gpt-5.2"
+GREEK_SOURCE_PRIORITY = {
+    source_document: index
+    for index, source_document in enumerate(PREFERRED_GREEK_SOURCE_DOCUMENTS)
+}
 
 # Greek letter ordering for sort
 GREEK_LETTERS = [
@@ -826,6 +831,7 @@ def export_lemmas():
 
     source_versions_by_lemma = {}
     current_meineke_by_lemma = {}
+    current_meineke_priority_by_lemma = {}
     meineke_lines_by_version = {}
     meineke_apparatus_by_version = {}
     meineke_ocr_scan_infos_by_lemma = {}
@@ -887,15 +893,28 @@ def export_lemmas():
                                 "text_body": text_body or "",
                             }
                         )
-                # Deprecate Meineke OCR as a displayed/public text source; keep only
-                # the current non-OCR Meineke source text for comparison.
-                if is_current and source_variant != "ocr":
+            if source_document in GREEK_SOURCE_PRIORITY:
+                # Deprecate OCR as a displayed/public text source; keep only the
+                # preferred current non-OCR source text for comparison.
+                source_priority = GREEK_SOURCE_PRIORITY[source_document]
+                previous_priority = current_meineke_priority_by_lemma.get(lemma_id, 999)
+                previous_id = int(current_meineke_by_lemma.get(lemma_id, {}).get("id") or 0)
+                if (
+                    is_current
+                    and source_variant != "ocr"
+                    and (
+                        source_priority < previous_priority
+                        or (source_priority == previous_priority and int(version_id) > previous_id)
+                    )
+                ):
                     current_meineke_by_lemma[lemma_id] = {
                         "id": version_id,
+                        "source_document": source_document or "",
                         "source_variant": source_variant or "",
                         "text_body": text_body or "",
                         "notes": notes or "",
                     }
+                    current_meineke_priority_by_lemma[lemma_id] = source_priority
 
         current_meineke_version_ids = [
             info["id"]
@@ -2071,6 +2090,7 @@ def export_lemmas():
             if risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False)
             else [],
             "meineke_source_variant": current_meineke.get("source_variant", ""),
+            "meineke_source_document": current_meineke.get("source_document", ""),
             "meineke_source_version_id": str(current_meineke_version_id or ""),
             "meineke_scan_filenames": merged_meineke_scan_filenames,
             "meineke_main_text_lines": meineke_lines_by_version.get(current_meineke_version_id, []),

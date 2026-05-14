@@ -14,6 +14,7 @@ from psycopg2.extras import Json
 from api_keys import load_api_key
 from db import get_connection
 from link_wikidata_places import query_wikidata_places
+from source_documents import public_source_document_list_sql, source_document_priority_sql
 from place_cluster_extraction import (
     build_wikidata_candidates,
     explicit_place_list_count,
@@ -49,15 +50,15 @@ def load_lemma_rows(cur, *, limit: int | None, lemma_id: int | None, rebuild: bo
     greek_expr = current_meineke_sql(has_source_versions)
     lateral_join = ""
     if has_source_versions:
-        lateral_join = """
+        lateral_join = f"""
         LEFT JOIN LATERAL (
             SELECT COALESCE(stv.text_body, '') AS text_body
             FROM lemma_source_text_versions stv
             WHERE stv.lemma_id = a.id
-              AND stv.source_document = 'meineke'
+              AND stv.source_document IN ({public_source_document_list_sql()})
               AND COALESCE(stv.source_variant, '') <> 'ocr'
               AND COALESCE(stv.is_current, FALSE) = TRUE
-            ORDER BY stv.id DESC
+            ORDER BY {source_document_priority_sql("stv.source_document")}, stv.id DESC
             LIMIT 1
         ) current_meineke ON TRUE
         """

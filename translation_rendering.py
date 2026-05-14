@@ -5,6 +5,8 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Callable
 
+from source_documents import is_public_greek_source_document
+
 _PAREN_SPAN_RE = re.compile(r"\(([^()]*)\)")
 _BRACKET_SPAN_RE = re.compile(r"\[([^\[\]]*)\]")
 _FENCED_VERSE_RE = re.compile(r"```(?:verse)?\s*\n?(.*?)\n?```", re.DOTALL | re.IGNORECASE)
@@ -154,7 +156,7 @@ def sanitize_public_translation_text(
         return ""
 
     normalized_source_document = (source_document or "").strip().lower()
-    if normalized_source_document == "meineke":
+    if is_public_greek_source_document(normalized_source_document):
         return raw
 
     paren_content_span_budget = _count_substantive_non_citation_greek_spans(displayed_greek, _PAREN_SPAN_RE)

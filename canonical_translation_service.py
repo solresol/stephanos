@@ -15,6 +15,7 @@ from pathlib import Path
 
 from db import get_connection
 import canonical_variants
+from source_documents import source_document_priority_sql
 
 
 def table_exists(cur, table_name: str) -> bool:
@@ -132,18 +133,12 @@ def choose_default_source_text_version(cur, lemma_id: int) -> int | None:
     if not table_exists(cur, "lemma_source_text_versions"):
         return None
     cur.execute(
-        """
+        f"""
         SELECT id
         FROM lemma_source_text_versions
         WHERE lemma_id = %s
           AND is_current = TRUE
-        ORDER BY
-          CASE source_document
-            WHEN 'meineke' THEN 0
-            WHEN 'billerbeck' THEN 1
-            ELSE 2
-          END,
-          id DESC
+        ORDER BY {source_document_priority_sql("source_document")}, id DESC
         LIMIT 1
         """,
         (lemma_id,),

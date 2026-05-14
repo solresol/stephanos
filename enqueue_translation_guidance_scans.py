@@ -11,6 +11,13 @@ from __future__ import annotations
 
 import argparse
 
+from source_documents import (
+    PREFERRED_SOURCE_DOCUMENT,
+    SOURCE_DOCUMENT_CLI_CHOICES,
+    normalize_source_document,
+    public_source_document_list_sql,
+    source_document_priority_sql,
+)
 from translation_guidance_coverage import (
     CURRENT_DETECTOR_VERSION,
     DETECTOR_BY_KIND,
@@ -109,21 +116,40 @@ def kappa_untranslated_priority_sql() -> str:
 
 
 def resolve_source_rows(cur, args) -> list[tuple[int, int, bool]]:
+    source_document = normalize_source_document(args.source_document)
     priority_select = (
         kappa_untranslated_priority_sql()
         if args.prioritize_kappa_untranslated
         else "1"
     )
-    query = """
-        SELECT a.id, stv.id, {priority_select} AS source_priority
-        FROM assembled_lemmas a
+    if source_document == PREFERRED_SOURCE_DOCUMENT:
+        source_join = f"""
+        JOIN LATERAL (
+            SELECT stv.id, stv.text_body, stv.source_document
+            FROM lemma_source_text_versions stv
+            WHERE stv.lemma_id = a.id
+              AND stv.source_document IN ({public_source_document_list_sql()})
+              AND stv.is_current = TRUE
+            ORDER BY {source_document_priority_sql("stv.source_document")}, stv.id DESC
+            LIMIT 1
+        ) stv ON TRUE
+        """
+        params: list[object] = []
+    else:
+        source_join = """
         JOIN lemma_source_text_versions stv
           ON stv.lemma_id = a.id
          AND stv.source_document = %s
          AND stv.is_current = TRUE
+        """
+        params = [source_document]
+
+    query = f"""
+        SELECT a.id, stv.id, {priority_select} AS source_priority
+        FROM assembled_lemmas a
+        {source_join}
         WHERE COALESCE(stv.text_body, '') <> ''
-    """.format(priority_select=priority_select)
-    params: list[object] = [args.source_document]
+    """
 
     if not args.include_quarantined:
         query += " AND COALESCE(a.quarantined, FALSE) = FALSE"
@@ -235,7 +261,7 @@ def main() -> None:
         help="Enqueue settled guidance rules that can be added to translation prompts",
     )
     parser.add_argument("--lemma-id", type=int, action="append", help="Restrict to one or more lemma ids")
-    parser.add_argument("--source-document", default="meineke", choices=["billerbeck", "meineke"])
+    parser.add_argument("--source-document", default=PREFERRED_SOURCE_DOCUMENT, choices=SOURCE_DOCUMENT_CLI_CHOICES)
     parser.add_argument("--limit", type=int, help="Max source lemmas to enqueue per run")
     parser.add_argument("--max-queue-rows", type=int, help="Stop after inserting this many queue rows")
     parser.add_argument("--priority", type=int, default=100)

@@ -267,7 +267,7 @@ if [ "$TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT" -gt 0 ]; then
     echo "Step 4d7: Queueing translation-guidance scans before translation..." | tee -a "$LOGFILE"
     guidance_enqueue_args=(
         --prompt-eligible-rules
-        --source-document meineke
+        --source-document preferred
         --max-queue-rows "$TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT"
         --prioritize-kappa-untranslated
         --created-by "run_daily_pipeline.sh"
@@ -320,7 +320,7 @@ if [ "$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT" -gt 0 ]; then
     "${guidance_process_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation-guidance scan step failed" | tee -a "$LOGFILE"
 fi
 
-# Step 4e: Enqueue Meineke translation run requests (set TRANSLATION_ENQUEUE_LIMIT=0 to disable)
+# Step 4e: Enqueue preferred-source translation run requests (set TRANSLATION_ENQUEUE_LIMIT=0 to disable)
 TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-20}"
 TRANSLATION_ENQUEUE_ORDER="${TRANSLATION_ENQUEUE_ORDER:-canonical}"
 # Kappa review is the current editorial priority; give these requests enough
@@ -333,7 +333,7 @@ if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
     translation_enqueue_args=(
         uv run enqueue_translation_runs.py
         --profile legacy_scholarly
-        --source-document meineke
+        --source-document preferred
         --limit "$TRANSLATION_ENQUEUE_LIMIT"
         --missing-final
         --order "$TRANSLATION_ENQUEUE_ORDER"

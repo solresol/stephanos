@@ -8,6 +8,13 @@ import re
 import unicodedata
 
 from db import get_connection
+from source_documents import (
+    PREFERRED_SOURCE_DOCUMENT,
+    SOURCE_DOCUMENT_CLI_CHOICES,
+    normalize_source_document,
+    public_source_document_list_sql,
+    source_document_priority_sql,
+)
 from translation_guidance_coverage import (
     enqueue_missing_guidance,
     guidance_coverage_counts,
@@ -195,12 +202,35 @@ def find_candidates(
     order: str = "canonical",
 ):
     explicit_lemma_ids = explicit_lemma_ids or []
+    source_document = normalize_source_document(source_document)
     letter_filter = normalise_letter_filter(letter)
     prefix_filter = normalise_prefix(headword_prefix)
     start_key = normalise_headword_key(headword_start) if headword_start else None
     end_key = normalise_headword_key(headword_end) if headword_end else None
 
-    query = """
+    if source_document == PREFERRED_SOURCE_DOCUMENT:
+        source_join = f"""
+        JOIN LATERAL (
+            SELECT stv.id, stv.text_body, stv.source_document
+            FROM lemma_source_text_versions stv
+            WHERE stv.lemma_id = a.id
+              AND stv.source_document IN ({public_source_document_list_sql()})
+              AND stv.is_current = TRUE
+            ORDER BY {source_document_priority_sql("stv.source_document")}, stv.id DESC
+            LIMIT 1
+        ) stv ON TRUE
+        """
+        params = [int(target_profile_id)]
+    else:
+        source_join = """
+        JOIN lemma_source_text_versions stv
+          ON stv.lemma_id = a.id
+         AND stv.source_document = %s
+         AND stv.is_current = TRUE
+        """
+        params = [int(target_profile_id), source_document]
+
+    query = f"""
         SELECT
             a.id,
             stv.id,
@@ -215,13 +245,9 @@ def find_candidates(
                   AND COALESCE(tr.translation_text, '') != ''
             ) AS has_older_profile_run
         FROM assembled_lemmas a
-        JOIN lemma_source_text_versions stv
-          ON stv.lemma_id = a.id
-         AND stv.source_document = %s
-         AND stv.is_current = TRUE
+        {source_join}
         WHERE 1=1
     """
-    params = [int(target_profile_id), source_document]
 
     if lemma_id is not None and explicit_lemma_ids:
         raise ValueError("Use either --lemma-id or --lemma-ids, not both")
@@ -405,7 +431,7 @@ def main():
     parser = argparse.ArgumentParser(description="Enqueue translation run requests.")
     parser.add_argument("--profile", required=True, help="Prompt profile name")
     parser.add_argument("--profile-version", type=int, help="Prompt profile version (default: latest active)")
-    parser.add_argument("--source-document", default="meineke", choices=["billerbeck", "meineke"])
+    parser.add_argument("--source-document", default=PREFERRED_SOURCE_DOCUMENT, choices=SOURCE_DOCUMENT_CLI_CHOICES)
     parser.add_argument("--lemma-id", type=int, help="Queue only a single lemma id")
     parser.add_argument("--lemma-ids", type=parse_lemma_ids, help="Comma/space-separated explicit lemma id list")
     parser.add_argument("--letter", help="Greek letter filter, e.g. kappa")
