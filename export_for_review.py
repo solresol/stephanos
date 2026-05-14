@@ -12,6 +12,7 @@ Output: review_data.json
 import json
 import re
 import unicodedata
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -315,15 +316,112 @@ def fetch_guidance_scan_batches(cur, rule_id: int) -> list[dict]:
     return batches
 
 
-def parse_meineke_page_filename(meineke_id: str) -> str:
-    """Derive a Meineke page image filename from ids like '397.3'."""
+def parse_meineke_print_page(meineke_id: str) -> int | None:
+    """Extract the printed Meineke page from ids like '397.3' or 'p397_e1'."""
     text = (meineke_id or "").strip()
     if not text:
-        return ""
-    match = re.match(r"^(\d+)(?:\.\d+)?$", text)
+        return None
+    match = re.match(r"^[pP]?(\d+)", text)
     if not match:
-        return ""
-    return f"meineke_page_{match.group(1)}.jpg"
+        return None
+    return int(match.group(1))
+
+
+def format_meineke_scan_filename(image_page_number: int) -> str:
+    return f"meineke_page_{image_page_number:03d}.jpg"
+
+
+def build_meineke_print_page_scan_index(cur):
+    """
+    Build a printed-page -> scan-image index from OCR metadata.
+
+    Meineke ids use printed page numbers, while image filenames use scan
+    numbers. The offset changes in the front matter, so infer it from nearby
+    OCR rows instead of formatting the printed page directly.
+    """
+    cur.execute(
+        """
+        SELECT image_filename, page_number, lemma_json
+        FROM images
+        WHERE source_document = 'meineke'
+          AND lemma_json IS NOT NULL
+          AND lemma_json <> ''
+        """
+    )
+    scan_filenames_by_print_page: dict[int, list[str]] = {}
+    offsets_by_print_page: dict[int, Counter[int]] = defaultdict(Counter)
+    all_offsets: Counter[int] = Counter()
+    for image_filename, image_page_number, lemma_json in cur.fetchall():
+        if not image_filename or image_page_number is None:
+            continue
+        try:
+            data = json.loads(lemma_json)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        seen_offsets: set[tuple[int, int]] = set()
+        for entry in data.get("entries", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            printed_page = parse_meineke_print_page(entry.get("meineke_id", ""))
+            if printed_page is None:
+                continue
+            filenames = scan_filenames_by_print_page.setdefault(printed_page, [])
+            if image_filename not in filenames:
+                filenames.append(image_filename)
+            offset = int(image_page_number) - printed_page
+            if (printed_page, offset) not in seen_offsets:
+                offsets_by_print_page[printed_page][offset] += 1
+                all_offsets[offset] += 1
+                seen_offsets.add((printed_page, offset))
+
+    common_offset = all_offsets.most_common(1)[0][0] if all_offsets else None
+    return scan_filenames_by_print_page, offsets_by_print_page, common_offset
+
+
+def infer_meineke_scan_offset(
+    printed_page: int,
+    offsets_by_print_page: dict[int, Counter[int]],
+    common_offset: int | None,
+) -> int | None:
+    for radius in (0, 3, 8, 20, 50):
+        nearby_offsets: Counter[int] = Counter()
+        for anchor_page, offset_counts in offsets_by_print_page.items():
+            if abs(anchor_page - printed_page) <= radius:
+                nearby_offsets.update(offset_counts)
+        if nearby_offsets:
+            return nearby_offsets.most_common(1)[0][0]
+    return common_offset
+
+
+def derive_meineke_scan_filenames(
+    meineke_id: str,
+    scan_filenames_by_print_page: dict[int, list[str]],
+    offsets_by_print_page: dict[int, Counter[int]],
+    common_offset: int | None,
+    known_meineke_image_filenames: set[str],
+) -> list[str]:
+    printed_page = parse_meineke_print_page(meineke_id)
+    if printed_page is None:
+        return []
+
+    exact_filenames = [
+        filename
+        for filename in scan_filenames_by_print_page.get(printed_page, [])
+        if filename in known_meineke_image_filenames
+    ]
+    if exact_filenames:
+        return exact_filenames
+
+    offset = infer_meineke_scan_offset(printed_page, offsets_by_print_page, common_offset)
+    if offset is not None:
+        inferred_filename = format_meineke_scan_filename(printed_page + offset)
+        if inferred_filename in known_meineke_image_filenames:
+            return [inferred_filename]
+
+    direct_filename = format_meineke_scan_filename(printed_page)
+    if direct_filename in known_meineke_image_filenames:
+        return [direct_filename]
+    return []
 
 
 def normalize_text_for_match(text: str) -> str:
@@ -346,8 +444,8 @@ def ocr_text_matches_current_meineke(ocr_text: str, current_text: str) -> bool:
     Keep OCR provenance only when it plausibly matches the current Meineke text.
 
     This is intentionally conservative: if we cannot validate a mismatch, we
-    prefer dropping the suspect OCR scan reference and falling back to the
-    known Meineke page.
+    prefer dropping the suspect OCR scan reference and deriving a scan from
+    the printed Meineke page.
     """
     if not (ocr_text or "").strip() or not (current_text or "").strip():
         return True
@@ -843,6 +941,11 @@ def export_lemmas():
         """
     )
     known_meineke_image_filenames = {row[0] for row in cur.fetchall() if row[0]}
+    (
+        meineke_scan_filenames_by_print_page,
+        meineke_scan_offsets_by_print_page,
+        common_meineke_scan_offset,
+    ) = build_meineke_print_page_scan_index(cur)
     cur.execute("SELECT to_regclass('public.lemma_source_text_versions') IS NOT NULL")
     has_source_versions = bool(cur.fetchone()[0])
     if has_source_versions:
@@ -2041,13 +2144,16 @@ def export_lemmas():
             if filename and filename not in merged_meineke_scan_filenames:
                 merged_meineke_scan_filenames.append(filename)
 
-        derived_meineke_page_filename = parse_meineke_page_filename(meineke_id or "")
-        if (
-            not merged_meineke_scan_filenames
-            and derived_meineke_page_filename
-            and derived_meineke_page_filename in known_meineke_image_filenames
-        ):
-            merged_meineke_scan_filenames.append(derived_meineke_page_filename)
+        if not merged_meineke_scan_filenames:
+            merged_meineke_scan_filenames.extend(
+                derive_meineke_scan_filenames(
+                    meineke_id or "",
+                    meineke_scan_filenames_by_print_page,
+                    meineke_scan_offsets_by_print_page,
+                    common_meineke_scan_offset,
+                    known_meineke_image_filenames,
+                )
+            )
 
         lemma_data = {
             "id": lemma_id,
