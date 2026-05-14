@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,15 @@ type GuidanceHitView struct {
 	EditorURL                 string
 }
 
+type LetterEntryOption struct {
+	ID           int
+	EntryNumber  int
+	Lemma        string
+	Selected     bool
+	StatusLabel  string
+	SortHeadword string
+}
+
 type PageData struct {
 	Lemma                           *Lemma
 	Review                          *Review
@@ -46,6 +56,8 @@ type PageData struct {
 	HasNextUnreviewed               bool
 	LetterName                      string
 	LetterNav                       []LetterNav
+	LetterEntryOptions              []LetterEntryOption
+	FinalReviewURL                  string
 	ShowMeineke                     bool
 	BillerbeckCompareText           string
 	MeinekeStatus                   string
@@ -67,6 +79,107 @@ type PageData struct {
 	GuidanceStrongHits              []GuidanceHitView
 	GuidanceUncertainHits           []GuidanceHitView
 	GuidanceProperNounHits          []GuidanceHitView
+}
+
+func yesNoLabel(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}
+
+func lemmaHasAITranslation(lemma *Lemma) bool {
+	if lemma == nil {
+		return false
+	}
+	for _, variant := range lemma.TranslationVariants {
+		if mapStringValue(variant, "kind") != "translation_run" {
+			continue
+		}
+		if strings.TrimSpace(mapStringValue(variant, "text")) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func lemmaHasHumanTranslation(lemma *Lemma, review *Review) bool {
+	if review != nil {
+		if strings.TrimSpace(review.CorrectedEnglishTranslation) != "" ||
+			strings.TrimSpace(review.ReviewedEnglishTranslation) != "" {
+			return true
+		}
+	}
+	if lemma == nil {
+		return false
+	}
+	for _, variant := range lemma.TranslationVariants {
+		if mapStringValue(variant, "kind") != "human_translation" {
+			continue
+		}
+		if strings.TrimSpace(mapStringValue(variant, "text")) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func buildLetterEntryOptions(db *sql.DB, data *LemmaData, current *Lemma) []LetterEntryOption {
+	if data == nil || current == nil {
+		return nil
+	}
+	var options []LetterEntryOption
+	for i := range data.Lemmas {
+		lemma := &data.Lemmas[i]
+		if lemma.Letter != current.Letter {
+			continue
+		}
+		review, err := GetReview(db, lemma.ID)
+		if err != nil {
+			review = nil
+		}
+		hasAI := lemmaHasAITranslation(lemma)
+		hasHuman := lemmaHasHumanTranslation(lemma, review)
+		options = append(options, LetterEntryOption{
+			ID:           lemma.ID,
+			EntryNumber:  lemma.EntryNumber,
+			Lemma:        lemma.Lemma,
+			Selected:     lemma.ID == current.ID,
+			StatusLabel:  fmt.Sprintf("AI:%s · Human:%s", yesNoLabel(hasAI), yesNoLabel(hasHuman)),
+			SortHeadword: normalizeGreekHeadwordForSort(lemma.Lemma),
+		})
+	}
+	sort.SliceStable(options, func(i, j int) bool {
+		left := options[i]
+		right := options[j]
+		if left.EntryNumber > 0 && right.EntryNumber > 0 && left.EntryNumber != right.EntryNumber {
+			return left.EntryNumber < right.EntryNumber
+		}
+		if left.EntryNumber > 0 && right.EntryNumber <= 0 {
+			return true
+		}
+		if left.EntryNumber <= 0 && right.EntryNumber > 0 {
+			return false
+		}
+		if left.SortHeadword != right.SortHeadword {
+			return left.SortHeadword < right.SortHeadword
+		}
+		return left.ID < right.ID
+	})
+	return options
+}
+
+func finalReviewURLForLemma(lemma *Lemma) string {
+	if lemma == nil || lemma.ID <= 0 {
+		return "/cgi-bin/final_review.cgi"
+	}
+	values := url.Values{}
+	values.Set("status", "all")
+	values.Set("sort", "entry_number")
+	if strings.TrimSpace(lemma.Letter) != "" {
+		values.Set("letter", strings.TrimSpace(lemma.Letter))
+	}
+	return "/cgi-bin/final_review.cgi?" + values.Encode() + "#entry-" + strconv.Itoa(lemma.ID)
 }
 
 func workingGreekLabel(lemma *Lemma) (string, string) {
@@ -756,6 +869,8 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		HasNextUnreviewed:               nextUnreviewed != nil,
 		LetterName:                      GetGreekLetterName(currentLemma.Letter),
 		LetterNav:                       GetLetterNavigation(data),
+		LetterEntryOptions:              buildLetterEntryOptions(db, data, currentLemma),
+		FinalReviewURL:                  finalReviewURLForLemma(currentLemma),
 		ShowMeineke:                     showMeineke,
 		BillerbeckCompareText:           billerbeckText,
 		MeinekeStatus:                   meinekeStatus,

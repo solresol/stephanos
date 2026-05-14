@@ -29,20 +29,23 @@ type FinalReviewRuleOption struct {
 }
 
 type FinalReviewRow struct {
-	Lemma                 Lemma
-	SourceText            string
-	TranslationText       string
-	TranslationStatus     string
-	TranslationBy         string
-	TranslationUpdatedAt  string
-	Notes                 string
-	HasFinished           bool
-	HasLocalReviewed      bool
-	HasImpact             bool
-	Impacts               []GuidanceRuleImpact
-	GuidanceHits          []GuidanceHit
-	ExtraGuidanceHitCount int
-	SearchText            string
+	Lemma                  Lemma
+	SourceText             string
+	TranslationText        string
+	TranslationStatus      string
+	TranslationBy          string
+	TranslationUpdatedAt   string
+	FinalTranslationSortAt time.Time
+	LatestAITranslationAt  string
+	LatestAISortAt         time.Time
+	Notes                  string
+	HasFinished            bool
+	HasLocalReviewed       bool
+	HasImpact              bool
+	Impacts                []GuidanceRuleImpact
+	GuidanceHits           []GuidanceHit
+	ExtraGuidanceHitCount  int
+	SearchText             string
 }
 
 type FinalReviewPageData struct {
@@ -117,9 +120,9 @@ func parseFinalReviewFilters(values url.Values) FinalReviewFilters {
 	}
 	sortMode := strings.TrimSpace(values.Get("sort"))
 	switch sortMode {
-	case "headword", "entry_number":
+	case "entry_number", "final_updated", "latest_ai", "headword":
 	default:
-		sortMode = "headword"
+		sortMode = "entry_number"
 	}
 	return FinalReviewFilters{
 		Letter:     strings.TrimSpace(values.Get("letter")),
@@ -249,7 +252,8 @@ func buildFinalReviewRow(lemma Lemma, review *Review, impacts []GuidanceRuleImpa
 		lemma.HumanGreekText,
 		lemma.GreekText,
 	)
-	translationText, status, by, updatedAt, hasFinished, hasLocalReviewed := finalReviewTranslationState(lemma, review)
+	translationText, status, by, updatedAt, finalTranslationSortAt, hasFinished, hasLocalReviewed := finalReviewTranslationState(lemma, review)
+	latestAISortAt := latestFinalReviewAITranslationTime(lemma)
 	guidanceHits := matchedFinalReviewGuidanceHits(lemma.GuidanceHits)
 	extraGuidance := 0
 	if len(guidanceHits) > 10 {
@@ -271,30 +275,38 @@ func buildFinalReviewRow(lemma Lemma, review *Review, impacts []GuidanceRuleImpa
 		searchParts = append(searchParts, impact.Label, impact.RuleCode, impact.RuleKey, impact.PreferredTranslation, impact.EvidenceText)
 	}
 	return FinalReviewRow{
-		Lemma:                 lemma,
-		SourceText:            sourceText,
-		TranslationText:       translationText,
-		TranslationStatus:     status,
-		TranslationBy:         by,
-		TranslationUpdatedAt:  updatedAt,
-		Notes:                 review.Notes,
-		HasFinished:           hasFinished,
-		HasLocalReviewed:      hasLocalReviewed,
-		HasImpact:             len(impacts) > 0,
-		Impacts:               impacts,
-		GuidanceHits:          guidanceHits,
-		ExtraGuidanceHitCount: extraGuidance,
-		SearchText:            strings.ToLower(strings.Join(searchParts, " ")),
+		Lemma:                  lemma,
+		SourceText:             sourceText,
+		TranslationText:        translationText,
+		TranslationStatus:      status,
+		TranslationBy:          by,
+		TranslationUpdatedAt:   updatedAt,
+		FinalTranslationSortAt: finalTranslationSortAt,
+		LatestAITranslationAt:  formatReviewTimeValue(latestAISortAt),
+		LatestAISortAt:         latestAISortAt,
+		Notes:                  review.Notes,
+		HasFinished:            hasFinished,
+		HasLocalReviewed:       hasLocalReviewed,
+		HasImpact:              len(impacts) > 0,
+		Impacts:                impacts,
+		GuidanceHits:           guidanceHits,
+		ExtraGuidanceHitCount:  extraGuidance,
+		SearchText:             strings.ToLower(strings.Join(searchParts, " ")),
 	}
 }
 
-func finalReviewTranslationState(lemma Lemma, review *Review) (string, string, string, string, bool, bool) {
+func finalReviewTranslationState(lemma Lemma, review *Review) (string, string, string, string, time.Time, bool, bool) {
 	if review != nil {
 		if text := strings.TrimSpace(review.ReviewedEnglishTranslation); text != "" {
+			updatedAt := time.Time{}
+			if review.ReviewedAt != nil {
+				updatedAt = *review.ReviewedAt
+			}
 			return text,
 				"Local reviewed",
 				firstNonEmpty(review.ReviewedTranslationBy, review.ReviewerUsername),
 				formatReviewTime(review.ReviewedAt),
+				updatedAt,
 				true,
 				true
 		}
@@ -318,22 +330,28 @@ func finalReviewTranslationState(lemma Lemma, review *Review) (string, string, s
 			return text,
 				label,
 				mapStringValue(variant, "reviewed_by"),
-				firstNonEmpty(mapStringValue(variant, "reviewed_at"), mapStringValue(variant, "created_at")),
+				formatReviewTimeValue(finalReviewVariantTime(variant, "reviewed_at", "updated_at", "created_at")),
+				finalReviewVariantTime(variant, "reviewed_at", "updated_at", "created_at"),
 				hasFinished,
 				false
 		}
 	}
 	if review != nil {
 		if text := strings.TrimSpace(review.CorrectedEnglishTranslation); text != "" {
+			updatedAt := time.Time{}
+			if review.ReviewedAt != nil {
+				updatedAt = *review.ReviewedAt
+			}
 			return text,
 				"Initial human draft",
 				firstNonEmpty(review.InitialTranslationBy, review.ReviewerUsername),
 				formatReviewTime(review.ReviewedAt),
+				updatedAt,
 				false,
 				false
 		}
 	}
-	return "", "No final text", "", "", false, false
+	return "", "No final text", "", "", time.Time{}, false, false
 }
 
 func finalReviewVariantHasHumanReview(variant map[string]interface{}) bool {
@@ -356,6 +374,52 @@ func findFinalReviewVariant(lemma Lemma, kind string, id string) map[string]inte
 		}
 	}
 	return nil
+}
+
+func parseFinalReviewTimestamp(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999-07:00",
+		"2006-01-02 15:04:05.999999-07",
+		"2006-01-02 15:04:05.999999",
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02 15:04:05-07",
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
+func finalReviewVariantTime(variant map[string]interface{}, keys ...string) time.Time {
+	for _, key := range keys {
+		if parsed := parseFinalReviewTimestamp(mapStringValue(variant, key)); !parsed.IsZero() {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
+func latestFinalReviewAITranslationTime(lemma Lemma) time.Time {
+	latest := time.Time{}
+	for _, variant := range lemma.TranslationVariants {
+		if mapStringValue(variant, "kind") != "translation_run" {
+			continue
+		}
+		createdAt := finalReviewVariantTime(variant, "created_at", "reviewed_at", "updated_at")
+		if createdAt.After(latest) {
+			latest = createdAt
+		}
+	}
+	return latest
 }
 
 func matchedFinalReviewGuidanceHits(hits []GuidanceHit) []GuidanceHit {
@@ -432,36 +496,77 @@ func sortFinalReviewRows(rows []FinalReviewRow, sortMode string) {
 		left := rows[i]
 		right := rows[j]
 		switch sortMode {
-		case "entry_number":
-			leftEntry := left.Lemma.EntryNumber
-			rightEntry := right.Lemma.EntryNumber
-			if leftEntry > 0 && rightEntry > 0 && leftEntry != rightEntry {
-				return leftEntry < rightEntry
+		case "final_updated":
+			if cmp := compareTimeDescending(left.FinalTranslationSortAt, right.FinalTranslationSortAt); cmp != 0 {
+				return cmp < 0
 			}
-			if leftEntry > 0 && rightEntry <= 0 {
-				return true
+		case "latest_ai":
+			if cmp := compareTimeDescending(left.LatestAISortAt, right.LatestAISortAt); cmp != 0 {
+				return cmp < 0
 			}
-			if leftEntry <= 0 && rightEntry > 0 {
-				return false
+		case "headword":
+			if cmp := compareNormalizedHeadwords(left.Lemma.Lemma, right.Lemma.Lemma); cmp != 0 {
+				return cmp < 0
 			}
-		default:
-			if left.Lemma.SortOrder != right.Lemma.SortOrder {
-				return left.Lemma.SortOrder < right.Lemma.SortOrder
-			}
-			leftLemma := strings.ToLower(strings.TrimSpace(left.Lemma.Lemma))
-			rightLemma := strings.ToLower(strings.TrimSpace(right.Lemma.Lemma))
-			if leftLemma != rightLemma {
-				return leftLemma < rightLemma
-			}
+		}
+		if cmp := compareEntryNumbers(left.Lemma.EntryNumber, right.Lemma.EntryNumber); cmp != 0 {
+			return cmp < 0
+		}
+		if cmp := compareNormalizedHeadwords(left.Lemma.Lemma, right.Lemma.Lemma); cmp != 0 {
+			return cmp < 0
 		}
 		if left.Lemma.Lemma != right.Lemma.Lemma {
 			return left.Lemma.Lemma < right.Lemma.Lemma
 		}
-		if left.Lemma.EntryNumber != right.Lemma.EntryNumber {
-			return left.Lemma.EntryNumber < right.Lemma.EntryNumber
-		}
 		return left.Lemma.ID < right.Lemma.ID
 	})
+}
+
+func compareEntryNumbers(left int, right int) int {
+	if left > 0 && right > 0 && left != right {
+		if left < right {
+			return -1
+		}
+		return 1
+	}
+	if left > 0 && right <= 0 {
+		return -1
+	}
+	if left <= 0 && right > 0 {
+		return 1
+	}
+	return 0
+}
+
+func compareNormalizedHeadwords(left string, right string) int {
+	leftKey := normalizeGreekHeadwordForSort(left)
+	rightKey := normalizeGreekHeadwordForSort(right)
+	if leftKey < rightKey {
+		return -1
+	}
+	if leftKey > rightKey {
+		return 1
+	}
+	return 0
+}
+
+func compareTimeDescending(left time.Time, right time.Time) int {
+	if left.IsZero() && right.IsZero() {
+		return 0
+	}
+	if left.IsZero() {
+		return 1
+	}
+	if right.IsZero() {
+		return -1
+	}
+	if left.After(right) {
+		return -1
+	}
+	if right.After(left) {
+		return 1
+	}
+	return 0
 }
 
 func buildFinalReviewRuleOptions(data *LemmaData, impactByLemma map[int][]GuidanceRuleImpact) []FinalReviewRuleOption {
@@ -534,6 +639,13 @@ func formatReviewTime(value *time.Time) string {
 	if value == nil || value.IsZero() {
 		return ""
 	}
+	return formatReviewTimeValue(*value)
+}
+
+func formatReviewTimeValue(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
 	return value.Format("2006-01-02 15:04")
 }
 
@@ -573,7 +685,7 @@ func finalReviewFilterHref(current FinalReviewFilters, key string, value string)
 	if current.Status != "" && current.Status != "finished" {
 		values.Set("status", current.Status)
 	}
-	if current.Sort != "" && current.Sort != "headword" {
+	if current.Sort != "" && current.Sort != "entry_number" {
 		values.Set("sort", current.Sort)
 	}
 	if current.ImpactOnly {
@@ -599,7 +711,7 @@ func finalReviewFilterHref(current FinalReviewFilters, key string, value string)
 			values.Set("status", value)
 		}
 	case "sort":
-		if value == "" || value == "headword" {
+		if value == "" || value == "entry_number" {
 			values.Del("sort")
 		} else {
 			values.Set("sort", value)
@@ -1013,8 +1125,10 @@ const finalReviewTemplate = `<!DOCTYPE html>
             <div>
                 <label for="sort">Sort</label>
                 <select name="sort" id="sort">
-                    <option value="headword" {{if eq .Filters.Sort "headword"}}selected{{end}}>Headword</option>
                     <option value="entry_number" {{if eq .Filters.Sort "entry_number"}}selected{{end}}>Entry number</option>
+                    <option value="final_updated" {{if eq .Filters.Sort "final_updated"}}selected{{end}}>Final translation time</option>
+                    <option value="latest_ai" {{if eq .Filters.Sort "latest_ai"}}selected{{end}}>Latest AI translation time</option>
+                    <option value="headword" {{if eq .Filters.Sort "headword"}}selected{{end}}>Headword</option>
                 </select>
             </div>
             <div>
@@ -1049,7 +1163,7 @@ const finalReviewTemplate = `<!DOCTYPE html>
                 <div class="entry-head">
                     <div>
                         <div class="headword"><label><input class="row-select" type="checkbox" value="{{.Lemma.ID}}" data-form-id="final_review_form_{{.Lemma.ID}}"> {{.Lemma.Lemma}}</label></div>
-                        <div class="muted">Entry {{.Lemma.EntryNumber}} · lemma {{.Lemma.ID}} · {{.Lemma.Letter}}{{if .Lemma.MeinekeID}} · Meineke {{.Lemma.MeinekeID}}{{end}}</div>
+                        <div class="muted">Entry {{.Lemma.EntryNumber}} · lemma {{.Lemma.ID}} · {{.Lemma.Letter}}{{if .Lemma.MeinekeID}} · Meineke {{.Lemma.MeinekeID}}{{end}}{{if .LatestAITranslationAt}} · latest AI {{.LatestAITranslationAt}}{{end}}</div>
                     </div>
                     <div class="row-links">
                         {{if .HasFinished}}<span class="status">{{.TranslationStatus}}</span>{{else}}<span class="status draft">{{.TranslationStatus}}</span>{{end}}

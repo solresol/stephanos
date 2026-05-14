@@ -137,6 +137,15 @@ func stripGreekDiacritics(r rune) rune {
 	}
 }
 
+func normalizeGreekHeadwordForSort(value string) string {
+	return strings.ToLower(strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Mn, r) {
+			return -1
+		}
+		return stripGreekDiacritics(r)
+	}, strings.TrimSpace(value)))
+}
+
 func isGreekRune(r rune) bool {
 	return (r >= 0x0370 && r <= 0x03FF) || (r >= 0x1F00 && r <= 0x1FFF)
 }

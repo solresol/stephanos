@@ -132,6 +132,43 @@ const sharedPageStyles = `
             background: #fee2e2;
             color: #991b1b;
         }
+        .entry-jump {
+            align-items: end;
+            display: flex;
+            flex: 1 1 360px;
+            gap: 8px;
+            min-width: min(100%, 360px);
+        }
+        .entry-jump label {
+            color: #64748b;
+            display: block;
+            font-size: 0.78em;
+            font-weight: 700;
+            margin-bottom: 3px;
+        }
+        .entry-jump select {
+            background: white;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            box-sizing: border-box;
+            color: #172334;
+            font: inherit;
+            max-width: 520px;
+            min-width: 280px;
+            padding: 9px 10px;
+            width: 100%;
+        }
+        .entry-jump a {
+            background: #f8fafc;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            color: #20496b;
+            font-size: 0.92em;
+            font-weight: 700;
+            padding: 10px 12px;
+            text-decoration: none;
+            white-space: nowrap;
+        }
         .view-tabs {
             display: flex;
             flex-wrap: wrap;
@@ -834,12 +871,25 @@ const translationReviewTemplate = `<!DOCTYPE html>
                 <button class="next-unreviewed" disabled>No More Unreviewed in {{.LetterName}}</button>
                 {{end}}
             </div>
+            {{if .LetterEntryOptions}}
+            <div class="entry-jump">
+                <div>
+                    <label for="letter_entry_select">Entry in {{.LetterName}}</label>
+                    <select id="letter_entry_select" onchange="if (this.value) window.location.href='?id=' + encodeURIComponent(this.value)">
+                        {{range .LetterEntryOptions}}
+                        <option value="{{.ID}}" {{if .Selected}}selected{{end}}>#{{.EntryNumber}} {{.Lemma}} · {{.StatusLabel}}</option>
+                        {{end}}
+                    </select>
+                </div>
+                <a href="{{.FinalReviewURL}}">Final workspace</a>
+            </div>
+            {{end}}
             <div class="view-tabs">
                 <span class="view-tab active">Translation review</span>
                 <a class="view-tab" href="/cgi-bin/entities.cgi?id={{.Lemma.ID}}">Entity resolution ({{.PlaceClusterCount}} places, {{.OtherEntityCount}} others)</a>
                 <a class="view-tab" href="/cgi-bin/guidance.cgi">Translation guidance</a>
                 <a class="view-tab" href="/cgi-bin/guidance_impacts.cgi">Rule impacts</a>
-                <a class="view-tab" href="/cgi-bin/final_review.cgi">Final workspace</a>
+                <a class="view-tab" href="{{.FinalReviewURL}}">Final workspace</a>
             </div>
             <div class="metadata">
                 Entry {{.CurrentPosition}} of {{.TotalCount}}
