@@ -39,20 +39,20 @@ def resolve_profile(cur, profile_name: str) -> int:
     return int(row[0])
 
 
-def resolve_profile_versions(cur, profile_id: int) -> dict[int, int]:
-    cur.execute(
-        """
+def resolve_profile_versions(cur, profile_id: int, *, include_inactive: bool = False) -> dict[int, int]:
+    query = """
         SELECT version, id
         FROM translation_prompt_profile_versions
         WHERE profile_id = %s
-        ORDER BY version
-        """,
-        (profile_id,),
-    )
+    """
+    if not include_inactive:
+        query += " AND active = TRUE"
+    query += " ORDER BY version"
+    cur.execute(query, (profile_id,))
     return {int(version): int(profile_version_id) for version, profile_version_id in cur.fetchall()}
 
 
-def fetch_candidates(cur, *, source_document: str, limit: int | None):
+def fetch_candidates(cur, *, source_document: str, prompt_versions: list[int], limit: int | None):
     query = """
         SELECT
             a.id,
@@ -68,9 +68,12 @@ def fetch_candidates(cur, *, source_document: str, limit: int | None):
          AND stv.is_current = TRUE
         WHERE COALESCE(a.translation_prompt_version, 0) > 0
           AND COALESCE(a.translation, '') != ''
-        ORDER BY a.id
     """
     params = [source_document]
+    if prompt_versions:
+        query += " AND COALESCE(a.translation_prompt_version, 0) = ANY(%s)"
+        params.append([int(version) for version in prompt_versions])
+    query += " ORDER BY a.id"
     if limit is not None:
         query += f" LIMIT {int(limit)}"
     cur.execute(query, params)
@@ -259,13 +262,22 @@ def main():
     parser.add_argument("--profile", default="legacy_scholarly", help="Prompt profile name to attach")
     parser.add_argument(
         "--source-document",
-        default="billerbeck",
+        default="meineke",
         choices=["meineke", "billerbeck", "kiesling"],
-        help="Source document for source_text_version lookup; non-public source documents are backfilled as hidden",
+        help=(
+            "Source document for source_text_version lookup. Defaults to Meineke, "
+            "the public translation source; use billerbeck only for an explicit "
+            "historical Billerbeck backfill."
+        ),
     )
     parser.add_argument("--model", default=DEFAULT_TRANSLATION_MODEL, help="Model name for backfilled rows")
     parser.add_argument("--limit", type=int, help="Max candidate lemmas to inspect")
     parser.add_argument("--dry-run", action="store_true", help="Report what would change without writing")
+    parser.add_argument(
+        "--include-inactive-profile-versions",
+        action="store_true",
+        help="Also backfill historical prompt/profile versions. Default is active prompt versions only.",
+    )
     args = parser.parse_args()
 
     conn = get_connection()
@@ -292,10 +304,23 @@ def main():
         return
 
     profile_id = resolve_profile(cur, args.profile)
-    profile_versions = resolve_profile_versions(cur, profile_id)
+    profile_versions = resolve_profile_versions(
+        cur,
+        profile_id,
+        include_inactive=bool(args.include_inactive_profile_versions),
+    )
+    if not profile_versions:
+        raise RuntimeError(f"No prompt profile versions found for {args.profile}")
 
-    candidates = fetch_candidates(cur, source_document=args.source_document, limit=args.limit)
-    print(f"Legacy AI rows to inspect: {len(candidates)}")
+    prompt_versions_in_scope = sorted(profile_versions)
+    candidates = fetch_candidates(
+        cur,
+        source_document=args.source_document,
+        prompt_versions=prompt_versions_in_scope,
+        limit=args.limit,
+    )
+    print(f"Prompt versions in scope: {', '.join(str(version) for version in prompt_versions_in_scope)}")
+    print(f"Legacy AI rows to inspect for {args.source_document} source text: {len(candidates)}")
 
     normalized = 0
     inserted = 0

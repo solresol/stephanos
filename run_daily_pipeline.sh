@@ -234,7 +234,7 @@ uv run seed_translation_styles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: s
 
 # Step 4d3: Backfill authoritative translation runs from compatibility columns
 echo "Step 4d3: Backfilling authoritative translation runs..." | tee -a "$LOGFILE"
-uv run backfill_legacy_translation_runs.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation backfill failed" | tee -a "$LOGFILE"
+uv run backfill_legacy_translation_runs.py --source-document meineke 2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation backfill failed" | tee -a "$LOGFILE"
 
 # Step 4d3a: Ensure Billerbeck-sourced AI translations stay hidden/non-public
 echo "Step 4d3a: Hiding Billerbeck-sourced AI translation runs..." | tee -a "$LOGFILE"
