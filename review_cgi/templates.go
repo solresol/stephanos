@@ -354,18 +354,23 @@ const sharedPageStyles = `
             cursor: pointer;
             font-weight: 700;
         }
-        .prompt-artifact-block {
-            background: #0f172a;
+        .prompt-artifact-text {
+            background: #f8fafc;
+            border: 1px solid #dce6f0;
             border-radius: 8px;
-            color: #e5edf5;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-            font-size: 0.82em;
-            line-height: 1.45;
+            color: #172334;
+            font-size: 0.95em;
+            line-height: 1.6;
             margin-top: 8px;
             max-height: 520px;
             overflow: auto;
             padding: 12px;
-            white-space: pre-wrap;
+        }
+        .prompt-artifact-text p {
+            margin: 0 0 0.85em;
+        }
+        .prompt-artifact-text p:last-child {
+            margin-bottom: 0;
         }
         .guidance-hit-panel {
             margin-top: 18px;
@@ -1011,13 +1016,13 @@ const translationReviewTemplate = `<!DOCTYPE html>
                     <div class="section-title">Latest AI Translation</div>
                     <div class="helper-text" style="margin-bottom: 8px;">{{.LatestAITranslationLabel}}</div>
                     <div class="translation-block commentary-source" data-commentary-source="translation" tabindex="0" title="Select text here to add commentary">{{.LatestAITranslation}}</div>
-                    {{if .LatestAIRequestPayloadPretty}}
+                    {{if .LatestAIRequestUserPrompt}}
                     <details class="prompt-artifact-details">
-                        <summary>Show prompt/request artifact</summary>
-                        <pre class="prompt-artifact-block">{{.LatestAIRequestPayloadPretty}}</pre>
+                        <summary>Show user prompt</summary>
+                        <div class="prompt-artifact-text">{{formatPromptText .LatestAIRequestUserPrompt}}</div>
                     </details>
                     {{else if .LatestAITranslationRunID}}
-                    <div class="helper-text" style="margin-top: 10px;">No prompt/request artifact was recorded for this older AI run.</div>
+                    <div class="helper-text" style="margin-top: 10px;">No user prompt was recorded for this older AI run.</div>
                     {{end}}
                 </div>
             </div>
@@ -1245,6 +1250,8 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                         <th style="padding: 8px; text-align:left;">Select</th>
                                         <th style="padding: 8px; text-align:left;">Kind</th>
                                         <th style="padding: 8px; text-align:left;">Status</th>
+                                        <th style="padding: 8px; text-align:left;">Prompt version</th>
+                                        <th style="padding: 8px; text-align:left;">Date</th>
                                         <th style="padding: 8px; text-align:left;">Text</th>
                                         <th style="padding: 8px; text-align:left;">Canonical</th>
                                     </tr>
@@ -1265,20 +1272,30 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                             {{index . "kind"}}{{if index . "deprecated"}}<div class="helper-text">{{if index . "deprecation_note"}}{{index . "deprecation_note"}}{{else}}Legacy baseline retained for context.{{end}}</div>{{end}}
                                         </td>
                                         <td style="border-top: 1px solid #e5edf5; padding: 8px;">{{index . "status"}}</td>
+                                        <td style="border-top: 1px solid #e5edf5; padding: 8px; white-space: nowrap;">
+                                            {{if index . "profile_version"}}
+                                                {{if index . "profile_name"}}{{index . "profile_name"}} {{end}}v{{index . "profile_version"}}
+                                            {{else if index . "profile_name"}}
+                                                {{index . "profile_name"}}
+                                            {{else}}
+                                                –
+                                            {{end}}
+                                        </td>
+                                        <td style="border-top: 1px solid #e5edf5; padding: 8px; white-space: nowrap;">{{if index . "created_at"}}{{index . "created_at"}}{{else}}–{{end}}</td>
                                         <td style="border-top: 1px solid #e5edf5; padding: 8px;">
                                             <details class="variant-text-details">
                                                 <summary>{{if index . "preview"}}{{index . "preview"}}{{else}}No text stored.{{end}}</summary>
                                                 <div class="helper-text" style="margin-top: 8px;">
-                                                    {{if index . "model"}}model: {{index . "model"}}{{else if eq (index . "kind") "legacy_assembled"}}model: gpt-5.2{{end}}{{if index . "profile_name"}} · profile: {{index . "profile_name"}}{{end}}{{if index . "profile_version"}} v{{index . "profile_version"}}{{end}}{{if index . "created_at"}} · created: {{index . "created_at"}}{{end}}
+                                                    {{if index . "model"}}model: {{index . "model"}}{{else if eq (index . "kind") "legacy_assembled"}}model: gpt-5.2{{end}}{{if index . "source_document"}} · source: {{index . "source_document"}}{{end}}{{if index . "reviewed_at"}} · reviewed: {{index . "reviewed_at"}}{{end}}
                                                 </div>
                                                 <div class="translation-block">{{index . "text"}}</div>
-                                                {{if index . "request_payload_pretty"}}
+                                                {{if index . "request_user_prompt_text"}}
                                                 <details class="prompt-artifact-details">
-                                                    <summary>Show prompt/request artifact</summary>
-                                                    <pre class="prompt-artifact-block">{{index . "request_payload_pretty"}}</pre>
+                                                    <summary>Show user prompt</summary>
+                                                    <div class="prompt-artifact-text">{{formatPromptText (index . "request_user_prompt_text")}}</div>
                                                 </details>
                                                 {{else if eq (index . "kind") "translation_run"}}
-                                                <div class="helper-text" style="margin-top: 8px;">No prompt/request artifact recorded for this AI run.</div>
+                                                <div class="helper-text" style="margin-top: 8px;">No user prompt recorded for this AI run.</div>
                                                 {{end}}
                                             </details>
                                         </td>

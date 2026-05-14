@@ -145,6 +145,40 @@ def pretty_json_object(value) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2)
 
 
+def message_content_to_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                if isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif isinstance(item.get("content"), str):
+                    parts.append(item["content"])
+                else:
+                    parts.append(json.dumps(item, ensure_ascii=False))
+            elif item is not None:
+                parts.append(str(item))
+        return "\n".join(part for part in parts if part)
+    if isinstance(content, dict):
+        return json.dumps(content, ensure_ascii=False)
+    return ""
+
+
+def last_user_prompt_text(request_payload: dict) -> str:
+    body = coerce_json_object(request_payload.get("body"))
+    messages = body.get("messages") or []
+    last_user_content = ""
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") == "user":
+                last_user_content = message_content_to_text(message.get("content")).strip()
+    return last_user_content
+
+
 def fetch_guidance_scan_batches(cur, rule_id: int) -> list[dict]:
     cur.execute(
         """
@@ -1580,6 +1614,7 @@ def export_lemmas():
                     "reviewed_by": reviewed_by or "",
                     "reviewed_at": reviewed_at or "",
                     "request_payload_pretty": pretty_json_object(request_payload),
+                    "request_user_prompt_text": last_user_prompt_text(request_payload),
                     "prompt_recorded": bool(request_payload),
                     "preview": preview_text(translation_text),
                     "deprecated": False,
@@ -2106,10 +2141,14 @@ def export_lemmas():
             "deprecation_note": "Legacy assembled Billerbeck baseline kept for review context only.",
         }
         variants = list(translation_variants_by_lemma.get(lemma_id, []))
-        if legacy_translation.strip() or risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False):
+        legacy_text = legacy_translation.strip()
+        legacy_already_projected = bool(legacy_text) and any(
+            (variant.get("kind") in {"translation_run", "human_translation"})
+            and (variant.get("text") or "").strip() == legacy_text
+            for variant in variants
+        )
+        if legacy_text and not legacy_already_projected:
             variants.append(default_variant)
-        elif not variants:
-            variants = [default_variant]
         variants = sort_translation_variants(variants)
 
         pointer_variant = canonical_variants.select_pointer_variant(cur, lemma_id=lemma_id)

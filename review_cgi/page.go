@@ -68,6 +68,7 @@ type PageData struct {
 	LatestAITranslationLabel        string
 	LatestAITranslationRunID        int
 	LatestAIRequestPayloadPretty    string
+	LatestAIRequestUserPrompt       string
 	EntityContextTranslation        string
 	EntityContextTranslationLabel   string
 	SourceLookupLinks               []SourceLookupLink
@@ -382,7 +383,7 @@ func chooseLatestAITranslation(lemma *Lemma) (string, string, int, string) {
 
 	if latestRun != nil {
 		runID, _ := strconv.Atoi(mapStringValue(latestRun, "id"))
-		return strings.TrimSpace(mapStringValue(latestRun, "text")), latestAITranslationRunLabel(latestRun), runID, strings.TrimSpace(mapStringValue(latestRun, "request_payload_pretty"))
+		return strings.TrimSpace(mapStringValue(latestRun, "text")), latestAITranslationRunLabel(latestRun), runID, strings.TrimSpace(mapStringValue(latestRun, "request_user_prompt_text"))
 	}
 	if legacyVariant != nil {
 		return strings.TrimSpace(mapStringValue(legacyVariant, "text")), latestAILegacyLabel(legacyVariant), 0, ""
@@ -847,7 +848,7 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		len(currentLemma.Apparatus) > 0 ||
 		len(currentLemma.MeinekeScanFilenames) > 0
 	workingGreekTitle, sourceTextVersionID := workingGreekLabel(currentLemma)
-	latestAITranslation, latestAITranslationLabel, latestAITranslationRunID, latestAIRequestPayload := chooseLatestAITranslation(currentLemma)
+	latestAITranslation, latestAITranslationLabel, latestAITranslationRunID, latestAIRequestUserPrompt := chooseLatestAITranslation(currentLemma)
 	entityTranslation, entityTranslationLabel := chooseEntityContextTranslation(review, currentLemma)
 	primaryEntities, secondaryEntities, legacyPlaceEntities := splitEntityBuckets(currentLemma)
 	localUrgentGuidanceHits, err := FetchUrgentGuidanceHitsForLemma(db, currentLemma.ID)
@@ -880,7 +881,7 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		LatestAITranslation:             latestAITranslation,
 		LatestAITranslationLabel:        latestAITranslationLabel,
 		LatestAITranslationRunID:        latestAITranslationRunID,
-		LatestAIRequestPayloadPretty:    latestAIRequestPayload,
+		LatestAIRequestUserPrompt:       latestAIRequestUserPrompt,
 		EntityContextTranslation:        entityTranslation,
 		EntityContextTranslationLabel:   entityTranslationLabel,
 		SourceLookupLinks:               buildSourceLookupLinks(currentLemma),

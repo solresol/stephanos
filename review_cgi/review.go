@@ -6,7 +6,39 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"strings"
 )
+
+func formatPromptText(value interface{}) template.HTML {
+	text, ok := value.(string)
+	if !ok {
+		text = fmt.Sprint(value)
+	}
+	text = strings.TrimSpace(text)
+	if text == "" || text == "<nil>" {
+		return ""
+	}
+
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+
+	paragraphs := strings.Split(text, "\n\n")
+	var builder strings.Builder
+	for _, paragraph := range paragraphs {
+		paragraph = strings.Trim(paragraph, "\n")
+		if strings.TrimSpace(paragraph) == "" {
+			continue
+		}
+		if builder.Len() > 0 {
+			builder.WriteString("\n")
+		}
+		builder.WriteString("<p>")
+		escaped := template.HTMLEscapeString(paragraph)
+		builder.WriteString(strings.ReplaceAll(escaped, "\n", "<br>\n"))
+		builder.WriteString("</p>")
+	}
+	return template.HTML(builder.String())
+}
 
 func main() {
 	fmt.Println("Content-Type: text/html; charset=utf-8")
@@ -39,7 +71,9 @@ func main() {
 		return
 	}
 
-	tmpl, err := template.New("translation").Parse(translationReviewTemplate)
+	tmpl, err := template.New("translation").Funcs(template.FuncMap{
+		"formatPromptText": formatPromptText,
+	}).Parse(translationReviewTemplate)
 	if err != nil {
 		showError(fmt.Sprintf("Template error: %v", err))
 		return
