@@ -16,6 +16,7 @@ guidance_scan_results.db
 data/topostext_snapshots/
 .secrets/
 tmp/
+output/
 .playwright-cli/
 
 # Temporary migration/testing scripts
