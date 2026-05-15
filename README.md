@@ -114,6 +114,13 @@ uv run fetch_topostext_html.py --output-dir data/topostext_snapshots
 
 The Dropbox app key, app secret, refresh token, and shared link must live outside git under `~/.config/stephanos/`. Use `--dry-run` to validate the configured source without writing a snapshot or database row.
 
+Import the latest fetched snapshot into additive staging tables:
+```bash
+DB_HOST=raksasa DB_USER=stephanos \
+uv run import_topostext_intake.py \
+  --pauly-workbook ~/Downloads/PaulyHeadwordstoWikidata\ from\ Margherita\ scrape.xlsx
+```
+
 Generate a read-only intake report from the latest fetched snapshot:
 ```bash
 DB_HOST=raksasa DB_USER=stephanos \
@@ -123,7 +130,16 @@ uv run generate_topostext_intake_report.py \
   --summary-json exports/topostext_intake_report_summary.json
 ```
 
-The report exposes paragraph counts, inline entity tag counts, `YY`/`JJ`/`zzz` placeholders, RE namespace rows, and a complete entity-mention CSV for external review. When the PaulyHeadwords workbook is available, RE rows are enriched with German short definitions, RE article Wikidata items, and subject Wikidata items. It does not import those rows into the entity-resolution tables.
+Generate the review queue page and CSV from staged rows:
+```bash
+DB_HOST=raksasa DB_USER=stephanos \
+uv run generate_topostext_review_page.py \
+  --output exports/topostext_review.html \
+  --queue-csv exports/topostext_review_queue.csv \
+  --diff-csv exports/topostext_snapshot_diff.csv
+```
+
+The intake report exposes paragraph counts, inline entity tag counts, `YY`/`JJ`/`zzz` placeholders, RE namespace rows, and a complete entity-mention CSV for external review. The review queue page groups the imported rows into concrete work queues: `JJ` new-ID work, `YY` deeper search, `zzz` unresolved IDs, RE namespace enrichment gaps, and source markup/classification fixes. When the PaulyHeadwords workbook is available, RE rows are enriched with German short definitions, RE article Wikidata items, and subject Wikidata items. None of these commands mutates the existing entity-resolution tables.
 
 For the daily `raksasa` pipeline, keep the PaulyHeadwords workbook outside git at `data/pauly/PaulyHeadwordstoWikidata from Margherita scrape.xlsx` or set `TOPOSTEXT_PAULY_WORKBOOK=/path/to/workbook.xlsx`.
 

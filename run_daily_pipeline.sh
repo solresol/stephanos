@@ -177,12 +177,27 @@ echo "Step 1: Skipping Billerbeck EPUB ingestion (OCR corpus complete)." | tee -
 # Step 2: Retire finished Billerbeck image extraction steps
 echo "Step 2: Skipping Billerbeck image extraction (OCR corpus complete)." | tee -a "$LOGFILE"
 
+TOPOSTEXT_PAULY_WORKBOOK="${TOPOSTEXT_PAULY_WORKBOOK:-data/pauly/PaulyHeadwordstoWikidata from Margherita scrape.xlsx}"
+
 # Step 2a: Fetch Brady's current ToposText HTML snapshot
 TOPOSTEXT_HTML_FETCH="${TOPOSTEXT_HTML_FETCH:-1}"
 if [ "$TOPOSTEXT_HTML_FETCH" -gt 0 ]; then
     echo "Step 2a: Fetching ToposText HTML snapshot..." | tee -a "$LOGFILE"
     uv run fetch_topostext_html.py --output-dir data/topostext_snapshots \
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: ToposText HTML fetch failed" | tee -a "$LOGFILE"
+fi
+
+# Step 2a1: Import ToposText snapshot into review staging tables
+TOPOSTEXT_INTAKE_IMPORT="${TOPOSTEXT_INTAKE_IMPORT:-1}"
+if [ "$TOPOSTEXT_INTAKE_IMPORT" -gt 0 ]; then
+    echo "Step 2a1: Importing ToposText intake staging rows..." | tee -a "$LOGFILE"
+    topostext_import_args=(uv run import_topostext_intake.py)
+    if [ -f "$TOPOSTEXT_PAULY_WORKBOOK" ]; then
+        topostext_import_args+=(--pauly-workbook "$TOPOSTEXT_PAULY_WORKBOOK")
+    else
+        echo "  Warning: PaulyHeadwords workbook not found at $TOPOSTEXT_PAULY_WORKBOOK; importing without RE enrichment" | tee -a "$LOGFILE"
+    fi
+    "${topostext_import_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: ToposText intake import failed" | tee -a "$LOGFILE"
 fi
 
 # Step 2b: Queue missing Meineke page scans based on headword hole detection
@@ -599,7 +614,6 @@ uv run export_guidance_scan_db.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 8c: Generate ToposText intake report for Brady review
 TOPOSTEXT_INTAKE_REPORT="${TOPOSTEXT_INTAKE_REPORT:-1}"
-TOPOSTEXT_PAULY_WORKBOOK="${TOPOSTEXT_PAULY_WORKBOOK:-data/pauly/PaulyHeadwordstoWikidata from Margherita scrape.xlsx}"
 if [ "$TOPOSTEXT_INTAKE_REPORT" -gt 0 ]; then
     echo "Step 8c: Generating ToposText intake report..." | tee -a "$LOGFILE"
     topostext_report_args=(
@@ -613,6 +627,14 @@ if [ "$TOPOSTEXT_INTAKE_REPORT" -gt 0 ]; then
         echo "  Warning: PaulyHeadwords workbook not found at $TOPOSTEXT_PAULY_WORKBOOK; generating without RE enrichment" | tee -a "$LOGFILE"
     fi
     "${topostext_report_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: ToposText intake report generation failed" | tee -a "$LOGFILE"
+
+    echo "Step 8c1: Generating ToposText review queues..." | tee -a "$LOGFILE"
+    uv run generate_topostext_review_page.py \
+        --output exports/topostext_review.html \
+        --queue-csv exports/topostext_review_queue.csv \
+        --diff-csv exports/topostext_snapshot_diff.csv \
+        --summary-json exports/topostext_review_summary.json \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: ToposText review page generation failed" | tee -a "$LOGFILE"
 fi
 
 # Step 9: Deploy to merah
@@ -632,7 +654,11 @@ for topostext_export in \
     exports/topostext_intake_report.html \
     exports/topostext_intake_report_mentions.csv \
     exports/topostext_intake_report_re_namespace.csv \
-    exports/topostext_intake_report_summary.json; do
+    exports/topostext_intake_report_summary.json \
+    exports/topostext_review.html \
+    exports/topostext_review_queue.csv \
+    exports/topostext_snapshot_diff.csv \
+    exports/topostext_review_summary.json; do
     if [ -f "$topostext_export" ]; then
         rsync -az "$topostext_export" stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
     fi

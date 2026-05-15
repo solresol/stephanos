@@ -120,6 +120,7 @@ class Entry:
 class Mention:
     sequence: int
     entry_sequence: int
+    entry_mention_sequence: int
     work: str
     paragraph_id: str
     entry_key: str
@@ -354,12 +355,15 @@ def parse_topostext_html(content: str) -> ParsedToposText:
         )
         entries.append(entry)
 
+        entry_mention_sequence = 0
         for tag_name, original_tag_name, tag_id, mention_text in raw_mention_parts(raw_paragraph):
+            entry_mention_sequence += 1
             authority_class = classify_authority_id(tag_id)
             mentions.append(
                 Mention(
                     sequence=len(mentions) + 1,
                     entry_sequence=entry_sequence,
+                    entry_mention_sequence=entry_mention_sequence,
                     work=work,
                     paragraph_id=paragraph_id,
                     entry_key=entry_key,
@@ -1097,6 +1101,8 @@ def write_mentions_csv(path: Path, mentions: list[Mention]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "sequence",
+        "entry_sequence",
+        "entry_mention_sequence",
         "work",
         "paragraph_id",
         "entry_key",

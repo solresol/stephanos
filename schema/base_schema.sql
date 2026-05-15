@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict dUcAMDta8HkGWWCGvrTHzd67zyYTL5oHICXEg9fFXhcuoeQOIWkV9jonKTdPFiD
+\restrict uUrtYMLj0qkdzPehxwFn8i94slqeNUGX1BoQswH2pOFvldH7m1IWdCR1JZHrKuX
 
 -- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
@@ -1943,6 +1943,109 @@ ALTER SEQUENCE public.text_pair_differences_id_seq OWNED BY public.text_pair_dif
 
 
 --
+-- Name: topostext_intake_entries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.topostext_intake_entries (
+    id bigint NOT NULL,
+    snapshot_id bigint NOT NULL,
+    entry_sequence integer NOT NULL,
+    work text DEFAULT ''::text NOT NULL,
+    paragraph_id text DEFAULT ''::text NOT NULL,
+    entry_key text NOT NULL,
+    title text DEFAULT ''::text NOT NULL,
+    wdate text DEFAULT ''::text NOT NULL,
+    edate text DEFAULT ''::text NOT NULL,
+    entry_text text DEFAULT ''::text NOT NULL,
+    text_sha256 text NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    CONSTRAINT topostext_intake_entries_sequence_check CHECK ((entry_sequence > 0)),
+    CONSTRAINT topostext_intake_entries_text_sha256_check CHECK ((text_sha256 ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: topostext_intake_entries_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.topostext_intake_entries_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: topostext_intake_entries_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.topostext_intake_entries_id_seq OWNED BY public.topostext_intake_entries.id;
+
+
+--
+-- Name: topostext_intake_mentions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.topostext_intake_mentions (
+    id bigint NOT NULL,
+    snapshot_id bigint NOT NULL,
+    entry_id bigint NOT NULL,
+    mention_sequence integer NOT NULL,
+    entry_mention_sequence integer NOT NULL,
+    work text DEFAULT ''::text NOT NULL,
+    paragraph_id text DEFAULT ''::text NOT NULL,
+    entry_key text NOT NULL,
+    tag_name text DEFAULT ''::text NOT NULL,
+    original_tag_name text DEFAULT ''::text NOT NULL,
+    tag_id text DEFAULT ''::text NOT NULL,
+    authority_class text DEFAULT ''::text NOT NULL,
+    authority_namespace text DEFAULT ''::text NOT NULL,
+    authority_id text DEFAULT ''::text NOT NULL,
+    action_status text DEFAULT ''::text NOT NULL,
+    placeholder_code text DEFAULT ''::text NOT NULL,
+    mention_text text DEFAULT ''::text NOT NULL,
+    authority_url text DEFAULT ''::text NOT NULL,
+    context text DEFAULT ''::text NOT NULL,
+    re_namespace_id text DEFAULT ''::text NOT NULL,
+    re_short_definition text DEFAULT ''::text NOT NULL,
+    re_article_item text DEFAULT ''::text NOT NULL,
+    re_subject_item text DEFAULT ''::text NOT NULL,
+    re_subject_label text DEFAULT ''::text NOT NULL,
+    re_author text DEFAULT ''::text NOT NULL,
+    re_volume text DEFAULT ''::text NOT NULL,
+    re_page text DEFAULT ''::text NOT NULL,
+    re_match_source text DEFAULT ''::text NOT NULL,
+    mention_fingerprint text NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    CONSTRAINT topostext_intake_mentions_entry_sequence_check CHECK ((entry_mention_sequence > 0)),
+    CONSTRAINT topostext_intake_mentions_fingerprint_check CHECK ((mention_fingerprint ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT topostext_intake_mentions_sequence_check CHECK ((mention_sequence > 0))
+);
+
+
+--
+-- Name: topostext_intake_mentions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.topostext_intake_mentions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: topostext_intake_mentions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.topostext_intake_mentions_id_seq OWNED BY public.topostext_intake_mentions.id;
+
+
+--
 -- Name: translation_guidance_action_import_map; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2151,19 +2254,19 @@ CREATE TABLE public.translation_guidance_rules (
     updated_by text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    introduced_at timestamp with time zone DEFAULT now() NOT NULL,
-    introduced_at_basis text DEFAULT 'actual'::text NOT NULL,
-    introduced_at_notes text,
     retired_at timestamp with time zone,
     semantic_domain text,
     lifecycle_stage text DEFAULT 'guidance'::text NOT NULL,
     context_condition text,
     bias_strength text DEFAULT 'normal'::text NOT NULL,
+    introduced_at timestamp with time zone DEFAULT now() NOT NULL,
+    introduced_at_basis text DEFAULT 'actual'::text NOT NULL,
+    introduced_at_notes text,
     CONSTRAINT translation_guidance_rules_application_mode_check CHECK ((application_mode = ANY (ARRAY['replace'::text, 'required'::text, 'advisory'::text]))),
     CONSTRAINT translation_guidance_rules_bias_strength_check CHECK ((bias_strength = ANY (ARRAY['weak'::text, 'normal'::text, 'strong'::text]))),
+    CONSTRAINT translation_guidance_rules_introduced_at_basis_check CHECK ((introduced_at_basis = ANY (ARRAY['actual'::text, 'estimated'::text, 'unknown'::text]))),
     CONSTRAINT translation_guidance_rules_kind_check CHECK ((kind = ANY (ARRAY['gloss'::text, 'formula'::text, 'proper_noun'::text, 'contextual_bias'::text]))),
     CONSTRAINT translation_guidance_rules_lifecycle_stage_check CHECK ((lifecycle_stage = ANY (ARRAY['investigate'::text, 'recognizer'::text, 'guidance'::text, 'inactive'::text]))),
-    CONSTRAINT translation_guidance_rules_introduced_at_basis_check CHECK ((introduced_at_basis = ANY (ARRAY['actual'::text, 'estimated'::text, 'unknown'::text]))),
     CONSTRAINT translation_guidance_rules_status_check CHECK ((status = ANY (ARRAY['in_progress'::text, 'settled'::text, 'unsure'::text, 'retired'::text])))
 );
 
@@ -2826,6 +2929,20 @@ ALTER TABLE ONLY public.text_pair_differences ALTER COLUMN id SET DEFAULT nextva
 
 
 --
+-- Name: topostext_intake_entries id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entries ALTER COLUMN id SET DEFAULT nextval('public.topostext_intake_entries_id_seq'::regclass);
+
+
+--
+-- Name: topostext_intake_mentions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mentions ALTER COLUMN id SET DEFAULT nextval('public.topostext_intake_mentions_id_seq'::regclass);
+
+
+--
 -- Name: translation_guidance_backlog_items id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -3346,6 +3463,46 @@ ALTER TABLE ONLY public.source_quote_passages
 
 ALTER TABLE ONLY public.text_pair_differences
     ADD CONSTRAINT text_pair_differences_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: topostext_intake_entries topostext_intake_entries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entries
+    ADD CONSTRAINT topostext_intake_entries_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: topostext_intake_entries topostext_intake_entries_snapshot_entry_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entries
+    ADD CONSTRAINT topostext_intake_entries_snapshot_entry_key UNIQUE (snapshot_id, entry_key);
+
+
+--
+-- Name: topostext_intake_entries topostext_intake_entries_snapshot_sequence_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entries
+    ADD CONSTRAINT topostext_intake_entries_snapshot_sequence_key UNIQUE (snapshot_id, entry_sequence);
+
+
+--
+-- Name: topostext_intake_mentions topostext_intake_mentions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mentions
+    ADD CONSTRAINT topostext_intake_mentions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: topostext_intake_mentions topostext_intake_mentions_snapshot_sequence_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mentions
+    ADD CONSTRAINT topostext_intake_mentions_snapshot_sequence_key UNIQUE (snapshot_id, mention_sequence);
 
 
 --
@@ -4113,6 +4270,55 @@ CREATE UNIQUE INDEX text_pair_differences_pair_unique_idx ON public.text_pair_di
 
 
 --
+-- Name: topostext_intake_entries_snapshot_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_entries_snapshot_idx ON public.topostext_intake_entries USING btree (snapshot_id, entry_key);
+
+
+--
+-- Name: topostext_intake_entries_text_sha_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_entries_text_sha_idx ON public.topostext_intake_entries USING btree (snapshot_id, text_sha256);
+
+
+--
+-- Name: topostext_intake_mentions_action_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_mentions_action_idx ON public.topostext_intake_mentions USING btree (snapshot_id, action_status);
+
+
+--
+-- Name: topostext_intake_mentions_authority_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_mentions_authority_idx ON public.topostext_intake_mentions USING btree (authority_namespace, authority_id) WHERE ((authority_namespace <> ''::text) AND (authority_id <> ''::text));
+
+
+--
+-- Name: topostext_intake_mentions_fingerprint_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_mentions_fingerprint_idx ON public.topostext_intake_mentions USING btree (snapshot_id, mention_fingerprint);
+
+
+--
+-- Name: topostext_intake_mentions_re_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_mentions_re_idx ON public.topostext_intake_mentions USING btree (re_namespace_id) WHERE (re_namespace_id <> ''::text);
+
+
+--
+-- Name: topostext_intake_mentions_snapshot_entry_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_mentions_snapshot_entry_idx ON public.topostext_intake_mentions USING btree (snapshot_id, entry_key, entry_mention_sequence);
+
+
+--
 -- Name: translation_guidance_backlog_items_active_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4814,6 +5020,30 @@ ALTER TABLE ONLY public.text_pair_differences
 
 
 --
+-- Name: topostext_intake_entries topostext_intake_entries_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entries
+    ADD CONSTRAINT topostext_intake_entries_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.entity_source_snapshots(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_mentions topostext_intake_mentions_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mentions
+    ADD CONSTRAINT topostext_intake_mentions_entry_id_fkey FOREIGN KEY (entry_id) REFERENCES public.topostext_intake_entries(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_mentions topostext_intake_mentions_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mentions
+    ADD CONSTRAINT topostext_intake_mentions_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.entity_source_snapshots(id) ON DELETE CASCADE;
+
+
+--
 -- Name: translation_guidance_backlog_items translation_guidance_backlog_items_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5057,4 +5287,5 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict dUcAMDta8HkGWWCGvrTHzd67zyYTL5oHICXEg9fFXhcuoeQOIWkV9jonKTdPFiD
+\unrestrict uUrtYMLj0qkdzPehxwFn8i94slqeNUGX1BoQswH2pOFvldH7m1IWdCR1JZHrKuX
+
