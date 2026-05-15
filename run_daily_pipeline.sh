@@ -177,6 +177,14 @@ echo "Step 1: Skipping Billerbeck EPUB ingestion (OCR corpus complete)." | tee -
 # Step 2: Retire finished Billerbeck image extraction steps
 echo "Step 2: Skipping Billerbeck image extraction (OCR corpus complete)." | tee -a "$LOGFILE"
 
+# Step 2a: Fetch Brady's current ToposText HTML snapshot
+TOPOSTEXT_HTML_FETCH="${TOPOSTEXT_HTML_FETCH:-1}"
+if [ "$TOPOSTEXT_HTML_FETCH" -gt 0 ]; then
+    echo "Step 2a: Fetching ToposText HTML snapshot..." | tee -a "$LOGFILE"
+    uv run fetch_topostext_html.py --output-dir data/topostext_snapshots \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: ToposText HTML fetch failed" | tee -a "$LOGFILE"
+fi
+
 # Step 2b: Queue missing Meineke page scans based on headword hole detection
 echo "Step 2b: Queueing missing Meineke hole pages..." | tee -a "$LOGFILE"
 uv run enqueue_meineke_holes.py --image-dir pdf_pages_meineke 2>&1 | tee -a "$LOGFILE"
@@ -589,6 +597,24 @@ echo "Step 8b: Exporting lemma data for review interface..." | tee -a "$LOGFILE"
 uv run export_for_review.py 2>&1 | tee -a "$LOGFILE"
 uv run export_guidance_scan_db.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 8c: Generate ToposText intake report for Brady review
+TOPOSTEXT_INTAKE_REPORT="${TOPOSTEXT_INTAKE_REPORT:-1}"
+TOPOSTEXT_PAULY_WORKBOOK="${TOPOSTEXT_PAULY_WORKBOOK:-data/pauly/PaulyHeadwordstoWikidata from Margherita scrape.xlsx}"
+if [ "$TOPOSTEXT_INTAKE_REPORT" -gt 0 ]; then
+    echo "Step 8c: Generating ToposText intake report..." | tee -a "$LOGFILE"
+    topostext_report_args=(
+        uv run generate_topostext_intake_report.py
+        --output exports/topostext_intake_report.html
+        --summary-json exports/topostext_intake_report_summary.json
+    )
+    if [ -f "$TOPOSTEXT_PAULY_WORKBOOK" ]; then
+        topostext_report_args+=(--pauly-workbook "$TOPOSTEXT_PAULY_WORKBOOK")
+    else
+        echo "  Warning: PaulyHeadwords workbook not found at $TOPOSTEXT_PAULY_WORKBOOK; generating without RE enrichment" | tee -a "$LOGFILE"
+    fi
+    "${topostext_report_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: ToposText intake report generation failed" | tee -a "$LOGFILE"
+fi
+
 # Step 9: Deploy to merah
 echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
 # Deploy reference_site/ (contains statistics.html, statistics/, statistics_images/, people.html, and all lemma pages)
@@ -601,6 +627,16 @@ rsync -az exports/proper_nouns.csv stephanos@merah.cassia.ifost.org.au:/var/www/
 rsync -az exports/etymologies.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 rsync -az exports/source_citation_units.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 rsync -az exports/source_citation_mentions.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+# Deploy ToposText intake report outputs when generated
+for topostext_export in \
+    exports/topostext_intake_report.html \
+    exports/topostext_intake_report_mentions.csv \
+    exports/topostext_intake_report_re_namespace.csv \
+    exports/topostext_intake_report_summary.json; do
+    if [ -f "$topostext_export" ]; then
+        rsync -az "$topostext_export" stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+    fi
+done
 # Deploy nodegoat exports
 rsync -az exports/nodegoat/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/nodegoat/ 2>&1 | tee -a "$LOGFILE"
 # Deploy review data JSON

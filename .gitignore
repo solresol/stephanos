@@ -15,6 +15,7 @@ review_data/
 review_data.json
 guidance_scan_results.db
 data/topostext_snapshots/
+data/pauly/
 .secrets/
 tmp/
 output/

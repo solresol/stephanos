@@ -5,6 +5,7 @@ from generate_topostext_intake_report import (
     authority_url,
     classify_authority_id,
     parse_topostext_html,
+    re_lookup_keys,
 )
 
 
@@ -19,6 +20,7 @@ SAMPLE_HTML = """<html><body>
   <place id="RE:Aba1">Aba</place>
 </p>
 <p work="241" id="A2.1"><PPN id="Q4427729">Solymoi</PPN></p>
+<p work="241" id="A3.1"><demonymn id="Q1">wrong tag</demonymn></p>
 </body></html>"""
 
 
@@ -53,10 +55,10 @@ class ToposTextIntakeReportTests(unittest.TestCase):
     def test_parse_topostext_html_extracts_mentions_and_unknown_tags(self):
         parsed = parse_topostext_html(SAMPLE_HTML)
 
-        self.assertEqual(len(parsed.entries), 2)
+        self.assertEqual(len(parsed.entries), 3)
         self.assertEqual(parsed.entries[0].entry_key, "241:A1.1")
         self.assertEqual(parsed.entries[0].title, "Abai")
-        self.assertEqual(len(parsed.mentions), 8)
+        self.assertEqual(len(parsed.mentions), 9)
 
         classes = [mention.authority_class for mention in parsed.mentions]
         self.assertIn("topostext_like", classes)
@@ -66,9 +68,19 @@ class ToposTextIntakeReportTests(unittest.TestCase):
         self.assertIn("jj_placeholder", classes)
         self.assertIn("re", classes)
 
-        unknown_tags = [mention for mention in parsed.mentions if mention.tag_name == "ppn"]
-        self.assertEqual(len(unknown_tags), 1)
-        self.assertEqual(unknown_tags[0].authority_class, "wikidata")
+        ppn_mentions = [mention for mention in parsed.mentions if mention.original_tag_name == "ppn"]
+        self.assertEqual(len(ppn_mentions), 1)
+        self.assertEqual(ppn_mentions[0].tag_name, "prn")
+        self.assertEqual(ppn_mentions[0].authority_class, "wikidata")
+
+        demonymn_mentions = [mention for mention in parsed.mentions if mention.original_tag_name == "demonymn"]
+        self.assertEqual(len(demonymn_mentions), 1)
+        self.assertEqual(demonymn_mentions[0].tag_name, "demonym")
+
+    def test_re_lookup_keys_normalize_common_variants(self):
+        self.assertIn("RE:Aba_1", re_lookup_keys("RE:Aba1"))
+        self.assertIn("RE:Athyras_2", re_lookup_keys("RE:Athyras_2#II,2"))
+        self.assertIn("RE:Alimala_(?)", re_lookup_keys("RE:Alimala_(%3F)"))
 
 
 if __name__ == "__main__":

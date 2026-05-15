@@ -18,18 +18,23 @@ import json
 import re
 import sys
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from bs4 import BeautifulSoup, Tag
 
 
 DEFAULT_SOURCE_NAME = "topostext_stephanus_html"
 DEFAULT_OUTPUT = Path("exports/topostext_intake_report.html")
+DEFAULT_PAULY_WORKBOOK_NAME = "PaulyHeadwordstoWikidata from Margherita scrape.xlsx"
 KNOWN_ENTITY_TAGS = {"prn", "place", "person", "ethnic", "demonym", "patnym"}
+SOURCE_TAG_FIXES = {
+    "ppn": "prn",
+    "demonymn": "demonym",
+}
 
 QID_RE = re.compile(r"^Q\d+$", re.IGNORECASE)
 PLEIADES_RE = re.compile(r"^p?(\d+)$", re.IGNORECASE)
@@ -39,13 +44,14 @@ LOCAL_BRADY_RE = re.compile(r"^JBK\d+$", re.IGNORECASE)
 PARAGRAPH_START_RE = re.compile(r"<p\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
 ATTR_RE = re.compile(r"([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(['\"])(.*?)\2", re.DOTALL)
 OPEN_TAG_RE = re.compile(r"<(?P<tag>[A-Za-z][A-Za-z0-9]*)\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
+NULL_CELL_VALUES = {"", "#n/a", "n/a", "none", "null", "nan"}
 
 
 AUTHORITY_CLASS_LABELS = {
     "wikidata": "Wikidata QID",
     "pleiades_numeric": "numeric/Pleiades-like",
     "topostext_like": "ToposText-like",
-    "re": "RE reference",
+    "re": "RE namespace",
     "yy_placeholder": "YY placeholder",
     "jj_placeholder": "JJ placeholder",
     "zzz": "zzz unresolved",
@@ -59,14 +65,29 @@ AUTHORITY_CLASS_NOTES = {
     "wikidata": "Q-prefixed Wikidata authority IDs.",
     "pleiades_numeric": "Bare numeric IDs; existing Brady import code treats these as Pleiades-style candidates.",
     "topostext_like": "Mixed numeric/alphabetic IDs already linked elsewhere in this repo as ToposText place IDs.",
-    "re": "RE-prefixed references, linked using the existing German Wikisource convention.",
-    "yy_placeholder": "Suffix placeholder, probably pending a search or authority decision.",
-    "jj_placeholder": "Suffix placeholder, probably searched with no good authority ID found.",
+    "re": "RE-prefixed identifiers; Brady confirmed these should be their own authority namespace.",
+    "yy_placeholder": "Brady did a quick pattern search for a ToposText ID, but did not search Wikidata, RE, or Pleiades by hand.",
+    "jj_placeholder": "Brady searched and found nothing; create a fresh ToposText-style ID from the best guess of what and where it is.",
     "zzz": "Unresolved inline placeholder, mostly on PRN mentions in the current snapshot.",
     "brady_local": "Local/person-specific identifier seen in the introductory matter.",
     "missing": "Tag has no usable id attribute.",
     "other": "Non-empty ID that does not match the current guessed patterns.",
 }
+
+
+@dataclass(frozen=True)
+class ReEnrichment:
+    re_id: str
+    short_definition: str = ""
+    article_item: str = ""
+    subject_item: str = ""
+    subject_label: str = ""
+    wikipedia: str = ""
+    title_redirect: str = ""
+    volume: str = ""
+    page: str = ""
+    author: str = ""
+    match_source: str = ""
 
 
 @dataclass(frozen=True)
@@ -106,11 +127,21 @@ class Mention:
     wdate: str
     edate: str
     tag_name: str
+    original_tag_name: str
     tag_id: str
     authority_class: str
     mention_text: str
     authority_url: str
     context: str
+    re_namespace_id: str = ""
+    re_short_definition: str = ""
+    re_article_item: str = ""
+    re_subject_item: str = ""
+    re_subject_label: str = ""
+    re_author: str = ""
+    re_volume: str = ""
+    re_page: str = ""
+    re_match_source: str = ""
 
 
 @dataclass(frozen=True)
@@ -123,8 +154,18 @@ def normalize_space(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
 
 
+def clean_cell(value: object) -> str:
+    text = normalize_space(value)
+    return "" if text.casefold() in NULL_CELL_VALUES else text
+
+
+def canonical_tag_name(raw_tag_name: str) -> str:
+    tag_name = normalize_space(raw_tag_name).casefold()
+    return SOURCE_TAG_FIXES.get(tag_name, tag_name)
+
+
 def classify_authority_id(raw_value: str) -> str:
-    value = normalize_space(raw_value)
+    value = clean_cell(raw_value)
     if not value:
         return "missing"
     upper_value = value.upper()
@@ -162,6 +203,49 @@ def authority_url(authority_class: str, raw_value: str) -> str:
     if authority_class == "re":
         return f"https://de.wikisource.org/wiki/{quote(value, safe=':/#(),%')}"
     return ""
+
+
+def normalize_wikidata_url(raw_value: object) -> str:
+    value = normalize_space(raw_value)
+    if not value:
+        return ""
+    match = re.search(r"\bQ\d+\b", value, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    return f"https://www.wikidata.org/wiki/{match.group(0).upper()}"
+
+
+def normalize_re_id(raw_value: str) -> str:
+    value = normalize_space(raw_value)
+    if not value:
+        return ""
+    if value.casefold().startswith("re:"):
+        body = value[3:]
+    else:
+        body = value
+    body = unquote(body).strip()
+    body = re.sub(r"\s+", "_", body)
+    return f"RE:{body}" if body else ""
+
+
+def re_lookup_keys(raw_value: str) -> list[str]:
+    normalized = normalize_re_id(raw_value)
+    if not normalized:
+        return []
+    body = normalized[3:]
+    bodies = {body}
+    if "#" in body:
+        bodies.add(body.split("#", 1)[0])
+    expanded = set(bodies)
+    for candidate in list(bodies):
+        if "#" in candidate:
+            continue
+        match = re.fullmatch(r"(.+?)(\d+[a-z]?)", candidate, flags=re.IGNORECASE)
+        if match and not match.group(1).endswith("_"):
+            expanded.add(f"{match.group(1)}_{match.group(2)}")
+        expanded.add(candidate.replace("_", " "))
+    keys = [f"RE:{candidate}" for candidate in expanded if candidate]
+    return sorted(set(keys), key=lambda item: (item != normalized, item))
 
 
 def derive_entry_title(paragraph: Tag, full_text: str) -> str:
@@ -217,19 +301,20 @@ def strip_markup(value: str) -> str:
     return normalize_space(BeautifulSoup(value or "", "html.parser").get_text(" ", strip=True))
 
 
-def raw_mention_parts(raw_paragraph: str) -> Iterable[tuple[str, str, str]]:
+def raw_mention_parts(raw_paragraph: str) -> Iterable[tuple[str, str, str, str]]:
     for match in OPEN_TAG_RE.finditer(raw_paragraph):
-        tag_name = normalize_space(match.group("tag")).casefold()
+        original_tag_name = normalize_space(match.group("tag")).casefold()
+        tag_name = canonical_tag_name(original_tag_name)
         if tag_name == "p":
             continue
         attrs = parse_attrs(match.group("attrs"))
         if tag_name not in KNOWN_ENTITY_TAGS and "id" not in attrs:
             continue
 
-        close_re = re.compile(rf"</\s*{re.escape(tag_name)}\s*>", re.IGNORECASE)
+        close_re = re.compile(rf"</\s*{re.escape(original_tag_name)}\s*>", re.IGNORECASE)
         close_match = close_re.search(raw_paragraph, match.end())
         inner_markup = raw_paragraph[match.end() : close_match.start()] if close_match else ""
-        yield tag_name, normalize_space(attrs.get("id")), strip_markup(inner_markup)
+        yield tag_name, original_tag_name, normalize_space(attrs.get("id")), strip_markup(inner_markup)
 
 
 def parse_topostext_html(content: str) -> ParsedToposText:
@@ -269,7 +354,7 @@ def parse_topostext_html(content: str) -> ParsedToposText:
         )
         entries.append(entry)
 
-        for tag_name, tag_id, mention_text in raw_mention_parts(raw_paragraph):
+        for tag_name, original_tag_name, tag_id, mention_text in raw_mention_parts(raw_paragraph):
             authority_class = classify_authority_id(tag_id)
             mentions.append(
                 Mention(
@@ -282,6 +367,7 @@ def parse_topostext_html(content: str) -> ParsedToposText:
                     wdate=wdate,
                     edate=edate,
                     tag_name=tag_name,
+                    original_tag_name=original_tag_name,
                     tag_id=tag_id,
                     authority_class=authority_class,
                     mention_text=mention_text,
@@ -378,6 +464,166 @@ def count_by_tag_and_class(mentions: Iterable[Mention]) -> dict[str, Counter[str
     return counts
 
 
+def default_pauly_workbook_candidates() -> list[Path]:
+    return [
+        Path("data/pauly") / DEFAULT_PAULY_WORKBOOK_NAME,
+        Path.home() / "Downloads" / DEFAULT_PAULY_WORKBOOK_NAME,
+    ]
+
+
+def find_default_pauly_workbook() -> Path | None:
+    for candidate in default_pauly_workbook_candidates():
+        candidate = candidate.expanduser()
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def update_re_enrichment(
+    table: dict[str, ReEnrichment],
+    raw_id: object,
+    *,
+    short_definition: object = "",
+    article_item: object = "",
+    subject_item: object = "",
+    subject_label: object = "",
+    wikipedia: object = "",
+    title_redirect: object = "",
+    volume: object = "",
+    page: object = "",
+    author: object = "",
+    match_source: str,
+) -> None:
+    keys = re_lookup_keys(normalize_space(raw_id))
+    if not keys:
+        return
+    re_id = keys[0]
+    current = table.get(re_id, ReEnrichment(re_id=re_id))
+    incoming = ReEnrichment(
+        re_id=current.re_id or re_id,
+        short_definition=clean_cell(short_definition) or current.short_definition,
+        article_item=normalize_wikidata_url(article_item) or current.article_item,
+        subject_item=normalize_wikidata_url(subject_item) or current.subject_item,
+        subject_label=clean_cell(subject_label) or current.subject_label,
+        wikipedia=clean_cell(wikipedia) or current.wikipedia,
+        title_redirect=clean_cell(title_redirect) or current.title_redirect,
+        volume=clean_cell(volume) or current.volume,
+        page=clean_cell(page) or current.page,
+        author=clean_cell(author) or current.author,
+        match_source=current.match_source or match_source,
+    )
+    for key in keys:
+        existing = table.get(key)
+        if existing is None:
+            table[key] = incoming
+        else:
+            table[key] = ReEnrichment(
+                re_id=existing.re_id or incoming.re_id,
+                short_definition=existing.short_definition or incoming.short_definition,
+                article_item=existing.article_item or incoming.article_item,
+                subject_item=existing.subject_item or incoming.subject_item,
+                subject_label=existing.subject_label or incoming.subject_label,
+                wikipedia=existing.wikipedia or incoming.wikipedia,
+                title_redirect=existing.title_redirect or incoming.title_redirect,
+                volume=existing.volume or incoming.volume,
+                page=existing.page or incoming.page,
+                author=existing.author or incoming.author,
+                match_source=existing.match_source or incoming.match_source,
+            )
+
+
+def row_dict(headers: list[str], row: tuple[object, ...]) -> dict[str, object]:
+    return {headers[index]: value for index, value in enumerate(row) if index < len(headers)}
+
+
+def load_pauly_re_enrichment(path: Path) -> dict[str, ReEnrichment]:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path.expanduser(), read_only=True, data_only=True)
+    table: dict[str, ReEnrichment] = {}
+
+    if "scrape_re_wikipedia_wikidata_li" in workbook.sheetnames:
+        sheet = workbook["scrape_re_wikipedia_wikidata_li"]
+        headers = [normalize_space(cell) for cell in next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))]
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            data = row_dict(headers, row)
+            subject_item = data.get("wikidata subject item") or data.get("StatementSubject of")
+            update_re_enrichment(
+                table,
+                data.get("RE_Title"),
+                short_definition=data.get("ShortDefinition"),
+                article_item=data.get("RE_ArticleItem"),
+                subject_item=subject_item,
+                wikipedia=data.get("wikipedia"),
+                title_redirect=data.get("title_redirect"),
+                match_source="scrape_re_wikipedia_wikidata_li",
+            )
+
+    if "REdefinitions_author_vol" in workbook.sheetnames:
+        sheet = workbook["REdefinitions_author_vol"]
+        headers = [normalize_space(cell) for cell in next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))]
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            data = row_dict(headers, row)
+            update_re_enrichment(
+                table,
+                data.get("formal"),
+                short_definition=data.get("definition"),
+                volume=data.get("Volume"),
+                page=data.get("page"),
+                author=data.get("author"),
+                match_source="REdefinitions_author_vol",
+            )
+
+    if "RE cited by headword not WD" in workbook.sheetnames:
+        sheet = workbook["RE cited by headword not WD"]
+        headers = [normalize_space(cell) for cell in next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))]
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            data = row_dict(headers, row)
+            update_re_enrichment(
+                table,
+                data.get("REHeadword"),
+                subject_item=data.get("WD_ID") or data.get("item"),
+                subject_label=data.get("itemLabel"),
+                match_source="RE cited by headword not WD",
+            )
+
+    workbook.close()
+    return table
+
+
+def enrich_re_mentions(parsed: ParsedToposText, re_lookup: dict[str, ReEnrichment]) -> ParsedToposText:
+    if not re_lookup:
+        return parsed
+    mentions: list[Mention] = []
+    for mention in parsed.mentions:
+        if mention.authority_class != "re":
+            mentions.append(mention)
+            continue
+        enrichment = None
+        for key in re_lookup_keys(mention.tag_id):
+            enrichment = re_lookup.get(key)
+            if enrichment:
+                break
+        if enrichment is None:
+            mentions.append(replace(mention, re_namespace_id=normalize_re_id(mention.tag_id)))
+            continue
+        mentions.append(
+            replace(
+                mention,
+                re_namespace_id=enrichment.re_id,
+                re_short_definition=enrichment.short_definition,
+                re_article_item=enrichment.article_item,
+                re_subject_item=enrichment.subject_item,
+                re_subject_label=enrichment.subject_label,
+                re_author=enrichment.author,
+                re_volume=enrichment.volume,
+                re_page=enrichment.page,
+                re_match_source=enrichment.match_source,
+            )
+        )
+    return ParsedToposText(entries=parsed.entries, mentions=mentions)
+
+
 def top_entries_by_unresolved(parsed: ParsedToposText, limit: int) -> list[dict[str, object]]:
     entry_lookup = {entry.sequence: entry for entry in parsed.entries}
     unresolved_classes = {"zzz", "yy_placeholder", "jj_placeholder", "missing", "other"}
@@ -430,6 +676,57 @@ def top_surface_forms(mentions: Iterable[Mention], authority_class: str, limit: 
             }
         )
     return rows
+
+
+def build_re_namespace_rows(mentions: Iterable[Mention]) -> list[dict[str, object]]:
+    grouped: dict[str, dict[str, object]] = {}
+    original_ids: dict[str, set[str]] = defaultdict(set)
+    counts: Counter[str] = Counter()
+    for mention in mentions:
+        if mention.authority_class != "re":
+            continue
+        re_id = mention.re_namespace_id or normalize_re_id(mention.tag_id)
+        counts[re_id] += 1
+        original_ids[re_id].add(mention.tag_id)
+        grouped.setdefault(
+            re_id,
+            {
+                "re_namespace_id": re_id,
+                "count": 0,
+                "original_ids": "",
+                "short_definition": mention.re_short_definition,
+                "re_article_item": mention.re_article_item,
+                "subject_item": mention.re_subject_item,
+                "subject_label": mention.re_subject_label,
+                "author": mention.re_author,
+                "volume": mention.re_volume,
+                "page": mention.re_page,
+                "match_source": mention.re_match_source,
+                "first_entry": mention.entry_key,
+                "first_text": mention.mention_text,
+                "first_context": mention.context,
+            },
+        )
+        row = grouped[re_id]
+        for key, value in {
+            "short_definition": mention.re_short_definition,
+            "re_article_item": mention.re_article_item,
+            "subject_item": mention.re_subject_item,
+            "subject_label": mention.re_subject_label,
+            "author": mention.re_author,
+            "volume": mention.re_volume,
+            "page": mention.re_page,
+            "match_source": mention.re_match_source,
+        }.items():
+            if value and not row.get(key):
+                row[key] = value
+
+    rows = []
+    for re_id, row in grouped.items():
+        row["count"] = counts[re_id]
+        row["original_ids"] = "; ".join(sorted(original_ids[re_id]))
+        rows.append(row)
+    return sorted(rows, key=lambda row: (-int(row["count"]), str(row["re_namespace_id"])))
 
 
 def example_mentions(
@@ -511,6 +808,8 @@ def build_report_html(
     parsed: ParsedToposText,
     output_path: Path,
     mentions_csv_path: Path | None,
+    re_namespace_csv_path: Path | None,
+    pauly_workbook_path: Path | None,
     example_limit: int,
     top_limit: int,
 ) -> str:
@@ -521,7 +820,16 @@ def build_report_html(
     unknown_tag_counts = Counter(
         mention.tag_name for mention in parsed.mentions if mention.tag_name not in KNOWN_ENTITY_TAGS
     )
+    tag_fix_counts = Counter(
+        (mention.original_tag_name, mention.tag_name)
+        for mention in parsed.mentions
+        if mention.original_tag_name and mention.original_tag_name != mention.tag_name
+    )
     by_tag_class = count_by_tag_and_class(parsed.mentions)
+    re_namespace_rows = build_re_namespace_rows(parsed.mentions)
+    re_distinct_count = len(re_namespace_rows)
+    re_definition_count = sum(1 for row in re_namespace_rows if row.get("short_definition"))
+    re_subject_count = sum(1 for row in re_namespace_rows if row.get("subject_item"))
 
     summary_cards = [
         ("Paragraphs", f"{len(parsed.entries):,}"),
@@ -531,6 +839,7 @@ def build_report_html(
         ("YY placeholders", f"{class_counts['yy_placeholder']:,}"),
         ("JJ placeholders", f"{class_counts['jj_placeholder']:,}"),
         ("RE references", f"{class_counts['re']:,}"),
+        ("RE IDs matched", f"{re_definition_count:,}/{re_distinct_count:,}"),
         ("ToposText-like IDs", f"{class_counts['topostext_like']:,}"),
     ]
 
@@ -568,6 +877,7 @@ def build_report_html(
 
     work_rows = [[work, count] for work, count in work_counts.most_common()]
     unknown_tag_rows = [[tag, count] for tag, count in unknown_tag_counts.most_common()]
+    tag_fix_rows = [[source, target, count] for (source, target), count in sorted(tag_fix_counts.items())]
 
     generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     css = """
@@ -671,6 +981,22 @@ def build_report_html(
             f"<p>Complete mention CSV: <code>{render_cell(str(mentions_csv_path))}</code> "
             f"(<a href=\"{render_cell(relative_csv)}\">open CSV next to this report</a>).</p>"
         )
+    if re_namespace_csv_path:
+        relative_re_csv = (
+            re_namespace_csv_path.name
+            if re_namespace_csv_path.parent == output_path.parent
+            else str(re_namespace_csv_path)
+        )
+        csv_html += (
+            f"<p>RE namespace CSV: <code>{render_cell(str(re_namespace_csv_path))}</code> "
+            f"(<a href=\"{render_cell(relative_re_csv)}\">open RE namespace CSV next to this report</a>).</p>"
+        )
+
+    pauly_note = (
+        f"PaulyHeadwords enrichment workbook: <code>{render_cell(pauly_workbook_path.name)}</code>."
+        if pauly_workbook_path
+        else "No PaulyHeadwords workbook was loaded; RE namespace rows are still listed, but German definitions and subject Wikidata enrichment are blank."
+    )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -702,10 +1028,12 @@ def build_report_html(
     <h2>Current Working Assumptions</h2>
     <ul>
       <li><code>work=241</code> and paragraph <code>id</code> are treated as stable source coordinates for this import slice.</li>
-      <li><code>Q...</code> is Wikidata; bare numeric IDs are treated as Pleiades-like candidates; <code>RE:...</code> is an RE reference.</li>
+      <li><code>Q...</code> is Wikidata; bare numeric IDs are treated as Pleiades-like candidates; <code>RE:...</code> is its own authority namespace.</li>
       <li>Mixed numeric/alphabetic IDs such as <code>386229PAba</code> are treated as ToposText-like keys and linked using the repo's existing <code>https://topostext.org/place/{{id}}</code> convention.</li>
-      <li>IDs ending <code>YY</code> or <code>JJ</code> are reported as placeholder decisions. The exact semantics still need Brady's confirmation.</li>
+      <li><code>YY</code> means Brady did a quick pattern search for a ToposText ID, but did not manually search Wikidata, RE, or Pleiades.</li>
+      <li><code>JJ</code> means Brady searched and found nothing; we need to mint a fresh ToposText-style ID from the best guess of what and where it is.</li>
       <li><code>zzz</code> is reported as unresolved inline markup, not as a real authority identifier.</li>
+      <li>Source tag typos are normalized on intake: <code>PPN</code> becomes <code>PRN</code>, and <code>demonymn</code> becomes <code>demonym</code>.</li>
     </ul>
   </section>
 
@@ -719,8 +1047,16 @@ def build_report_html(
   {render_count_table(["class", "mentions", "current interpretation"], class_rows)}
 
   <h2>Tag Variants To Check</h2>
-  <p>Anything here has an <code>id</code> attribute but is not one of the expected entity tags: {render_cell(", ".join(sorted(KNOWN_ENTITY_TAGS)))}.</p>
+  <h3>Source Tag Typos Normalized</h3>
+  {render_count_table(["source tag", "canonical tag", "mentions"], tag_fix_rows) if tag_fix_rows else '<p class="empty">No known source tag typos found.</p>'}
+  <h3>Unknown ID-Bearing Tags</h3>
+  <p>Anything here has an <code>id</code> attribute but is not one of the expected canonical entity tags: {render_cell(", ".join(sorted(KNOWN_ENTITY_TAGS)))}.</p>
   {render_count_table(["tag", "mentions"], unknown_tag_rows) if unknown_tag_rows else '<p class="empty">No unknown id-bearing entity tag names found.</p>'}
+
+  <h2>RE Namespace Enrichment</h2>
+  <p>{pauly_note}</p>
+  {render_count_table(["metric", "count"], [["RE mentions", class_counts["re"]], ["distinct RE namespace IDs", re_distinct_count], ["IDs with German short definition", re_definition_count], ["IDs with subject Wikidata item", re_subject_count], ["IDs without matched definition", re_distinct_count - re_definition_count]])}
+  {render_dict_table(["RE namespace ID", "mentions", "original IDs", "German short definition", "subject Wikidata item", "article item", "first entry"], re_namespace_rows[:top_limit], ["re_namespace_id", "count", "original_ids", "short_definition", "subject_item", "re_article_item", "first_entry"])}
 
   <h2>Review Queues</h2>
   <h3>YY / JJ Placeholder Examples</h3>
@@ -765,11 +1101,21 @@ def write_mentions_csv(path: Path, mentions: list[Mention]) -> None:
         "wdate",
         "edate",
         "tag_name",
+        "original_tag_name",
         "tag_id",
         "authority_class",
         "mention_text",
         "authority_url",
         "context",
+        "re_namespace_id",
+        "re_short_definition",
+        "re_article_item",
+        "re_subject_item",
+        "re_subject_label",
+        "re_author",
+        "re_volume",
+        "re_page",
+        "re_match_source",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -779,8 +1125,34 @@ def write_mentions_csv(path: Path, mentions: list[Mention]) -> None:
             writer.writerow(row)
 
 
+def write_re_namespace_csv(path: Path, mentions: list[Mention]) -> None:
+    rows = build_re_namespace_rows(mentions)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "re_namespace_id",
+        "count",
+        "original_ids",
+        "short_definition",
+        "re_article_item",
+        "subject_item",
+        "subject_label",
+        "author",
+        "volume",
+        "page",
+        "match_source",
+        "first_entry",
+        "first_text",
+        "first_context",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def write_summary_json(path: Path, metadata: SnapshotMetadata, parsed: ParsedToposText) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    re_namespace_rows = build_re_namespace_rows(parsed.mentions)
     payload = {
         "metadata": asdict(metadata),
         "counts": {
@@ -789,6 +1161,14 @@ def write_summary_json(path: Path, metadata: SnapshotMetadata, parsed: ParsedTop
             "by_tag": Counter(mention.tag_name for mention in parsed.mentions),
             "by_authority_class": Counter(mention.authority_class for mention in parsed.mentions),
             "by_work": Counter(entry.work or "(missing)" for entry in parsed.entries),
+            "re_namespace_ids": len(re_namespace_rows),
+            "re_namespace_ids_with_short_definition": sum(1 for row in re_namespace_rows if row.get("short_definition")),
+            "re_namespace_ids_with_subject_item": sum(1 for row in re_namespace_rows if row.get("subject_item")),
+            "source_tag_fixes": Counter(
+                f"{mention.original_tag_name}->{mention.tag_name}"
+                for mention in parsed.mentions
+                if mention.original_tag_name and mention.original_tag_name != mention.tag_name
+            ),
         },
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -805,8 +1185,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=Path,
         help="Complete mention CSV path. Defaults to <output stem>_mentions.csv",
     )
+    parser.add_argument(
+        "--re-namespace-csv",
+        type=Path,
+        help="Distinct RE namespace CSV path. Defaults to <output stem>_re_namespace.csv",
+    )
     parser.add_argument("--no-mentions-csv", action="store_true", help="Do not write the complete mention CSV")
+    parser.add_argument("--no-re-namespace-csv", action="store_true", help="Do not write the RE namespace CSV")
     parser.add_argument("--summary-json", type=Path, help="Optional machine-readable summary JSON path")
+    parser.add_argument("--pauly-workbook", type=Path, help="PaulyHeadwords workbook for RE enrichment")
+    parser.add_argument("--no-pauly-enrichment", action="store_true", help="Skip PaulyHeadwords workbook lookup")
     parser.add_argument("--example-limit", type=int, default=40)
     parser.add_argument("--top-limit", type=int, default=30)
     return parser.parse_args(argv)
@@ -826,6 +1214,17 @@ def main(argv: list[str] | None = None) -> int:
     content = snapshot_path.read_text(encoding="utf-8")
     parsed = parse_topostext_html(content)
 
+    pauly_workbook_path = None
+    if not args.no_pauly_enrichment:
+        if args.pauly_workbook:
+            pauly_workbook_path = args.pauly_workbook.expanduser()
+            if not pauly_workbook_path.exists():
+                raise FileNotFoundError(f"Pauly workbook not found: {pauly_workbook_path}")
+        else:
+            pauly_workbook_path = find_default_pauly_workbook()
+        if pauly_workbook_path:
+            parsed = enrich_re_mentions(parsed, load_pauly_re_enrichment(pauly_workbook_path))
+
     mentions_csv_path = None
     if not args.no_mentions_csv:
         mentions_csv_path = (
@@ -835,12 +1234,23 @@ def main(argv: list[str] | None = None) -> int:
         )
         write_mentions_csv(mentions_csv_path, parsed.mentions)
 
+    re_namespace_csv_path = None
+    if not args.no_re_namespace_csv:
+        re_namespace_csv_path = (
+            args.re_namespace_csv.expanduser()
+            if args.re_namespace_csv
+            else args.output.with_name(f"{args.output.stem}_re_namespace.csv")
+        )
+        write_re_namespace_csv(re_namespace_csv_path, parsed.mentions)
+
     report_html = build_report_html(
         metadata=metadata,
         snapshot_path=snapshot_path,
         parsed=parsed,
         output_path=args.output,
         mentions_csv_path=mentions_csv_path,
+        re_namespace_csv_path=re_namespace_csv_path,
+        pauly_workbook_path=pauly_workbook_path,
         example_limit=args.example_limit,
         top_limit=args.top_limit,
     )
@@ -855,6 +1265,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"report={args.output}")
     if mentions_csv_path:
         print(f"mentions_csv={mentions_csv_path}")
+    if re_namespace_csv_path:
+        print(f"re_namespace_csv={re_namespace_csv_path}")
+    if pauly_workbook_path:
+        print(f"pauly_workbook={pauly_workbook_path}")
     if args.summary_json:
         print(f"summary_json={args.summary_json}")
     return 0

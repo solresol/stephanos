@@ -119,10 +119,13 @@ Generate a read-only intake report from the latest fetched snapshot:
 DB_HOST=raksasa DB_USER=stephanos \
 uv run generate_topostext_intake_report.py \
   --output exports/topostext_intake_report.html \
+  --pauly-workbook ~/Downloads/PaulyHeadwordstoWikidata\ from\ Margherita\ scrape.xlsx \
   --summary-json exports/topostext_intake_report_summary.json
 ```
 
-The report exposes paragraph counts, inline entity tag counts, `YY`/`JJ`/`zzz` placeholders, RE references, and a complete entity-mention CSV for external review. It does not import those rows into the entity-resolution tables.
+The report exposes paragraph counts, inline entity tag counts, `YY`/`JJ`/`zzz` placeholders, RE namespace rows, and a complete entity-mention CSV for external review. When the PaulyHeadwords workbook is available, RE rows are enriched with German short definitions, RE article Wikidata items, and subject Wikidata items. It does not import those rows into the entity-resolution tables.
+
+For the daily `raksasa` pipeline, keep the PaulyHeadwords workbook outside git at `data/pauly/PaulyHeadwordstoWikidata from Margherita scrape.xlsx` or set `TOPOSTEXT_PAULY_WORKBOOK=/path/to/workbook.xlsx`.
 
 ## Pipeline Architecture
 

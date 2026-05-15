@@ -22,4 +22,5 @@ dependencies = [
     "cartopy>=0.25.0",
     "umap-learn>=0.5.11",
     "rapidfuzz>=3.14.3",
+    "openpyxl>=3.1.5",
 ]
