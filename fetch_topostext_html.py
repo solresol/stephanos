@@ -255,6 +255,15 @@ def load_latest_snapshot(cur, source_name: str) -> LatestSnapshot | None:
     return LatestSnapshot(id=int(row[0]), sha256=str(row[1]), local_path=str(row[2] or ""))
 
 
+def snapshot_file_exists(local_path: str, *, base_dir: Path | None = None) -> bool:
+    if not local_path:
+        return False
+    path = Path(local_path).expanduser()
+    if not path.is_absolute():
+        path = (base_dir or Path.cwd()) / path
+    return path.exists()
+
+
 def insert_snapshot_row(
     cur,
     *,
@@ -447,7 +456,7 @@ def main(argv: list[str] | None = None) -> int:
             cur = conn.cursor()
             latest = load_latest_snapshot(cur, args.source_name)
 
-        if latest is not None and latest.sha256 == digest:
+        if latest is not None and latest.sha256 == digest and snapshot_file_exists(latest.local_path):
             snapshot_id = None
             if conn is not None:
                 snapshot_id = insert_snapshot_row(
@@ -476,6 +485,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
+        materialized_from_snapshot_id = latest.id if latest is not None and latest.sha256 == digest else None
         html_path = write_snapshot_files(
             output_dir=args.output_dir,
             expected_name=args.expected_name,
@@ -498,7 +508,7 @@ def main(argv: list[str] | None = None) -> int:
                 content_type=fetch_result.content_type,
                 byte_count=len(fetch_result.content),
                 digest=digest,
-                unchanged_from_snapshot_id=None,
+                unchanged_from_snapshot_id=materialized_from_snapshot_id,
                 metadata=metadata,
             )
             conn.commit()

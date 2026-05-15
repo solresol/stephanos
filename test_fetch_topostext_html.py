@@ -8,6 +8,7 @@ from fetch_topostext_html import (
     looks_like_dropbox_viewer,
     main,
     sha256_bytes,
+    snapshot_file_exists,
     validate_topostext_html,
 )
 
@@ -81,6 +82,16 @@ class FetchToposTextHtmlTests(unittest.TestCase):
             sha256_bytes(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         )
+
+    def test_snapshot_file_exists_resolves_relative_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            snapshot_path = temp_path / "snapshots" / "file.html"
+            snapshot_path.parent.mkdir()
+            snapshot_path.write_text("ok", encoding="utf-8")
+
+            self.assertTrue(snapshot_file_exists("snapshots/file.html", base_dir=temp_path))
+            self.assertFalse(snapshot_file_exists("missing/file.html", base_dir=temp_path))
 
 
 if __name__ == "__main__":
