@@ -114,6 +114,16 @@ uv run fetch_topostext_html.py --output-dir data/topostext_snapshots
 
 The Dropbox app key, app secret, refresh token, and shared link must live outside git under `~/.config/stephanos/`. Use `--dry-run` to validate the configured source without writing a snapshot or database row.
 
+Generate a read-only intake report from the latest fetched snapshot:
+```bash
+DB_HOST=raksasa DB_USER=stephanos \
+uv run generate_topostext_intake_report.py \
+  --output exports/topostext_intake_report.html \
+  --summary-json exports/topostext_intake_report_summary.json
+```
+
+The report exposes paragraph counts, inline entity tag counts, `YY`/`JJ`/`zzz` placeholders, RE references, and a complete entity-mention CSV for external review. It does not import those rows into the entity-resolution tables.
+
 ## Pipeline Architecture
 
 ### Data Model
