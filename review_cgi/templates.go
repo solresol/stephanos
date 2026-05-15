@@ -1013,15 +1013,15 @@ const translationReviewTemplate = `<!DOCTYPE html>
                 </div>
 
                 <div class="translation-panel">
-                    <div class="section-title">Latest AI Translation</div>
-                    <div class="helper-text" style="margin-bottom: 8px;">{{.LatestAITranslationLabel}}</div>
-                    <div class="translation-block commentary-source" data-commentary-source="translation" tabindex="0" title="Select text here to add commentary">{{.LatestAITranslation}}</div>
-                    {{if .LatestAIRequestUserPrompt}}
+                    <div class="section-title">Current English Translation</div>
+                    <div class="helper-text" style="margin-bottom: 8px;">{{.DisplayedTranslationLabel}}</div>
+                    <div class="translation-block commentary-source" data-commentary-source="translation" tabindex="0" title="Select text here to add commentary">{{.DisplayedTranslation}}</div>
+                    {{if .DisplayedTranslationUserPrompt}}
                     <details class="prompt-artifact-details">
                         <summary>Show user prompt</summary>
-                        <div class="prompt-artifact-text">{{formatPromptText .LatestAIRequestUserPrompt}}</div>
+                        <div class="prompt-artifact-text">{{formatPromptText .DisplayedTranslationUserPrompt}}</div>
                     </details>
-                    {{else if .LatestAITranslationRunID}}
+                    {{else if .DisplayedTranslationRunID}}
                     <div class="helper-text" style="margin-top: 10px;">No user prompt was recorded for this older AI run.</div>
                     {{end}}
                 </div>
@@ -1069,7 +1069,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
                 <input type="hidden" name="return_view" value="translation">
                 <input type="hidden" name="lemma_id" value="{{.Lemma.ID}}">
                 <input type="hidden" name="current_position" value="{{.Lemma.SortOrder}}">
-                <input type="hidden" id="ai_translation" value="{{.LatestAITranslation}}">
+                <input type="hidden" id="displayed_translation" value="{{.DisplayedTranslation}}">
                 <input type="hidden" name="variant_id" id="variant_id" value="">
                 <input type="hidden" name="source_text_version_id" id="source_text_version_id" value="">
                 <input type="hidden" id="canonical_kind" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "kind"}}{{end}}">
@@ -1179,7 +1179,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
                     <div class="form-group context-panel">
                         <label for="corrected_english">Initial Human Translation{{if .Review.CorrectedEnglishTranslation}} <span class="helper-text">last edited by {{if .Review.InitialTranslationBy}}{{.Review.InitialTranslationBy}}{{else}}{{.Review.ReviewerUsername}}{{end}}</span>{{end}}</label>
                         <div class="button-group" style="margin-bottom: 8px;">
-                            <button type="button" class="btn-subtle" onclick="copyAIToInitial()">Copy AI translation here</button>
+                            <button type="button" class="btn-subtle" onclick="copyDisplayedToInitial()">Copy current translation here</button>
                         </div>
                         <textarea name="corrected_english" id="corrected_english">{{.Review.CorrectedEnglishTranslation}}</textarea>
                     </div>
@@ -1313,7 +1313,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
 
         <div class="card">
             <div class="section-title">Phrase Commentary</div>
-            <div class="commentary-help">Select text in the working Greek or AI translation blocks above, then save a note for that phrase.</div>
+            <div class="commentary-help">Select text in the working Greek or English translation blocks above, then save a note for that phrase.</div>
             <div id="commentary_selection_status" class="commentary-selection-status">Highlight a phrase to start a commentary note.</div>
             <form method="POST" action="/cgi-bin/save.cgi" class="commentary-form" id="commentary_form">
                 <input type="hidden" name="form_mode" value="commentary">
@@ -1426,9 +1426,9 @@ const translationReviewTemplate = `<!DOCTYPE html>
             var initial = document.getElementById('corrected_english').value;
             document.getElementById('reviewed_english').value = initial;
         }
-        function copyAIToInitial() {
-            var ai = document.getElementById('ai_translation').value;
-            document.getElementById('corrected_english').value = ai;
+        function copyDisplayedToInitial() {
+            var displayed = document.getElementById('displayed_translation').value;
+            document.getElementById('corrected_english').value = displayed;
         }
         function setCommentaryStatus(message) {
             var status = document.getElementById('commentary_selection_status');

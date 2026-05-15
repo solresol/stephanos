@@ -26,7 +26,7 @@ class ReviewTemplateSplitTests(unittest.TestCase):
         self.assertIn("Stephanos Translation Review", template)
         self.assertIn("Meineke Scan", template)
         self.assertIn("Billerbeck Scan", template)
-        self.assertIn("Latest AI Translation", template)
+        self.assertIn("Current English Translation", template)
         self.assertIn("Initial Human Translation", template)
         self.assertIn("Reviewed English Translation", template)
         self.assertIn("Legacy Corrected Greek (archived)", template)

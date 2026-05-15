@@ -64,11 +64,11 @@ type PageData struct {
 	MeinekeStatusLabel              string
 	WorkingGreekLabel               string
 	WorkingGreekSourceTextVersionID string
-	LatestAITranslation             string
-	LatestAITranslationLabel        string
-	LatestAITranslationRunID        int
+	DisplayedTranslation            string
+	DisplayedTranslationLabel       string
+	DisplayedTranslationRunID       int
+	DisplayedTranslationUserPrompt  string
 	LatestAIRequestPayloadPretty    string
-	LatestAIRequestUserPrompt       string
 	EntityContextTranslation        string
 	EntityContextTranslationLabel   string
 	SourceLookupLinks               []SourceLookupLink
@@ -389,6 +389,75 @@ func chooseLatestAITranslation(lemma *Lemma) (string, string, int, string) {
 		return strings.TrimSpace(mapStringValue(legacyVariant, "text")), latestAILegacyLabel(legacyVariant), 0, ""
 	}
 	return "", "No stored AI translation available.", 0, ""
+}
+
+func findTranslationVariant(lemma *Lemma, kind string, id string) map[string]interface{} {
+	if lemma == nil {
+		return nil
+	}
+	kind = strings.TrimSpace(kind)
+	id = strings.TrimSpace(id)
+	if kind == "" || id == "" {
+		return nil
+	}
+	for _, variant := range lemma.TranslationVariants {
+		if mapStringValue(variant, "kind") == kind && mapStringValue(variant, "id") == id {
+			return variant
+		}
+	}
+	return nil
+}
+
+func variantRefLabel(kind string, id string) string {
+	kind = strings.TrimSpace(kind)
+	id = strings.TrimSpace(id)
+	if kind == "" {
+		return ""
+	}
+	if id == "" {
+		return "variant: " + kind
+	}
+	return "variant: " + kind + " " + id
+}
+
+func chooseDisplayedEnglishTranslation(lemma *Lemma) (string, string, int, string) {
+	if lemma == nil {
+		return "", "No stored English translation available.", 0, ""
+	}
+
+	selectedText := strings.TrimSpace(lemma.EnglishTranslation)
+	if selectedText == "" {
+		return chooseLatestAITranslation(lemma)
+	}
+
+	refKind := mapStringValue(lemma.CanonicalVariantRef, "kind")
+	refID := mapStringValue(lemma.CanonicalVariantRef, "id")
+	variant := findTranslationVariant(lemma, refKind, refID)
+	status := mapStringValue(variant, "status")
+	sourceDocument := mapStringValue(variant, "source_document")
+	statusLabel := ""
+	if status != "" {
+		statusLabel = "status: " + status
+	}
+	sourceLabel := ""
+	if sourceDocument != "" {
+		sourceLabel = "source: " + sourceDocument
+	}
+
+	switch refKind {
+	case "human_translation":
+		return selectedText, joinNonEmpty("Selected canonical human translation", variantRefLabel(refKind, refID), statusLabel), 0, ""
+	case "translation_run":
+		runID, _ := strconv.Atoi(refID)
+		if variant != nil {
+			runID, _ = strconv.Atoi(mapStringValue(variant, "id"))
+		}
+		return selectedText, joinNonEmpty("Selected canonical AI translation", variantRefLabel(refKind, refID), statusLabel, sourceLabel), runID, strings.TrimSpace(mapStringValue(variant, "request_user_prompt_text"))
+	case "legacy_assembled":
+		return selectedText, joinNonEmpty("Selected legacy assembled translation", variantRefLabel(refKind, refID), statusLabel), 0, ""
+	default:
+		return selectedText, "Selected current English translation.", 0, ""
+	}
 }
 
 func reviewGuidanceKindLabel(kind string) string {
@@ -848,7 +917,7 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		len(currentLemma.Apparatus) > 0 ||
 		len(currentLemma.MeinekeScanFilenames) > 0
 	workingGreekTitle, sourceTextVersionID := workingGreekLabel(currentLemma)
-	latestAITranslation, latestAITranslationLabel, latestAITranslationRunID, latestAIRequestUserPrompt := chooseLatestAITranslation(currentLemma)
+	displayedTranslation, displayedTranslationLabel, displayedTranslationRunID, displayedTranslationUserPrompt := chooseDisplayedEnglishTranslation(currentLemma)
 	entityTranslation, entityTranslationLabel := chooseEntityContextTranslation(review, currentLemma)
 	primaryEntities, secondaryEntities, legacyPlaceEntities := splitEntityBuckets(currentLemma)
 	localUrgentGuidanceHits, err := FetchUrgentGuidanceHitsForLemma(db, currentLemma.ID)
@@ -856,7 +925,7 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		return nil, fmt.Errorf("failed to read urgent guidance hits: %w", err)
 	}
 	currentLemma.GuidanceHits = mergeGuidanceHits(currentLemma.GuidanceHits, localUrgentGuidanceHits)
-	guidanceStrongHits, guidanceUncertainHits, guidanceProperNounHits := splitGuidanceHitViews(currentLemma, latestAITranslationRunID)
+	guidanceStrongHits, guidanceUncertainHits, guidanceProperNounHits := splitGuidanceHitViews(currentLemma, displayedTranslationRunID)
 
 	pageData := &PageData{
 		Lemma:                           currentLemma,
@@ -878,10 +947,10 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		MeinekeStatusLabel:              meinekeStatusLabel(meinekeStatus),
 		WorkingGreekLabel:               workingGreekTitle,
 		WorkingGreekSourceTextVersionID: sourceTextVersionID,
-		LatestAITranslation:             latestAITranslation,
-		LatestAITranslationLabel:        latestAITranslationLabel,
-		LatestAITranslationRunID:        latestAITranslationRunID,
-		LatestAIRequestUserPrompt:       latestAIRequestUserPrompt,
+		DisplayedTranslation:            displayedTranslation,
+		DisplayedTranslationLabel:       displayedTranslationLabel,
+		DisplayedTranslationRunID:       displayedTranslationRunID,
+		DisplayedTranslationUserPrompt:  displayedTranslationUserPrompt,
 		EntityContextTranslation:        entityTranslation,
 		EntityContextTranslationLabel:   entityTranslationLabel,
 		SourceLookupLinks:               buildSourceLookupLinks(currentLemma),
