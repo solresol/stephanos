@@ -974,12 +974,14 @@ def build_report_html(
         for label, value in summary_cards
     )
 
+    cache_suffix = metadata.sha256[:12] if metadata.sha256 else generated_at.replace(":", "")
     csv_html = ""
     if mentions_csv_path:
         relative_csv = mentions_csv_path.name if mentions_csv_path.parent == output_path.parent else str(mentions_csv_path)
+        relative_csv_url = f"{relative_csv}?v={cache_suffix}"
         csv_html = (
             f"<p>Complete mention CSV: <code>{render_cell(str(mentions_csv_path))}</code> "
-            f"(<a href=\"{render_cell(relative_csv)}\">open CSV next to this report</a>).</p>"
+            f"(<a href=\"{render_cell(relative_csv_url)}\">open CSV next to this report</a>).</p>"
         )
     if re_namespace_csv_path:
         relative_re_csv = (
@@ -987,9 +989,10 @@ def build_report_html(
             if re_namespace_csv_path.parent == output_path.parent
             else str(re_namespace_csv_path)
         )
+        relative_re_csv_url = f"{relative_re_csv}?v={cache_suffix}"
         csv_html += (
             f"<p>RE namespace CSV: <code>{render_cell(str(re_namespace_csv_path))}</code> "
-            f"(<a href=\"{render_cell(relative_re_csv)}\">open RE namespace CSV next to this report</a>).</p>"
+            f"(<a href=\"{render_cell(relative_re_csv_url)}\">open RE namespace CSV next to this report</a>).</p>"
         )
 
     pauly_note = (
