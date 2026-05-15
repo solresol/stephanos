@@ -2151,6 +2151,9 @@ CREATE TABLE public.translation_guidance_rules (
     updated_by text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    introduced_at timestamp with time zone DEFAULT now() NOT NULL,
+    introduced_at_basis text DEFAULT 'actual'::text NOT NULL,
+    introduced_at_notes text,
     retired_at timestamp with time zone,
     semantic_domain text,
     lifecycle_stage text DEFAULT 'guidance'::text NOT NULL,
@@ -2160,8 +2163,30 @@ CREATE TABLE public.translation_guidance_rules (
     CONSTRAINT translation_guidance_rules_bias_strength_check CHECK ((bias_strength = ANY (ARRAY['weak'::text, 'normal'::text, 'strong'::text]))),
     CONSTRAINT translation_guidance_rules_kind_check CHECK ((kind = ANY (ARRAY['gloss'::text, 'formula'::text, 'proper_noun'::text, 'contextual_bias'::text]))),
     CONSTRAINT translation_guidance_rules_lifecycle_stage_check CHECK ((lifecycle_stage = ANY (ARRAY['investigate'::text, 'recognizer'::text, 'guidance'::text, 'inactive'::text]))),
+    CONSTRAINT translation_guidance_rules_introduced_at_basis_check CHECK ((introduced_at_basis = ANY (ARRAY['actual'::text, 'estimated'::text, 'unknown'::text]))),
     CONSTRAINT translation_guidance_rules_status_check CHECK ((status = ANY (ARRAY['in_progress'::text, 'settled'::text, 'unsure'::text, 'retired'::text])))
 );
+
+
+--
+-- Name: COLUMN translation_guidance_rules.introduced_at; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_guidance_rules.introduced_at IS 'Best known date when the guidance rule entered Gabe/Stephanos translation practice.';
+
+
+--
+-- Name: COLUMN translation_guidance_rules.introduced_at_basis; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_guidance_rules.introduced_at_basis IS 'Whether introduced_at is an actual timestamp, an estimate from translation evidence, or unknown.';
+
+
+--
+-- Name: COLUMN translation_guidance_rules.introduced_at_notes; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_guidance_rules.introduced_at_notes IS 'Short human-readable note explaining the evidence behind introduced_at.';
 
 
 --
@@ -4162,6 +4187,13 @@ CREATE INDEX translation_guidance_rules_bias_strength_idx ON public.translation_
 --
 
 CREATE INDEX translation_guidance_rules_context_condition_idx ON public.translation_guidance_rules USING btree (context_condition) WHERE (context_condition IS NOT NULL);
+
+
+--
+-- Name: translation_guidance_rules_introduced_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_rules_introduced_at_idx ON public.translation_guidance_rules USING btree (introduced_at, introduced_at_basis);
 
 
 --

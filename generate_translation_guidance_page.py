@@ -67,6 +67,8 @@ TABLE_COLUMNS = [
     ("revision", "Revision", False),
     ("matched", "Matched", True),
     ("backlog", "Backlog", False),
+    ("introduced", "Introduced", True),
+    ("date-basis", "Date basis", False),
     ("updated", "Updated", False),
 ]
 
@@ -123,6 +125,36 @@ def fetch_rules() -> list[dict[str, object]]:
         """
     )
     has_bias_strength = cur.fetchone() is not None
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'translation_guidance_rules'
+          AND column_name = 'introduced_at'
+        """
+    )
+    has_introduced_at = cur.fetchone() is not None
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'translation_guidance_rules'
+          AND column_name = 'introduced_at_basis'
+        """
+    )
+    has_introduced_at_basis = cur.fetchone() is not None
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'translation_guidance_rules'
+          AND column_name = 'introduced_at_notes'
+        """
+    )
+    has_introduced_at_notes = cur.fetchone() is not None
 
     match_join = ""
     match_select = "0 AS match_count, 0 AS uncertain_count"
@@ -181,6 +213,21 @@ def fetch_rules() -> list[dict[str, object]]:
         if has_bias_strength
         else "'normal' AS bias_strength"
     )
+    introduced_at_select = (
+        "COALESCE(r.introduced_at::date::text, '') AS introduced_at"
+        if has_introduced_at
+        else "COALESCE(r.created_at::date::text, '') AS introduced_at"
+    )
+    introduced_at_basis_select = (
+        "COALESCE(r.introduced_at_basis, 'actual') AS introduced_at_basis"
+        if has_introduced_at_basis
+        else "'actual' AS introduced_at_basis"
+    )
+    introduced_at_notes_select = (
+        "COALESCE(r.introduced_at_notes, '') AS introduced_at_notes"
+        if has_introduced_at_notes
+        else "'' AS introduced_at_notes"
+    )
 
     cur.execute(
         f"""
@@ -206,6 +253,9 @@ def fetch_rules() -> list[dict[str, object]]:
             COALESCE(r.status, '') AS status,
             COALESCE(r.application_mode, '') AS application_mode,
             COALESCE(r.notes, '') AS notes,
+            {introduced_at_select},
+            {introduced_at_basis_select},
+            {introduced_at_notes_select},
             COALESCE(r.updated_at::text, '') AS updated_at,
             COALESCE(lr.revision_number, 0) AS revision_number,
             {match_select},
@@ -247,11 +297,14 @@ def fetch_rules() -> list[dict[str, object]]:
                 "status": row[11] or "",
                 "application_mode": row[12] or "",
                 "notes": row[13] or "",
-                "updated_at": row[14] or "",
-                "revision_number": int(row[15] or 0),
-                "match_count": int(row[16] or 0),
-                "uncertain_count": int(row[17] or 0),
-                "backlog_count": int(row[18] or 0),
+                "introduced_at": row[14] or "",
+                "introduced_at_basis": row[15] or "",
+                "introduced_at_notes": row[16] or "",
+                "updated_at": row[17] or "",
+                "revision_number": int(row[18] or 0),
+                "match_count": int(row[19] or 0),
+                "uncertain_count": int(row[20] or 0),
+                "backlog_count": int(row[21] or 0),
             }
         )
     return rules
@@ -328,6 +381,9 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                     "bias_strength",
                     "lifecycle_stage",
                     "notes",
+                    "introduced_at",
+                    "introduced_at_basis",
+                    "introduced_at_notes",
                 )
             ]
             + [lifecycle_display]
@@ -353,6 +409,8 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                 data-revision="{int(rule['revision_number'])}"
                 data-matched="{int(rule['match_count'])}"
                 data-backlog="{int(rule['backlog_count'])}"
+                data-introduced="{esc(rule['introduced_at'])}"
+                data-date-basis="{esc(rule['introduced_at_basis'])}"
                 data-updated="{esc(rule['updated_at'])}"
                 data-search="{esc(search_text)}">
                 {render_table_cell(kind_display, col_key="kind")}
@@ -370,6 +428,8 @@ def render_rule_table(rules: list[dict[str, object]]) -> str:
                 <td data-col="revision" class="numeric">{int(rule['revision_number'])}</td>
                 <td data-col="matched" class="numeric">{int(rule['match_count'])}</td>
                 <td data-col="backlog" class="numeric">{int(rule['backlog_count'])}</td>
+                {render_table_cell(rule["introduced_at"], col_key="introduced", css_class="compact")}
+                {render_table_cell(rule["introduced_at_basis"], col_key="date-basis", css_class="compact")}
                 {render_table_cell(rule["updated_at"], col_key="updated", css_class="compact")}
             </tr>
             """

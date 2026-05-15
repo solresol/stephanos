@@ -9,10 +9,12 @@ Produces statistics and visualizations for:
 - Parisinus Coislinianus 228 vs Epitomised version comparisons
 """
 from pathlib import Path
+from collections import defaultdict
 from datetime import datetime
 import html as html_module
 import re
 import unicodedata
+import urllib.parse
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -1522,7 +1524,8 @@ def generate_navigation(current_page='index', in_subdirectory=False):
         'category_deities': 'Deities',
         'etymology': 'Etymology Analysis',
         'parisinus_comparison': 'Parisinus vs Epitome',
-        'pausanias_analysis': 'Pausanias Citations'
+        'pausanias_analysis': 'Pausanias Citations',
+        'guidance_rules': 'Guidance Rules',
     }
 
     nav_html = '<nav style="background-color: #34495e; padding: 15px; margin-bottom: 20px; border-radius: 5px;">\n'
@@ -2407,6 +2410,853 @@ def generate_translation_length_page(
     return html
 
 
+def pg_table_exists(cur, table_name):
+    cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table_name}",))
+    return bool(cur.fetchone()[0])
+
+
+def pg_column_exists(cur, table_name, column_name):
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s
+          AND column_name = %s
+        """,
+        (table_name, column_name),
+    )
+    return cur.fetchone() is not None
+
+
+def guidance_butterfly_estimates(frequencies, incidence_units):
+    """Estimate unseen guidance rules from incidence counts across scanned headwords."""
+    frequencies = np.asarray([value for value in frequencies if value > 0], dtype=float)
+    s_observed = int(len(frequencies))
+    incidence_units = int(incidence_units or 0)
+    if s_observed == 0 or incidence_units <= 0:
+        return {
+            "observed_rules": s_observed,
+            "incidence_units": incidence_units,
+            "rule_incidences": 0,
+            "singletons": 0,
+            "doubletons": 0,
+            "chao2_total": np.nan,
+            "chao2_unseen": np.nan,
+            "jackknife1_total": np.nan,
+            "jackknife2_total": np.nan,
+            "sample_coverage": np.nan,
+            "next_incidence_new_rule_probability": np.nan,
+        }
+
+    q1 = int(np.sum(frequencies == 1))
+    q2 = int(np.sum(frequencies == 2))
+    incidences = int(np.sum(frequencies))
+    if q2 > 0:
+        chao2_unseen = (q1 * q1) / (2 * q2)
+    else:
+        chao2_unseen = (q1 * (q1 - 1)) / 2
+    chao2_total = s_observed + chao2_unseen
+    jackknife1_total = s_observed + q1 * (incidence_units - 1) / incidence_units
+    if incidence_units > 1:
+        jackknife2_total = (
+            s_observed
+            + q1 * (2 * incidence_units - 3) / incidence_units
+            - q2 * ((incidence_units - 2) ** 2) / (incidence_units * (incidence_units - 1))
+        )
+    else:
+        jackknife2_total = np.nan
+
+    sample_coverage = 1 - (q1 / incidences) if incidences else np.nan
+    new_rule_probability = q1 / incidences if incidences else np.nan
+    return {
+        "observed_rules": s_observed,
+        "incidence_units": incidence_units,
+        "rule_incidences": incidences,
+        "singletons": q1,
+        "doubletons": q2,
+        "chao2_total": float(chao2_total),
+        "chao2_unseen": float(chao2_unseen),
+        "jackknife1_total": float(jackknife1_total),
+        "jackknife2_total": float(jackknife2_total),
+        "sample_coverage": float(sample_coverage),
+        "next_incidence_new_rule_probability": float(new_rule_probability),
+    }
+
+
+def get_guidance_kappa_discovery_data(cur, active_rule_ids):
+    """Build rule-discovery rows ordered by Gabe-linked kappa human translations."""
+    columns = [
+        "sample_index",
+        "lemma_id",
+        "lemma",
+        "event_at",
+        "event_date",
+        "matched_rule_count",
+        "new_rule_count",
+        "new_rule_labels",
+        "cumulative_rules",
+        "rolling_new_rules_10",
+    ]
+    if not active_rule_ids or not pg_table_exists(cur, "human_translations"):
+        return pd.DataFrame(columns=columns)
+
+    cur.execute(
+        """
+        SELECT
+            ht.lemma_id,
+            COALESCE(a.lemma, '') AS lemma,
+            ht.id,
+            COALESCE(ht.status, '') AS status,
+            ht.created_at,
+            ht.updated_at,
+            ht.reviewed_at
+        FROM human_translations ht
+        JOIN assembled_lemmas a ON a.id = ht.lemma_id
+        WHERE COALESCE(ht.translation_text, '') <> ''
+          AND LEFT(COALESCE(a.lemma, ''), 1) = 'Κ'
+          AND (
+              ht.created_by = 'gabriel'
+              OR ht.updated_by = 'gabriel'
+              OR ht.reviewed_by = 'gabriel'
+          )
+        """
+    )
+    earliest_by_lemma = {}
+    for lemma_id, lemma, human_translation_id, status, created_at, updated_at, reviewed_at in cur.fetchall():
+        event_at = reviewed_at or created_at or updated_at
+        if event_at is None:
+            continue
+        event = {
+            "lemma_id": int(lemma_id),
+            "lemma": lemma or "",
+            "human_translation_id": int(human_translation_id),
+            "status": status or "",
+            "event_at": event_at,
+        }
+        existing = earliest_by_lemma.get(event["lemma_id"])
+        if existing is None or event["event_at"] < existing["event_at"]:
+            earliest_by_lemma[event["lemma_id"]] = event
+
+    if not earliest_by_lemma:
+        return pd.DataFrame(columns=columns)
+
+    lemma_ids = sorted(earliest_by_lemma)
+    active_ids = sorted(int(rule_id) for rule_id in active_rule_ids)
+    cur.execute(
+        """
+        SELECT
+            m.lemma_id,
+            m.rule_id,
+            COALESCE(r.label, '') AS label
+        FROM translation_guidance_matches m
+        JOIN translation_guidance_rules r ON r.id = m.rule_id
+        WHERE m.match_status = 'matched'
+          AND m.occurrence_count > 0
+          AND m.lemma_id = ANY(%s)
+          AND m.rule_id = ANY(%s)
+        ORDER BY m.lemma_id, r.label, m.rule_id
+        """,
+        (lemma_ids, active_ids),
+    )
+    matched_by_lemma = defaultdict(dict)
+    for lemma_id, rule_id, label in cur.fetchall():
+        matched_by_lemma[int(lemma_id)][int(rule_id)] = label or f"Rule {rule_id}"
+
+    events = sorted(
+        earliest_by_lemma.values(),
+        key=lambda item: (item["event_at"], item["lemma"], item["lemma_id"]),
+    )
+    seen_rules = set()
+    new_rule_counts = []
+    rows = []
+    for sample_index, event in enumerate(events, 1):
+        matched_rules = matched_by_lemma.get(event["lemma_id"], {})
+        matched_rule_ids = set(matched_rules)
+        new_rule_ids = sorted(matched_rule_ids - seen_rules, key=lambda rid: matched_rules[rid])
+        seen_rules.update(new_rule_ids)
+
+        new_rule_count = len(new_rule_ids)
+        new_rule_counts.append(new_rule_count)
+        rolling_window = new_rule_counts[-10:]
+        new_rule_labels = [matched_rules[rule_id] for rule_id in new_rule_ids[:8]]
+        if len(new_rule_ids) > 8:
+            new_rule_labels.append(f"... {len(new_rule_ids) - 8} more")
+
+        rows.append({
+            "sample_index": sample_index,
+            "lemma_id": event["lemma_id"],
+            "lemma": event["lemma"],
+            "event_at": event["event_at"],
+            "event_date": pd.to_datetime(event["event_at"], utc=True).date(),
+            "matched_rule_count": len(matched_rule_ids),
+            "new_rule_count": new_rule_count,
+            "new_rule_labels": "; ".join(new_rule_labels),
+            "cumulative_rules": len(seen_rules),
+            "rolling_new_rules_10": int(sum(rolling_window)),
+        })
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def get_guidance_rule_statistics_data(cur):
+    """Fetch and derive guidance-rule analytics from scan evidence."""
+    if not pg_table_exists(cur, "translation_guidance_rules") or not pg_table_exists(cur, "translation_guidance_matches"):
+        return None
+
+    has_introduced_at = pg_column_exists(cur, "translation_guidance_rules", "introduced_at")
+    has_introduced_basis = pg_column_exists(cur, "translation_guidance_rules", "introduced_at_basis")
+    has_introduced_notes = pg_column_exists(cur, "translation_guidance_rules", "introduced_at_notes")
+
+    introduced_at_select = "r.introduced_at" if has_introduced_at else "r.created_at"
+    introduced_basis_select = "COALESCE(r.introduced_at_basis, 'actual')" if has_introduced_basis else "'actual'"
+    introduced_notes_select = "COALESCE(r.introduced_at_notes, '')" if has_introduced_notes else "''"
+
+    cur.execute(
+        f"""
+        SELECT
+            r.id,
+            COALESCE(r.rule_key, '') AS rule_key,
+            COALESCE(r.kind, '') AS kind,
+            COALESCE(r.label, '') AS label,
+            COALESCE(r.preferred_translation, '') AS preferred_translation,
+            COALESCE(r.lifecycle_stage, '') AS lifecycle_stage,
+            COALESCE(r.status, '') AS status,
+            COALESCE(r.application_mode, '') AS application_mode,
+            r.created_at,
+            {introduced_at_select} AS introduced_at,
+            {introduced_basis_select} AS introduced_at_basis,
+            {introduced_notes_select} AS introduced_at_notes
+        FROM translation_guidance_rules r
+        ORDER BY r.id
+        """
+    )
+    rule_rows = cur.fetchall()
+    rules = pd.DataFrame(rule_rows, columns=[
+        "rule_id",
+        "rule_key",
+        "kind",
+        "label",
+        "preferred_translation",
+        "lifecycle_stage",
+        "status",
+        "application_mode",
+        "created_at",
+        "introduced_at",
+        "introduced_at_basis",
+        "introduced_at_notes",
+    ])
+    if rules.empty:
+        return None
+
+    cur.execute(
+        """
+        SELECT
+            rule_id,
+            lemma_id,
+            SUM(occurrence_count) AS occurrence_count
+        FROM translation_guidance_matches
+        WHERE match_status = 'matched'
+          AND occurrence_count > 0
+        GROUP BY rule_id, lemma_id
+        """
+    )
+    match_rows = cur.fetchall()
+    matches = pd.DataFrame(match_rows, columns=["rule_id", "lemma_id", "occurrence_count"])
+
+    cur.execute(
+        """
+        SELECT
+            COUNT(DISTINCT lemma_id) AS scanned_headwords,
+            COUNT(*) AS scan_rows
+        FROM translation_guidance_matches
+        """
+    )
+    scanned_headwords, scan_rows = cur.fetchone()
+    scanned_headwords = int(scanned_headwords or 0)
+    scan_rows = int(scan_rows or 0)
+
+    if matches.empty:
+        frequencies = pd.DataFrame(columns=["rule_id", "firing_headwords", "occurrence_count"])
+    else:
+        frequencies = (
+            matches.groupby("rule_id")
+            .agg(
+                firing_headwords=("lemma_id", "nunique"),
+                occurrence_count=("occurrence_count", "sum"),
+            )
+            .reset_index()
+        )
+
+    rule_stats = rules.merge(frequencies, on="rule_id", how="left")
+    rule_stats["firing_headwords"] = rule_stats["firing_headwords"].fillna(0).astype(int)
+    rule_stats["occurrence_count"] = rule_stats["occurrence_count"].fillna(0).astype(int)
+    rule_stats["is_active"] = (
+        (rule_stats["status"] != "retired")
+        & (rule_stats["lifecycle_stage"] != "inactive")
+    )
+
+    active_rule_ids = set(rule_stats.loc[rule_stats["is_active"], "rule_id"].astype(int))
+    if matches.empty or not active_rule_ids:
+        active_matches = pd.DataFrame(columns=matches.columns)
+    else:
+        active_matches = matches[matches["rule_id"].isin(active_rule_ids)].copy()
+
+    matched_headwords = int(active_matches["lemma_id"].nunique()) if not active_matches.empty else 0
+    top_rules = rule_stats[rule_stats["is_active"]].sort_values(
+        ["firing_headwords", "occurrence_count", "label"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+    positive_top_rules = top_rules[top_rules["firing_headwords"] > 0].copy()
+    positive_top_rules["rank"] = range(1, len(positive_top_rules) + 1)
+
+    frequencies_for_estimate = positive_top_rules["firing_headwords"].astype(int).tolist()
+    butterfly = guidance_butterfly_estimates(frequencies_for_estimate, scanned_headwords)
+
+    by_kind_rows = []
+    for kind, kind_df in top_rules.groupby("kind", dropna=False):
+        kind_positive = kind_df[kind_df["firing_headwords"] > 0]
+        estimates = guidance_butterfly_estimates(kind_positive["firing_headwords"].astype(int).tolist(), scanned_headwords)
+        estimates["kind"] = kind or "unknown"
+        estimates["active_rules"] = int(len(kind_df))
+        by_kind_rows.append(estimates)
+    butterfly_by_kind = pd.DataFrame(by_kind_rows).sort_values("observed_rules", ascending=False) if by_kind_rows else pd.DataFrame()
+
+    coverage_rows = []
+    total_rule_incidences = int(active_matches[["rule_id", "lemma_id"]].drop_duplicates().shape[0]) if not active_matches.empty else 0
+    for n in [1, 3, 5, 10, 20, 50, 100]:
+        if n > len(positive_top_rules):
+            continue
+        selected_ids = set(positive_top_rules.head(n)["rule_id"].astype(int))
+        selected = active_matches[active_matches["rule_id"].isin(selected_ids)] if not active_matches.empty else active_matches
+        covered = int(selected["lemma_id"].nunique()) if not selected.empty else 0
+        selected_incidences = int(selected[["rule_id", "lemma_id"]].drop_duplicates().shape[0]) if not selected.empty else 0
+        coverage_rows.append({
+            "top_n": n,
+            "covered_headwords": covered,
+            "scanned_headword_coverage": covered / scanned_headwords if scanned_headwords else np.nan,
+            "matched_headword_coverage": covered / matched_headwords if matched_headwords else np.nan,
+            "rule_incidence_coverage": selected_incidences / total_rule_incidences if total_rule_incidences else np.nan,
+        })
+    coverage_df = pd.DataFrame(coverage_rows)
+
+    zipf_df = positive_top_rules[["rank", "rule_id", "rule_key", "kind", "label", "firing_headwords", "occurrence_count"]].copy()
+    if len(zipf_df) >= 2:
+        log_rank = np.log(zipf_df["rank"].astype(float).to_numpy())
+        log_freq = np.log(zipf_df["firing_headwords"].astype(float).to_numpy())
+        zipf_fit = stats.linregress(log_rank, log_freq)
+        zipf_info = {
+            "slope": float(zipf_fit.slope),
+            "intercept": float(zipf_fit.intercept),
+            "alpha": float(-zipf_fit.slope),
+            "r2": float(zipf_fit.rvalue ** 2),
+            "p_value": float(zipf_fit.pvalue),
+            "stderr": float(zipf_fit.stderr),
+        }
+    else:
+        zipf_info = None
+
+    basis_counts = (
+        rules["introduced_at_basis"]
+        .replace("", "unknown")
+        .value_counts()
+        .rename_axis("basis")
+        .reset_index(name="count")
+    )
+    basis_order = {"actual": 0, "estimated": 1, "unknown": 2}
+    basis_counts["sort_key"] = basis_counts["basis"].map(lambda value: basis_order.get(value, 99))
+    basis_counts = basis_counts.sort_values(["sort_key", "basis"]).drop(columns=["sort_key"])
+    estimated_rules = rules[rules["introduced_at_basis"] == "estimated"].copy()
+    if not estimated_rules.empty:
+        estimated_rules["introduced_date"] = pd.to_datetime(
+            estimated_rules["introduced_at"],
+            utc=True,
+        ).dt.date
+        introduced_by_date = (
+            estimated_rules.groupby("introduced_date")
+            .size()
+            .reset_index(name="rules")
+            .sort_values("introduced_date")
+        )
+        introduced_by_date["cumulative_rules"] = introduced_by_date["rules"].cumsum()
+    else:
+        introduced_by_date = pd.DataFrame(columns=["introduced_date", "rules", "cumulative_rules"])
+
+    kappa_discovery = get_guidance_kappa_discovery_data(cur, active_rule_ids)
+
+    return {
+        "rules": rules,
+        "rule_stats": rule_stats,
+        "top_rules": positive_top_rules,
+        "matches": matches,
+        "scanned_headwords": scanned_headwords,
+        "scan_rows": scan_rows,
+        "matched_headwords": matched_headwords,
+        "total_rule_incidences": total_rule_incidences,
+        "butterfly": butterfly,
+        "butterfly_by_kind": butterfly_by_kind,
+        "coverage": coverage_df,
+        "zipf": zipf_df,
+        "zipf_info": zipf_info,
+        "basis_counts": basis_counts,
+        "introduced_by_date": introduced_by_date,
+        "kappa_discovery": kappa_discovery,
+    }
+
+
+def format_percent(value, decimal_places=1):
+    if pd.isna(value):
+        return "N/A"
+    return f"{100 * float(value):.{decimal_places}f}%"
+
+
+def guidance_rule_href(rule_key):
+    return "../translation_guidance.html#rule-" + urllib.parse.quote(str(rule_key or ""), safe=":-_")
+
+
+def generate_guidance_zipf_visualization(guidance_data, filename):
+    if not guidance_data or guidance_data["zipf"].empty:
+        return None
+
+    zipf_df = guidance_data["zipf"]
+    zipf_info = guidance_data["zipf_info"]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=zipf_df["rank"],
+            y=zipf_df["firing_headwords"],
+            mode="markers",
+            marker=dict(size=8, color=zipf_df["occurrence_count"], colorscale="Viridis", colorbar=dict(title="Occurrences")),
+            text=[
+                f"<b>{html_module.escape(str(row.label))}</b><br>"
+                f"Kind: {html_module.escape(str(row.kind))}<br>"
+                f"Rank: {int(row.rank)}<br>"
+                f"Headwords: {int(row.firing_headwords)}<br>"
+                f"Occurrences: {int(row.occurrence_count)}"
+                for row in zipf_df.itertuples(index=False)
+            ],
+            hovertemplate="%{text}<extra></extra>",
+            name="Rules",
+        )
+    )
+    if zipf_info:
+        x_line = np.array([float(zipf_df["rank"].min()), float(zipf_df["rank"].max())])
+        y_line = np.exp(zipf_info["intercept"]) * np.power(x_line, zipf_info["slope"])
+        fig.add_trace(
+            go.Scatter(
+                x=x_line,
+                y=y_line,
+                mode="lines",
+                line=dict(color="#d35400", width=3),
+                name=f"Fit slope {zipf_info['slope']:.3f}",
+            )
+        )
+    fig.update_layout(
+        title="Guidance Rule Rank-Frequency",
+        height=650,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        xaxis_title="Rule rank by matched headwords",
+        yaxis_title="Matched headwords",
+        margin=dict(l=70, r=35, t=80, b=70),
+    )
+    fig.update_xaxes(type="log", gridcolor="lightgray")
+    fig.update_yaxes(type="log", gridcolor="lightgray")
+
+    output_dir = Path("reference_site/statistics_images")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    html_path = output_dir / filename
+    fig.write_html(str(html_path), include_plotlyjs="cdn")
+    return f"statistics_images/{filename}"
+
+
+def generate_guidance_coverage_visualization(guidance_data, filename):
+    if not guidance_data or guidance_data["coverage"].empty:
+        return None
+
+    coverage = guidance_data["coverage"]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=coverage["top_n"],
+            y=coverage["scanned_headword_coverage"] * 100,
+            mode="lines+markers",
+            name="All scanned headwords",
+            line=dict(color="#2c7fb8", width=3),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=coverage["top_n"],
+            y=coverage["matched_headword_coverage"] * 100,
+            mode="lines+markers",
+            name="Headwords with any active rule",
+            line=dict(color="#31a354", width=3),
+        )
+    )
+    fig.update_layout(
+        title="Coverage by Top Guidance Rules",
+        height=560,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        xaxis_title="Top N rules by matched headwords",
+        yaxis_title="Headword coverage (%)",
+        yaxis=dict(range=[0, 100]),
+        margin=dict(l=70, r=35, t=80, b=70),
+    )
+    fig.update_xaxes(gridcolor="lightgray")
+    fig.update_yaxes(gridcolor="lightgray")
+
+    output_dir = Path("reference_site/statistics_images")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    html_path = output_dir / filename
+    fig.write_html(str(html_path), include_plotlyjs="cdn")
+    return f"statistics_images/{filename}"
+
+
+def generate_guidance_kappa_discovery_visualization(guidance_data, filename):
+    if not guidance_data or guidance_data["kappa_discovery"].empty:
+        return None
+
+    from plotly.subplots import make_subplots
+
+    discovery = guidance_data["kappa_discovery"]
+    butterfly = guidance_data["butterfly"]
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        row_heights=[0.62, 0.38],
+        vertical_spacing=0.08,
+        subplot_titles=(
+            "Cumulative distinct rules discovered",
+            "New-rule bursts and trailing 10-entry discovery rate",
+        ),
+    )
+    hover_text = [
+        f"<b>{html_module.escape(str(row.lemma))}</b><br>"
+        f"Sample: {int(row.sample_index)}<br>"
+        f"Date: {html_module.escape(str(row.event_date))}<br>"
+        f"Matched active rules: {int(row.matched_rule_count)}<br>"
+        f"New rules: {int(row.new_rule_count)}<br>"
+        f"{html_module.escape(str(row.new_rule_labels)) if row.new_rule_labels else 'No first-observed rules'}"
+        for row in discovery.itertuples(index=False)
+    ]
+    fig.add_trace(
+        go.Scatter(
+            x=discovery["sample_index"],
+            y=discovery["cumulative_rules"],
+            mode="lines+markers",
+            name="Observed distinct rules",
+            line=dict(color="#2c7fb8", width=3),
+            marker=dict(size=6),
+            text=hover_text,
+            hovertemplate="%{text}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    if not pd.isna(butterfly["chao2_total"]):
+        fig.add_trace(
+            go.Scatter(
+                x=[int(discovery["sample_index"].min()), int(discovery["sample_index"].max())],
+                y=[butterfly["chao2_total"], butterfly["chao2_total"]],
+                mode="lines",
+                name=f"Chao2 total estimate ({butterfly['chao2_total']:.1f})",
+                line=dict(color="#d35400", width=3, dash="dash"),
+                hovertemplate="Chao2 estimated total: %{y:.1f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+
+    fig.add_trace(
+        go.Bar(
+            x=discovery["sample_index"],
+            y=discovery["new_rule_count"],
+            name="New rules in entry",
+            marker_color="rgba(49, 130, 189, 0.42)",
+            text=hover_text,
+            hovertemplate="%{text}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=discovery["sample_index"],
+            y=discovery["rolling_new_rules_10"],
+            mode="lines+markers",
+            name="New rules in trailing 10 entries",
+            line=dict(color="#31a354", width=3),
+            marker=dict(size=5),
+            hovertemplate="Sample: %{x}<br>New rules in trailing 10 entries: %{y}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    if not pd.isna(butterfly["observed_rules"]):
+        fig.add_annotation(
+            x=0.02,
+            y=0.98,
+            xref="paper",
+            yref="paper",
+            align="left",
+            showarrow=False,
+            bgcolor="rgba(255,255,255,0.92)",
+            bordercolor="#95a5a6",
+            borderwidth=1,
+            borderpad=8,
+            text=(
+                f"<b>Kappa sample:</b> {len(discovery):,} dated human entries<br>"
+                f"<b>Rules first observed in sample:</b> {int(discovery['cumulative_rules'].max()):,}<br>"
+                f"<b>Chao2 unseen from full scan evidence:</b> {butterfly['chao2_unseen']:.1f}"
+            ),
+            font=dict(size=13, color="#2c3e50"),
+        )
+
+    fig.update_layout(
+        title="Guidance Rule Accumulation in Kappa Human Translations",
+        height=760,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=70, r=35, t=95, b=70),
+    )
+    fig.update_xaxes(title_text="Kappa human-translated entries in timestamp order", gridcolor="lightgray", row=2, col=1)
+    fig.update_yaxes(title_text="Cumulative distinct rules", gridcolor="lightgray", rangemode="tozero", row=1, col=1)
+    fig.update_yaxes(title_text="New rules", gridcolor="lightgray", rangemode="tozero", row=2, col=1)
+
+    output_dir = Path("reference_site/statistics_images")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    html_path = output_dir / filename
+    fig.write_html(str(html_path), include_plotlyjs="cdn")
+    return f"statistics_images/{filename}"
+
+
+def generate_guidance_butterfly_table(guidance_data):
+    butterfly = guidance_data["butterfly"]
+    rows = [
+        ("Observed active rules that fire at least once", butterfly["observed_rules"]),
+        ("Rule incidences in scanned headwords", butterfly["rule_incidences"]),
+        ("Rules seen in one headword", butterfly["singletons"]),
+        ("Rules seen in two headwords", butterfly["doubletons"]),
+        ("Estimated total rules, Chao2", format_stat(butterfly["chao2_total"])),
+        ("Estimated unseen rules, Chao2", format_stat(butterfly["chao2_unseen"])),
+        ("Estimated total rules, first-order jackknife", format_stat(butterfly["jackknife1_total"])),
+        ("Estimated total rules, second-order jackknife", format_stat(butterfly["jackknife2_total"])),
+        ("Sample coverage", format_percent(butterfly["sample_coverage"])),
+        ("Chance next rule incidence is a not-yet-seen rule", format_percent(butterfly["next_incidence_new_rule_probability"])),
+    ]
+    html = """
+    <table>
+        <tr><th>Measure</th><th>Value</th></tr>
+"""
+    for label, value in rows:
+        html += f"        <tr><td>{html_module.escape(str(label))}</td><td><strong>{html_module.escape(str(value))}</strong></td></tr>\n"
+    html += "    </table>\n"
+    return html
+
+
+def generate_guidance_rules_statistics_page(guidance_data, zipf_img, coverage_img, kappa_discovery_img):
+    html = generate_page_header("Guidance Rule Statistics", "guidance_rules", in_subdirectory=True)
+
+    if not guidance_data:
+        html += "    <p>No translation guidance rule statistics are available yet.</p>\n"
+        html += generate_page_footer()
+        return html
+
+    rules = guidance_data["rules"]
+    top_rules = guidance_data["top_rules"]
+    zipf_info = guidance_data["zipf_info"]
+    basis_counts = guidance_data["basis_counts"]
+
+    html += f"""
+    <p>This page measures how the translation-guidance rules are behaving as reusable editorial knowledge.
+    The denominators are explicit: scan coverage is based on headwords with guidance scan evidence, and
+    rule coverage is based on active, non-retired rules with matched evidence.</p>
+
+    <div class="stats-box">
+        <div class="metric"><span class="metric-label">Rules:</span> <span class="metric-value">{len(rules):,}</span></div>
+        <div class="metric"><span class="metric-label">Scanned headwords:</span> <span class="metric-value">{guidance_data['scanned_headwords']:,}</span></div>
+        <div class="metric"><span class="metric-label">Headwords with active rule matches:</span> <span class="metric-value">{guidance_data['matched_headwords']:,}</span></div>
+        <div class="metric"><span class="metric-label">Active rule incidences:</span> <span class="metric-value">{guidance_data['total_rule_incidences']:,}</span></div>
+    </div>
+
+    <h2>Introduction Date Basis</h2>
+    <p>Rules imported from Gabe's spreadsheet can predate their database row. Estimated dates use the earliest
+    Gabe-linked kappa human translation whose headword is matched by that rule; rules without that evidence are
+    kept separate from actual timestamps.</p>
+    <table>
+        <tr><th>Date basis</th><th>Rules</th></tr>
+"""
+    for _, row in basis_counts.iterrows():
+        html += f"        <tr><td>{html_module.escape(str(row['basis']))}</td><td>{int(row['count']):,}</td></tr>\n"
+    html += "    </table>\n"
+
+    introduced_by_date = guidance_data["introduced_by_date"]
+    if not introduced_by_date.empty:
+        html += """
+    <h3>Estimated Rules by Introduction Date</h3>
+    <table>
+        <tr><th>Date</th><th>New estimated rules</th><th>Cumulative estimated rules</th></tr>
+"""
+        for _, row in introduced_by_date.iterrows():
+            html += f"""        <tr>
+            <td>{html_module.escape(str(row['introduced_date']))}</td>
+            <td>{int(row['rules']):,}</td>
+            <td>{int(row['cumulative_rules']):,}</td>
+        </tr>
+"""
+        html += "    </table>\n"
+
+    html += """
+    <h2>Butterfly Collecting Estimate</h2>
+    <p>Here each guidance rule is treated like a species and each scanned headword is a collecting site.
+    Rules that appear only once or twice drive the estimate of how many additional rules are likely still unseen.</p>
+"""
+    butterfly = guidance_data["butterfly"]
+    html += f"""
+    <div class="stats-box">
+        <div class="metric"><span class="metric-label">Observed active firing rules:</span> <span class="metric-value">{butterfly['observed_rules']:,}</span></div>
+        <div class="metric"><span class="metric-label">Chao2 unseen rules:</span> <span class="metric-value">{format_stat(butterfly['chao2_unseen'])}</span></div>
+        <div class="metric"><span class="metric-label">Chao2 estimated total:</span> <span class="metric-value">{format_stat(butterfly['chao2_total'])}</span></div>
+    </div>
+    <p><strong>Chao2 currently estimates {format_stat(butterfly['chao2_unseen'])} unseen active firing rules</strong>
+    beyond the {butterfly['observed_rules']:,} active rules already observed in guidance-match evidence.</p>
+"""
+    kappa_discovery = guidance_data["kappa_discovery"]
+    if kappa_discovery_img and not kappa_discovery.empty:
+        kappa_observed_rules = int(kappa_discovery["cumulative_rules"].max())
+        kappa_samples = len(kappa_discovery)
+        html += """
+    <h3>Kappa Rule Accumulation</h3>
+"""
+        html += f"""
+    <p>This uses the dated kappa human translations as the collecting sequence. Each step is one Gabe-linked
+    kappa headword in timestamp order. The upper curve shows cumulative distinct active rules first observed
+    in that sample; the lower panel shows new-rule bursts and the number of new rules seen in the trailing
+    10 sampled entries. The current sample observes {kappa_observed_rules:,} distinct active rules across
+    {kappa_samples:,} dated kappa entries.</p>
+"""
+        html += generate_chart_embed(kappa_discovery_img, "Guidance rule accumulation chart", height=780)
+
+    html += generate_guidance_butterfly_table(guidance_data)
+
+    butterfly_by_kind = guidance_data["butterfly_by_kind"]
+    if not butterfly_by_kind.empty:
+        html += """
+    <h3>Estimate by Rule Kind</h3>
+    <table>
+        <tr>
+            <th>Kind</th>
+            <th>Active rules</th>
+            <th>Observed firing rules</th>
+            <th>Singletons</th>
+            <th>Doubletons</th>
+            <th>Chao2 total</th>
+            <th>Chao2 unseen</th>
+            <th>Sample coverage</th>
+        </tr>
+"""
+        for _, row in butterfly_by_kind.iterrows():
+            html += f"""        <tr>
+            <td>{html_module.escape(str(row['kind']))}</td>
+            <td>{int(row['active_rules']):,}</td>
+            <td>{int(row['observed_rules']):,}</td>
+            <td>{int(row['singletons']):,}</td>
+            <td>{int(row['doubletons']):,}</td>
+            <td>{format_stat(row['chao2_total'])}</td>
+            <td>{format_stat(row['chao2_unseen'])}</td>
+            <td>{format_percent(row['sample_coverage'])}</td>
+        </tr>
+"""
+        html += "    </table>\n"
+
+    html += """
+    <h2>Zipf-Like Rank Frequency</h2>
+    <p>Rules are ranked by the number of distinct headwords where they fire. A Zipf-like distribution would
+    appear close to a straight line on the log-log plot, with slope near -1.</p>
+"""
+    if zipf_info:
+        html += f"""
+    <div class="stats-box">
+        <div class="metric"><span class="metric-label">Fitted slope:</span> <span class="metric-value">{zipf_info['slope']:.3f}</span></div>
+        <div class="metric"><span class="metric-label">Alpha:</span> <span class="metric-value">{zipf_info['alpha']:.3f}</span></div>
+        <div class="metric"><span class="metric-label">Log-log R²:</span> <span class="metric-value">{format_stat(zipf_info['r2'])}</span></div>
+        <div class="metric"><span class="metric-label">Slope p-value:</span> <span class="metric-value">{format_p_value(zipf_info['p_value'])}</span></div>
+    </div>
+"""
+    if zipf_img:
+        html += generate_chart_embed(zipf_img, "Guidance rule rank-frequency plot")
+
+    html += """
+    <h2>Top-N Headword Coverage</h2>
+    <p>This asks how much of the scanned corpus is covered if we keep only the most frequently firing rules.</p>
+"""
+    if coverage_img:
+        html += generate_chart_embed(coverage_img, "Guidance rule top-N coverage plot", height=580)
+
+    coverage = guidance_data["coverage"]
+    if not coverage.empty:
+        html += """
+    <table>
+        <tr>
+            <th>Top N rules</th>
+            <th>Covered headwords</th>
+            <th>Coverage of scanned headwords</th>
+            <th>Coverage of matched headwords</th>
+            <th>Coverage of rule incidences</th>
+        </tr>
+"""
+        for _, row in coverage.iterrows():
+            html += f"""        <tr>
+            <td>{int(row['top_n'])}</td>
+            <td>{int(row['covered_headwords']):,}</td>
+            <td>{format_percent(row['scanned_headword_coverage'])}</td>
+            <td>{format_percent(row['matched_headword_coverage'])}</td>
+            <td>{format_percent(row['rule_incidence_coverage'])}</td>
+        </tr>
+"""
+        html += "    </table>\n"
+
+    html += """
+    <h2>Top Firing Rules</h2>
+    <table>
+        <tr>
+            <th>Rank</th>
+            <th>Kind</th>
+            <th>Rule</th>
+            <th>Preferred</th>
+            <th>Matched headwords</th>
+            <th>Occurrences</th>
+            <th>Date basis</th>
+            <th>Introduced</th>
+        </tr>
+"""
+    for _, row in top_rules.head(50).iterrows():
+        introduced_at = row["introduced_at"]
+        if pd.isna(introduced_at):
+            introduced_display = ""
+        else:
+            introduced_display = str(pd.to_datetime(introduced_at, utc=True).date())
+        html += f"""        <tr>
+            <td>{int(row['rank'])}</td>
+            <td>{html_module.escape(str(row['kind']))}</td>
+            <td><a href="{guidance_rule_href(row['rule_key'])}">{html_module.escape(str(row['label']))}</a></td>
+            <td>{html_module.escape(str(row['preferred_translation']))}</td>
+            <td>{int(row['firing_headwords']):,}</td>
+            <td>{int(row['occurrence_count']):,}</td>
+            <td>{html_module.escape(str(row['introduced_at_basis']))}</td>
+            <td>{html_module.escape(introduced_display)}</td>
+        </tr>
+"""
+    html += "    </table>\n"
+
+    html += generate_page_footer()
+    return html
+
+
 def generate_index_page():
     """Generate index page with links to all statistics sections."""
     html = generate_page_header('Statistical Analysis - Overview', 'index')
@@ -2458,6 +3308,12 @@ def generate_index_page():
         <p>Analysis of Stephanos's citations of Pausanias the Periegete. Did Stephanos have access to the
         complete text of Pausanias, or only certain portions? Statistical analysis of citation distribution
         with links to the cited passages.</p>
+    </div>
+
+    <div class="section-card">
+        <h3><a href="statistics/guidance_rules.html">8. Guidance Rule Statistics</a></h3>
+        <p>Daily statistics for translation-guidance rules: discovery estimates, Zipf-like rank frequency,
+        and top-rule headword coverage.</p>
     </div>
 """
 
@@ -3334,6 +4190,33 @@ def main():
         translation_human_scatter_img = None
         geographic_length_analysis = None
 
+    # 3.6. Translation-guidance rule statistics
+    print("  Analyzing guidance rule statistics...")
+    guidance_rule_data = get_guidance_rule_statistics_data(cur)
+    if guidance_rule_data:
+        guidance_zipf_img = generate_guidance_zipf_visualization(
+            guidance_rule_data,
+            "guidance_rule_zipf.html",
+        )
+        guidance_coverage_img = generate_guidance_coverage_visualization(
+            guidance_rule_data,
+            "guidance_rule_coverage.html",
+        )
+        guidance_kappa_discovery_img = generate_guidance_kappa_discovery_visualization(
+            guidance_rule_data,
+            "guidance_rule_kappa_accumulation.html",
+        )
+        print(
+            f"    guidance rules: {len(guidance_rule_data['rules']):,}; "
+            f"scanned headwords: {guidance_rule_data['scanned_headwords']:,}; "
+            f"matched headwords: {guidance_rule_data['matched_headwords']:,}"
+        )
+    else:
+        guidance_zipf_img = None
+        guidance_coverage_img = None
+        guidance_kappa_discovery_img = None
+        print("    guidance rule tables unavailable")
+
     # 4. Ridge regression analysis
     print("  Building feature matrix for ridge regression...")
     X, y, noun_lemmas, lemma_names, is_parisinus = get_proper_noun_features(cur)
@@ -3562,6 +4445,16 @@ def main():
     )
     (stats_dir / "translation_length.html").write_text(translation_length_html, encoding='utf-8')
 
+    # Generate guidance rule statistics page
+    print("    - Generating guidance rule statistics page...")
+    guidance_rules_html = generate_guidance_rules_statistics_page(
+        guidance_rule_data,
+        guidance_zipf_img,
+        guidance_coverage_img,
+        guidance_kappa_discovery_img,
+    )
+    (stats_dir / "guidance_rules.html").write_text(guidance_rules_html, encoding='utf-8')
+
     # Generate regression page
     print("    - Generating regression page...")
     regression_html = generate_regression_page(
@@ -3610,6 +4503,7 @@ def main():
     print(f"  - Main page: {(ref_site_dir / 'statistics.html').absolute()}")
     print(f"  - Word count: {(stats_dir / 'word_count.html').absolute()}")
     print(f"  - Translation length: {(stats_dir / 'translation_length.html').absolute()}")
+    print(f"  - Guidance rules: {(stats_dir / 'guidance_rules.html').absolute()}")
     print(f"  - Regression: {(stats_dir / 'regression.html').absolute()}")
     print(f"  - Categories: {(stats_dir / 'categories.html').absolute()}")
     print(f"  - Etymology: {(stats_dir / 'etymology.html').absolute()}")
