@@ -16,6 +16,8 @@ This covers item 6 from the design work plan: the content model sketch. Per the 
 
 The current database schema is treated as evidence, not as the product model the UI must expose. In particular, the UI should not teach users the accidental distinctions between generator outputs, protected reports, old review fields, new variant tables, and temporary entity-import tables.
 
+Hard public/private rule: Billerbeck source text, Billerbeck OCR, and Billerbeck scan imagery are protected-only. Public pages may refer to Billerbeck-era translation/provenance issues only in abstract methodological terms, without exposing the source text, OCR text, scan images, or direct public links to those materials.
+
 ## Model In One Sentence
 
 Stephanos is an entry-centred scholarly reference system: each entry/headword gathers source text versions, translations, entities, source citations, commentary, guidance hits, review actions, and operational provenance; public and protected workspaces are different projections of those same objects.
@@ -25,8 +27,8 @@ Stephanos is an entry-centred scholarly reference system: each entry/headword ga
 | Object | Current data anchors | Public role | Protected/editorial role | Design note |
 | --- | --- | --- | --- | --- |
 | Entry / headword | `assembled_lemmas` | Main public object page and browse/search unit | Main review object and batch unit | The entry is the anchor object. Other data should feel attached to it, not scattered across pages. |
-| Source text version | `lemma_source_text_versions`, `lemma_source_lines` | Shows the current public Greek source and source provenance | Lets reviewers compare Meineke, Keesling, Billerbeck, OCR, and manual variants | Source version must be explicit anywhere translation quality is judged. |
-| Source evidence | `images`, `lemma_images`, `pdf_files`, `html_files`, protected scan pages | Usually a contextual evidence link | Diagnostic/evidence view for source lookup, OCR, and scan mismatch checks | Scans are evidence, not a public top-level section. |
+| Source text version | `lemma_source_text_versions`, `lemma_source_lines` | Shows the current public Greek source and source provenance; never Billerbeck source text | Lets reviewers compare Meineke, Keesling, Billerbeck, OCR, and manual variants | Source version must be explicit anywhere translation quality is judged. Billerbeck variants are protected-only. |
+| Source evidence | `images`, `lemma_images`, `pdf_files`, `html_files`, protected scan pages | Usually a contextual evidence link for public-safe sources only | Diagnostic/evidence view for source lookup, OCR, and scan mismatch checks | Scans are evidence, not a public top-level section. Billerbeck scans/OCR are never public. |
 | AI translation run | `translation_runs`, `translation_run_requests` | May appear only when public-eligible and clearly labelled | Main comparison object for review, variants, prompt evaluation, and provenance | Never show "latest" without a stable run identity and source-text version. |
 | Human translation | `human_translations`, legacy review fields | Source of reviewed/final public translation | Initial, reviewed, and final human review states | Human text should be protected from automatic overwrites. |
 | Canonical translation selection | `lemma_canonical_variants`, `public_cgi/canonical_translation.cgi` | Determines what the public entry should foreground | Lets reviewers promote a variant to official/canonical status | Canonical means selected, not merely newest. |
@@ -209,7 +211,7 @@ CommentaryEntry
 
 | Projection | Shows | Hides or collapses | Primary owner |
 | --- | --- | --- | --- |
-| Public entry page | Headword, current Greek, canonical translation, reviewed entities, source citations, public commentary, compact provenance | Draft variants, raw review actions, scan-debug data, unresolved entity candidates, pipeline state | Public reader |
+| Public entry page | Headword, current Greek, canonical translation, reviewed entities, source citations, public commentary, compact provenance | Draft variants, raw review actions, scan-debug data, unresolved entity candidates, Billerbeck source/OCR/scans, pipeline state | Public reader |
 | Review entry workbench | Source-version selector, all translation variants, canonical-selection controls, review notes, guidance hits, impacts, entity links, source evidence | Public-reader visual simplicity | Greta / Gabriel |
 | Final translation workspace | Many finished entries, source text and final translation, inline impacts, edit controls | Raw OCR and low-level pipeline data | Greta |
 | Entity curation workspace | Entity candidates, authority links, all contexts, Brady/ToposText imports, correction state | Public presentation polish | Brady |
@@ -225,7 +227,7 @@ The product needs a small, shared state language. Raw database statuses can rema
 | --- | --- | --- |
 | Entry review | Not reviewed, AI available, Human initial, Human reviewed, Final, Blocked, Source issue, Stale | Avoid exposing internal combinations unless the user asks for detail. |
 | Translation variant | Draft, Completed AI, Approved AI, Human initial, Human reviewed, Final, Rejected, Hidden, Outdated | "Latest" should not be a status. It is a sort order. |
-| Source text | Current public Greek, Alternate source, OCR source, Manual source, Source conflict, Scan mismatch | Keesling/Meineke/Billerbeck should be explicit where relevant. |
+| Source text | Current public Greek, Alternate source, OCR source, Manual source, Source conflict, Scan mismatch | Keesling/Meineke/Billerbeck should be explicit where relevant in protected review. Billerbeck should not be a public source label attached to visible source text. |
 | Entity | Candidate, Matched, Ambiguous, Not found, Human approved, Human corrected, Not alignable, Removed, Added | Entity chips should show labels/descriptions, not only IDs. |
 | Authority link | Machine candidate, Human chosen, Imported from Brady, Imported from ToposText, External missing, External ambiguous | Supports Brady's workflow without leaking every provisional state publicly. |
 | Guidance rule | Investigate, Recognizer, Active guidance, Settled, Unsure, Retired | Distinguish detect-only from translation-affecting rules. |
@@ -307,13 +309,14 @@ These rules should guide design and later implementation.
 1. Human-reviewed translation wins over AI output unless a human explicitly changes the canonical selection.
 2. A translation without source-text-version provenance is not review-grade.
 3. "Latest AI translation" is a sort/filter, not a trustworthy label by itself.
-4. Public pages should foreground stable scholarly content and collapse operational provenance.
-5. Protected workspaces should expose provenance, alternatives, stale states, and uncertainty directly.
-6. Entity review should be organized around entities and authority decisions, with entries as contexts.
-7. Guidance rules should show both human intent and machine evidence.
-8. Source evidence is always reachable from review, but it should not dominate public navigation.
-9. Exports should carry scope, date, source text version, translation status, and public/private status.
-10. Old generated URLs can remain, but navigation should teach the conceptual model, not the generator model.
+4. Billerbeck source text, OCR, and scans are never public.
+5. Public pages should foreground stable scholarly content and collapse operational provenance.
+6. Protected workspaces should expose provenance, alternatives, stale states, and uncertainty directly.
+7. Entity review should be organized around entities and authority decisions, with entries as contexts.
+8. Guidance rules should show both human intent and machine evidence.
+9. Source evidence is always reachable from review, but it should not dominate public navigation.
+10. Exports should carry scope, date, source text version, translation status, and public/private status.
+11. Old generated URLs can remain, but navigation should teach the conceptual model, not the generator model.
 
 ## Open Model Questions
 

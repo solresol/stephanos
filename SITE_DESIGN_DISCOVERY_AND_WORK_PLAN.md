@@ -10,6 +10,8 @@ Action item 12 from the 2026-05-14 Stephanos meeting says to keep a UI polish pa
 
 This document assembles the material a designer would want before redesigning the Stephanos web experience, then lays out the design work plan step by step.
 
+Hard public/private rule: Billerbeck source text, OCR text, and scan imagery must never be visible to public readers. Billerbeck-related comparison, leakage, and diagnostic work belongs in protected review/analysis/operations surfaces only.
+
 ## Sources Assembled
 
 Local project sources:
@@ -80,6 +82,8 @@ The main site navigation currently exposes a long mixed list:
 - Human Review
 - Downloads
 - PDF Book
+
+The Billerbeck-related item in that current list is a design and access-control problem, not a public navigation target. Public pages may discuss Billerbeck-era translation/provenance issues only without exposing Billerbeck source text, OCR text, scan images, or direct public links to them.
 
 The protected CGI tools have their own navigation model:
 
@@ -182,6 +186,7 @@ Workflow:
 - Review pages do not yet provide a compact status-aware entry selector.
 - Final-review sorting mixes entry-order, headword-order, accent-normalized order, and timestamp needs.
 - Translation version/provenance must be highly visible because stale V1/Billerbeck-era output has caused confusion.
+- Billerbeck source material is protected-only; provenance labels may identify Billerbeck-era translation runs or diagnostic risks, but public pages must not show Billerbeck source text, OCR text, scans, or comparison links.
 
 Visual system:
 
@@ -284,6 +289,8 @@ For Greg and pipeline maintenance.
 - Meineke/Billerbeck comparison and difference reports.
 - Export status.
 - Deployment/check freshness.
+
+Billerbeck comparison and difference reports are protected operational/review evidence only. They should not appear in the public reader's navigation or public source/provenance modules.
 
 This structure would reduce the public top nav to perhaps five or six items, while keeping all current pages discoverable through section landing pages.
 

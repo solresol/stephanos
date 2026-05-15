@@ -8,6 +8,8 @@ Status: design discovery artifact. This is an ownership and information-architec
 
 This inventory is based on the current checkout and generated files under `reference_site/`, `progress.html`, `exports/`, `review_cgi/`, `public_cgi/`, and the generation/deployment order in `run_daily_pipeline.sh`. I did not regenerate the site for this inventory.
 
+Hard public/private rule: Billerbeck source text, OCR text, and scan imagery must never be visible to public readers. Billerbeck-related comparison and contamination work belongs only in protected review, analysis, or operations surfaces.
+
 The useful unit is a page family, not each individual generated page. The current local snapshot contains 6,324 generated HTML files under `reference_site/`:
 
 | Count | Page family |
@@ -39,7 +41,7 @@ The current site does not have one navigation model.
 
 | Nav model | Where it appears | Current links or controls | Design issue |
 | --- | --- | --- | --- |
-| Public flat nav | `generate_reference_site.py` public pages | Ancient Sources, Works Cited, Word Index, Lemma Index, FGrHist, People and Deities, Ethnic Groups, Aliases, Places Map, Translation Prompts, Statistics, Meineke/Billerbeck, Difference Analysis, Clustering, Entity Review, Brady Review, Processing Progress, Pipeline Status, Page Scans, Human Review, Downloads, PDF Book | Public, editorial, analysis, and operations links are mixed in one long menu. |
+| Public flat nav | `generate_reference_site.py` public pages | Ancient Sources, Works Cited, Word Index, Lemma Index, FGrHist, People and Deities, Ethnic Groups, Aliases, Places Map, Translation Prompts, Statistics, Meineke/Billerbeck, Difference Analysis, Clustering, Entity Review, Brady Review, Processing Progress, Pipeline Status, Page Scans, Human Review, Downloads, PDF Book | Public, editorial, analysis, and operations links are mixed in one long menu. Any Billerbeck source/comparison link is especially not public-safe. |
 | Source/entity subnav | `sources.html`, `works.html`, `entities.html`, `peoples.html`, `aliases.html`, `fgrhist.html` | Sources, works, FGrHist, entities, peoples, aliases, statistics | Useful cluster, but it is not framed as one "reference objects" area. |
 | Statistics nav | `statistics.html`, `statistics/*.html`, `statistics_images/*.html` | Word count, translation length, regression, etymology, Parisinus comparison, category pages, Pausanias, guidance rules | Analysis pages are independent of the public/reference shell. |
 | Protected static nav | `reference_site/protected/*.html` | Page scans, human review, pipeline/status, Meineke reports, clustering, entity review | Operational diagnostics and editorial review reports sit beside scan evidence. |
@@ -79,7 +81,7 @@ The current site does not have one navigation model.
 | Processing progress | `progress.html` at repo root and deployed root | `generate_progress_site.py` | Public now; operational/back-compat | Greg | OCR/translation/image processing counts and token usage | Linked from public flat nav | Daily pipeline | Operations | Keep URL for compatibility; present through Operations landing page. |
 | Protected scan/image wrappers | `protected/image_849.html`; 1,732 pages | `generate_protected_pages.py` | Protected/static | Greg; reviewers secondarily | `images`, OCR JSON, `lemma_images`, assembled lemmas, source image files | Protected static nav | Daily after OCR/assembly | Operations, Review support | Treat as evidence/diagnostic pages. Link contextually from entry/review, not public top nav. |
 | Protected scan index | `protected/index.html` | `generate_protected_pages.py` | Protected/static | Greg | Same as protected image pages | Protected static nav | Daily after OCR/assembly | Operations | Operations dashboard card, not a public page. |
-| Meineke/Billerbeck comparison | `protected/meineke_comparison.html` | `generate_reference_site.py` | Protected/static | Greg; reviewers | Meineke/Billerbeck source text links, image/page coverage | Protected static nav | Daily after source-text changes | Operations, Review support | Keep as diagnostic evidence; surface specific diffs in review context. |
+| Meineke/Billerbeck comparison | `protected/meineke_comparison.html` | `generate_reference_site.py` | Protected/static only | Greg; reviewers | Meineke/Billerbeck source text links, image/page coverage | Protected static nav | Daily after source-text changes | Operations, Review support | Keep as protected diagnostic evidence. Never expose Billerbeck source text, OCR text, scan images, or comparison links in public navigation. |
 | Meineke difference and impact reports | `protected/meineke_difference_analysis.html`, `meineke_impact_*.html` | `generate_meineke_difference_analysis_page.py` | Protected/static | Greg; Gabriel | `meineke_text_differences`, source variants, translation impact classifications | Protected static nav | Daily after source-text/translation updates | Analysis, Review support | Make a curated Analysis/Review report, not a public nav item. |
 | Meineke holes reports | `protected/meineke_holes_report.html`, JSON reports | `generate_meineke_holes_report.py` and related source-coverage scripts | Protected/static | Greg | Meineke headwords/source coverage queues | Protected static nav | Daily or source-import run | Operations | Operations diagnostic. |
 | Translation risk report | `protected/translation_risk_report.html` | `generate_translation_risk_report.py` | Protected/static | Gabriel; Greg | Translation review/risk heuristics | Protected static nav | Daily after translation/review changes | Review, Analysis secondary | Convert to review queue or batch-selection input. |
@@ -185,6 +187,7 @@ Design responsibility: make freshness, failures, source evidence, and deploy sta
 ## Immediate IA Moves
 
 1. Public top nav should become: Read, Map, Sources, Entities, Analysis, Downloads. Review/Operations links can appear only for authenticated/editorial contexts.
+   Billerbeck source/comparison links must be removed from public navigation entirely.
 2. Add section landing pages for Review, Entities, Guidance, Analysis, and Operations before redesigning every individual generated page.
 3. Keep existing URLs stable, but change how users discover them.
 4. Make `headword_*.html` the public object-page template and `/cgi-bin/review.cgi?id=*` the editorial object-page template.

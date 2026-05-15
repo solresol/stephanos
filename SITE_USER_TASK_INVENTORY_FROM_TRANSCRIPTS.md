@@ -10,6 +10,8 @@ Related artifacts:
 - `SITE_PAGE_INVENTORY_AND_OWNERSHIP.md`
 - `output/playwright/site-design-2026-05-15/README.md`
 
+Hard public/private rule: Billerbeck source text, OCR text, and scan imagery must never be visible to public readers. Tasks involving Billerbeck source material are protected review, analysis, or operations tasks.
+
 ## Purpose
 
 This document extracts user tasks from the Stephanos meeting transcripts and transcript-derived notes. The goal is to make explicit what people are trying to do with the site and supporting tools before redesigning navigation, page families, and page ownership.
@@ -98,7 +100,7 @@ The transcript evidence points to six major task clusters:
 | EC08 | Brady, Greg | Compare Stephanos AI/entity extraction with Brady's current Dropbox HTML rather than stale public ToposText. | S8 lines 25-26 | ToposText intake should be a repeatable protected workflow, not a one-off report. |
 | EC09 | Brady, Greg | Track temporary and external authority states such as ToposText, Wikidata, Pleiades, Manto, RE, `zzz`, `YY`, and `JJ`. | S4 lines 28-29; S8 lines 25-29 | The entity UI needs stable labels for provisional, missing, inferred, and external IDs. |
 | EC10 | Brady, Greta | Exchange Manto/entity exports and tagged external texts such as Zenobius/Zenobiaus. | S4 lines 75-79 | Entity workflows need import/export affordances and dated snapshots. |
-| EC11 | Brady, Greg | Keep oracle and Billerbeck-derived factual cross-reference data useful while avoiding public reuse of protected text. | S4 lines 43-47 | Public pages and private data views need different disclosure rules. |
+| EC11 | Brady, Greg | Keep oracle and Billerbeck-derived factual cross-reference data useful while preventing any public exposure of Billerbeck source text, OCR text, or scan imagery. | S4 lines 43-47 | Public pages and private data views need hard separation rules. |
 | EC12 | Brady, Greg | Export cited works/authors in CSV for external ancient-author/work Wikidata projects. | S7 lines 767-783 | Source-citation extraction needs status, CSV exports, and external-project formatting. |
 | EC13 | Brady, Greta, Greg | Delay nodegoat as a primary workflow until the structured data is more settled; keep it as a later visualization/export option. | S7 lines 671-680 | Nodegoat should not drive the near-term IA; Stephanos needs its own entity workbench first. |
 
@@ -126,7 +128,7 @@ The transcript evidence points to six major task clusters:
 | RP03 | Greg, Greta | Prepare human-research ethics, opt-out language, and tutorial recruitment logistics. | S5 lines 109-180 | This is outside the public site, but the tool must support controlled packets and consent-safe workflows. |
 | RP04 | Greta, Gabriel, Greg | Compare successive rounds of 20 translations and measure whether prompt/rule improvements reduce errors. | S6 lines 526-550; S7 lines 623-628 | Translation runs need comparable snapshots by round and entry set. |
 | RP05 | Gabriel, Greta, Greg | Classify edits by style, reader comprehension, and necessary semantic correction; possibly use an independent rater. | S6 lines 557-641 | Review notes and final edits should be exportable into a coding/evaluation table. |
-| RP06 | Greta, Gabriel, Greg | Track Billerbeck/German leakage and triangulated translation evidence. | S0 lines 430-571, 697-760; S3 lines 164-215; S5 lines 515-541 | The system should preserve suspicious examples, source variants, and notes as paper evidence. |
+| RP06 | Greta, Gabriel, Greg | Track Billerbeck/German leakage and triangulated translation evidence in protected research evidence. | S0 lines 430-571, 697-760; S3 lines 164-215; S5 lines 515-541 | The system should preserve suspicious examples, source variants, and notes as private paper evidence, while never publishing Billerbeck source text or scans. |
 | RP07 | Gabriel, Greg | Use formula/guidance distributions as philological evidence about Stephanos, epitomizers, or lexical domains. | S1 lines 214-320; S8 lines 68-69 | Guidance analytics should be exportable and organized by rule, entry, source, and corpus slice. |
 | RP08 | Greg, Greta | Analyze translation length/wordiness and compare Greek source length to English output. | S5 lines 900-981; S8 lines 40-41, 77-78 | Length analytics must verify source mappings before becoming paper evidence. |
 | RP09 | Brady, Greg | Measure linked-data/entity extraction accuracy against Brady's corrections. | S6 lines 671-718, 724-737 | Entity correction UI should log machine proposal, human correction, and error category. |
@@ -155,15 +157,17 @@ The transcript evidence points to six major task clusters:
 
 2. Treat translation version/provenance as a primary UI element. Stale AI output, Billerbeck-era output, prompt versions, human precedence, and canonical translation selection are central to trust.
 
-3. Separate public reading from editorial and operational work. Public readers need text, translation, source, entities, map, search, commentary, and downloads. Reviewers need work queues and version history. Maintainers need freshness and pipeline state.
+3. Enforce Billerbeck privacy as a hard boundary. Public readers should never see Billerbeck source text, OCR text, scan images, or direct public comparison links.
 
-4. Make Guidance a workbench, not just a public page. Gabriel's tasks require dense rule browsing, rule lifecycle, usage statistics, formula discovery, and impact acknowledgement.
+4. Separate public reading from editorial and operational work. Public readers need text, translation, source, entities, map, search, commentary, and downloads. Reviewers need work queues and version history. Maintainers need freshness and pipeline state.
 
-5. Make Entities entity-centred. Brady's tasks are about authority records and linked-data correction across the corpus. Headwords are evidence and contexts, not the right top-level object for curation.
+5. Make Guidance a workbench, not just a public page. Gabriel's tasks require dense rule browsing, rule lifecycle, usage statistics, formula discovery, and impact acknowledgement.
 
-6. Use ToposText as a design reference for confidence, object pages, map/text linking, and scholarly polish. Do not copy its backend assumptions; Stephanos has stronger AI provenance and review-state needs.
+6. Make Entities entity-centred. Brady's tasks are about authority records and linked-data correction across the corpus. Headwords are evidence and contexts, not the right top-level object for curation.
 
-7. Keep research outputs as first-class artifacts. The project needs comparison sets, notes, coding tables, exports, analytics, and demos. These are not incidental to the UI; they are part of why the UI exists.
+7. Use ToposText as a design reference for confidence, object pages, map/text linking, and scholarly polish. Do not copy its backend assumptions; Stephanos has stronger AI provenance and review-state needs.
+
+8. Keep research outputs as first-class artifacts. The project needs comparison sets, notes, coding tables, exports, analytics, and demos. These are not incidental to the UI; they are part of why the UI exists.
 
 ## Candidate Page / Workspace Set
 
