@@ -40,7 +40,7 @@ type FinalReviewRow struct {
 	LatestAISortAt         time.Time
 	Notes                  string
 	HasFinished            bool
-	HasLocalReviewed       bool
+	HasHumanFirstPass      bool
 	HasImpact              bool
 	Impacts                []GuidanceRuleImpact
 	GuidanceHits           []GuidanceHit
@@ -49,18 +49,19 @@ type FinalReviewRow struct {
 }
 
 type FinalReviewPageData struct {
-	Rows              []FinalReviewRow
-	Letters           []string
-	RuleOptions       []FinalReviewRuleOption
-	Filters           FinalReviewFilters
-	ReturnURL         string
-	ExportedAt        string
-	TotalRows         int
-	DisplayedRows     int
-	FinishedRows      int
-	LocalReviewedRows int
-	ImpactRows        int
-	SelectedRuleLabel string
+	Rows               []FinalReviewRow
+	Letters            []string
+	RuleOptions        []FinalReviewRuleOption
+	Filters            FinalReviewFilters
+	ReturnURL          string
+	ExportedAt         string
+	TotalRows          int
+	DisplayedRows      int
+	AITranslationRows  int
+	HumanFirstPassRows int
+	HumanReviewedRows  int
+	ImpactRows         int
+	SelectedRuleLabel  string
 }
 
 func main() {
@@ -114,9 +115,15 @@ func main() {
 func parseFinalReviewFilters(values url.Values) FinalReviewFilters {
 	status := strings.TrimSpace(values.Get("status"))
 	switch status {
-	case "all", "finished", "local_reviewed", "needs_final":
+	case "all", "ai_translation", "human_first_pass", "human_reviewed", "needs_review":
+	case "finished":
+		status = "human_reviewed"
+	case "local_reviewed":
+		status = "human_first_pass"
+	case "needs_final":
+		status = "needs_review"
 	default:
-		status = "finished"
+		status = "human_reviewed"
 	}
 	sortMode := strings.TrimSpace(values.Get("sort"))
 	switch sortMode {
@@ -224,11 +231,13 @@ func buildFinalReviewPageData(data *LemmaData, reviews map[int]*Review, filters 
 			review = &Review{LemmaID: lemma.ID, ReviewStatus: "not_reviewed"}
 		}
 		row := buildFinalReviewRow(lemma, review, impactByLemma[lemma.ID])
-		if row.HasFinished {
-			page.FinishedRows++
-		}
-		if row.HasLocalReviewed {
-			page.LocalReviewedRows++
+		switch row.TranslationStatus {
+		case "AI translation":
+			page.AITranslationRows++
+		case "Human first pass":
+			page.HumanFirstPassRows++
+		case "Human reviewed":
+			page.HumanReviewedRows++
 		}
 		if row.HasImpact {
 			page.ImpactRows++
@@ -252,7 +261,7 @@ func buildFinalReviewRow(lemma Lemma, review *Review, impacts []GuidanceRuleImpa
 		lemma.HumanGreekText,
 		lemma.GreekText,
 	)
-	translationText, status, by, updatedAt, finalTranslationSortAt, hasFinished, hasLocalReviewed := finalReviewTranslationState(lemma, review)
+	translationText, status, by, updatedAt, finalTranslationSortAt, hasFinished, hasHumanFirstPass := finalReviewTranslationState(lemma, review)
 	latestAISortAt := latestFinalReviewAITranslationTime(lemma)
 	guidanceHits := matchedFinalReviewGuidanceHits(lemma.GuidanceHits)
 	extraGuidance := 0
@@ -286,7 +295,7 @@ func buildFinalReviewRow(lemma Lemma, review *Review, impacts []GuidanceRuleImpa
 		LatestAISortAt:         latestAISortAt,
 		Notes:                  review.Notes,
 		HasFinished:            hasFinished,
-		HasLocalReviewed:       hasLocalReviewed,
+		HasHumanFirstPass:      hasHumanFirstPass,
 		HasImpact:              len(impacts) > 0,
 		Impacts:                impacts,
 		GuidanceHits:           guidanceHits,
@@ -303,7 +312,7 @@ func finalReviewTranslationState(lemma Lemma, review *Review) (string, string, s
 				updatedAt = *review.ReviewedAt
 			}
 			return text,
-				"Local reviewed",
+				"Human reviewed",
 				firstNonEmpty(review.ReviewedTranslationBy, review.ReviewerUsername),
 				formatReviewTime(review.ReviewedAt),
 				updatedAt,
@@ -311,31 +320,12 @@ func finalReviewTranslationState(lemma Lemma, review *Review) (string, string, s
 				true
 		}
 	}
-	if selectedKind := strings.TrimSpace(mapStringValue(lemma.CanonicalVariantRef, "kind")); selectedKind != "" && selectedKind != "legacy_assembled" {
-		if text := strings.TrimSpace(lemma.EnglishTranslation); text != "" {
-			variant := findFinalReviewVariant(lemma, selectedKind, mapStringValue(lemma.CanonicalVariantRef, "id"))
-			label := "Exported canonical"
-			hasFinished := false
-			if selectedKind == "human_translation" {
-				label = "Exported human translation"
-				hasFinished = finalReviewHumanVariantIsFinal(variant)
-			} else if selectedKind == "translation_run" {
-				if finalReviewVariantHasHumanReview(variant) {
-					label = "Reviewed AI translation"
-					hasFinished = true
-				} else {
-					label = "AI translation candidate"
-				}
-			}
-			return text,
-				label,
-				mapStringValue(variant, "reviewed_by"),
-				formatReviewTimeValue(finalReviewVariantTime(variant, "reviewed_at", "updated_at", "created_at")),
-				finalReviewVariantTime(variant, "reviewed_at", "updated_at", "created_at"),
-				hasFinished,
-				false
-		}
+
+	if variant := selectFinalReviewReviewedHumanVariant(lemma); variant != nil {
+		text, by, updatedAt, sortAt := finalReviewVariantTextAndMeta(variant, "reviewed_at", "updated_at", "created_at")
+		return text, "Human reviewed", by, updatedAt, sortAt, true, true
 	}
+
 	if review != nil {
 		if text := strings.TrimSpace(review.CorrectedEnglishTranslation); text != "" {
 			updatedAt := time.Time{}
@@ -343,28 +333,154 @@ func finalReviewTranslationState(lemma Lemma, review *Review) (string, string, s
 				updatedAt = *review.ReviewedAt
 			}
 			return text,
-				"Initial human draft",
+				"Human first pass",
 				firstNonEmpty(review.InitialTranslationBy, review.ReviewerUsername),
 				formatReviewTime(review.ReviewedAt),
 				updatedAt,
 				false,
-				false
+				true
 		}
 	}
-	return "", "No final text", "", "", time.Time{}, false, false
+
+	if variant := selectFinalReviewHumanFirstPassVariant(lemma); variant != nil {
+		text, by, updatedAt, sortAt := finalReviewVariantTextAndMeta(variant, "reviewed_at", "updated_at", "created_at")
+		return text, "Human first pass", by, updatedAt, sortAt, false, true
+	}
+
+	if variant := selectFinalReviewAITranslationVariant(lemma); variant != nil {
+		text, by, updatedAt, sortAt := finalReviewVariantTextAndMeta(variant, "created_at", "reviewed_at", "updated_at")
+		return text, "AI translation", by, updatedAt, sortAt, false, false
+	}
+
+	if text, variant := finalReviewSelectedTranslation(lemma); text != "" {
+		if variant != nil {
+			by, updatedAt, sortAt := finalReviewVariantMeta(variant, "reviewed_at", "updated_at", "created_at")
+			return text, "AI translation", by, updatedAt, sortAt, false, false
+		}
+		return text, "AI translation", "", "", time.Time{}, false, false
+	}
+
+	return "", "AI translation", "", "", time.Time{}, false, false
 }
 
-func finalReviewVariantHasHumanReview(variant map[string]interface{}) bool {
-	return firstNonEmpty(
-		mapStringValue(variant, "reviewed_by"),
-		mapStringValue(variant, "reviewed_at"),
-	) != ""
+func finalReviewSelectedTranslation(lemma Lemma) (string, map[string]interface{}) {
+	selectedKind := strings.TrimSpace(mapStringValue(lemma.CanonicalVariantRef, "kind"))
+	if selectedKind != "" && selectedKind != "legacy_assembled" {
+		variant := findFinalReviewVariant(lemma, selectedKind, mapStringValue(lemma.CanonicalVariantRef, "id"))
+		if text := strings.TrimSpace(mapStringValue(variant, "text")); text != "" {
+			return text, variant
+		}
+		if text := strings.TrimSpace(lemma.EnglishTranslation); text != "" {
+			return text, variant
+		}
+	}
+	if text := strings.TrimSpace(lemma.EnglishTranslation); text != "" {
+		return text, nil
+	}
+	return "", nil
+}
+
+func finalReviewVariantTextAndMeta(variant map[string]interface{}, timeKeys ...string) (string, string, string, time.Time) {
+	text := strings.TrimSpace(mapStringValue(variant, "text"))
+	by, updatedAt, sortAt := finalReviewVariantMeta(variant, timeKeys...)
+	return text, by, updatedAt, sortAt
+}
+
+func finalReviewVariantMeta(variant map[string]interface{}, timeKeys ...string) (string, string, time.Time) {
+	sortAt := finalReviewVariantTime(variant, timeKeys...)
+	return mapStringValue(variant, "reviewed_by"), formatReviewTimeValue(sortAt), sortAt
 }
 
 func finalReviewHumanVariantIsFinal(variant map[string]interface{}) bool {
 	status := strings.TrimSpace(mapStringValue(variant, "status"))
 	stage := strings.TrimSpace(mapStringValue(variant, "stage"))
 	return status == "approved" && (stage == "reviewed" || stage == "final")
+}
+
+func selectFinalReviewReviewedHumanVariant(lemma Lemma) map[string]interface{} {
+	var best map[string]interface{}
+	bestTime := time.Time{}
+	for _, variant := range lemma.TranslationVariants {
+		if mapStringValue(variant, "kind") != "human_translation" {
+			continue
+		}
+		if strings.TrimSpace(mapStringValue(variant, "text")) == "" {
+			continue
+		}
+		if !finalReviewHumanVariantIsFinal(variant) {
+			continue
+		}
+		updatedAt := finalReviewVariantTime(variant, "reviewed_at", "updated_at", "created_at")
+		if best == nil || compareTimeDescending(updatedAt, bestTime) < 0 {
+			best = variant
+			bestTime = updatedAt
+		}
+	}
+	return best
+}
+
+func selectFinalReviewHumanFirstPassVariant(lemma Lemma) map[string]interface{} {
+	var best map[string]interface{}
+	bestRank := 99
+	bestTime := time.Time{}
+	for _, variant := range lemma.TranslationVariants {
+		if mapStringValue(variant, "kind") != "human_translation" {
+			continue
+		}
+		if strings.TrimSpace(mapStringValue(variant, "text")) == "" {
+			continue
+		}
+		if finalReviewHumanVariantIsFinal(variant) {
+			continue
+		}
+		stage := strings.TrimSpace(mapStringValue(variant, "stage"))
+		status := strings.TrimSpace(mapStringValue(variant, "status"))
+		rank := 2
+		if stage == "initial" || status == "draft" {
+			rank = 0
+		} else if stage != "" || status != "" {
+			rank = 1
+		}
+		updatedAt := finalReviewVariantTime(variant, "reviewed_at", "updated_at", "created_at")
+		if best == nil || rank < bestRank || (rank == bestRank && compareTimeDescending(updatedAt, bestTime) < 0) {
+			best = variant
+			bestRank = rank
+			bestTime = updatedAt
+		}
+	}
+	return best
+}
+
+func selectFinalReviewAITranslationVariant(lemma Lemma) map[string]interface{} {
+	var best map[string]interface{}
+	bestRank := 99
+	bestTime := time.Time{}
+	for _, variant := range lemma.TranslationVariants {
+		if mapStringValue(variant, "kind") != "translation_run" {
+			continue
+		}
+		if strings.TrimSpace(mapStringValue(variant, "text")) == "" {
+			continue
+		}
+		status := strings.TrimSpace(mapStringValue(variant, "status"))
+		if status != "" && status != "approved" {
+			continue
+		}
+		rank := 2
+		switch strings.TrimSpace(mapStringValue(variant, "source_document")) {
+		case "meineke":
+			rank = 0
+		case "":
+			rank = 1
+		}
+		createdAt := finalReviewVariantTime(variant, "created_at", "reviewed_at", "updated_at")
+		if best == nil || rank < bestRank || (rank == bestRank && compareTimeDescending(createdAt, bestTime) < 0) {
+			best = variant
+			bestRank = rank
+			bestTime = createdAt
+		}
+	}
+	return best
 }
 
 func findFinalReviewVariant(lemma Lemma, kind string, id string) map[string]interface{} {
@@ -444,16 +560,20 @@ func finalReviewRowMatches(row FinalReviewRow, filters FinalReviewFilters) bool 
 		return false
 	}
 	switch filters.Status {
-	case "finished":
-		if !row.HasFinished {
+	case "ai_translation":
+		if row.TranslationStatus != "AI translation" {
 			return false
 		}
-	case "local_reviewed":
-		if !row.HasLocalReviewed {
+	case "human_first_pass":
+		if row.TranslationStatus != "Human first pass" {
 			return false
 		}
-	case "needs_final":
-		if row.HasFinished {
+	case "human_reviewed":
+		if row.TranslationStatus != "Human reviewed" {
+			return false
+		}
+	case "needs_review":
+		if row.TranslationStatus != "AI translation" && row.TranslationStatus != "Human first pass" {
 			return false
 		}
 	}
@@ -682,7 +802,7 @@ func finalReviewFilterHref(current FinalReviewFilters, key string, value string)
 	if current.Letter != "" {
 		values.Set("letter", current.Letter)
 	}
-	if current.Status != "" && current.Status != "finished" {
+	if current.Status != "" && current.Status != "human_reviewed" {
 		values.Set("status", current.Status)
 	}
 	if current.Sort != "" && current.Sort != "entry_number" {
@@ -705,7 +825,7 @@ func finalReviewFilterHref(current FinalReviewFilters, key string, value string)
 			values.Set("letter", value)
 		}
 	case "status":
-		if value == "" || value == "finished" {
+		if value == "" || value == "human_reviewed" {
 			values.Del("status")
 		} else {
 			values.Set("status", value)
@@ -1089,7 +1209,7 @@ const finalReviewTemplate = `<!DOCTYPE html>
 <body>
     <div class="header">
         <h1>Final Translation Workspace</h1>
-        <div class="meta">Reviewed/final translation editing against current Meineke source text. Exported {{.ExportedAt}}.</div>
+        <div class="meta">Database-derived translation workflow against current Meineke source text. Exported {{.ExportedAt}}.</div>
     </div>
     <div class="container">
         <div class="view-tabs">
@@ -1101,8 +1221,9 @@ const finalReviewTemplate = `<!DOCTYPE html>
         </div>
         <div class="summary-grid">
             <div class="summary-item"><strong>{{.DisplayedRows}}</strong>Displayed entries</div>
-            <div class="summary-item"><strong>{{.FinishedRows}}</strong>Reviewed/final entries</div>
-            <div class="summary-item"><strong>{{.LocalReviewedRows}}</strong>Local reviewed texts</div>
+            <div class="summary-item"><strong>{{.HumanReviewedRows}}</strong>Human reviewed</div>
+            <div class="summary-item"><strong>{{.HumanFirstPassRows}}</strong>Human first pass</div>
+            <div class="summary-item"><strong>{{.AITranslationRows}}</strong>AI translation</div>
             <div class="summary-item"><strong>{{.ImpactRows}}</strong>Entries with rule impacts</div>
         </div>
         <form class="filters" method="get" action="/cgi-bin/final_review.cgi">
@@ -1116,9 +1237,10 @@ const finalReviewTemplate = `<!DOCTYPE html>
             <div>
                 <label for="status">Status</label>
                 <select name="status" id="status">
-                    <option value="finished" {{if eq .Filters.Status "finished"}}selected{{end}}>Reviewed/final</option>
-                    <option value="local_reviewed" {{if eq .Filters.Status "local_reviewed"}}selected{{end}}>Local reviewed only</option>
-                    <option value="needs_final" {{if eq .Filters.Status "needs_final"}}selected{{end}}>Needs final text</option>
+                    <option value="human_reviewed" {{if eq .Filters.Status "human_reviewed"}}selected{{end}}>Human reviewed</option>
+                    <option value="human_first_pass" {{if eq .Filters.Status "human_first_pass"}}selected{{end}}>Human first pass</option>
+                    <option value="ai_translation" {{if eq .Filters.Status "ai_translation"}}selected{{end}}>AI translation</option>
+                    <option value="needs_review" {{if eq .Filters.Status "needs_review"}}selected{{end}}>Needs human review</option>
                     <option value="all" {{if eq .Filters.Status "all"}}selected{{end}}>All entries</option>
                 </select>
             </div>
@@ -1182,7 +1304,7 @@ const finalReviewTemplate = `<!DOCTYPE html>
                             <div class="source-text">{{if .SourceText}}{{.SourceText}}{{else}}No source text exported for this entry.{{end}}</div>
                         </div>
                         <div class="translation-pane">
-                            <div class="pane-title">Reviewed / Final English</div>
+                            <div class="pane-title">Working English</div>
                             <textarea name="reviewed_english">{{.TranslationText}}</textarea>
                             <textarea class="notes-box" name="notes" placeholder="Review notes">{{.Notes}}</textarea>
                             <div class="row-actions">
