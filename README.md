@@ -164,11 +164,18 @@ uv run generate_topostext_authority_status_page.py \
   --summary-json exports/topostext_authority_status_summary.json
 ```
 
+Run the dedicated Brady/ToposText intake pipeline:
+```bash
+DB_HOST=raksasa DB_USER=stephanos ./run_topostext_pipeline.sh
+```
+
 The intake report exposes paragraph counts, inline entity tag counts, `YY`/`JJ`/`zzz` placeholders, RE namespace rows, and a complete entity-mention CSV for external review. The review queue page groups the imported rows into concrete work queues: `JJ` new-ID work, `YY` deeper search, `zzz` unresolved IDs, RE namespace enrichment gaps, and source markup/classification fixes. It also surfaces changed entries between snapshots, possible `PRN -> place` / `PRN -> ethnic` tag fixes from Brady's place-type term list, tentative region hints, and possible RE matches for unresolved tags. When the PaulyHeadwords workbook is available, RE rows are enriched with German short definitions, RE article Wikidata items, and subject Wikidata items. None of these commands mutates the existing entity-resolution tables.
 
 The history page is the read-only change browser. It shows the imported snapshot timeline, adjacent snapshot change sets, paired mention transitions such as `prn zzz -> place 337435RMes`, and entry-level history across snapshots. It is generated from the same staging tables rather than from git diffs of the raw HTML.
 
 The authority/status page summarizes the additive canonical authority layer and publishes the concrete worklists Brady can review: possible RE matches for unmatched tags, likely `<ethnic>` suggestions, fresh ToposText ID rows, and recent entity-tag changes detected from the latest Dropbox snapshot.
+
+On `raksasa`, keep this separated from the main daily Stephanos pipeline. The main pipeline should run with `TOPOSTEXT_HTML_FETCH=0 TOPOSTEXT_INTAKE_IMPORT=0 TOPOSTEXT_INTAKE_REPORT=0`, while `run_topostext_pipeline.sh` should run at 10:00 Australia/Sydney during May-October, which is 03:00 in Greece while Athens is on EEST. Re-check the offset when Greece and Sydney are on different daylight-saving regimes.
 
 Refresh the additive canonical authority/entity tables from the latest ToposText intake rows, effective place clusters, and effective proper nouns:
 ```bash

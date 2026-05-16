@@ -179,16 +179,18 @@ echo "Step 2: Skipping Billerbeck image extraction (OCR corpus complete)." | tee
 
 TOPOSTEXT_PAULY_WORKBOOK="${TOPOSTEXT_PAULY_WORKBOOK:-data/pauly/PaulyHeadwordstoWikidata from Margherita scrape.xlsx}"
 
-# Step 2a: Fetch Brady's current ToposText HTML snapshot
-TOPOSTEXT_HTML_FETCH="${TOPOSTEXT_HTML_FETCH:-1}"
+# Step 2a: Fetch Brady's current ToposText HTML snapshot.
+# The production cron path for this is run_topostext_pipeline.sh, timed for
+# Brady's Greece workday. Set this to 1 only for manual full-pipeline runs.
+TOPOSTEXT_HTML_FETCH="${TOPOSTEXT_HTML_FETCH:-0}"
 if [ "$TOPOSTEXT_HTML_FETCH" -gt 0 ]; then
     echo "Step 2a: Fetching ToposText HTML snapshot..." | tee -a "$LOGFILE"
     uv run fetch_topostext_html.py --output-dir data/topostext_snapshots \
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: ToposText HTML fetch failed" | tee -a "$LOGFILE"
 fi
 
-# Step 2a1: Import ToposText snapshot into review staging tables
-TOPOSTEXT_INTAKE_IMPORT="${TOPOSTEXT_INTAKE_IMPORT:-1}"
+# Step 2a1: Import ToposText snapshot into review staging tables.
+TOPOSTEXT_INTAKE_IMPORT="${TOPOSTEXT_INTAKE_IMPORT:-0}"
 if [ "$TOPOSTEXT_INTAKE_IMPORT" -gt 0 ]; then
     echo "Step 2a1: Importing ToposText intake staging rows..." | tee -a "$LOGFILE"
     topostext_import_args=(uv run import_topostext_intake.py)
@@ -620,8 +622,9 @@ echo "Step 8b: Exporting lemma data for review interface..." | tee -a "$LOGFILE"
 uv run export_for_review.py 2>&1 | tee -a "$LOGFILE"
 uv run export_guidance_scan_db.py 2>&1 | tee -a "$LOGFILE"
 
-# Step 8c: Generate ToposText intake report for Brady review
-TOPOSTEXT_INTAKE_REPORT="${TOPOSTEXT_INTAKE_REPORT:-1}"
+# Step 8c: Generate ToposText intake report for Brady review.
+# The dedicated ToposText cron owns these outputs in normal operation.
+TOPOSTEXT_INTAKE_REPORT="${TOPOSTEXT_INTAKE_REPORT:-0}"
 if [ "$TOPOSTEXT_INTAKE_REPORT" -gt 0 ]; then
     echo "Step 8c: Generating ToposText intake report..." | tee -a "$LOGFILE"
     topostext_report_args=(
