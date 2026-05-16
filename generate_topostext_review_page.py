@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from import_topostext_intake import ACTION_STATUS_LABELS
+from site_navigation import render_site_navigation, site_navigation_styles
 
 
 DEFAULT_OUTPUT = Path("exports/topostext_review.html")
@@ -847,6 +848,7 @@ def build_html(
 
     cache_suffix = latest_snapshot.sha256[:12] or str(latest_snapshot.snapshot_id)
     links = [
+        f"<a href=\"topostext_authority_status.html?v={render_cell(cache_suffix)}\">authority status</a>",
         f"<a href=\"topostext_intake_report.html?v={render_cell(cache_suffix)}\">full intake report</a>",
         f"<a href=\"topostext_history.html?v={render_cell(cache_suffix)}\">snapshot history</a>",
     ]
@@ -957,10 +959,11 @@ def build_html(
 <head>
   <meta charset="utf-8">
   <title>ToposText Intake Review Queues</title>
-  <style>{css}</style>
+  <style>{css}{site_navigation_styles()}</style>
 </head>
 <body>
 <main>
+  {render_site_navigation("extracted", "topostext_review", absolute_links=True)}
   <h1>ToposText Intake Review Queues</h1>
   <p>Action queues generated from the imported PostgreSQL staging rows for Brady's current ToposText Stephanus HTML.</p>
   <p>{link_html}</p>

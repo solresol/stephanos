@@ -15,6 +15,11 @@ from generate_topostext_history_page import (
     build_pair_summary,
     normalize_surface,
 )
+from generate_topostext_authority_status_page import (
+    build_ethnic_suggestion_rows,
+    build_new_id_rows,
+    build_re_candidate_rows as build_status_re_candidate_rows,
+)
 from import_topostext_intake import (
     action_status,
     authority_namespace_and_id,
@@ -345,6 +350,38 @@ class ToposTextIntakeReportTests(unittest.TestCase):
         self.assertEqual(canonical_status("approved", True), "confirmed")
         self.assertEqual(canonical_status("candidate_import", True), "candidate")
         self.assertEqual(canonical_status("", False), "needs_review")
+
+    def test_authority_status_worklists_select_brady_facing_rows(self):
+        rows = [
+            {
+                "action_status": "needs_authority_id",
+                "authority_namespace": "topostext_pending",
+                "re_candidate_count": 2,
+                "suggested_tag_name": "",
+                "tag_name": "prn",
+                "place_type_kind": "",
+            },
+            {
+                "action_status": "candidate_import",
+                "authority_namespace": "topostext",
+                "re_candidate_count": 0,
+                "suggested_tag_name": "ethnic",
+                "tag_name": "prn",
+                "place_type_kind": "ethnic",
+            },
+            {
+                "action_status": "needs_new_topostext_id",
+                "authority_namespace": "topostext_new",
+                "re_candidate_count": 0,
+                "suggested_tag_name": "",
+                "tag_name": "prn",
+                "place_type_kind": "",
+            },
+        ]
+
+        self.assertEqual(len(build_status_re_candidate_rows(rows)), 1)
+        self.assertEqual(len(build_ethnic_suggestion_rows(rows)), 1)
+        self.assertEqual(len(build_new_id_rows(rows)), 1)
 
 
 if __name__ == "__main__":

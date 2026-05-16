@@ -654,6 +654,16 @@ if [ "$TOPOSTEXT_INTAKE_REPORT" -gt 0 ]; then
         --entry-history-csv exports/topostext_history_entries.csv \
         --summary-json exports/topostext_history_summary.json \
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: ToposText history page generation failed" | tee -a "$LOGFILE"
+
+    echo "Step 8c3: Generating ToposText authority status worklists..." | tee -a "$LOGFILE"
+    uv run generate_topostext_authority_status_page.py \
+        --output exports/topostext_authority_status.html \
+        --re-candidates-csv exports/topostext_unmatched_re_candidates.csv \
+        --ethnic-suggestions-csv exports/topostext_ethnic_suggestions.csv \
+        --new-ids-csv exports/topostext_new_id_worklist.csv \
+        --recent-changes-csv exports/topostext_recent_entity_changes.csv \
+        --summary-json exports/topostext_authority_status_summary.json \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: ToposText authority status page generation failed" | tee -a "$LOGFILE"
 fi
 
 # Step 9: Deploy to merah
@@ -684,7 +694,13 @@ for topostext_export in \
     exports/topostext_history_changesets.csv \
     exports/topostext_history_transitions.csv \
     exports/topostext_history_entries.csv \
-    exports/topostext_history_summary.json; do
+    exports/topostext_history_summary.json \
+    exports/topostext_authority_status.html \
+    exports/topostext_unmatched_re_candidates.csv \
+    exports/topostext_ethnic_suggestions.csv \
+    exports/topostext_new_id_worklist.csv \
+    exports/topostext_recent_entity_changes.csv \
+    exports/topostext_authority_status_summary.json; do
     if [ -f "$topostext_export" ]; then
         rsync -az "$topostext_export" stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
     fi

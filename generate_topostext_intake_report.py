@@ -25,6 +25,7 @@ from typing import Iterable
 from urllib.parse import quote, unquote
 
 from bs4 import BeautifulSoup, Tag
+from site_navigation import render_site_navigation, site_navigation_styles
 
 
 DEFAULT_SOURCE_NAME = "topostext_stephanus_html"
@@ -1010,10 +1011,11 @@ def build_report_html(
 <head>
   <meta charset="utf-8">
   <title>ToposText Stephanus Intake Report</title>
-  <style>{css}</style>
+  <style>{css}{site_navigation_styles()}</style>
 </head>
 <body>
 <main>
+  {render_site_navigation("extracted", "topostext_intake", absolute_links=True)}
   <h1>ToposText Stephanus Intake Report</h1>
   <p>This report parses Brady's current ToposText HTML snapshot without writing database rows. It is meant to expose the source shape and unresolved entity decisions before we design the durable import tables.</p>
 

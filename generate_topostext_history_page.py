@@ -22,6 +22,7 @@ from pathlib import Path
 
 from generate_topostext_intake_report import DEFAULT_SOURCE_NAME
 from import_topostext_intake import ACTION_STATUS_LABELS
+from site_navigation import render_site_navigation, site_navigation_styles
 
 
 DEFAULT_OUTPUT = Path("exports/topostext_history.html")
@@ -719,6 +720,7 @@ def build_html(
     changed_entry_total = len(changed_entries)
 
     links = [
+        f"<a href=\"topostext_authority_status.html?v={render_cell(cache_suffix)}\">authority status</a>",
         f"<a href=\"topostext_review.html?v={render_cell(cache_suffix)}\">current review queue</a>",
         f"<a href=\"topostext_intake_report.html?v={render_cell(cache_suffix)}\">current intake report</a>",
     ]
@@ -862,10 +864,11 @@ def build_html(
 <head>
   <meta charset="utf-8">
   <title>ToposText Snapshot History</title>
-  <style>{css}</style>
+  <style>{css}{site_navigation_styles()}</style>
 </head>
 <body>
 <main>
+  {render_site_navigation("extracted", "topostext_history", absolute_links=True)}
   <h1>ToposText Snapshot History</h1>
   <p>Daily change history for Brady's working ToposText Stephanus HTML, generated from the PostgreSQL snapshot and intake staging tables.</p>
   <p>{" | ".join(links)}</p>
