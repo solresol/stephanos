@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from db import get_connection
+from site_navigation import render_site_navigation, site_navigation_styles
 
 OUTPUT_PATH = Path("reference_site/protected/meineke_difference_analysis.html")
 
@@ -64,17 +65,7 @@ def shorten(text: str, limit: int = 260) -> str:
 
 
 def nav_links() -> str:
-    return """
-        <div class="nav-links">
-            <a href="../index.html">All Letters</a>
-            <a href="meineke_comparison.html">Meineke vs Billerbeck</a>
-            <a href="../sources.html">Ancient Sources</a>
-            <a href="../entities.html">People &amp; Deities</a>
-            <a href="../statistics.html">Statistics</a>
-            <a href="../pipeline.html">Pipeline Status</a>
-            <a href="../cgi-bin/review.cgi">Human Review</a>
-        </div>
-    """
+    return render_site_navigation("operations", "difference_analysis", depth=1)
 
 
 def ensure_output_dir() -> None:
@@ -261,6 +252,7 @@ def render_impact_page(*, title: str, description: str, rows: list[tuple], gener
     li {{ margin: 4px 0; }}
     .meta {{ color: #666; font-size: 0.9em; }}
     .note {{ color: #555; font-size: 0.95em; }}
+    {site_navigation_styles()}
   </style>
 </head>
 <body>
@@ -269,12 +261,7 @@ def render_impact_page(*, title: str, description: str, rows: list[tuple], gener
     <p>{html_module.escape(description)}</p>
   </div>
   <div class="container">
-    <div class="nav-links">
-      <a href="meineke_difference_analysis.html">Back to Difference Analysis</a>
-      <a href="meineke_comparison.html">Meineke vs Billerbeck</a>
-      <a href="../index.html">All Letters</a>
-      <a href="../cgi-bin/review.cgi">Human Review</a>
-    </div>
+    {nav_links()}
     <div class="card">
       <p><strong>Headwords:</strong> {len(rows):,}</p>
       <ul>
@@ -339,6 +326,7 @@ def main():
     .card {{ background: #fff; border-radius: 8px; padding: 18px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }}
     .nav-links a {{ margin-right: 12px; color: #0d47a1; text-decoration: none; font-weight: 600; }}
     pre {{ background: #f2f4f8; padding: 12px; border-radius: 6px; overflow-x: auto; }}
+    {site_navigation_styles()}
   </style>
 </head>
 <body>
@@ -543,6 +531,7 @@ def main():
       color: #555;
       font-size: 0.95em;
     }}
+    {site_navigation_styles()}
   </style>
 </head>
 <body>

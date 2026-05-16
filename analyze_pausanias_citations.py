@@ -17,6 +17,7 @@ from plotly.subplots import make_subplots
 from scipy import stats
 
 from db import get_connection
+from site_navigation import render_site_navigation, site_navigation_styles
 
 
 # Pausanias book names (for labeling)
@@ -367,9 +368,11 @@ def generate_report(citations, analysis, chi2, p_value, structure):
         .citation-link:hover {{ text-decoration: underline; }}
         .significant {{ color: #e74c3c; font-weight: bold; }}
         iframe {{ border: 1px solid #ddd; margin: 20px 0; }}
+        {site_navigation_styles()}
     </style>
 </head>
 <body>
+    {render_site_navigation("analysis", "pausanias", depth=1)}
     <h1>Stephanos's Citations of Pausanias the Periegete</h1>
 
     <div class="stats-box">

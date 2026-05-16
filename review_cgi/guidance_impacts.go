@@ -351,6 +351,7 @@ func main() {
 		"translationLabel": guidanceImpactTranslationLabel,
 		"ruleHref":         guidanceImpactRuleHref,
 		"filterHref":       guidanceImpactsFilterHref,
+		"siteNav":          siteNavHTML,
 	}).Parse(guidanceImpactsTemplate)
 	if err != nil {
 		showError(fmt.Sprintf("Template error: %v", err))
@@ -580,6 +581,7 @@ const guidanceImpactsTemplate = `<!DOCTYPE html>
             padding: 24px;
             color: #555;
         }
+` + siteNavStyles + `
     </style>
 </head>
 <body>
@@ -588,6 +590,7 @@ const guidanceImpactsTemplate = `<!DOCTYPE html>
         <div class="meta">Guidance matches whose rule revision or detection timestamp is later than a finalized/reviewed translation. Exported {{.ExportedAt}}.</div>
     </div>
     <div class="container">
+        {{siteNav "editing" "guidance_impacts"}}
         <div class="view-tabs">
             <a class="view-tab" href="/cgi-bin/review.cgi">Translation review</a>
             <a class="view-tab" href="/cgi-bin/entities.cgi">Entity resolution</a>

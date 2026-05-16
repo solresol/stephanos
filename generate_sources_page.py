@@ -14,6 +14,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from db import get_connection
 import citation_format
+from site_navigation import render_site_navigation, site_navigation_styles
 
 
 LETTER_MAP = {
@@ -315,19 +316,13 @@ def main():
             border-radius: 5px;
             border-left: 4px solid #8e44ad;
         }}
+        {site_navigation_styles()}
     </style>
 </head>
 <body>
     <h1>Ancient Sources Cited in Stephanos</h1>
 
-    <div class="nav-links">
-        <a href="index.html">All Letters</a>
-        <a href="works.html">Works Cited</a>
-        <a href="fgrhist.html">FGrHist Index</a>
-        <a href="entities.html">People &amp; Deities</a>
-        <a href="peoples.html">Ethnic Groups</a>
-        <a href="statistics.html">Statistics</a>
-    </div>
+    {render_site_navigation("sources", "sources")}
 
     <div class="intro">
         <p>This page lists the <strong>ancient authors and historians</strong> cited by Stephanos of Byzantium
@@ -477,16 +472,13 @@ def main():
       text-decoration: none;
       margin-left: 10px;
     }}
+    {site_navigation_styles()}
   </style>
   {render_sortable_table_js()}
 </head>
 <body>
   <h1>{display_name_esc}{wikidata_html}</h1>
-  <div class="nav-links" style="margin: 16px 0;">
-    <a href="sources.html">Back to Authors</a>
-    <a href="works.html">Works Cited</a>
-    <a href="index.html">All Letters</a>
-  </div>
+  {render_site_navigation("sources", "sources")}
   <div class="card">
     <div><strong>{len(mention_rows):,} citations</strong> across <strong>{int(entry_count):,} Stephanos entries</strong> (units: {int(unit_count):,}).</div>
   </div>

@@ -8,6 +8,7 @@ Groups aliases by:
 """
 from pathlib import Path
 from db import get_connection
+from site_navigation import render_site_navigation, site_navigation_styles
 
 OUTPUT_DIR = "reference_site"
 
@@ -122,7 +123,7 @@ def common_styles():
             color: #666;
             font-size: 0.9em;
         }
-    """
+    """ + site_navigation_styles()
 
 
 def generate_aliases_page():
@@ -194,12 +195,7 @@ def generate_aliases_page():
     </div>
 
     <div class="container">
-        <div class="nav-links">
-            <a href="index.html">Home</a>
-            <a href="sources.html">Sources</a>
-            <a href="entities.html">Entities</a>
-            <a href="peoples.html">Peoples</a>
-        </div>
+        {render_site_navigation("extracted", "aliases")}
 
         <div class="stats">
             <div class="stats-grid">

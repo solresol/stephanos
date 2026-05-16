@@ -102,6 +102,7 @@ func main() {
 		"guidanceRuleState": finalReviewGuidanceRuleStatusMarker,
 		"guidanceChipClass": finalReviewGuidanceChipClass,
 		"eq":                func(a, b string) bool { return a == b },
+		"siteNav":           siteNavHTML,
 	}).Parse(finalReviewTemplate)
 	if err != nil {
 		showError(fmt.Sprintf("Template error: %v", err))
@@ -1204,6 +1205,7 @@ const finalReviewTemplate = `<!DOCTYPE html>
                 border-bottom: 1px solid #ecece5;
             }
         }
+` + siteNavStyles + `
     </style>
 </head>
 <body>
@@ -1212,6 +1214,7 @@ const finalReviewTemplate = `<!DOCTYPE html>
         <div class="meta">Database-derived translation workflow against current Meineke source text. Exported {{.ExportedAt}}.</div>
     </div>
     <div class="container">
+        {{siteNav "editing" "final_review"}}
         <div class="view-tabs">
             <a class="view-tab" href="/cgi-bin/review.cgi">Translation review</a>
             <a class="view-tab" href="/cgi-bin/entities.cgi">Entity resolution</a>

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import wikidata_entity_cache
+from site_navigation import render_site_navigation, site_navigation_styles
 
 
 OUTPUT_FILE = Path("reference_site/protected/brady_entity_review.html")
@@ -801,6 +802,7 @@ def render_page(rows: list[dict], metadata: dict[str, dict], brady_group_count: 
                 padding: 12px;
             }}
         }}
+        {site_navigation_styles()}
     </style>
 </head>
 <body>
@@ -809,11 +811,7 @@ def render_page(rows: list[dict], metadata: dict[str, dict], brady_group_count: 
         <div>Generated {html.escape(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))}</div>
     </div>
     <div class="container">
-        <div class="nav-links">
-            <a href="../index.html">Reference Index</a>
-            <a href="entity_resolution_review.html">Manual Entity Review</a>
-            <a href="../downloads.html">Downloads</a>
-        </div>
+        {render_site_navigation("editing", "brady_review", depth=1)}
         <div class="intro">
             Brady's imported ground-truth tags are grouped by Billerbeck entry and compared against our current extracted/linkable entities.
             Rows with exact human/AI QID agreement are counted in the summary but omitted from the table below so the page stays focused on review work.

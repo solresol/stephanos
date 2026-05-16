@@ -1,6 +1,6 @@
 .PHONY: all clean test
 
-COMMON_REVIEW_SRCS = common.go guidance_common.go page.go templates.go shared_helpers.go
+COMMON_REVIEW_SRCS = common.go guidance_common.go page.go templates.go shared_helpers.go site_nav.go
 GUIDANCE_SRCS = common.go guidance_common.go guidance_urgent_common.go
 
 all: review.cgi entities.cgi guidance.cgi guidance_impacts.cgi final_review.cgi guidance_status.cgi guidance_urgent_worker save.cgi status.cgi
@@ -11,14 +11,14 @@ review.cgi: review.go $(COMMON_REVIEW_SRCS)
 entities.cgi: entities.go $(COMMON_REVIEW_SRCS)
 	go build -o entities.cgi entities.go $(COMMON_REVIEW_SRCS)
 
-guidance.cgi: guidance.go $(GUIDANCE_SRCS) templates.go shared_helpers.go
-	go build -o guidance.cgi guidance.go $(GUIDANCE_SRCS) templates.go shared_helpers.go
+guidance.cgi: guidance.go $(GUIDANCE_SRCS) templates.go shared_helpers.go site_nav.go
+	go build -o guidance.cgi guidance.go $(GUIDANCE_SRCS) templates.go shared_helpers.go site_nav.go
 
-guidance_impacts.cgi: guidance_impacts.go common.go shared_helpers.go
-	go build -o guidance_impacts.cgi guidance_impacts.go common.go shared_helpers.go
+guidance_impacts.cgi: guidance_impacts.go common.go shared_helpers.go site_nav.go
+	go build -o guidance_impacts.cgi guidance_impacts.go common.go shared_helpers.go site_nav.go
 
-final_review.cgi: final_review.go common.go shared_helpers.go
-	go build -o final_review.cgi final_review.go common.go shared_helpers.go
+final_review.cgi: final_review.go common.go shared_helpers.go site_nav.go
+	go build -o final_review.cgi final_review.go common.go shared_helpers.go site_nav.go
 
 guidance_status.cgi: guidance_status.go $(GUIDANCE_SRCS)
 	go build -o guidance_status.cgi guidance_status.go $(GUIDANCE_SRCS)
@@ -40,7 +40,7 @@ clean:
 	rm -f review.cgi entities.cgi guidance.cgi guidance_impacts.cgi final_review.cgi guidance_status.cgi guidance_urgent_worker save.cgi status.cgi
 
 test:
-	cd .. && python3 -m unittest test_place_cluster_extraction.py test_review_template_split.py
+	cd .. && uv run python -m unittest test_place_cluster_extraction.py test_review_template_split.py
 
 # For deployment on merah
 deploy: all

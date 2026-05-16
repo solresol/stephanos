@@ -29,6 +29,7 @@ from scipy import stats
 import canonical_variants
 from db import get_connection
 from source_documents import public_source_document_list_sql, source_document_priority_sql
+from site_navigation import render_site_navigation, site_navigation_styles
 import plotly.graph_objects as go
 import plotly.express as px
 
@@ -1557,6 +1558,22 @@ def generate_navigation(current_page='index', in_subdirectory=False):
     return nav_html
 
 
+def main_menu_item_for_stats_page(current_page: str) -> str:
+    """Map statistics-local pages onto the shared site menu."""
+    if current_page.startswith("category_") or current_page == "categories":
+        return "categories"
+    return {
+        "index": "statistics",
+        "word_count": "word_count_stats",
+        "translation_length": "translation_length",
+        "guidance_rules": "guidance_stats",
+        "regression": "regression",
+        "etymology": "etymology",
+        "parisinus_comparison": "parisinus",
+        "pausanias_analysis": "pausanias",
+    }.get(current_page, "statistics")
+
+
 def generate_page_header(title, current_page='index', in_subdirectory=False):
     """Generate common page header with navigation."""
     return f"""<!DOCTYPE html>
@@ -1674,9 +1691,11 @@ def generate_page_header(title, current_page='index', in_subdirectory=False):
         .section-card a:hover {{
             text-decoration: underline;
         }}
+        {site_navigation_styles()}
     </style>
 </head>
 <body>
+    {render_site_navigation("analysis", main_menu_item_for_stats_page(current_page), depth=1 if in_subdirectory else 0)}
     {generate_navigation(current_page, in_subdirectory)}
     <h1>{title}</h1>
     <p><em>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</em></p>

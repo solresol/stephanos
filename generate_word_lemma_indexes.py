@@ -19,6 +19,7 @@ from pathlib import Path
 
 from db import get_connection
 from generate_reference_site import common_styles, get_all_lemmas, headword_page_filename, write_search_ui_asset
+from site_navigation import render_site_navigation
 
 OUTPUT_DIR = Path("reference_site")
 SEARCH_DATA_DIR = OUTPUT_DIR / "search-data"
@@ -303,15 +304,7 @@ def generate_index_page(mode: str, terms: dict[str, dict], stats: dict) -> str:
         <p>{html_module.escape(subtitle)}</p>
     </div>
     <div class="container">
-        <div class="nav-links">
-            <a href="index.html">All Letters</a>
-            <a href="word_index.html">Word Index</a>
-            <a href="lemma_index.html">Lemma Index</a>
-            <a href="sources.html">Ancient Sources</a>
-            <a href="works.html">Works Cited</a>
-            <a href="statistics.html">Statistics</a>
-            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
-        </div>
+        {render_site_navigation("translations", f"{mode}_index")}
         <div class="breadcrumb"><a href="index.html">All Letters</a> / Meineke {title}</div>
         <div class="site-search" data-search-base="search-data" data-site-root="">
             <div class="site-search-row">

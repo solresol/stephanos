@@ -9,6 +9,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from db import get_connection
 import citation_format
+from site_navigation import render_site_navigation, site_navigation_styles
 
 
 LETTER_MAP = {
@@ -100,6 +101,7 @@ def main():
         .nav-links a:hover {{
             text-decoration: underline;
         }}
+        {site_navigation_styles()}
         .work-card {{
             background-color: white;
             padding: 20px;
@@ -187,14 +189,7 @@ def main():
 <body>
     <h1>Ancient Works Cited in Stephanos</h1>
 
-    <div class="nav-links">
-        <a href="index.html">All Letters</a>
-        <a href="sources.html">Authors</a>
-        <a href="fgrhist.html">FGrHist Index</a>
-        <a href="entities.html">People &amp; Deities</a>
-        <a href="peoples.html">Ethnic Groups</a>
-        <a href="statistics.html">Statistics</a>
-    </div>
+    {render_site_navigation("sources", "works")}
 
     <div class="intro">
         <p>This page lists the <strong>ancient literary works</strong> cited by Stephanos of Byzantium.

@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from db import get_connection
 from manual_entity_canonicalization import canonicalize_entity
+from site_navigation import render_site_navigation, site_navigation_styles
 
 
 LETTER_MAP = {
@@ -113,6 +114,7 @@ def main():
         .nav-links a:hover {{
             text-decoration: underline;
         }}
+        {site_navigation_styles()}
         .people-card {{
             background-color: white;
             padding: 15px 20px;
@@ -179,14 +181,7 @@ def main():
 <body>
     <h1>Ethnic Groups in Stephanos</h1>
 
-    <div class="nav-links">
-        <a href="index.html">All Letters</a>
-        <a href="sources.html">Authors</a>
-        <a href="works.html">Works Cited</a>
-        <a href="fgrhist.html">FGrHist Index</a>
-        <a href="entities.html">People &amp; Deities</a>
-        <a href="statistics.html">Statistics</a>
-    </div>
+    {render_site_navigation("extracted", "peoples")}
 
     <div class="intro">
         <p>This page lists <strong>ethnic groups and peoples</strong> mentioned in the Ethnika.

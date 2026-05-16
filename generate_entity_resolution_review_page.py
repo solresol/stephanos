@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from db import get_connection
+from site_navigation import render_site_navigation, site_navigation_styles
 import wikidata_entity_cache
 
 
@@ -356,6 +357,7 @@ def render_page(rows: list[dict], metadata: dict[str, dict]) -> str:
             margin-top: 20px;
             text-align: center;
         }}
+        {site_navigation_styles()}
     </style>
 </head>
 <body>
@@ -364,18 +366,7 @@ def render_page(rows: list[dict], metadata: dict[str, dict]) -> str:
         <p>Human-versus-machine review queue for imported and manually corrected named-entity links.</p>
     </div>
     <div class="container">
-        <div class="nav-links">
-            <a href="../index.html">All Letters</a>
-            <a href="../sources.html">Ancient Sources</a>
-            <a href="../works.html">Works Cited</a>
-            <a href="../entities.html">People &amp; Deities</a>
-            <a href="../peoples.html">Ethnic Groups</a>
-            <a href="meineke_comparison.html">Meineke vs Billerbeck</a>
-            <a href="meineke_difference_analysis.html">Difference Analysis</a>
-            <a href="clustering.html">Clustering</a>
-            <a href="brady_entity_review.html">Brady Review</a>
-            <a href="../cgi-bin/review.cgi">Human Review</a>
-        </div>
+        {render_site_navigation("operations", "entity_resolution_report", depth=1)}
 
         <div class="stats">
             <div class="stat-card">

@@ -39,7 +39,9 @@ func main() {
 		return
 	}
 
-	tmpl, err := template.New("entities").Parse(entityResolutionTemplate)
+	tmpl, err := template.New("entities").Funcs(template.FuncMap{
+		"siteNav": siteNavHTML,
+	}).Parse(entityResolutionTemplate)
 	if err != nil {
 		showError(fmt.Sprintf("Template error: %v", err))
 		return

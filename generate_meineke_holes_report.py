@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from db import get_connection
+from site_navigation import render_site_navigation, site_navigation_styles
 
 OUTPUT_HTML = Path("reference_site/protected/meineke_holes_report.html")
 OUTPUT_JSON = Path("reference_site/protected/meineke_holes_report.json")
@@ -152,9 +153,11 @@ def write_html(path: Path, payload: dict):
     th {{ background: #f7f7f7; }}
     .status-missing_ocr_source {{ color: #8a4b00; }}
     .status-no_assembled_mapping {{ color: #8f1d1d; }}
+    {site_navigation_styles()}
   </style>
 </head>
 <body>
+  {render_site_navigation("operations", "scan_diagnostics", depth=1)}
   <h1>Meineke OCR holes report</h1>
   <div class="meta">
     Generated: {generated_at}<br>

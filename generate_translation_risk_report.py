@@ -7,6 +7,7 @@ from pathlib import Path
 import html as html_module
 
 from db import get_connection
+from site_navigation import render_site_navigation, site_navigation_styles
 
 OUTPUT_PATH = Path("reference_site/protected/translation_risk_report.html")
 RISK_CODE = "billerbeck_likely_translation_change"
@@ -107,10 +108,12 @@ def render(rows):
     th {{ background: #fafafa; position: sticky; top: 0; }}
     tr:hover td {{ background: #fcfcfc; }}
     .meta {{ color: #666; margin-top: 10px; font-size: 0.9em; }}
+    {site_navigation_styles()}
   </style>
 </head>
 <body>
   <div class="wrap">
+    {render_site_navigation("operations", "translation_risk", depth=1)}
     <h1>Translation Risk Report</h1>
     <p>Blocked condition: Billerbeck-dependent translation + differences bot indicates likely translation change.</p>
     <div class="stats">

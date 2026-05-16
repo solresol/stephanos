@@ -12,6 +12,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from db import get_connection
 import citation_format
+from site_navigation import render_site_navigation, site_navigation_styles
 
 
 LETTER_MAP = {
@@ -170,6 +171,7 @@ def main():
         .nav-links a:hover {{
             text-decoration: underline;
         }}
+        {site_navigation_styles()}
         .author-section {{
             background-color: white;
             padding: 20px;
@@ -311,14 +313,7 @@ def main():
 <body>
     <h1>FGrHist Fragment Index</h1>
 
-    <div class="nav-links">
-        <a href="index.html">All Letters</a>
-        <a href="sources.html">Authors</a>
-        <a href="works.html">Works Cited</a>
-        <a href="entities.html">People &amp; Deities</a>
-        <a href="peoples.html">Ethnic Groups</a>
-        <a href="statistics.html">Statistics</a>
-    </div>
+    {render_site_navigation("sources", "fgrhist")}
 
     <div class="intro">
         <p><strong>Die Fragmente der griechischen Historiker</strong> (FGrHist) is Felix Jacoby's

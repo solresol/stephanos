@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from datetime import datetime, timezone
 from db import get_connection
+from site_navigation import render_site_navigation, site_navigation_styles
 
 
 OUTPUT_DIR = "reference_site/protected"
@@ -431,14 +432,12 @@ def generate_image_page(image_data, lemmas, image_src: str, prev_page: str | Non
                 margin: 0;
             }}
         }}
+        {site_navigation_styles()}
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="nav-links">
-            <a href="index.html">← Protected Index</a>
-            <a href="../index.html">Reference Site</a>
-        </div>
+        {render_site_navigation("operations", "page_scans", depth=1)}
 
 	        <div class="page-nav">
 	            {f'<a href="{prev_page}">← Previous Page</a>' if prev_page else '<span class="disabled">← Previous Page</span>'}
@@ -591,14 +590,12 @@ def generate_protected_index(images_by_volume):
         .nav-links a:hover {{
             text-decoration: underline;
         }}
+        {site_navigation_styles()}
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="nav-links">
-            <a href="../index.html">← Reference Site</a>
-            <a href="../progress.html">Processing Progress</a>
-        </div>
+        {render_site_navigation("operations", "page_scans", depth=1)}
 
         <h1>Protected Area - OCR Pages</h1>
         <p style="margin-bottom: 30px; color: #666;">

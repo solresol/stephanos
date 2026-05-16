@@ -830,7 +830,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Translation Review: {{.Lemma.Lemma}} - Stephanos Review System</title>
     <style>
-` + sharedPageStyles + `
+` + sharedPageStyles + siteNavStyles + `
     </style>
 </head>
 <body>
@@ -856,6 +856,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
     </div>
 
     <div class="container">
+        {{siteNav "editing" "review"}}
         <div class="navigation">
             <div class="nav-buttons">
                 {{if .HasPrevious}}
@@ -1597,7 +1598,7 @@ const entityResolutionTemplate = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Entity Resolution: {{.Lemma.Lemma}} - Stephanos Review System</title>
     <style>
-` + sharedPageStyles + `
+` + sharedPageStyles + siteNavStyles + `
     </style>
 </head>
 <body>
@@ -1623,6 +1624,7 @@ const entityResolutionTemplate = `<!DOCTYPE html>
     </div>
 
     <div class="container">
+        {{siteNav "editing" "entity_review"}}
         <div class="navigation">
             <div class="nav-buttons">
                 {{if .HasPrevious}}

@@ -13,6 +13,7 @@ from pathlib import Path
 import urllib.parse
 
 from db import get_connection
+from site_navigation import render_site_navigation, site_navigation_styles
 
 
 OUTPUT_PATH = Path("reference_site/translation_guidance.html")
@@ -613,6 +614,10 @@ def build_html(rules: list[dict[str, object]]) -> str:
             border-radius: 999px;
             background: rgba(255, 255, 255, 0.14);
         }}
+        {site_navigation_styles()}
+        .site-menu {{
+            margin-bottom: 18px;
+        }}
         .summary {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -869,6 +874,7 @@ def build_html(rules: list[dict[str, object]]) -> str:
 </head>
 <body>
     <div class="wrap">
+        {render_site_navigation("translations", "guidance")}
         <section class="hero">
             <h1>Translation Guidance</h1>
             <p>
@@ -876,12 +882,6 @@ def build_html(rules: list[dict[str, object]]) -> str:
                 gloss preferences, recurring formulae, proper-noun transliterations, and vocabulary-bias rules. These rules are
                 edited through the protected review workflow and stored in PostgreSQL as first-class project data.
             </p>
-            <div class="hero-links">
-                <a href="index.html">Reference Site</a>
-                <a href="downloads.html">Downloads</a>
-                <a href="/cgi-bin/review.cgi">Human Review</a>
-                <a href="/cgi-bin/guidance.cgi">Protected Guidance Editor</a>
-            </div>
         </section>
 
         <section class="summary">

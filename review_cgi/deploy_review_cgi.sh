@@ -27,6 +27,7 @@ SOURCE_FILES=(
     "status.go"
     "templates.go"
     "shared_helpers.go"
+    "site_nav.go"
     "go.mod"
     "go.sum"
 )
@@ -45,11 +46,11 @@ ssh "$REMOTE_HOST" "
     cd '$REMOTE_BUILD_DIR'
     export CGO_ENABLED=1
     export CC=/usr/bin/cc
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o review.cgi review.go common.go guidance_common.go page.go templates.go shared_helpers.go
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o entities.cgi entities.go common.go guidance_common.go page.go templates.go shared_helpers.go
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance.cgi guidance.go common.go guidance_common.go guidance_urgent_common.go templates.go shared_helpers.go
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance_impacts.cgi guidance_impacts.go common.go shared_helpers.go
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o final_review.cgi final_review.go common.go shared_helpers.go
+    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o review.cgi review.go common.go guidance_common.go page.go templates.go shared_helpers.go site_nav.go
+    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o entities.cgi entities.go common.go guidance_common.go page.go templates.go shared_helpers.go site_nav.go
+    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance.cgi guidance.go common.go guidance_common.go guidance_urgent_common.go templates.go shared_helpers.go site_nav.go
+    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance_impacts.cgi guidance_impacts.go common.go shared_helpers.go site_nav.go
+    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o final_review.cgi final_review.go common.go shared_helpers.go site_nav.go
     /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance_status.cgi guidance_status.go common.go guidance_common.go guidance_urgent_common.go
     /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance_urgent_worker guidance_urgent_worker.go common.go guidance_common.go guidance_urgent_common.go
     /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o save.cgi save.go common.go guidance_common.go guidance_urgent_common.go

@@ -73,6 +73,7 @@ func main() {
 
 	tmpl, err := template.New("translation").Funcs(template.FuncMap{
 		"formatPromptText": formatPromptText,
+		"siteNav":          siteNavHTML,
 	}).Parse(translationReviewTemplate)
 	if err != nil {
 		showError(fmt.Sprintf("Template error: %v", err))

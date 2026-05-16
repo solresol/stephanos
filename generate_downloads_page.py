@@ -5,6 +5,7 @@ Generate downloads page with links to all CSV exports.
 
 import os
 from datetime import datetime, timezone
+from site_navigation import render_site_navigation, site_navigation_styles
 
 def get_file_info(filepath):
     """Get file size and modification time."""
@@ -302,6 +303,7 @@ def generate_downloads_page():
             margin-bottom: 20px;
             color: #555;
         }}
+        {site_navigation_styles()}
     </style>
 </head>
 <body>
@@ -311,12 +313,7 @@ def generate_downloads_page():
     </div>
 
     <div class="container">
-        <div class="nav-links">
-            <a href="index.html">Reference</a>
-            <a href="sources.html">Ancient Sources</a>
-            <a href="statistics.html">Statistics</a>
-            <a href="progress.html">Progress</a>
-        </div>
+        {render_site_navigation("downloads", "downloads")}
 
         <div class="content">
             <h2>Data Downloads</h2>

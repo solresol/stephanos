@@ -8,6 +8,7 @@ all entries where they are mentioned.
 from pathlib import Path
 from datetime import datetime, timezone
 from db import get_connection
+from site_navigation import render_site_navigation, site_navigation_styles
 
 
 def main():
@@ -69,6 +70,7 @@ def main():
         .nav-links a:hover {{
             text-decoration: underline;
         }}
+        {site_navigation_styles()}
         .person-card {{
             background-color: white;
             padding: 20px;
@@ -127,11 +129,7 @@ def main():
 <body>
     <h1>People Mentioned in Stephanos of Byzantium</h1>
 
-    <div class="nav-links">
-        <a href="index.html">All Letters</a>
-        <a href="statistics.html">Statistics</a>
-        <a href="progress.html">Processing Progress</a>
-    </div>
+    {render_site_navigation("extracted", "entities")}
 
     <div class="stats">
         <strong>{len(people):,} people mentioned</strong> across the Ethnika

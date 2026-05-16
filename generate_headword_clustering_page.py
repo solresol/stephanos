@@ -25,6 +25,7 @@ from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from db import get_connection
+from site_navigation import render_site_navigation, site_navigation_styles
 
 try:
     import umap  # type: ignore[import-not-found]
@@ -397,6 +398,7 @@ def main() -> int:
     .nav a {{ margin-right: 12px; }}
     .note {{ margin: 12px 0 18px 0; color: #334; font-size: 13px; }}
     code {{ background: #f0f0f0; padding: 2px 4px; border-radius: 4px; }}
+    {site_navigation_styles()}
   </style>
 </head>
 <body>
@@ -405,11 +407,7 @@ def main() -> int:
     <div class="meta">Embedding: {embedding_method}. Click any point to open <code>review.cgi</code>.</div>
   </div>
   <div class="container">
-    <div class="nav">
-      <a href="../index.html">Reference Home</a>
-      <a href="../cgi-bin/review.cgi">Human Review</a>
-      <a href="../protected/">Page Scans</a>
-    </div>
+    {render_site_navigation("operations", "clustering", depth=1)}
     <div class="note">
       Points are headwords from <code>assembled_lemmas</code>, vectorized with character n-gram TF-IDF and embedded to 2D.
       DBSCAN and KMeans labels are computed on the 2D embedding.

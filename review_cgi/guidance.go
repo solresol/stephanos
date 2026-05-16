@@ -103,6 +103,7 @@ func main() {
 		"scanBatchProgressPercent": scanBatchProgressPercent,
 		"urgentJobFinishedCount":   urgentJobFinishedCount,
 		"urgentJobProgressPercent": urgentJobProgressPercent,
+		"siteNav":                  siteNavHTML,
 	}).Parse(guidanceTemplate)
 	if err != nil {
 		showError(fmt.Sprintf("Template error: %v", err))
@@ -394,7 +395,7 @@ const guidanceTemplate = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Translation Guidance Editor</title>
     <style>
-` + sharedPageStyles + `
+` + sharedPageStyles + siteNavStyles + `
         .guidance-summary {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -945,6 +946,7 @@ const guidanceTemplate = `<!DOCTYPE html>
     </div>
 
     <div class="container {{if .DetailMode}}guidance-detail-container{{else}}guidance-table-container{{end}}">
+        {{siteNav "editing" "guidance_editor"}}
         <div class="navigation">
             <div class="view-tabs">
                 <a class="view-tab" href="/cgi-bin/review.cgi">Translation Review</a>

@@ -20,6 +20,7 @@ from db import DB_USER as STEPHANOS_DB_USER
 import canonical_variants
 import citation_format
 from source_documents import public_source_document_list_sql, source_document_priority_sql
+from site_navigation import render_site_navigation, site_navigation_styles
 from translation_rendering import (
     render_inline_markup,
     sanitize_public_translation_text,
@@ -2389,37 +2390,6 @@ def common_styles():
             gap: 12px;
             margin: 24px 0;
         }
-        .explore-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 14px;
-            margin: 24px 0 8px;
-        }
-        .explore-card {
-            display: block;
-            background: linear-gradient(180deg, #ffffff 0%, #f7f9ff 100%);
-            color: #1a237e;
-            border: 1px solid #dfe6ff;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            padding: 18px;
-            text-decoration: none;
-            transition: transform 0.15s, box-shadow 0.15s;
-        }
-        .explore-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-        }
-        .explore-card-title {
-            font-size: 1.05em;
-            font-weight: 700;
-            margin-bottom: 6px;
-        }
-        .explore-card-copy {
-            color: #4a4f63;
-            font-size: 0.95em;
-            line-height: 1.5;
-        }
         .letter-card {
             background: white;
             padding: 16px;
@@ -2984,7 +2954,7 @@ def common_styles():
             padding: 12px;
             white-space: pre-wrap;
         }
-    """
+    """ + site_navigation_styles()
 
 
 def generate_index_html(letter_counts, stats):
@@ -3003,48 +2973,6 @@ def generate_index_html(letter_counts, stats):
             """
         )
 
-    explore_cards = [
-        (
-            "sources.html",
-            "Ancient Sources",
-            "Browse cited authors, then drill into works, books, and citation phrases.",
-        ),
-        (
-            "works.html",
-            "Works Cited",
-            "Jump straight to cited works across Stephanos, independently of headwords.",
-        ),
-        (
-            "stephanos_ethnika_translations.pdf",
-            "PDF Book",
-            "Open the generated translation volume, including verse-aware layout for poetic entries.",
-        ),
-        (
-            "word_index.html",
-            "Word Index",
-            "Browse observed Meineke word forms and jump to every indexed passage.",
-        ),
-        (
-            "lemma_index.html",
-            "Lemma Index",
-            "Browse model-assigned lexical lemmas and their passage-level usage links.",
-        ),
-        (
-            "protected/",
-            "Page Scans",
-            "Inspect the protected page-image wrappers and compare public text against the scans.",
-        ),
-    ]
-    explore_html = "".join(
-        f"""
-        <a class="explore-card" href="{href}">
-            <div class="explore-card-title">{title}</div>
-            <div class="explore-card-copy">{copy}</div>
-        </a>
-        """
-        for href, title, copy in explore_cards
-    )
-
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3056,36 +2984,8 @@ def generate_index_html(letter_counts, stats):
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>Stephanos of Byzantium</h1>
-        <p>Ethnika - Geographical Lexicon (Billerbeck 2006 Edition)</p>
-    </div>
-
     <div class="container">
-	        <div class="nav-links">
-	            <a href="sources.html">Ancient Sources</a>
-	            <a href="works.html">Works Cited</a>
-	            <a href="word_index.html">Word Index</a>
-	            <a href="lemma_index.html">Lemma Index</a>
-	            <a href="fgrhist.html">FGrHist Index</a>
-	            <a href="entities.html">People &amp; Deities</a>
-	            <a href="peoples.html">Ethnic Groups</a>
-	            <a href="aliases.html">Aliases</a>
-	            <a href="map.html">Places Map</a>
-                    <a href="prompts.html">Translation Prompts</a>
-		            <a href="statistics.html">Statistics</a>
-		            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
-		            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
-		            <a href="protected/clustering.html">Clustering</a>
-		            <a href="protected/entity_resolution_review.html">Entity Review</a>
-		            <a href="protected/brady_entity_review.html">Brady Review</a>
-		            <a href="progress.html">Processing Progress</a>
-		            <a href="pipeline.html">Pipeline Status</a>
-		            <a href="protected/">Page Scans</a>
-		            <a href="cgi-bin/review.cgi">Human Review</a>
-            <a href="downloads.html">Downloads</a>
-            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
-        </div>
+        {render_site_navigation("translations", "reference")}
         {render_search_widget()}
         <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
             <div class="stat-card">
@@ -3106,17 +3006,12 @@ def generate_index_html(letter_counts, stats):
             </div>
         </div>
 
-        <div class="explore-grid">
-            {explore_html}
-        </div>
-
         <div class="letter-grid">
             {''.join(letters_html)}
         </div>
 
         <div class="footer">
             <p>Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
-            <p>Select a letter to browse headwords, then open canonical pages for each entry.</p>
         </div>
     </div>
 </body>
@@ -3225,15 +3120,7 @@ def generate_prompt_detail_page(item: dict):
     </div>
 
     <div class="container">
-        <div class="nav-links">
-            <a href="../index.html">All Letters</a>
-            <a href="../prompts.html">Translation Prompts</a>
-            <a href="../word_index.html">Word Index</a>
-            <a href="../lemma_index.html">Lemma Index</a>
-            <a href="../statistics.html">Statistics</a>
-            <a href="../pipeline.html">Pipeline Status</a>
-            <a href="../cgi-bin/review.cgi">Human Review</a>
-        </div>
+        {render_site_navigation("translations", depth=1)}
         <div class="breadcrumb">
             <a href="../index.html">All Letters</a>
             / <a href="../prompts.html">Translation Prompts</a>
@@ -3372,29 +3259,7 @@ def generate_prompts_page(prompt_versions):
     </div>
 
     <div class="container">
-        <div class="nav-links">
-            <a href="index.html">All Letters</a>
-            <a href="sources.html">Ancient Sources</a>
-            <a href="works.html">Works Cited</a>
-            <a href="word_index.html">Word Index</a>
-            <a href="lemma_index.html">Lemma Index</a>
-            <a href="fgrhist.html">FGrHist Index</a>
-            <a href="entities.html">People &amp; Deities</a>
-            <a href="peoples.html">Ethnic Groups</a>
-            <a href="aliases.html">Aliases</a>
-            <a href="map.html">Places Map</a>
-            <a href="statistics.html">Statistics</a>
-            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
-            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
-            <a href="protected/clustering.html">Clustering</a>
-            <a href="protected/entity_resolution_review.html">Entity Review</a>
-            <a href="protected/brady_entity_review.html">Brady Review</a>
-            <a href="progress.html">Processing Progress</a>
-            <a href="pipeline.html">Pipeline Status</a>
-            <a href="cgi-bin/review.cgi">Human Review</a>
-            <a href="downloads.html">Downloads</a>
-            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
-        </div>
+        {render_site_navigation("translations")}
         {render_search_widget()}
         <div class="stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0;">
             <div class="stat-card">
@@ -3511,28 +3376,7 @@ def generate_letter_page(letter_char, letter_name, slug, lemmas):
         <p>Stephanos of Byzantium - Ethnika</p>
     </div>
     <div class="container">
-	        <div class="nav-links">
-	            <a href="index.html">All Letters</a>
-	            <a href="sources.html">Ancient Sources</a>
-	            <a href="works.html">Works Cited</a>
-	            <a href="word_index.html">Word Index</a>
-	            <a href="lemma_index.html">Lemma Index</a>
-	            <a href="fgrhist.html">FGrHist Index</a>
-	            <a href="entities.html">People &amp; Deities</a>
-	            <a href="peoples.html">Ethnic Groups</a>
-	            <a href="aliases.html">Aliases</a>
-	            <a href="map.html">Places Map</a>
-		            <a href="prompts.html">Translation Prompts</a>
-		            <a href="statistics.html">Statistics</a>
-		            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
-		            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
-		            <a href="protected/clustering.html">Clustering</a>
-		            <a href="protected/entity_resolution_review.html">Entity Review</a>
-		            <a href="protected/brady_entity_review.html">Brady Review</a>
-		            <a href="cgi-bin/review.cgi">Human Review</a>
-		            <a href="downloads.html">Downloads</a>
-		            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
-	        </div>
+        {render_site_navigation("translations", "reference")}
         {render_search_widget()}
         {body}
         <div class="footer">
@@ -3588,29 +3432,7 @@ def generate_headword_page(lemma: dict, overlaps: list[dict], overlap_run_id: in
         <p>Stephanos of Byzantium - Ethnika</p>
     </div>
     <div class="container">
-	        <div class="nav-links">
-	            <a href="index.html">All Letters</a>
-	            <a href="letter_{html_module.escape(letter_slug)}.html">{letter_char} {letter_name}</a>
-	            <a href="sources.html">Ancient Sources</a>
-	            <a href="works.html">Works Cited</a>
-	            <a href="word_index.html">Word Index</a>
-	            <a href="lemma_index.html">Lemma Index</a>
-	            <a href="fgrhist.html">FGrHist Index</a>
-	            <a href="entities.html">People &amp; Deities</a>
-	            <a href="peoples.html">Ethnic Groups</a>
-	            <a href="aliases.html">Aliases</a>
-	            <a href="map.html">Places Map</a>
-	            <a href="prompts.html">Translation Prompts</a>
-	            <a href="statistics.html">Statistics</a>
-	            <a href="protected/meineke_comparison.html">Meineke vs Billerbeck</a>
-	            <a href="protected/meineke_difference_analysis.html">Difference Analysis</a>
-	            <a href="protected/clustering.html">Clustering</a>
-	            <a href="protected/entity_resolution_review.html">Entity Review</a>
-	            <a href="protected/brady_entity_review.html">Brady Review</a>
-	            <a href="cgi-bin/review.cgi">Human Review</a>
-	            <a href="downloads.html">Downloads</a>
-	            <a href="stephanos_ethnika_translations.pdf">PDF Book</a>
-	        </div>
+        {render_site_navigation("translations", "reference")}
         {render_search_widget()}
         {body}
         <div class="footer">
@@ -3855,26 +3677,7 @@ def generate_meineke_comparison_page(stats: dict) -> str:
         <p>Greek text comparison and human review coverage</p>
     </div>
     <div class="container">
-        <div class="nav-links">
-            <a href="../index.html">All Letters</a>
-            <a href="../sources.html">Ancient Sources</a>
-            <a href="../works.html">Works Cited</a>
-            <a href="../fgrhist.html">FGrHist Index</a>
-            <a href="../entities.html">People &amp; Deities</a>
-            <a href="../peoples.html">Ethnic Groups</a>
-            <a href="../aliases.html">Aliases</a>
-	            <a href="../map.html">Places Map</a>
-	            <a href="../statistics.html">Statistics</a>
-	            <a href="meineke_difference_analysis.html">Difference Analysis</a>
-	            <a href="clustering.html">Clustering</a>
-	            <a href="entity_resolution_review.html">Entity Review</a>
-	            <a href="brady_entity_review.html">Brady Review</a>
-	            <a href="../progress.html">Processing Progress</a>
-	            <a href="../pipeline.html">Pipeline Status</a>
-	            <a href="../protected/">Page Scans</a>
-	            <a href="../cgi-bin/review.cgi">Human Review</a>
-            <a href="../downloads.html">Downloads</a>
-        </div>
+        {render_site_navigation("operations", "text_comparison", depth=1)}
 
         <div class="breadcrumb"><a href="../index.html">All Letters</a> / Meineke vs Billerbeck</div>
 
@@ -4106,17 +3909,7 @@ def main():
         <p>Greek text comparison and human review coverage</p>
     </div>
     <div class="container">
-	        <div class="nav-links">
-	            <a href="../index.html">All Letters</a>
-                    <a href="../prompts.html">Translation Prompts</a>
-	            <a href="../statistics.html">Statistics</a>
-	            <a href="meineke_difference_analysis.html">Difference Analysis</a>
-	            <a href="clustering.html">Clustering</a>
-	            <a href="entity_resolution_review.html">Entity Review</a>
-	            <a href="brady_entity_review.html">Brady Review</a>
-	            <a href="../pipeline.html">Pipeline Status</a>
-	            <a href="../cgi-bin/review.cgi">Human Review</a>
-	        </div>
+        {render_site_navigation("operations", "text_comparison", depth=1)}
         <div class="breadcrumb"><a href="../index.html">All Letters</a> / Meineke vs Billerbeck</div>
         <h2>Page Unavailable</h2>
         <p>This page could not be generated.</p>

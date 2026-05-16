@@ -35,6 +35,7 @@ import canonical_variants
 import db
 from nodegoat_client import NodegoatClient
 from config import NODEGOAT_PROJECT_ID, NODEGOAT_LEMMA_TYPE_ID
+from site_navigation import render_site_navigation, site_navigation_styles
 
 # nodegoat field IDs for "Steph Paragraph" type
 NG_FIELDS = {
@@ -226,7 +227,9 @@ def write_canonical_sync_ambiguity_report(
         "th{background:#f3f4f6;text-align:left;}"
         "ul{margin:0;padding-left:18px;}"
         "li{margin:6px 0;}"
+        f"{site_navigation_styles()}"
         "</style></head><body>"
+        + render_site_navigation("operations", depth=1)
         + html_body
         + "</body></html>"
     )

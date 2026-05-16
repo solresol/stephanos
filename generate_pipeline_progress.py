@@ -17,6 +17,7 @@ from pathlib import Path
 import db
 from generate_spelling_variants import generate_variants
 from source_documents import public_source_document_list_sql, source_document_priority_sql
+from site_navigation import render_site_navigation, site_navigation_styles
 from translation_guidance_coverage import (
     CURRENT_DETECTOR_VERSION,
     PROMPT_GUIDANCE_KINDS,
@@ -1003,9 +1004,11 @@ def generate_html(stats: dict) -> str:
         a {{
             color: #2563eb;
         }}
+        {site_navigation_styles()}
     </style>
 </head>
 <body>
+    {render_site_navigation("operations", "pipeline")}
     <h1>Stephanos Pipeline Progress</h1>
     <p class="updated">Last updated: {now}</p>
 
@@ -1036,11 +1039,6 @@ def generate_html(stats: dict) -> str:
         the active German-reference lane is internal and reported separately when present.
     </div>
 
-    <p style="margin-top: 20px;">
-        <a href="index.html">&larr; Back to main site</a> |
-        <a href="statistics.html">Statistics</a> |
-        <a href="downloads.html">Downloads</a>
-    </p>
 </body>
 </html>
 """

@@ -13,6 +13,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from db import get_connection
+from site_navigation import render_site_navigation, site_navigation_styles
 
 OUTPUT_DIR = Path("reference_site")
 
@@ -100,7 +101,7 @@ def generate_map_html(places):
             opacity: 0.9;
         }}
         .header-links a:hover {{ opacity: 1; text-decoration: underline; }}
-        #map {{ height: calc(100vh - 60px); width: 100%; }}
+        #map {{ height: calc(100vh - 126px); width: 100%; }}
         .stats-bar {{
             position: absolute;
             top: 70px;
@@ -149,17 +150,15 @@ def generate_map_html(places):
             font-size: 0.85em;
         }}
         .popup-links a:hover {{ text-decoration: underline; }}
+        {site_navigation_styles()}
+        .site-menu {{ margin: 8px 10px; }}
     </style>
 </head>
 <body>
     <div class="header">
         <h1>Stephanos Places Map</h1>
-        <div class="header-links">
-            <a href="index.html">Reference Index</a>
-            <a href="statistics.html">Statistics</a>
-            <a href="downloads.html">Downloads</a>
-        </div>
     </div>
+    {render_site_navigation("extracted", "map")}
     <div id="map"></div>
     <div class="stats-bar">
         <strong>{len(features)}</strong> places geocoded
