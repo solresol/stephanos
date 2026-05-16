@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict uUrtYMLj0qkdzPehxwFn8i94slqeNUGX1BoQswH2pOFvldH7m1IWdCR1JZHrKuX
+\restrict dv82t5KW22o37kBlvGMJQXefENES9ZvbwUUIRTLy0wlkQDAaqau5NBehHocbs0z
 
 -- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
@@ -2020,8 +2020,17 @@ CREATE TABLE public.topostext_intake_mentions (
     mention_fingerprint text NOT NULL,
     imported_at timestamp with time zone DEFAULT now() NOT NULL,
     metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    suggested_tag_name text DEFAULT ''::text NOT NULL,
+    tag_review_reason text DEFAULT ''::text NOT NULL,
+    place_type_term text DEFAULT ''::text NOT NULL,
+    place_type_kind text DEFAULT ''::text NOT NULL,
+    region_hint text DEFAULT ''::text NOT NULL,
+    region_hint_source text DEFAULT ''::text NOT NULL,
+    re_candidate_ids jsonb DEFAULT '[]'::jsonb NOT NULL,
+    re_candidate_count integer DEFAULT 0 NOT NULL,
     CONSTRAINT topostext_intake_mentions_entry_sequence_check CHECK ((entry_mention_sequence > 0)),
     CONSTRAINT topostext_intake_mentions_fingerprint_check CHECK ((mention_fingerprint ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT topostext_intake_mentions_re_candidate_count_check CHECK ((re_candidate_count >= 0)),
     CONSTRAINT topostext_intake_mentions_sequence_check CHECK ((mention_sequence > 0))
 );
 
@@ -4305,6 +4314,20 @@ CREATE INDEX topostext_intake_mentions_fingerprint_idx ON public.topostext_intak
 
 
 --
+-- Name: topostext_intake_mentions_place_type_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_mentions_place_type_idx ON public.topostext_intake_mentions USING btree (snapshot_id, place_type_term) WHERE (place_type_term <> ''::text);
+
+
+--
+-- Name: topostext_intake_mentions_re_candidate_count_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_mentions_re_candidate_count_idx ON public.topostext_intake_mentions USING btree (snapshot_id, re_candidate_count DESC) WHERE (re_candidate_count > 0);
+
+
+--
 -- Name: topostext_intake_mentions_re_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4312,10 +4335,24 @@ CREATE INDEX topostext_intake_mentions_re_idx ON public.topostext_intake_mention
 
 
 --
+-- Name: topostext_intake_mentions_region_hint_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_mentions_region_hint_idx ON public.topostext_intake_mentions USING btree (snapshot_id, region_hint) WHERE (region_hint <> ''::text);
+
+
+--
 -- Name: topostext_intake_mentions_snapshot_entry_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX topostext_intake_mentions_snapshot_entry_idx ON public.topostext_intake_mentions USING btree (snapshot_id, entry_key, entry_mention_sequence);
+
+
+--
+-- Name: topostext_intake_mentions_suggested_tag_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_mentions_suggested_tag_idx ON public.topostext_intake_mentions USING btree (snapshot_id, suggested_tag_name) WHERE (suggested_tag_name <> ''::text);
 
 
 --
@@ -5287,5 +5324,5 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict uUrtYMLj0qkdzPehxwFn8i94slqeNUGX1BoQswH2pOFvldH7m1IWdCR1JZHrKuX
+\unrestrict dv82t5KW22o37kBlvGMJQXefENES9ZvbwUUIRTLy0wlkQDAaqau5NBehHocbs0z
 

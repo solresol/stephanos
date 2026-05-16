@@ -2,6 +2,7 @@
 import unittest
 
 from generate_topostext_intake_report import (
+    ReEnrichment,
     authority_url,
     classify_authority_id,
     parse_topostext_html,
@@ -11,6 +12,8 @@ from generate_topostext_review_page import build_review_groups
 from import_topostext_intake import (
     action_status,
     authority_namespace_and_id,
+    build_review_hints,
+    re_candidate_index,
     placeholder_code,
     stable_mention_fingerprints,
 )
@@ -178,6 +181,45 @@ class ToposTextIntakeReportTests(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0].count, 2)
         self.assertEqual(groups[0].entries, {"241:A1", "241:A2"})
+
+    def test_review_hints_suggest_place_and_region_from_type_term(self):
+        parsed = parse_topostext_html(
+            """<p work="241" id="A15.1"><PRN id="AgessosJJ">Ἀγησσός</PRN>, πόλις Θρᾴκης.</p>"""
+        )
+        hints = build_review_hints(parsed.mentions[0])
+
+        self.assertEqual(hints.place_type_term, "πόλις")
+        self.assertEqual(hints.place_type_kind, "place")
+        self.assertEqual(hints.suggested_tag_name, "place")
+        self.assertEqual(hints.region_hint, "Θρᾴκης")
+
+    def test_review_hints_suggest_ethnic_from_ethnos_term(self):
+        parsed = parse_topostext_html(
+            """<p work="241" id="E1"><PRN id="FooYY">Φοῦ</PRN>, ἔθνος Ἰλλυρικόν.</p>"""
+        )
+        hints = build_review_hints(parsed.mentions[0])
+
+        self.assertEqual(hints.place_type_term, "ἔθνος")
+        self.assertEqual(hints.place_type_kind, "ethnic")
+        self.assertEqual(hints.suggested_tag_name, "ethnic")
+
+    def test_re_candidate_suggestions_use_pauly_index(self):
+        parsed = parse_topostext_html(
+            """<p work="241" id="A15.1"><place id="AgessosJJ">Agessos</place>: text.</p>"""
+        )
+        exact_index, prefix_index = re_candidate_index(
+            {
+                "RE:Agessos": ReEnrichment(
+                    re_id="RE:Agessos",
+                    short_definition="Ort in Thrakien",
+                    subject_item="https://www.wikidata.org/wiki/Q1",
+                )
+            }
+        )
+        hints = build_review_hints(parsed.mentions[0], exact_index, prefix_index)
+
+        self.assertEqual(hints.re_candidates[0]["re_id"], "RE:Agessos")
+        self.assertEqual(hints.re_candidates[0]["match"], "exact")
 
 
 if __name__ == "__main__":

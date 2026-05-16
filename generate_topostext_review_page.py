@@ -25,6 +25,8 @@ from import_topostext_intake import ACTION_STATUS_LABELS
 DEFAULT_OUTPUT = Path("exports/topostext_review.html")
 DEFAULT_QUEUE_CSV = Path("exports/topostext_review_queue.csv")
 DEFAULT_DIFF_CSV = Path("exports/topostext_snapshot_diff.csv")
+DEFAULT_TAG_REVIEW_CSV = Path("exports/topostext_tag_review.csv")
+DEFAULT_RE_CANDIDATES_CSV = Path("exports/topostext_re_candidates.csv")
 
 REVIEW_STATUS_PRIORITY = {
     "needs_new_topostext_id": 0,
@@ -76,6 +78,13 @@ class ReviewGroup:
     re_article_item: str
     re_subject_item: str
     re_subject_label: str
+    suggested_tag_name: str = ""
+    tag_review_reason: str = ""
+    place_type_term: str = ""
+    place_type_kind: str = ""
+    region_hint: str = ""
+    re_candidate_ids: list[dict] = field(default_factory=list)
+    re_candidate_count: int = 0
     count: int = 0
     entries: set[str] = field(default_factory=set)
     first_entry: str = ""
@@ -93,6 +102,31 @@ def link_or_text(label: str, url: str) -> str:
     if not url:
         return safe_label
     return f"<a href=\"{render_cell(url)}\" target=\"_blank\" rel=\"noopener\">{safe_label}</a>"
+
+
+def row_candidates(row: dict) -> list[dict]:
+    raw = row.get("re_candidate_ids") or []
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return raw if isinstance(raw, list) else []
+
+
+def format_re_candidates(candidates: list[dict], limit: int = 3) -> str:
+    if not candidates:
+        return ""
+    parts = []
+    for candidate in candidates[:limit]:
+        label = candidate.get("re_id") or candidate.get("label") or ""
+        definition = candidate.get("short_definition") or ""
+        if definition:
+            parts.append(f"{label}: {definition}")
+        else:
+            parts.append(str(label))
+    return " | ".join(parts)
 
 
 def table_exists(cur, table_name: str) -> bool:
@@ -247,6 +281,13 @@ def build_review_groups(rows: list[dict]) -> list[ReviewGroup]:
                 re_article_item=row.get("re_article_item") or "",
                 re_subject_item=row.get("re_subject_item") or "",
                 re_subject_label=row.get("re_subject_label") or "",
+                suggested_tag_name=row.get("suggested_tag_name") or "",
+                tag_review_reason=row.get("tag_review_reason") or "",
+                place_type_term=row.get("place_type_term") or "",
+                place_type_kind=row.get("place_type_kind") or "",
+                region_hint=row.get("region_hint") or "",
+                re_candidate_ids=row_candidates(row),
+                re_candidate_count=int(row.get("re_candidate_count") or 0),
                 first_entry=row.get("entry_key") or "",
                 first_title=row.get("entry_title") or "",
                 first_context=row.get("context") or "",
@@ -263,9 +304,17 @@ def build_review_groups(rows: list[dict]) -> list[ReviewGroup]:
             "re_article_item",
             "re_subject_item",
             "re_subject_label",
+            "suggested_tag_name",
+            "tag_review_reason",
+            "place_type_term",
+            "place_type_kind",
+            "region_hint",
         ):
             if not getattr(group, attr) and row.get(attr):
                 setattr(group, attr, row[attr])
+        if not group.re_candidate_ids and row_candidates(row):
+            group.re_candidate_ids = row_candidates(row)
+            group.re_candidate_count = int(row.get("re_candidate_count") or len(group.re_candidate_ids))
 
     return sorted(
         groups.values(),
@@ -368,6 +417,68 @@ def diff_row(change_kind: str, change_status: str, row: dict) -> dict:
     }
 
 
+def build_diff_entry_groups(rows: list[dict]) -> list[dict]:
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        entry_key = row.get("entry_key") or ""
+        group = grouped.setdefault(
+            entry_key,
+            {
+                "entry_key": entry_key,
+                "title": row.get("title", ""),
+                "entry_changes": Counter(),
+                "mention_changes": Counter(),
+                "examples": [],
+            },
+        )
+        if not group["title"] and row.get("title"):
+            group["title"] = row["title"]
+        counter_name = "entry_changes" if row.get("change_kind") == "entry" else "mention_changes"
+        group[counter_name][row.get("change_status") or "changed"] += 1
+        if len(group["examples"]) < 5:
+            if row.get("change_kind") == "mention":
+                group["examples"].append(
+                    f"{row.get('change_status')}: <{row.get('tag_name')} id='{row.get('tag_id')}'>{row.get('mention_text')}</{row.get('tag_name')}>"
+                )
+            else:
+                group["examples"].append(f"{row.get('change_status')}: {row.get('context', '')[:160]}")
+
+    def total_changes(group: dict) -> int:
+        return sum(group["entry_changes"].values()) + sum(group["mention_changes"].values())
+
+    return sorted(grouped.values(), key=lambda item: (-total_changes(item), item["entry_key"]))
+
+
+def build_tag_review_rows(rows: list[dict]) -> list[dict]:
+    review_rows = [
+        row
+        for row in rows
+        if (row.get("suggested_tag_name") or row.get("place_type_term") or row.get("region_hint"))
+    ]
+    return sorted(
+        review_rows,
+        key=lambda row: (
+            0 if row.get("suggested_tag_name") else 1,
+            row.get("suggested_tag_name") or "",
+            row.get("entry_key") or "",
+            row.get("mention_sequence") or 0,
+        ),
+    )
+
+
+def build_re_candidate_rows(rows: list[dict]) -> list[dict]:
+    review_rows = [row for row in rows if int(row.get("re_candidate_count") or 0) > 0]
+    return sorted(
+        review_rows,
+        key=lambda row: (
+            row.get("action_status") or "",
+            -(int(row.get("re_candidate_count") or 0)),
+            row.get("entry_key") or "",
+            row.get("mention_sequence") or 0,
+        ),
+    )
+
+
 def write_review_queue_csv(path: Path, groups: list[ReviewGroup]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
@@ -386,6 +497,12 @@ def write_review_queue_csv(path: Path, groups: list[ReviewGroup]) -> None:
         "re_article_item",
         "re_subject_item",
         "re_subject_label",
+        "suggested_tag_name",
+        "tag_review_reason",
+        "place_type_term",
+        "place_type_kind",
+        "region_hint",
+        "re_candidates",
         "first_entry",
         "first_title",
         "first_context",
@@ -412,10 +529,70 @@ def write_review_queue_csv(path: Path, groups: list[ReviewGroup]) -> None:
                     "re_article_item": group.re_article_item,
                     "re_subject_item": group.re_subject_item,
                     "re_subject_label": group.re_subject_label,
+                    "suggested_tag_name": group.suggested_tag_name,
+                    "tag_review_reason": group.tag_review_reason,
+                    "place_type_term": group.place_type_term,
+                    "place_type_kind": group.place_type_kind,
+                    "region_hint": group.region_hint,
+                    "re_candidates": format_re_candidates(group.re_candidate_ids, limit=5),
                     "first_entry": group.first_entry,
                     "first_title": group.first_title,
                     "first_context": group.first_context,
                     "next_step": REVIEW_NEXT_STEPS.get(group.action_status, ""),
+                }
+            )
+
+
+def write_tag_review_csv(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "entry_key",
+        "entry_title",
+        "tag_name",
+        "suggested_tag_name",
+        "tag_review_reason",
+        "place_type_term",
+        "place_type_kind",
+        "region_hint",
+        "tag_id",
+        "mention_text",
+        "context",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({name: row.get(name, "") for name in fieldnames})
+
+
+def write_re_candidates_csv(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "entry_key",
+        "entry_title",
+        "action_status",
+        "tag_name",
+        "tag_id",
+        "mention_text",
+        "re_candidate_count",
+        "re_candidates",
+        "context",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "entry_key": row.get("entry_key", ""),
+                    "entry_title": row.get("entry_title", ""),
+                    "action_status": row.get("action_status", ""),
+                    "tag_name": row.get("tag_name", ""),
+                    "tag_id": row.get("tag_id", ""),
+                    "mention_text": row.get("mention_text", ""),
+                    "re_candidate_count": row.get("re_candidate_count", 0),
+                    "re_candidates": format_re_candidates(row_candidates(row), limit=5),
+                    "context": row.get("context", ""),
                 }
             )
 
@@ -450,6 +627,15 @@ def render_group_table(groups: list[ReviewGroup], limit: int) -> str:
         else:
             subject = "<span class=\"empty\">missing</span>"
         definition = group.re_short_definition or ""
+        suggestions = []
+        if group.suggested_tag_name:
+            suggestions.append(f"tag -> {group.suggested_tag_name}")
+        if group.place_type_term:
+            suggestions.append(f"type {group.place_type_term}")
+        if group.region_hint:
+            suggestions.append(f"region {group.region_hint}")
+        if group.re_candidate_ids:
+            suggestions.append(format_re_candidates(group.re_candidate_ids))
         body.append(
             "<tr>"
             f"<td>{render_cell(ACTION_STATUS_LABELS.get(group.action_status, group.action_status))}</td>"
@@ -460,6 +646,7 @@ def render_group_table(groups: list[ReviewGroup], limit: int) -> str:
             f"<td>{render_cell(group.surface)}</td>"
             f"<td>{render_cell(definition)}</td>"
             f"<td>{subject}</td>"
+            f"<td>{render_cell('; '.join(suggestions))}</td>"
             f"<td>{render_cell(group.first_entry)}</td>"
             f"<td>{render_cell(group.first_context)}</td>"
             f"<td>{render_cell(REVIEW_NEXT_STEPS.get(group.action_status, ''))}</td>"
@@ -468,7 +655,7 @@ def render_group_table(groups: list[ReviewGroup], limit: int) -> str:
     return (
         "<table><thead><tr>"
         "<th>Queue</th><th>Mentions</th><th>Entries</th><th>Tag</th><th>ID</th><th>Surface</th>"
-        "<th>RE definition</th><th>Subject item</th><th>First entry</th><th>First context</th><th>Next step</th>"
+        "<th>RE definition</th><th>Subject item</th><th>Generated hints</th><th>First entry</th><th>First context</th><th>Next step</th>"
         "</tr></thead><tbody>"
         + "".join(body)
         + "</tbody></table>"
@@ -511,17 +698,100 @@ def render_diff_table(rows: list[dict], limit: int) -> str:
     )
 
 
+def render_diff_group_table(groups: list[dict], limit: int) -> str:
+    if not groups:
+        return "<p class=\"empty\">No changed entries against the previous imported snapshot.</p>"
+    body = []
+    for group in groups[:limit]:
+        entry_changes = ", ".join(f"{key}: {count}" for key, count in group["entry_changes"].items())
+        mention_changes = ", ".join(f"{key}: {count}" for key, count in group["mention_changes"].items())
+        body.append(
+            "<tr>"
+            f"<td>{render_cell(group['entry_key'])}</td>"
+            f"<td>{render_cell(group['title'])}</td>"
+            f"<td>{render_cell(entry_changes)}</td>"
+            f"<td>{render_cell(mention_changes)}</td>"
+            f"<td>{render_cell(' | '.join(group['examples']))}</td>"
+            "</tr>"
+        )
+    return (
+        "<table><thead><tr>"
+        "<th>Entry</th><th>Title</th><th>Entry changes</th><th>Tag changes</th><th>Examples</th>"
+        "</tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table>"
+    )
+
+
+def render_tag_review_table(rows: list[dict], limit: int) -> str:
+    if not rows:
+        return "<p class=\"empty\">No tag or place-type hints in this snapshot.</p>"
+    body = []
+    for row in rows[:limit]:
+        body.append(
+            "<tr>"
+            f"<td>{render_cell(row.get('entry_key'))}</td>"
+            f"<td><code>{render_cell(row.get('tag_name'))}</code></td>"
+            f"<td><code>{render_cell(row.get('suggested_tag_name'))}</code></td>"
+            f"<td>{render_cell(row.get('place_type_term'))}</td>"
+            f"<td>{render_cell(row.get('place_type_kind'))}</td>"
+            f"<td>{render_cell(row.get('region_hint'))}</td>"
+            f"<td>{render_cell(row.get('mention_text'))}</td>"
+            f"<td>{render_cell(row.get('tag_review_reason'))}</td>"
+            f"<td>{render_cell(row.get('context'))}</td>"
+            "</tr>"
+        )
+    return (
+        "<table><thead><tr>"
+        "<th>Entry</th><th>Current tag</th><th>Suggested tag</th><th>Type term</th><th>Kind</th><th>Region hint</th><th>Surface</th><th>Reason</th><th>Context</th>"
+        "</tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table>"
+    )
+
+
+def render_re_candidate_table(rows: list[dict], limit: int) -> str:
+    if not rows:
+        return "<p class=\"empty\">No possible RE matches for unresolved tags in this snapshot.</p>"
+    body = []
+    for row in rows[:limit]:
+        body.append(
+            "<tr>"
+            f"<td>{render_cell(row.get('entry_key'))}</td>"
+            f"<td>{render_cell(ACTION_STATUS_LABELS.get(row.get('action_status'), row.get('action_status')))}</td>"
+            f"<td><code>{render_cell(row.get('tag_name'))}</code></td>"
+            f"<td>{render_cell(row.get('tag_id'))}</td>"
+            f"<td>{render_cell(row.get('mention_text'))}</td>"
+            f"<td>{render_cell(row.get('re_candidate_count'))}</td>"
+            f"<td>{render_cell(format_re_candidates(row_candidates(row), limit=5))}</td>"
+            f"<td>{render_cell(row.get('context'))}</td>"
+            "</tr>"
+        )
+    return (
+        "<table><thead><tr>"
+        "<th>Entry</th><th>Queue</th><th>Tag</th><th>ID</th><th>Surface</th><th>Candidates</th><th>Possible RE matches</th><th>Context</th>"
+        "</tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table>"
+    )
+
+
 def build_html(
     *,
     latest_snapshot: ImportedSnapshot,
     previous_snapshot: ImportedSnapshot | None,
     latest_mentions: list[dict],
     groups: list[ReviewGroup],
+    tag_review_rows: list[dict],
+    re_candidate_rows: list[dict],
     diff_counts: Counter[str],
     diff_rows: list[dict],
+    diff_entry_groups: list[dict],
     output_path: Path,
     queue_csv_path: Path | None,
     diff_csv_path: Path | None,
+    tag_review_csv_path: Path | None,
+    re_candidates_csv_path: Path | None,
     limit: int,
 ) -> str:
     generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -538,7 +808,9 @@ def build_html(
         ("Review Groups", f"{len(groups):,}"),
         ("JJ Groups", f"{sum(1 for group in groups if group.action_status == 'needs_new_topostext_id'):,}"),
         ("YY Groups", f"{sum(1 for group in groups if group.action_status == 'needs_deep_search'):,}"),
-        ("RE Subject Gaps", f"{sum(1 for group in groups if group.action_status == 'needs_re_subject_item'):,}"),
+        ("Tag Suggestions", f"{sum(1 for row in tag_review_rows if row.get('suggested_tag_name')):,}"),
+        ("RE Candidate Rows", f"{len(re_candidate_rows):,}"),
+        ("Region Hints", f"{sum(1 for row in latest_mentions if row.get('region_hint')):,}"),
     ]
     cards_html = "".join(
         f"<div class=\"card\"><strong>{render_cell(value)}</strong><span>{render_cell(label)}</span></div>"
@@ -551,6 +823,22 @@ def build_html(
     ]
     authority_rows = [[authority_class, count] for authority_class, count in authority_counts.most_common()]
     tag_rows = [[tag_name, count] for tag_name, count in tag_counts.most_common()]
+    place_type_rows = [
+        [term, kind, count]
+        for (term, kind), count in Counter(
+            (row.get("place_type_term") or "", row.get("place_type_kind") or "")
+            for row in latest_mentions
+            if row.get("place_type_term")
+        ).most_common(40)
+    ]
+    region_rows = [
+        [region, count]
+        for region, count in Counter(
+            row.get("region_hint") or ""
+            for row in latest_mentions
+            if row.get("region_hint")
+        ).most_common(40)
+    ]
     diff_count_rows = [[key, value] for key, value in sorted(diff_counts.items())]
     if previous_snapshot is None:
         diff_note = "No previous imported snapshot is available yet, so the diff section will start filling in after the next successful daily import."
@@ -565,6 +853,10 @@ def build_html(
         links.append(f"<a href=\"{render_cell(queue_csv_path.name)}?v={render_cell(cache_suffix)}\">review queue CSV</a>")
     if diff_csv_path:
         links.append(f"<a href=\"{render_cell(diff_csv_path.name)}?v={render_cell(cache_suffix)}\">snapshot diff CSV</a>")
+    if tag_review_csv_path:
+        links.append(f"<a href=\"{render_cell(tag_review_csv_path.name)}?v={render_cell(cache_suffix)}\">tag/type CSV</a>")
+    if re_candidates_csv_path:
+        links.append(f"<a href=\"{render_cell(re_candidates_csv_path.name)}?v={render_cell(cache_suffix)}\">RE candidates CSV</a>")
     link_html = " | ".join(links)
 
     css = """
@@ -690,6 +982,14 @@ def build_html(
   <h2>Grouped Review Queue</h2>
   {render_group_table(groups, limit)}
 
+  <h2>Tag And Type Suggestions</h2>
+  <p>These are generated hints from Brady's term list. They are not source edits; they point to rows where a <code>PRN</code> may really be a <code>place</code> or <code>ethnic</code>, and where a place-type term or region clue was visible near the mention.</p>
+  {render_tag_review_table(tag_review_rows, limit)}
+
+  <h2>Possible RE Matches For Unresolved Tags</h2>
+  <p>These are spreadsheet-derived RE candidates for unresolved tags such as <code>YY</code>, <code>JJ</code>, <code>zzz</code>, missing IDs, and unknown authority IDs.</p>
+  {render_re_candidate_table(re_candidate_rows, limit)}
+
   <div class="grid-two">
     <section>
       <h2>Queue Counts</h2>
@@ -704,11 +1004,24 @@ def build_html(
   <h2>Tag Counts</h2>
   {render_count_table(["tag", "mentions"], tag_rows)}
 
+  <div class="grid-two">
+    <section>
+      <h2>Place-Type Term Hints</h2>
+      {render_count_table(["term", "kind", "mentions"], place_type_rows)}
+    </section>
+    <section>
+      <h2>Region Hints</h2>
+      {render_count_table(["region hint", "mentions"], region_rows)}
+    </section>
+  </div>
+
   <section class="note warning">
     <strong>Snapshot diff:</strong> {render_cell(diff_note)}
   </section>
   <h2>Snapshot Diff Counts</h2>
   {render_count_table(["change", "count"], diff_count_rows)}
+  <h2>Changed Entries</h2>
+  {render_diff_group_table(diff_entry_groups, limit)}
   <h2>Snapshot Diff Examples</h2>
   {render_diff_table(diff_rows, limit)}
 </main>
@@ -722,6 +1035,8 @@ def build_review_page(
     output_path: Path,
     queue_csv_path: Path | None,
     diff_csv_path: Path | None,
+    tag_review_csv_path: Path | None,
+    re_candidates_csv_path: Path | None,
     snapshot_id: int | None,
     limit: int,
 ) -> dict[str, int | str]:
@@ -752,10 +1067,17 @@ def build_review_page(
         conn.close()
 
     groups = build_review_groups(latest_mentions)
+    tag_review_rows = build_tag_review_rows(latest_mentions)
+    re_candidate_rows = build_re_candidate_rows(latest_mentions)
+    diff_entry_groups = build_diff_entry_groups(diff_rows)
     if queue_csv_path:
         write_review_queue_csv(queue_csv_path, groups)
     if diff_csv_path:
         write_diff_csv(diff_csv_path, diff_rows)
+    if tag_review_csv_path:
+        write_tag_review_csv(tag_review_csv_path, tag_review_rows)
+    if re_candidates_csv_path:
+        write_re_candidates_csv(re_candidates_csv_path, re_candidate_rows)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
@@ -764,11 +1086,16 @@ def build_review_page(
             previous_snapshot=previous_snapshot,
             latest_mentions=latest_mentions,
             groups=groups,
+            tag_review_rows=tag_review_rows,
+            re_candidate_rows=re_candidate_rows,
             diff_counts=diff_counts,
             diff_rows=diff_rows,
+            diff_entry_groups=diff_entry_groups,
             output_path=output_path,
             queue_csv_path=queue_csv_path,
             diff_csv_path=diff_csv_path,
+            tag_review_csv_path=tag_review_csv_path,
+            re_candidates_csv_path=re_candidates_csv_path,
             limit=limit,
         ),
         encoding="utf-8",
@@ -778,7 +1105,10 @@ def build_review_page(
         "snapshot_id": latest_snapshot.snapshot_id,
         "mentions": latest_snapshot.mention_count,
         "review_groups": len(groups),
+        "tag_review_rows": len(tag_review_rows),
+        "re_candidate_rows": len(re_candidate_rows),
         "diff_rows": len(diff_rows),
+        "diff_entry_groups": len(diff_entry_groups),
         "output": str(output_path),
     }
 
@@ -788,8 +1118,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--queue-csv", type=Path, default=DEFAULT_QUEUE_CSV)
     parser.add_argument("--diff-csv", type=Path, default=DEFAULT_DIFF_CSV)
+    parser.add_argument("--tag-review-csv", type=Path, default=DEFAULT_TAG_REVIEW_CSV)
+    parser.add_argument("--re-candidates-csv", type=Path, default=DEFAULT_RE_CANDIDATES_CSV)
     parser.add_argument("--no-queue-csv", action="store_true")
     parser.add_argument("--no-diff-csv", action="store_true")
+    parser.add_argument("--no-tag-review-csv", action="store_true")
+    parser.add_argument("--no-re-candidates-csv", action="store_true")
     parser.add_argument("--snapshot-id", type=int)
     parser.add_argument("--limit", type=int, default=120)
     parser.add_argument("--summary-json", type=Path, help="Optional machine-readable generation summary")
@@ -801,10 +1135,14 @@ def main(argv: list[str] | None = None) -> int:
     output_path = args.output.expanduser()
     queue_csv_path = None if args.no_queue_csv else args.queue_csv.expanduser()
     diff_csv_path = None if args.no_diff_csv else args.diff_csv.expanduser()
+    tag_review_csv_path = None if args.no_tag_review_csv else args.tag_review_csv.expanduser()
+    re_candidates_csv_path = None if args.no_re_candidates_csv else args.re_candidates_csv.expanduser()
     summary = build_review_page(
         output_path=output_path,
         queue_csv_path=queue_csv_path,
         diff_csv_path=diff_csv_path,
+        tag_review_csv_path=tag_review_csv_path,
+        re_candidates_csv_path=re_candidates_csv_path,
         snapshot_id=args.snapshot_id,
         limit=args.limit,
     )
@@ -819,6 +1157,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"queue_csv={queue_csv_path}")
     if diff_csv_path:
         print(f"diff_csv={diff_csv_path}")
+    if tag_review_csv_path:
+        print(f"tag_review_csv={tag_review_csv_path}")
+    if re_candidates_csv_path:
+        print(f"re_candidates_csv={re_candidates_csv_path}")
     return 0
 
 

@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import sys
+import unicodedata
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 from psycopg2.extras import Json, execute_values
@@ -47,6 +50,327 @@ ACTION_STATUS_LABELS = {
     "re_enriched": "RE enriched",
     "local_identifier_review": "review local ID",
 }
+
+PLACE_TYPE_TERMS: list[tuple[str, str]] = [
+    ("ἄκρα", "place"),
+    ("ἀκρόπολις", "place"),
+    ("ἀκρωτήριον", "place"),
+    ("ἄλσος", "place"),
+    ("ἄντρον", "place"),
+    ("βασίλειον", "place"),
+    ("γένος", "ethnic"),
+    ("γῆ", "place"),
+    ("γυμνάσιον", "place"),
+    ("δῆμος", "place"),
+    ("ἔθνος", "ethnic"),
+    ("ἐμπόριον", "place"),
+    ("ἐπίνειον", "place"),
+    ("θάλασσα", "place"),
+    ("ἱερόν", "place"),
+    ("κόλπος", "place"),
+    ("κρήνη", "place"),
+    ("κώμη", "place"),
+    ("λιμήν", "place"),
+    ("λίμνη", "place"),
+    ("λόφος", "place"),
+    ("μαντεῖον", "place"),
+    ("μητρόπολις", "place"),
+    ("μοῖρα", "place_or_ethnic"),
+    ("νῆσοι", "place"),
+    ("νῆσος", "place"),
+    ("νομὸς", "place"),
+    ("ὄρος", "place"),
+    ("πεδίον", "place"),
+    ("πέλαγος", "place"),
+    ("πόλις", "place"),
+    ("πόλισμα", "place"),
+    ("πολίχνιον", "place"),
+    ("ποταμός", "place"),
+    ("τόπος", "place"),
+    ("χερρονήσου", "place"),
+    ("χώρα", "place"),
+    ("χωρίον", "place"),
+]
+GREEK_WORD_RE = re.compile(r"[\u0370-\u03ff\u1f00-\u1fff]+")
+PLACE_TYPE_BY_NORMALIZED: dict[str, tuple[str, str]] = {}
+for _term, _kind in PLACE_TYPE_TERMS:
+    PLACE_TYPE_BY_NORMALIZED[
+        "".join(
+            ch
+            for ch in unicodedata.normalize("NFD", _term.casefold())
+            if not unicodedata.combining(ch)
+        ).replace("ς", "σ")
+    ] = (_term, _kind)
+GREEK_REGION_SKIP_KEYS = {
+    "η",
+    "ο",
+    "οι",
+    "το",
+    "τα",
+    "τη",
+    "τηι",
+    "τησ",
+    "τον",
+    "των",
+    "του",
+    "τω",
+    "τωι",
+    "εν",
+    "εκ",
+    "εξ",
+    "επι",
+    "κατα",
+    "περι",
+    "προσ",
+    "παρα",
+    "και",
+    "δε",
+    "τε",
+    "ωσ",
+    "πολιτησ",
+    "εθνικον",
+} | set(PLACE_TYPE_BY_NORMALIZED)
+
+
+@dataclass(frozen=True)
+class ReviewHints:
+    suggested_tag_name: str = ""
+    tag_review_reason: str = ""
+    place_type_term: str = ""
+    place_type_kind: str = ""
+    region_hint: str = ""
+    region_hint_source: str = ""
+    re_candidates: tuple[dict[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class GreekToken:
+    raw: str
+    normalized: str
+    start: int
+    end: int
+
+
+def normalize_greek_key(value: str) -> str:
+    text = unicodedata.normalize("NFD", (value or "").casefold())
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return text.replace("ς", "σ")
+
+
+def greek_tokens(text: str) -> list[GreekToken]:
+    return [
+        GreekToken(
+            raw=match.group(0),
+            normalized=normalize_greek_key(match.group(0)),
+            start=match.start(),
+            end=match.end(),
+        )
+        for match in GREEK_WORD_RE.finditer(text or "")
+    ]
+
+
+def region_near_place_type(tokens: list[GreekToken], term_index: int) -> tuple[str, str]:
+    for token in tokens[term_index + 1 : term_index + 6]:
+        if token.normalized not in GREEK_REGION_SKIP_KEYS and len(token.normalized) > 1:
+            return token.raw, "after_place_type"
+    for token in reversed(tokens[max(0, term_index - 5) : term_index]):
+        if token.normalized not in GREEK_REGION_SKIP_KEYS and len(token.normalized) > 1:
+            return token.raw, "before_place_type"
+    return "", ""
+
+
+def infer_place_type_and_region(mention: Mention) -> tuple[str, str, str, str]:
+    if not likely_headword_mention(mention):
+        return "", "", "", ""
+    text = mention.context or ""
+    tokens = greek_tokens(text)
+    if not tokens:
+        return "", "", "", ""
+    focus = text.find(mention.mention_text) if mention.mention_text else -1
+    matches = []
+    for index, token in enumerate(tokens):
+        term_info = PLACE_TYPE_BY_NORMALIZED.get(token.normalized)
+        if not term_info:
+            continue
+        distance = abs(token.start - focus) if focus >= 0 else token.start
+        matches.append((distance, token.start, index, term_info))
+    if not matches:
+        return "", "", "", ""
+    _distance, _start, index, (term, kind) = sorted(matches)[0]
+    region, region_source = region_near_place_type(tokens, index)
+    return term, kind, region, region_source
+
+
+def tag_suggestion(mention: Mention, place_type_term: str, place_type_kind: str) -> tuple[str, str]:
+    if not place_type_term:
+        return "", ""
+    if place_type_kind == "ethnic" and mention.tag_name != "ethnic":
+        return (
+            "ethnic",
+            f"Context contains {place_type_term}, and Brady wants ethnos entries captured with <ethnic>.",
+        )
+    if place_type_kind == "place" and mention.tag_name == "prn":
+        return (
+            "place",
+            f"Context contains place-type term {place_type_term}; this PRN looks like a place tag.",
+        )
+    if place_type_kind == "place_or_ethnic" and mention.tag_name == "prn":
+        return (
+            "place_or_ethnic",
+            "Context contains μοῖρα, which Brady flagged as possibly place or ethnic.",
+        )
+    if place_type_kind == "ethnic" and mention.tag_name == "place":
+        return (
+            "ethnic",
+            f"Context contains {place_type_term}; this place tag may be an ethnos entry.",
+        )
+    return "", ""
+
+
+def normalize_latin_key(value: str) -> str:
+    text = unicodedata.normalize("NFKD", value or "")
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"(YY|JJ)$", "", text, flags=re.IGNORECASE)
+    text = text.casefold().replace("re:", "")
+    return re.sub(r"[^a-z0-9]+", "", text)
+
+
+def mention_matches_entry_title(mention: Mention) -> bool:
+    title_key = normalize_latin_key(mention.entry_title)
+    if not title_key:
+        return False
+    mention_key = normalize_latin_key(mention.mention_text)
+    id_key = normalize_latin_key(mention.tag_id)
+    return mention_key == title_key or id_key == title_key
+
+
+def likely_headword_mention(mention: Mention) -> bool:
+    if mention_matches_entry_title(mention):
+        return True
+    if mention.authority_class in {"yy_placeholder", "jj_placeholder", "zzz"} and mention.entry_mention_sequence <= 3:
+        return True
+    if mention.entry_mention_sequence <= 2:
+        return True
+    return False
+
+
+def use_entry_title_for_re_candidate(mention: Mention) -> bool:
+    return mention_matches_entry_title(mention) or (
+        mention.authority_class in {"yy_placeholder", "jj_placeholder", "zzz"}
+        and mention.entry_mention_sequence <= 3
+    )
+
+
+def re_display_name(re_id: str) -> str:
+    value = clean_cell(re_id)
+    if value.casefold().startswith("re:"):
+        value = value[3:]
+    return value.replace("_", " ")
+
+
+def re_candidate_index(re_lookup: dict[str, object]) -> tuple[dict[str, list[dict[str, str]]], dict[str, list[dict[str, str]]]]:
+    exact: dict[str, list[dict[str, str]]] = defaultdict(list)
+    prefix: dict[str, list[dict[str, str]]] = defaultdict(list)
+    seen: set[tuple[str, str]] = set()
+    for key, enrichment in re_lookup.items():
+        re_id = key
+        display = re_display_name(key)
+        candidate = {
+            "re_id": re_id,
+            "label": display,
+            "short_definition": getattr(enrichment, "short_definition", ""),
+            "subject_item": getattr(enrichment, "subject_item", ""),
+            "subject_label": getattr(enrichment, "subject_label", ""),
+            "article_item": getattr(enrichment, "article_item", ""),
+        }
+        names = {display}
+        names.add(re.sub(r"\s+\d+[a-z]?$", "", display, flags=re.IGNORECASE))
+        names.add(re.sub(r"\d+[a-z]?$", "", display, flags=re.IGNORECASE))
+        for name in names:
+            normalized = normalize_latin_key(name)
+            if len(normalized) < 3:
+                continue
+            dedupe_key = (normalized, re_id)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            exact[normalized].append(candidate)
+            prefix[normalized[:6]].append(candidate)
+    return exact, prefix
+
+
+def re_search_terms(mention: Mention) -> list[str]:
+    terms = []
+    raw_values = []
+    if mention.authority_class != "zzz":
+        raw_values.append(mention.tag_id)
+    raw_values.append(mention.mention_text)
+    if use_entry_title_for_re_candidate(mention):
+        raw_values.append(mention.entry_title)
+    for raw in raw_values:
+        normalized = normalize_latin_key(raw)
+        if len(normalized) >= 3 and normalized not in terms:
+            terms.append(normalized)
+    return terms
+
+
+def re_candidate_suggestions(
+    mention: Mention,
+    exact_index: dict[str, list[dict[str, str]]],
+    prefix_index: dict[str, list[dict[str, str]]],
+    limit: int = 5,
+) -> tuple[dict[str, str], ...]:
+    if mention.authority_class == "re":
+        return ()
+    if mention.authority_class not in {"yy_placeholder", "jj_placeholder", "zzz", "missing", "other"}:
+        return ()
+    candidates: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for term in re_search_terms(mention):
+        for candidate in exact_index.get(term, []):
+            if candidate["re_id"] in seen:
+                continue
+            seen.add(candidate["re_id"])
+            candidates.append({**candidate, "match": "exact"})
+        if candidates:
+            break
+        if len(term) >= 4:
+            for candidate in prefix_index.get(term[:6], []):
+                candidate_key = normalize_latin_key(candidate["label"])
+                if not (candidate_key.startswith(term) or term.startswith(candidate_key)):
+                    continue
+                if candidate["re_id"] in seen:
+                    continue
+                seen.add(candidate["re_id"])
+                candidates.append({**candidate, "match": "prefix"})
+                if len(candidates) >= limit:
+                    break
+        if candidates:
+            break
+    return tuple(candidates[:limit])
+
+
+def build_review_hints(
+    mention: Mention,
+    exact_re_index: dict[str, list[dict[str, str]]] | None = None,
+    prefix_re_index: dict[str, list[dict[str, str]]] | None = None,
+) -> ReviewHints:
+    place_type_term, place_type_kind, region_hint, region_hint_source = infer_place_type_and_region(mention)
+    suggested_tag_name, tag_review_reason = tag_suggestion(mention, place_type_term, place_type_kind)
+    re_candidates = re_candidate_suggestions(
+        mention,
+        exact_re_index or {},
+        prefix_re_index or {},
+    )
+    return ReviewHints(
+        suggested_tag_name=suggested_tag_name,
+        tag_review_reason=tag_review_reason,
+        place_type_term=place_type_term,
+        place_type_kind=place_type_kind,
+        region_hint=region_hint,
+        region_hint_source=region_hint_source,
+        re_candidates=re_candidates,
+    )
 
 
 def authority_namespace_and_id(mention: Mention) -> tuple[str, str]:
@@ -184,23 +508,29 @@ def snapshot_rows_from_db(source_name: str) -> list[SnapshotMetadata]:
 def parse_snapshot(
     metadata: SnapshotMetadata,
     *,
-    pauly_workbook_path: Path | None,
+    re_lookup: dict[str, object] | None,
     no_pauly_enrichment: bool,
 ) -> tuple[Path, ParsedToposText]:
     snapshot_path = resolve_snapshot_path(metadata)
     parsed = parse_topostext_html(snapshot_path.read_text(encoding="utf-8"))
-    if pauly_workbook_path and not no_pauly_enrichment:
-        parsed = enrich_re_mentions(parsed, load_pauly_re_enrichment(pauly_workbook_path))
+    if re_lookup and not no_pauly_enrichment:
+        parsed = enrich_re_mentions(parsed, re_lookup)
     return snapshot_path, parsed
 
 
-def import_snapshot(metadata: SnapshotMetadata, parsed: ParsedToposText) -> dict[str, int]:
+def import_snapshot(
+    metadata: SnapshotMetadata,
+    parsed: ParsedToposText,
+    *,
+    re_lookup: dict[str, object] | None = None,
+) -> dict[str, int]:
     if metadata.snapshot_id is None:
         raise RuntimeError("Cannot import a snapshot without an entity_source_snapshots id")
 
     from db import get_connection
 
     fingerprints = stable_mention_fingerprints(parsed.mentions)
+    exact_re_index, prefix_re_index = re_candidate_index(re_lookup or {})
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -257,6 +587,7 @@ def import_snapshot(metadata: SnapshotMetadata, parsed: ParsedToposText) -> dict
         mention_rows = []
         for mention in parsed.mentions:
             namespace, authority_id = authority_namespace_and_id(mention)
+            hints = build_review_hints(mention, exact_re_index, prefix_re_index)
             mention_rows.append(
                 (
                     metadata.snapshot_id,
@@ -286,6 +617,14 @@ def import_snapshot(metadata: SnapshotMetadata, parsed: ParsedToposText) -> dict
                     mention.re_volume,
                     mention.re_page,
                     mention.re_match_source,
+                    hints.suggested_tag_name,
+                    hints.tag_review_reason,
+                    hints.place_type_term,
+                    hints.place_type_kind,
+                    hints.region_hint,
+                    hints.region_hint_source,
+                    Json(list(hints.re_candidates)),
+                    len(hints.re_candidates),
                     fingerprints[mention.sequence],
                     Json({}),
                 )
@@ -322,6 +661,14 @@ def import_snapshot(metadata: SnapshotMetadata, parsed: ParsedToposText) -> dict
                 re_volume,
                 re_page,
                 re_match_source,
+                suggested_tag_name,
+                tag_review_reason,
+                place_type_term,
+                place_type_kind,
+                region_hint,
+                region_hint_source,
+                re_candidate_ids,
+                re_candidate_count,
                 mention_fingerprint,
                 metadata
             )
@@ -385,6 +732,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     pauly_workbook_path = resolve_pauly_workbook(args)
+    re_lookup = {}
+    if pauly_workbook_path and not args.no_pauly_enrichment:
+        re_lookup = load_pauly_re_enrichment(pauly_workbook_path)
 
     if args.all_available:
         snapshots = snapshot_rows_from_db(args.source_name)
@@ -399,7 +749,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             snapshot_path, parsed = parse_snapshot(
                 metadata,
-                pauly_workbook_path=pauly_workbook_path,
+                re_lookup=re_lookup,
                 no_pauly_enrichment=args.no_pauly_enrichment,
             )
         except RuntimeError as exc:
@@ -417,7 +767,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.dry_run:
             print("dry_run=1")
             continue
-        summary = import_snapshot(metadata, parsed)
+        summary = import_snapshot(metadata, parsed, re_lookup=re_lookup)
         for key, value in summary.items():
             imported_total[key] += value
             print(f"{key}={value}")
