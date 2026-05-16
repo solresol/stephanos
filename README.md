@@ -169,13 +169,15 @@ Run the dedicated Brady/ToposText intake pipeline:
 DB_HOST=raksasa DB_USER=stephanos ./run_topostext_pipeline.sh
 ```
 
+Send the daily ToposText email summary after the report generation/deploy step by setting `TOPOSTEXT_EMAIL_RECIPIENTS`. The pipeline generates the message with `generate_topostext_email_summary.py` and, by default, submits it through `stephanos@merah.cassia.ifost.org.au` as `stephanos@symmachus.org`.
+
 The intake report exposes paragraph counts, inline entity tag counts, `YY`/`JJ`/`zzz` placeholders, RE namespace rows, and a complete entity-mention CSV for external review. The review queue page groups the imported rows into concrete work queues: `JJ` new-ID work, `YY` deeper search, `zzz` unresolved IDs, RE namespace enrichment gaps, and source markup/classification fixes. It also surfaces changed entries between snapshots, possible `PRN -> place` / `PRN -> ethnic` tag fixes from Brady's place-type term list, tentative region hints, and possible RE matches for unresolved tags. When the PaulyHeadwords workbook is available, RE rows are enriched with German short definitions, RE article Wikidata items, and subject Wikidata items. None of these commands mutates the existing entity-resolution tables.
 
 The history page is the read-only change browser. It shows the imported snapshot timeline, adjacent snapshot change sets, paired mention transitions such as `prn zzz -> place 337435RMes`, and entry-level history across snapshots. It is generated from the same staging tables rather than from git diffs of the raw HTML.
 
 The authority/status page summarizes the additive canonical authority layer and publishes the concrete worklists Brady can review: possible RE matches for unmatched tags, likely `<ethnic>` suggestions, fresh ToposText ID rows, and recent entity-tag changes detected from the latest Dropbox snapshot.
 
-On `raksasa`, keep this separated from the main daily Stephanos pipeline. The main pipeline should run with `TOPOSTEXT_HTML_FETCH=0 TOPOSTEXT_INTAKE_IMPORT=0 TOPOSTEXT_INTAKE_REPORT=0`. The Brady/ToposText crontab entry should run `run_topostext_if_athens_hour.sh` hourly; that wrapper invokes `run_topostext_pipeline.sh` only when Athens local time is `03`. `raksasa`'s installed `crontab(5)` says this cron implementation does not support per-user scheduling timezones; `TZ` affects the command environment, not the cron trigger time.
+On `raksasa`, keep this separated from the main daily Stephanos pipeline. The main pipeline should run with `TOPOSTEXT_HTML_FETCH=0 TOPOSTEXT_INTAKE_IMPORT=0 TOPOSTEXT_INTAKE_REPORT=0`. Ignore daylight-saving drift for this workflow and schedule `run_topostext_pipeline.sh` at 10:00 Australia/Sydney, which is between 03:00 and 04:00 in Greece for Brady's current work pattern.
 
 Refresh the additive canonical authority/entity tables from the latest ToposText intake rows, effective place clusters, and effective proper nouns:
 ```bash

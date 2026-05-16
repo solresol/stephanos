@@ -124,4 +124,24 @@ for topostext_export in \
     fi
 done
 
+if [ -n "${TOPOSTEXT_EMAIL_RECIPIENTS:-}" ]; then
+    echo "Step 9: Sending ToposText daily email summary..." | tee -a "$LOGFILE"
+    email_file="$(mktemp)"
+    trap 'rm -f "$email_file"' EXIT
+    uv run generate_topostext_email_summary.py \
+        --to "$TOPOSTEXT_EMAIL_RECIPIENTS" \
+        > "$email_file"
+
+    TOPOSTEXT_EMAIL_FROM_ENVELOPE="${TOPOSTEXT_EMAIL_FROM_ENVELOPE:-stephanos@symmachus.org}"
+    TOPOSTEXT_EMAIL_SEND_HOST="${TOPOSTEXT_EMAIL_SEND_HOST:-stephanos@merah.cassia.ifost.org.au}"
+    if [ "$TOPOSTEXT_EMAIL_SEND_HOST" = "local" ]; then
+        /usr/sbin/sendmail -t -oi -f "$TOPOSTEXT_EMAIL_FROM_ENVELOPE" < "$email_file" \
+            2>&1 | tee -a "$LOGFILE"
+    else
+        ssh "$TOPOSTEXT_EMAIL_SEND_HOST" \
+            "/usr/sbin/sendmail -t -oi -f '$TOPOSTEXT_EMAIL_FROM_ENVELOPE'" \
+            < "$email_file" 2>&1 | tee -a "$LOGFILE"
+    fi
+fi
+
 echo "ToposText pipeline completed: $(date)" | tee -a "$LOGFILE"
