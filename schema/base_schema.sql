@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict dv82t5KW22o37kBlvGMJQXefENES9ZvbwUUIRTLy0wlkQDAaqau5NBehHocbs0z
+\restrict j6o0nlMAQ0EWKSs7GA93JsG4eLKuF7WR50KH9zHtHNRBCdNoRp3xIS9r97F9jnT
 
 -- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
@@ -180,6 +180,48 @@ ALTER SEQUENCE public.assembled_lemmas_id_seq OWNED BY public.assembled_lemmas.i
 
 
 --
+-- Name: authority_records; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.authority_records (
+    id bigint NOT NULL,
+    namespace text NOT NULL,
+    authority_id text NOT NULL,
+    authority_uri text DEFAULT ''::text NOT NULL,
+    display_label text DEFAULT ''::text NOT NULL,
+    description text DEFAULT ''::text NOT NULL,
+    entity_kind text DEFAULT ''::text NOT NULL,
+    source_name text DEFAULT ''::text NOT NULL,
+    first_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT authority_records_authority_id_check CHECK ((btrim(authority_id) <> ''::text)),
+    CONSTRAINT authority_records_namespace_check CHECK ((btrim(namespace) <> ''::text))
+);
+
+
+--
+-- Name: authority_records_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.authority_records_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: authority_records_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.authority_records_id_seq OWNED BY public.authority_records.id;
+
+
+--
 -- Name: billerbeck_german_pages; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -285,6 +327,133 @@ CREATE TABLE public.canonical_action_import_state (
     last_action_id bigint DEFAULT 0 NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
+
+
+--
+-- Name: canonical_entities; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.canonical_entities (
+    id bigint NOT NULL,
+    entity_key text NOT NULL,
+    display_label text DEFAULT ''::text NOT NULL,
+    normalized_label text DEFAULT ''::text NOT NULL,
+    entity_kind text DEFAULT ''::text NOT NULL,
+    resolution_status text DEFAULT 'candidate'::text NOT NULL,
+    preferred_authority_record_id bigint,
+    source_name text DEFAULT ''::text NOT NULL,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT canonical_entities_entity_key_check CHECK ((btrim(entity_key) <> ''::text)),
+    CONSTRAINT canonical_entities_resolution_status_check CHECK ((resolution_status = ANY (ARRAY['candidate'::text, 'confirmed'::text, 'needs_review'::text, 'merged'::text, 'rejected'::text, 'not_alignable'::text])))
+);
+
+
+--
+-- Name: canonical_entities_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.canonical_entities_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: canonical_entities_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.canonical_entities_id_seq OWNED BY public.canonical_entities.id;
+
+
+--
+-- Name: canonical_entity_authority_links; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.canonical_entity_authority_links (
+    id bigint NOT NULL,
+    canonical_entity_id bigint NOT NULL,
+    authority_record_id bigint NOT NULL,
+    link_status text DEFAULT 'candidate'::text NOT NULL,
+    confidence text DEFAULT ''::text NOT NULL,
+    source_table text DEFAULT ''::text NOT NULL,
+    source_id text DEFAULT ''::text NOT NULL,
+    source_snapshot_id bigint,
+    is_current boolean DEFAULT true NOT NULL,
+    evidence_text text DEFAULT ''::text NOT NULL,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT canonical_entity_authority_links_status_check CHECK ((link_status = ANY (ARRAY['candidate'::text, 'confirmed'::text, 'rejected'::text, 'superseded'::text, 'not_alignable'::text])))
+);
+
+
+--
+-- Name: canonical_entity_authority_links_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.canonical_entity_authority_links_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: canonical_entity_authority_links_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.canonical_entity_authority_links_id_seq OWNED BY public.canonical_entity_authority_links.id;
+
+
+--
+-- Name: canonical_entity_mentions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.canonical_entity_mentions (
+    id bigint NOT NULL,
+    canonical_entity_id bigint,
+    authority_record_id bigint,
+    source_table text NOT NULL,
+    source_id text NOT NULL,
+    source_snapshot_id bigint,
+    work text DEFAULT ''::text NOT NULL,
+    paragraph_id text DEFAULT ''::text NOT NULL,
+    entry_key text DEFAULT ''::text NOT NULL,
+    tag_name text DEFAULT ''::text NOT NULL,
+    tag_id text DEFAULT ''::text NOT NULL,
+    mention_text text DEFAULT ''::text NOT NULL,
+    context text DEFAULT ''::text NOT NULL,
+    action_status text DEFAULT ''::text NOT NULL,
+    is_current boolean DEFAULT true NOT NULL,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    observed_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: canonical_entity_mentions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.canonical_entity_mentions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: canonical_entity_mentions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.canonical_entity_mentions_id_seq OWNED BY public.canonical_entity_mentions.id;
 
 
 --
@@ -560,6 +729,45 @@ CREATE VIEW public.effective_proper_nouns AS
         END AS needs_alignment
    FROM public.proper_nouns pn
   WHERE (COALESCE(human_resolution_status, ''::text) <> 'removed'::text);
+
+
+--
+-- Name: entity_change_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.entity_change_events (
+    id bigint NOT NULL,
+    canonical_entity_id bigint,
+    authority_record_id bigint,
+    event_kind text NOT NULL,
+    event_status text DEFAULT ''::text NOT NULL,
+    source_table text DEFAULT ''::text NOT NULL,
+    source_id text DEFAULT ''::text NOT NULL,
+    source_snapshot_id bigint,
+    payload jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_by text DEFAULT ''::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT entity_change_events_kind_check CHECK ((btrim(event_kind) <> ''::text))
+);
+
+
+--
+-- Name: entity_change_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.entity_change_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: entity_change_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.entity_change_events_id_seq OWNED BY public.entity_change_events.id;
 
 
 --
@@ -2707,6 +2915,13 @@ ALTER TABLE ONLY public.assembled_lemmas ALTER COLUMN id SET DEFAULT nextval('pu
 
 
 --
+-- Name: authority_records id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.authority_records ALTER COLUMN id SET DEFAULT nextval('public.authority_records_id_seq'::regclass);
+
+
+--
 -- Name: billerbeck_german_pages id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -2718,6 +2933,34 @@ ALTER TABLE ONLY public.billerbeck_german_pages ALTER COLUMN id SET DEFAULT next
 --
 
 ALTER TABLE ONLY public.brady_entity_tags ALTER COLUMN id SET DEFAULT nextval('public.brady_entity_tags_id_seq'::regclass);
+
+
+--
+-- Name: canonical_entities id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entities ALTER COLUMN id SET DEFAULT nextval('public.canonical_entities_id_seq'::regclass);
+
+
+--
+-- Name: canonical_entity_authority_links id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entity_authority_links ALTER COLUMN id SET DEFAULT nextval('public.canonical_entity_authority_links_id_seq'::regclass);
+
+
+--
+-- Name: canonical_entity_mentions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entity_mentions ALTER COLUMN id SET DEFAULT nextval('public.canonical_entity_mentions_id_seq'::regclass);
+
+
+--
+-- Name: entity_change_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.entity_change_events ALTER COLUMN id SET DEFAULT nextval('public.entity_change_events_id_seq'::regclass);
 
 
 --
@@ -3059,6 +3302,22 @@ ALTER TABLE ONLY public.assembled_lemmas
 
 
 --
+-- Name: authority_records authority_records_namespace_authority_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.authority_records
+    ADD CONSTRAINT authority_records_namespace_authority_id_key UNIQUE (namespace, authority_id);
+
+
+--
+-- Name: authority_records authority_records_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.authority_records
+    ADD CONSTRAINT authority_records_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: billerbeck_german_pages billerbeck_german_pages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3080,6 +3339,62 @@ ALTER TABLE ONLY public.brady_entity_tags
 
 ALTER TABLE ONLY public.canonical_action_import_state
     ADD CONSTRAINT canonical_action_import_state_pkey PRIMARY KEY (source);
+
+
+--
+-- Name: canonical_entities canonical_entities_entity_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entities
+    ADD CONSTRAINT canonical_entities_entity_key_key UNIQUE (entity_key);
+
+
+--
+-- Name: canonical_entities canonical_entities_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entities
+    ADD CONSTRAINT canonical_entities_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: canonical_entity_authority_links canonical_entity_authority_links_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entity_authority_links
+    ADD CONSTRAINT canonical_entity_authority_links_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: canonical_entity_authority_links canonical_entity_authority_links_unique_source_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entity_authority_links
+    ADD CONSTRAINT canonical_entity_authority_links_unique_source_key UNIQUE (canonical_entity_id, authority_record_id, source_table, source_id);
+
+
+--
+-- Name: canonical_entity_mentions canonical_entity_mentions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entity_mentions
+    ADD CONSTRAINT canonical_entity_mentions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: canonical_entity_mentions canonical_entity_mentions_source_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entity_mentions
+    ADD CONSTRAINT canonical_entity_mentions_source_key UNIQUE (source_table, source_id);
+
+
+--
+-- Name: entity_change_events entity_change_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.entity_change_events
+    ADD CONSTRAINT entity_change_events_pkey PRIMARY KEY (id);
 
 
 --
@@ -3642,6 +3957,27 @@ CREATE UNIQUE INDEX assembled_lemmas_billerbeck_version_idx ON public.assembled_
 
 
 --
+-- Name: authority_records_kind_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX authority_records_kind_idx ON public.authority_records USING btree (entity_kind) WHERE (entity_kind <> ''::text);
+
+
+--
+-- Name: authority_records_label_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX authority_records_label_idx ON public.authority_records USING btree (display_label) WHERE (display_label <> ''::text);
+
+
+--
+-- Name: authority_records_namespace_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX authority_records_namespace_idx ON public.authority_records USING btree (namespace, authority_id);
+
+
+--
 -- Name: billerbeck_german_pages_image_id_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3688,6 +4024,104 @@ CREATE INDEX brady_entity_tags_topostext_idx ON public.brady_entity_tags USING b
 --
 
 CREATE INDEX brady_entity_tags_wikidata_idx ON public.brady_entity_tags USING btree (wikidata_qid) WHERE (wikidata_qid IS NOT NULL);
+
+
+--
+-- Name: canonical_entities_label_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX canonical_entities_label_idx ON public.canonical_entities USING btree (normalized_label) WHERE (normalized_label <> ''::text);
+
+
+--
+-- Name: canonical_entities_preferred_authority_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX canonical_entities_preferred_authority_idx ON public.canonical_entities USING btree (preferred_authority_record_id) WHERE (preferred_authority_record_id IS NOT NULL);
+
+
+--
+-- Name: canonical_entities_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX canonical_entities_status_idx ON public.canonical_entities USING btree (resolution_status, entity_kind);
+
+
+--
+-- Name: canonical_entity_authority_links_authority_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX canonical_entity_authority_links_authority_idx ON public.canonical_entity_authority_links USING btree (authority_record_id, is_current);
+
+
+--
+-- Name: canonical_entity_authority_links_entity_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX canonical_entity_authority_links_entity_idx ON public.canonical_entity_authority_links USING btree (canonical_entity_id, is_current);
+
+
+--
+-- Name: canonical_entity_authority_links_source_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX canonical_entity_authority_links_source_idx ON public.canonical_entity_authority_links USING btree (source_table, source_id) WHERE ((source_table <> ''::text) AND (source_id <> ''::text));
+
+
+--
+-- Name: canonical_entity_mentions_action_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX canonical_entity_mentions_action_idx ON public.canonical_entity_mentions USING btree (action_status) WHERE (action_status <> ''::text);
+
+
+--
+-- Name: canonical_entity_mentions_authority_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX canonical_entity_mentions_authority_idx ON public.canonical_entity_mentions USING btree (authority_record_id) WHERE (authority_record_id IS NOT NULL);
+
+
+--
+-- Name: canonical_entity_mentions_current_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX canonical_entity_mentions_current_idx ON public.canonical_entity_mentions USING btree (source_table, is_current);
+
+
+--
+-- Name: canonical_entity_mentions_entity_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX canonical_entity_mentions_entity_idx ON public.canonical_entity_mentions USING btree (canonical_entity_id) WHERE (canonical_entity_id IS NOT NULL);
+
+
+--
+-- Name: canonical_entity_mentions_entry_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX canonical_entity_mentions_entry_idx ON public.canonical_entity_mentions USING btree (source_snapshot_id, entry_key);
+
+
+--
+-- Name: entity_change_events_authority_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX entity_change_events_authority_idx ON public.entity_change_events USING btree (authority_record_id, created_at DESC) WHERE (authority_record_id IS NOT NULL);
+
+
+--
+-- Name: entity_change_events_entity_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX entity_change_events_entity_idx ON public.entity_change_events USING btree (canonical_entity_id, created_at DESC) WHERE (canonical_entity_id IS NOT NULL);
+
+
+--
+-- Name: entity_change_events_source_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX entity_change_events_source_idx ON public.entity_change_events USING btree (source_table, source_id) WHERE ((source_table <> ''::text) AND (source_id <> ''::text));
 
 
 --
@@ -4617,6 +5051,86 @@ ALTER TABLE ONLY public.billerbeck_german_pages
 
 
 --
+-- Name: canonical_entities canonical_entities_preferred_authority_record_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entities
+    ADD CONSTRAINT canonical_entities_preferred_authority_record_id_fkey FOREIGN KEY (preferred_authority_record_id) REFERENCES public.authority_records(id);
+
+
+--
+-- Name: canonical_entity_authority_links canonical_entity_authority_links_authority_record_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entity_authority_links
+    ADD CONSTRAINT canonical_entity_authority_links_authority_record_id_fkey FOREIGN KEY (authority_record_id) REFERENCES public.authority_records(id) ON DELETE CASCADE;
+
+
+--
+-- Name: canonical_entity_authority_links canonical_entity_authority_links_canonical_entity_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entity_authority_links
+    ADD CONSTRAINT canonical_entity_authority_links_canonical_entity_id_fkey FOREIGN KEY (canonical_entity_id) REFERENCES public.canonical_entities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: canonical_entity_authority_links canonical_entity_authority_links_source_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entity_authority_links
+    ADD CONSTRAINT canonical_entity_authority_links_source_snapshot_id_fkey FOREIGN KEY (source_snapshot_id) REFERENCES public.entity_source_snapshots(id);
+
+
+--
+-- Name: canonical_entity_mentions canonical_entity_mentions_authority_record_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entity_mentions
+    ADD CONSTRAINT canonical_entity_mentions_authority_record_id_fkey FOREIGN KEY (authority_record_id) REFERENCES public.authority_records(id) ON DELETE SET NULL;
+
+
+--
+-- Name: canonical_entity_mentions canonical_entity_mentions_canonical_entity_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entity_mentions
+    ADD CONSTRAINT canonical_entity_mentions_canonical_entity_id_fkey FOREIGN KEY (canonical_entity_id) REFERENCES public.canonical_entities(id) ON DELETE SET NULL;
+
+
+--
+-- Name: canonical_entity_mentions canonical_entity_mentions_source_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.canonical_entity_mentions
+    ADD CONSTRAINT canonical_entity_mentions_source_snapshot_id_fkey FOREIGN KEY (source_snapshot_id) REFERENCES public.entity_source_snapshots(id);
+
+
+--
+-- Name: entity_change_events entity_change_events_authority_record_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.entity_change_events
+    ADD CONSTRAINT entity_change_events_authority_record_id_fkey FOREIGN KEY (authority_record_id) REFERENCES public.authority_records(id) ON DELETE SET NULL;
+
+
+--
+-- Name: entity_change_events entity_change_events_canonical_entity_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.entity_change_events
+    ADD CONSTRAINT entity_change_events_canonical_entity_id_fkey FOREIGN KEY (canonical_entity_id) REFERENCES public.canonical_entities(id) ON DELETE SET NULL;
+
+
+--
+-- Name: entity_change_events entity_change_events_source_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.entity_change_events
+    ADD CONSTRAINT entity_change_events_source_snapshot_id_fkey FOREIGN KEY (source_snapshot_id) REFERENCES public.entity_source_snapshots(id);
+
+
+--
 -- Name: entity_source_snapshots entity_source_snapshots_unchanged_from_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5324,5 +5838,5 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict dv82t5KW22o37kBlvGMJQXefENES9ZvbwUUIRTLy0wlkQDAaqau5NBehHocbs0z
+\unrestrict j6o0nlMAQ0EWKSs7GA93JsG4eLKuF7WR50KH9zHtHNRBCdNoRp3xIS9r97F9jnT
 

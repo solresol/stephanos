@@ -474,6 +474,14 @@ fi
 echo "Step 5d2: Linking places to Wikidata..." | tee -a "$LOGFILE"
 uv run link_wikidata_places.py --limit 10 2>&1 | tee -a "$LOGFILE"
 
+# Step 5d3: Refresh additive canonical authority/entity tables
+CANONICAL_AUTHORITY_REFRESH="${CANONICAL_AUTHORITY_REFRESH:-1}"
+if [ "$CANONICAL_AUTHORITY_REFRESH" -gt 0 ]; then
+    echo "Step 5d3: Refreshing canonical authority layer..." | tee -a "$LOGFILE"
+    uv run refresh_canonical_authority_layer.py \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: canonical authority refresh failed" | tee -a "$LOGFILE"
+fi
+
 # Step 5e: Extract aliases from Greek text (limit to 20 per day to control costs)
 echo "Step 5e: Extracting aliases from Greek text..." | tee -a "$LOGFILE"
 uv run extract_aliases.py --limit 20 2>&1 | tee -a "$LOGFILE"

@@ -23,6 +23,12 @@ from import_topostext_intake import (
     placeholder_code,
     stable_mention_fingerprints,
 )
+from refresh_canonical_authority_layer import (
+    authority_uri as canonical_authority_uri,
+    canonical_status,
+    is_real_authority,
+    normalize_authority,
+)
 
 
 SAMPLE_HTML = """<html><body>
@@ -327,6 +333,18 @@ class ToposTextIntakeReportTests(unittest.TestCase):
 
     def test_history_surface_normalization_ignores_accents(self):
         self.assertEqual(normalize_surface("Μεσηνή"), normalize_surface("μεσηνη"))
+
+    def test_canonical_authority_helpers_normalize_external_ids(self):
+        self.assertEqual(normalize_authority("Wikidata", "q42"), ("wikidata", "Q42"))
+        self.assertEqual(normalize_authority("pleiades", "p865987"), ("pleiades", "865987"))
+        self.assertTrue(is_real_authority("topostext", "337435RMes"))
+        self.assertFalse(is_real_authority("unresolved", "zzz"))
+        self.assertEqual(canonical_authority_uri("wikidata", "q42"), "https://www.wikidata.org/wiki/Q42")
+
+    def test_canonical_status_keeps_candidates_separate_from_human_confirmation(self):
+        self.assertEqual(canonical_status("approved", True), "confirmed")
+        self.assertEqual(canonical_status("candidate_import", True), "candidate")
+        self.assertEqual(canonical_status("", False), "needs_review")
 
 
 if __name__ == "__main__":
