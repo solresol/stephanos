@@ -175,7 +175,7 @@ The history page is the read-only change browser. It shows the imported snapshot
 
 The authority/status page summarizes the additive canonical authority layer and publishes the concrete worklists Brady can review: possible RE matches for unmatched tags, likely `<ethnic>` suggestions, fresh ToposText ID rows, and recent entity-tag changes detected from the latest Dropbox snapshot.
 
-On `raksasa`, keep this separated from the main daily Stephanos pipeline. The main pipeline should run with `TOPOSTEXT_HTML_FETCH=0 TOPOSTEXT_INTAKE_IMPORT=0 TOPOSTEXT_INTAKE_REPORT=0`, while `run_topostext_pipeline.sh` should run at 10:00 Australia/Sydney during May-October, which is 03:00 in Greece while Athens is on EEST. Re-check the offset when Greece and Sydney are on different daylight-saving regimes.
+On `raksasa`, keep this separated from the main daily Stephanos pipeline. The main pipeline should run with `TOPOSTEXT_HTML_FETCH=0 TOPOSTEXT_INTAKE_IMPORT=0 TOPOSTEXT_INTAKE_REPORT=0`. The Brady/ToposText cron should set `TZ=Europe/Athens`, run an hourly `date +%H` guard, and invoke `run_topostext_pipeline.sh` only when Athens local time is `03`. Set `TZ=Australia/Sydney` again immediately afterwards so later crontab entries keep the expected command timezone. `raksasa`'s installed `crontab(5)` says this cron implementation does not support per-user scheduling timezones; `TZ` affects the command environment, not the cron trigger time.
 
 Refresh the additive canonical authority/entity tables from the latest ToposText intake rows, effective place clusters, and effective proper nouns:
 ```bash
