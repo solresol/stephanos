@@ -141,7 +141,20 @@ uv run generate_topostext_review_page.py \
   --re-candidates-csv exports/topostext_re_candidates.csv
 ```
 
+Generate the snapshot history browser and CSVs from staged rows:
+```bash
+DB_HOST=raksasa DB_USER=stephanos \
+uv run generate_topostext_history_page.py \
+  --output exports/topostext_history.html \
+  --changesets-csv exports/topostext_history_changesets.csv \
+  --transitions-csv exports/topostext_history_transitions.csv \
+  --entry-history-csv exports/topostext_history_entries.csv \
+  --summary-json exports/topostext_history_summary.json
+```
+
 The intake report exposes paragraph counts, inline entity tag counts, `YY`/`JJ`/`zzz` placeholders, RE namespace rows, and a complete entity-mention CSV for external review. The review queue page groups the imported rows into concrete work queues: `JJ` new-ID work, `YY` deeper search, `zzz` unresolved IDs, RE namespace enrichment gaps, and source markup/classification fixes. It also surfaces changed entries between snapshots, possible `PRN -> place` / `PRN -> ethnic` tag fixes from Brady's place-type term list, tentative region hints, and possible RE matches for unresolved tags. When the PaulyHeadwords workbook is available, RE rows are enriched with German short definitions, RE article Wikidata items, and subject Wikidata items. None of these commands mutates the existing entity-resolution tables.
+
+The history page is the read-only change browser. It shows the imported snapshot timeline, adjacent snapshot change sets, paired mention transitions such as `prn zzz -> place 337435RMes`, and entry-level history across snapshots. It is generated from the same staging tables rather than from git diffs of the raw HTML.
 
 For the daily `raksasa` pipeline, keep the PaulyHeadwords workbook outside git at `data/pauly/PaulyHeadwordstoWikidata from Margherita scrape.xlsx` or set `TOPOSTEXT_PAULY_WORKBOOK=/path/to/workbook.xlsx`.
 

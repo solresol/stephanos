@@ -637,6 +637,15 @@ if [ "$TOPOSTEXT_INTAKE_REPORT" -gt 0 ]; then
         --re-candidates-csv exports/topostext_re_candidates.csv \
         --summary-json exports/topostext_review_summary.json \
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: ToposText review page generation failed" | tee -a "$LOGFILE"
+
+    echo "Step 8c2: Generating ToposText snapshot history..." | tee -a "$LOGFILE"
+    uv run generate_topostext_history_page.py \
+        --output exports/topostext_history.html \
+        --changesets-csv exports/topostext_history_changesets.csv \
+        --transitions-csv exports/topostext_history_transitions.csv \
+        --entry-history-csv exports/topostext_history_entries.csv \
+        --summary-json exports/topostext_history_summary.json \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: ToposText history page generation failed" | tee -a "$LOGFILE"
 fi
 
 # Step 9: Deploy to merah
@@ -662,7 +671,12 @@ for topostext_export in \
     exports/topostext_snapshot_diff.csv \
     exports/topostext_tag_review.csv \
     exports/topostext_re_candidates.csv \
-    exports/topostext_review_summary.json; do
+    exports/topostext_review_summary.json \
+    exports/topostext_history.html \
+    exports/topostext_history_changesets.csv \
+    exports/topostext_history_transitions.csv \
+    exports/topostext_history_entries.csv \
+    exports/topostext_history_summary.json; do
     if [ -f "$topostext_export" ]; then
         rsync -az "$topostext_export" stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
     fi

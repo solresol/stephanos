@@ -9,6 +9,12 @@ from generate_topostext_intake_report import (
     re_lookup_keys,
 )
 from generate_topostext_review_page import build_review_groups
+from generate_topostext_history_page import (
+    SnapshotSummary,
+    build_entry_history_records,
+    build_pair_summary,
+    normalize_surface,
+)
 from import_topostext_intake import (
     action_status,
     authority_namespace_and_id,
@@ -220,6 +226,107 @@ class ToposTextIntakeReportTests(unittest.TestCase):
 
         self.assertEqual(hints.re_candidates[0]["re_id"], "RE:Agessos")
         self.assertEqual(hints.re_candidates[0]["match"], "exact")
+
+    def test_history_pair_summary_pairs_changed_surface(self):
+        older = SnapshotSummary(1, "fetched", "2026-05-15", "a" * 64, "old.html", 100, 1, 1)
+        newer = SnapshotSummary(2, "fetched", "2026-05-16", "b" * 64, "new.html", 120, 1, 1)
+        older_entries = {
+            "241:M447.14": {
+                "entry_key": "241:M447.14",
+                "title": "Messene",
+                "text_sha256": "old",
+                "snippet": "old",
+            }
+        }
+        newer_entries = {
+            "241:M447.14": {
+                "entry_key": "241:M447.14",
+                "title": "Messene",
+                "text_sha256": "new",
+                "snippet": "new",
+            }
+        }
+        older_mentions = [
+            {
+                "entry_key": "241:M447.14",
+                "mention_fingerprint": "old-fp",
+                "tag_name": "prn",
+                "tag_id": "zzz",
+                "authority_id": "zzz",
+                "action_status": "needs_authority_id",
+                "mention_text": "Μεσηνή",
+                "context": "old context",
+            }
+        ]
+        newer_mentions = [
+            {
+                "entry_key": "241:M447.14",
+                "mention_fingerprint": "new-fp",
+                "tag_name": "place",
+                "tag_id": "337435RMes",
+                "authority_id": "337435RMes",
+                "action_status": "candidate_import",
+                "mention_text": "Μεσηνή",
+                "context": "new context",
+            }
+        ]
+
+        summary = build_pair_summary(
+            older_snapshot=older,
+            newer_snapshot=newer,
+            older_entries=older_entries,
+            newer_entries=newer_entries,
+            older_mentions=older_mentions,
+            newer_mentions=newer_mentions,
+        )
+
+        self.assertEqual(summary.entry_text_changed, 1)
+        self.assertEqual(summary.mention_added, 1)
+        self.assertEqual(summary.mention_removed, 1)
+        self.assertEqual(len(summary.transitions), 1)
+        self.assertIn("337435RMes", summary.transitions[0].added_label)
+        self.assertIn("zzz", summary.transitions[0].removed_label)
+
+    def test_history_entry_records_summarize_versions(self):
+        snapshots = [
+            SnapshotSummary(2, "fetched", "2026-05-16", "b" * 64, "new.html", 120, 1, 2),
+            SnapshotSummary(1, "fetched", "2026-05-15", "a" * 64, "old.html", 100, 1, 1),
+        ]
+        entries = {
+            2: {
+                "241:A1": {
+                    "entry_key": "241:A1",
+                    "title": "A1",
+                    "text_sha256": "new",
+                    "snippet": "new text",
+                }
+            },
+            1: {
+                "241:A1": {
+                    "entry_key": "241:A1",
+                    "title": "A1",
+                    "text_sha256": "old",
+                    "snippet": "old text",
+                }
+            },
+        }
+        mentions = {
+            2: [
+                {"entry_key": "241:A1", "action_status": "candidate_import", "tag_name": "place"},
+                {"entry_key": "241:A1", "action_status": "needs_deep_search", "tag_name": "prn"},
+            ],
+            1: [{"entry_key": "241:A1", "action_status": "needs_authority_id", "tag_name": "prn"}],
+        }
+
+        records = build_entry_history_records(snapshots, entries, mentions, {"241:A1": 3})
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["snapshot_id"], 2)
+        self.assertIn("candidate import", records[0]["queue_summary"])
+        self.assertIn("place: 1", records[0]["tag_summary"])
+
+    def test_history_surface_normalization_ignores_accents(self):
+        self.assertEqual(normalize_surface("Μεσηνή"), normalize_surface("μεσηνη"))
 
 
 if __name__ == "__main__":

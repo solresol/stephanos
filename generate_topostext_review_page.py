@@ -848,6 +848,7 @@ def build_html(
     cache_suffix = latest_snapshot.sha256[:12] or str(latest_snapshot.snapshot_id)
     links = [
         f"<a href=\"topostext_intake_report.html?v={render_cell(cache_suffix)}\">full intake report</a>",
+        f"<a href=\"topostext_history.html?v={render_cell(cache_suffix)}\">snapshot history</a>",
     ]
     if queue_csv_path:
         links.append(f"<a href=\"{render_cell(queue_csv_path.name)}?v={render_cell(cache_suffix)}\">review queue CSV</a>")
