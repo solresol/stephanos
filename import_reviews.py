@@ -1445,6 +1445,49 @@ def import_place_cluster_reviews(sqlite_cur, pg_cur) -> tuple[int, int, int]:
     return applied, skipped, errors
 
 
+def set_primary_canonical_variant(
+    pg_cur,
+    *,
+    lemma_id: int,
+    variant_kind: str,
+    variant_id: str,
+    updated_by: str,
+    updated_at,
+) -> None:
+    """
+    Set one active primary variant for a lemma.
+
+    The partial unique index on active primaries is immediate, so the old
+    primary must be cleared before inserting/updating the new primary.
+    """
+    pg_cur.execute(
+        """
+        UPDATE lemma_canonical_variants
+        SET is_primary = FALSE,
+            updated_by = %s,
+            updated_at = COALESCE(%s, NOW())
+        WHERE lemma_id = %s
+          AND is_primary = TRUE
+          AND NOT (variant_kind = %s AND variant_id = %s)
+        """,
+        (updated_by, updated_at, lemma_id, variant_kind, variant_id),
+    )
+    pg_cur.execute(
+        """
+        INSERT INTO lemma_canonical_variants (
+            lemma_id, variant_kind, variant_id, is_active, is_primary, updated_by, updated_at
+        )
+        VALUES (%s, %s, %s, TRUE, TRUE, %s, COALESCE(%s, NOW()))
+        ON CONFLICT (lemma_id, variant_kind, variant_id) DO UPDATE SET
+            is_active = TRUE,
+            is_primary = TRUE,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (lemma_id, variant_kind, variant_id, updated_by, updated_at),
+    )
+
+
 def import_canonical_actions(sqlite_cur, pg_cur) -> tuple[int, int, int, int]:
     """
     Import new canonical actions (append-only) from SQLite into Postgres.
@@ -1551,31 +1594,13 @@ def import_canonical_actions(sqlite_cur, pg_cur) -> tuple[int, int, int, int]:
             continue
 
         if action == "set_primary":
-            pg_cur.execute(
-                """
-                INSERT INTO lemma_canonical_variants (
-                    lemma_id, variant_kind, variant_id, is_active, is_primary, updated_by, updated_at
-                )
-                VALUES (%s, %s, %s, TRUE, TRUE, %s, COALESCE(%s, NOW()))
-                ON CONFLICT (lemma_id, variant_kind, variant_id) DO UPDATE SET
-                    is_active = TRUE,
-                    is_primary = TRUE,
-                    updated_by = EXCLUDED.updated_by,
-                    updated_at = EXCLUDED.updated_at
-                """,
-                (lemma_id, kind, vid, reviewer, reviewed_at),
-            )
-            pg_cur.execute(
-                """
-                UPDATE lemma_canonical_variants
-                SET is_primary = FALSE,
-                    updated_by = %s,
-                    updated_at = COALESCE(%s, NOW())
-                WHERE lemma_id = %s
-                  AND is_primary = TRUE
-                  AND NOT (variant_kind = %s AND variant_id = %s)
-                """,
-                (reviewer, reviewed_at, lemma_id, kind, vid),
+            set_primary_canonical_variant(
+                pg_cur,
+                lemma_id=lemma_id,
+                variant_kind=kind,
+                variant_id=vid,
+                updated_by=reviewer,
+                updated_at=reviewed_at,
             )
             applied += 1
             continue
@@ -1855,31 +1880,13 @@ def import_variant_reviews(sqlite_cur, pg_cur):
                     )
                     if candidate.get("publishable"):
                         actor = reviewer or "import_reviews.py"
-                        pg_cur.execute(
-                            """
-                            INSERT INTO lemma_canonical_variants (
-                                lemma_id, variant_kind, variant_id, is_active, is_primary, updated_by, updated_at
-                            )
-                            VALUES (%s, %s, %s, TRUE, TRUE, %s, COALESCE(%s, NOW()))
-                            ON CONFLICT (lemma_id, variant_kind, variant_id) DO UPDATE SET
-                                is_active = TRUE,
-                                is_primary = TRUE,
-                                updated_by = EXCLUDED.updated_by,
-                                updated_at = EXCLUDED.updated_at
-                            """,
-                            (lemma_id, variant_kind, variant_id, actor, reviewed_at),
-                        )
-                        pg_cur.execute(
-                            """
-                            UPDATE lemma_canonical_variants
-                            SET is_primary = FALSE,
-                                updated_by = %s,
-                                updated_at = COALESCE(%s, NOW())
-                            WHERE lemma_id = %s
-                              AND is_primary = TRUE
-                              AND NOT (variant_kind = %s AND variant_id = %s)
-                            """,
-                            (actor, reviewed_at, lemma_id, variant_kind, variant_id),
+                        set_primary_canonical_variant(
+                            pg_cur,
+                            lemma_id=int(lemma_id),
+                            variant_kind=variant_kind,
+                            variant_id=variant_id,
+                            updated_by=actor,
+                            updated_at=reviewed_at,
                         )
                         canonical_set_count += 1
                     else:

@@ -129,6 +129,48 @@ def resolve_canonical(cur, lemma_id: int, lemma_text: str) -> dict:
     }
 
 
+def set_primary_membership(
+    cur,
+    *,
+    lemma_id: int,
+    variant_kind: str,
+    variant_id: str,
+    updated_by: str,
+) -> None:
+    """
+    Set one active primary variant for a lemma.
+
+    Clear existing primaries first because the active-primary unique index is
+    checked immediately on insert/update.
+    """
+    cur.execute(
+        """
+        UPDATE lemma_canonical_variants
+        SET is_primary = FALSE,
+            updated_by = %s,
+            updated_at = NOW()
+        WHERE lemma_id = %s
+          AND is_primary = TRUE
+          AND NOT (variant_kind = %s AND variant_id = %s)
+        """,
+        (updated_by, lemma_id, variant_kind, str(variant_id)),
+    )
+    cur.execute(
+        """
+        INSERT INTO lemma_canonical_variants (
+            lemma_id, variant_kind, variant_id, is_active, is_primary, updated_by, updated_at
+        )
+        VALUES (%s, %s, %s, TRUE, TRUE, %s, NOW())
+        ON CONFLICT (lemma_id, variant_kind, variant_id) DO UPDATE SET
+            is_active = TRUE,
+            is_primary = TRUE,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (lemma_id, variant_kind, str(variant_id), updated_by),
+    )
+
+
 def choose_default_source_text_version(cur, lemma_id: int) -> int | None:
     if not table_exists(cur, "lemma_source_text_versions"):
         return None
@@ -254,32 +296,12 @@ def command_set(cur, args) -> dict:
     if not table_exists(cur, "lemma_canonical_variants"):
         raise RuntimeError("lemma_canonical_variants table is required to set canonical variants")
 
-    # Ensure membership is active, set primary, clear other primaries.
-    cur.execute(
-        """
-        INSERT INTO lemma_canonical_variants (
-            lemma_id, variant_kind, variant_id, is_active, is_primary, updated_by, updated_at
-        )
-        VALUES (%s, %s, %s, TRUE, TRUE, %s, NOW())
-        ON CONFLICT (lemma_id, variant_kind, variant_id) DO UPDATE SET
-            is_active = TRUE,
-            is_primary = TRUE,
-            updated_by = EXCLUDED.updated_by,
-            updated_at = EXCLUDED.updated_at
-        """,
-        (lemma_id, variant_kind, str(variant_id), args.updated_by),
-    )
-    cur.execute(
-        """
-        UPDATE lemma_canonical_variants
-        SET is_primary = FALSE,
-            updated_by = %s,
-            updated_at = NOW()
-        WHERE lemma_id = %s
-          AND is_primary = TRUE
-          AND NOT (variant_kind = %s AND variant_id = %s)
-        """,
-        (args.updated_by, lemma_id, variant_kind, str(variant_id)),
+    set_primary_membership(
+        cur,
+        lemma_id=lemma_id,
+        variant_kind=variant_kind,
+        variant_id=str(variant_id),
+        updated_by=args.updated_by,
     )
 
     pointer_choice = canonical_variants.select_pointer_variant(cur, lemma_id=lemma_id)
