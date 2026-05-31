@@ -12,7 +12,7 @@ exports/
 backups/
 logs/
 review_data/
-review_data.json
+review_data.sqlite
 guidance_scan_results.db
 data/topostext_snapshots/
 data/pauly/

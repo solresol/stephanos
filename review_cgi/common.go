@@ -82,6 +82,124 @@ type GuidancePromptRun struct {
 	CreatedAt         string `json:"created_at"`
 }
 
+type MissingGuidanceRule struct {
+	RuleID                int    `json:"rule_id"`
+	Kind                  string `json:"kind"`
+	RuleKey               string `json:"rule_key"`
+	RuleCode              string `json:"rule_code"`
+	Label                 string `json:"label"`
+	PreferredTranslation  string `json:"preferred_translation"`
+	RuleRevisionID        int    `json:"rule_revision_id"`
+	RuleRevisionNumber    int    `json:"rule_revision_number"`
+	RuleRevisionCreatedAt string `json:"rule_revision_created_at"`
+	QueueStatus           string `json:"queue_status"`
+	QueueUpdatedAt        string `json:"queue_updated_at"`
+}
+
+type GuidanceRuleStatus struct {
+	RuleID                int    `json:"rule_id"`
+	Kind                  string `json:"kind"`
+	RuleKey               string `json:"rule_key"`
+	RuleCode              string `json:"rule_code"`
+	Label                 string `json:"label"`
+	PreferredTranslation  string `json:"preferred_translation"`
+	RuleRevisionID        int    `json:"rule_revision_id"`
+	RuleRevisionNumber    int    `json:"rule_revision_number"`
+	RuleRevisionCreatedAt string `json:"rule_revision_created_at"`
+	Status                string `json:"status"`
+	MatchStatus           string `json:"match_status"`
+	MatchID               int    `json:"match_id"`
+	Confidence            string `json:"confidence"`
+	OccurrenceCount       int    `json:"occurrence_count"`
+	EvidenceText          string `json:"evidence_text"`
+	DetectorKind          string `json:"detector_kind"`
+	MatchUpdatedAt        string `json:"match_updated_at"`
+	QueueStatus           string `json:"queue_status"`
+	QueueUpdatedAt        string `json:"queue_updated_at"`
+}
+
+func (status *GuidanceRuleStatus) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if data[0] == '{' {
+		type guidanceRuleStatus GuidanceRuleStatus
+		var decoded guidanceRuleStatus
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			return err
+		}
+		*status = GuidanceRuleStatus(decoded)
+		return nil
+	}
+	var row []interface{}
+	if err := json.Unmarshal(data, &row); err != nil {
+		return err
+	}
+	intAt := func(index int) int {
+		if index >= len(row) {
+			return 0
+		}
+		switch value := row[index].(type) {
+		case float64:
+			return int(value)
+		case int:
+			return value
+		default:
+			return 0
+		}
+	}
+	stringAt := func(index int) string {
+		if index >= len(row) {
+			return ""
+		}
+		if value, ok := row[index].(string); ok {
+			return value
+		}
+		return ""
+	}
+	status.RuleID = intAt(0)
+	status.RuleRevisionID = intAt(1)
+	status.RuleRevisionNumber = intAt(2)
+	status.Status = stringAt(3)
+	status.MatchStatus = stringAt(4)
+	status.MatchID = intAt(5)
+	status.Confidence = stringAt(6)
+	status.OccurrenceCount = intAt(7)
+	status.EvidenceText = stringAt(8)
+	status.DetectorKind = stringAt(9)
+	status.MatchUpdatedAt = stringAt(10)
+	status.QueueStatus = stringAt(11)
+	status.QueueUpdatedAt = stringAt(12)
+	return nil
+}
+
+type GuidanceCoverage struct {
+	Available               bool                  `json:"available"`
+	DetectorVersion         string                `json:"detector_version"`
+	SourceTextVersionID     string                `json:"source_text_version_id"`
+	Status                  string                `json:"status"`
+	StatusLabel             string                `json:"status_label"`
+	Complete                bool                  `json:"complete"`
+	Stale                   bool                  `json:"stale"`
+	RequiredRules           int                   `json:"required_rules"`
+	CompletedRules          int                   `json:"completed_rules"`
+	MissingRules            int                   `json:"missing_rules"`
+	MatchedRules            int                   `json:"matched_rules"`
+	NotMatchedRules         int                   `json:"not_matched_rules"`
+	UncertainRules          int                   `json:"uncertain_rules"`
+	NeedsReviewRules        int                   `json:"needs_review_rules"`
+	PendingScans            int                   `json:"pending_scans"`
+	RunningScans            int                   `json:"running_scans"`
+	FailedScans             int                   `json:"failed_scans"`
+	RuleStatuses            []GuidanceRuleStatus  `json:"rule_statuses"`
+	MissingRuleExamples     []MissingGuidanceRule `json:"missing_rule_examples"`
+	MissingRuleSampleLimit  int                   `json:"missing_rule_sample_limit"`
+	TotalGuidanceRules      int                   `json:"total_guidance_rules"`
+	NotRetiredGuidanceRules int                   `json:"not_retired_guidance_rules"`
+	PromptGuidanceRules     int                   `json:"prompt_guidance_rules"`
+	PromptGuidanceKinds     []string              `json:"prompt_guidance_kinds"`
+}
+
 type GuidanceHit struct {
 	MatchID              int                 `json:"match_id"`
 	LemmaID              int                 `json:"lemma_id"`
@@ -308,6 +426,7 @@ type Lemma struct {
 	TranslationBlockReason        string                   `json:"translation_block_reason"`
 	TranslationDifferenceEvidence string                   `json:"translation_difference_evidence"`
 	TranslationVariants           []map[string]interface{} `json:"translation_variants"`
+	GuidanceCoverage              GuidanceCoverage         `json:"guidance_coverage"`
 	GuidanceHits                  []GuidanceHit            `json:"guidance_hits"`
 	SourceTextVersions            []map[string]interface{} `json:"source_text_versions"`
 	CanonicalVariants             []map[string]interface{} `json:"canonical_variants"`
@@ -332,14 +451,20 @@ type Lemma struct {
 	PlaceClusters                 []PlaceCluster           `json:"place_clusters"`
 	Letter                        string                   `json:"letter"`
 	SortOrder                     int                      `json:"sort_order"`
+	HasAITranslation              bool                     `json:"has_ai_translation,omitempty"`
+	HasHumanTranslation           bool                     `json:"has_human_translation,omitempty"`
+	LatestAITranslationAt         string                   `json:"-"`
+	payloadLoaded                 bool
 }
 
 // LemmaData contains all lemmas from JSON export
 type LemmaData struct {
-	Lemmas              []Lemma              `json:"lemmas"`
-	TotalCount          int                  `json:"total_count"`
-	ExportedAt          time.Time            `json:"exported_at"`
-	GuidanceRuleImpacts []GuidanceRuleImpact `json:"translation_guidance_rule_impacts"`
+	Lemmas                   []Lemma                   `json:"lemmas"`
+	TotalCount               int                       `json:"total_count"`
+	ExportedAt               time.Time                 `json:"exported_at"`
+	TranslationGuidanceRules []TranslationGuidanceRule `json:"translation_guidance_rules"`
+	GuidanceRuleImpacts      []GuidanceRuleImpact      `json:"translation_guidance_rule_impacts"`
+	SnapshotDBPath           string                    `json:"-"`
 }
 
 // Review represents review data from SQLite
@@ -418,33 +543,259 @@ var buildTime = ""
 // GetConfig returns the application configuration
 func GetConfig() Config {
 	return Config{
-		DataFile:           "../db/review_data.json",
+		DataFile:           "../db/review_data.sqlite",
 		DBPath:             "../db/reviews.db",
 		GuidanceScanDBPath: "../db/guidance_scan_results.db",
 		ProtectedURL:       "/protected/",
 	}
 }
 
-// LoadLemmaData loads all lemmas from JSON file
+// LoadLemmaData loads the review snapshot. SQLite snapshots keep a light lemma
+// index in memory and load full lemma payloads on demand.
 func LoadLemmaData(filepath string) (*LemmaData, error) {
-	file, err := os.Open(filepath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open data file: %w", err)
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(filepath)), ".sqlite") ||
+		strings.HasSuffix(strings.ToLower(strings.TrimSpace(filepath)), ".db") {
+		return LoadLemmaDataFromSQLite(filepath)
 	}
-	defer file.Close()
+	return nil, fmt.Errorf("review snapshot must be SQLite, got %q", filepath)
+}
+
+func LoadLemmaDataFromSQLite(filepath string) (*LemmaData, error) {
+	db, err := sql.Open("sqlite3", "file:"+filepath+"?mode=ro")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open snapshot database: %w", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("failed to ping snapshot database: %w", err)
+	}
+
+	metadata := map[string]string{}
+	rows, err := db.Query("SELECT key, value FROM metadata")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read snapshot metadata: %w", err)
+	}
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("failed to scan snapshot metadata: %w", err)
+		}
+		metadata[key] = value
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close snapshot metadata rows: %w", err)
+	}
 
 	var data LemmaData
-	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(&data); err != nil {
-		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+	data.SnapshotDBPath = filepath
+	if exportedAt := strings.TrimSpace(metadata["exported_at"]); exportedAt != "" {
+		if parsed, err := time.Parse(time.RFC3339, exportedAt); err == nil {
+			data.ExportedAt = parsed
+		}
+	}
+	if value := strings.TrimSpace(metadata["translation_guidance_rules"]); value != "" {
+		if err := json.Unmarshal([]byte(value), &data.TranslationGuidanceRules); err != nil {
+			return nil, fmt.Errorf("failed to parse snapshot guidance rules: %w", err)
+		}
+	}
+	if value := strings.TrimSpace(metadata["translation_guidance_rule_impacts"]); value != "" {
+		if err := json.Unmarshal([]byte(value), &data.GuidanceRuleImpacts); err != nil {
+			return nil, fmt.Errorf("failed to parse snapshot guidance impacts: %w", err)
+		}
 	}
 
-	// Ensure lemmas are sorted by sort_order
-	sort.Slice(data.Lemmas, func(i, j int) bool {
-		return data.Lemmas[i].SortOrder < data.Lemmas[j].SortOrder
-	})
-
+	lemmaRows, err := db.Query(`
+		SELECT id, sort_order, letter, lemma, entry_number,
+		       has_ai_translation, has_human_translation, latest_ai_translation_at
+		FROM lemmas
+		ORDER BY sort_order
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read snapshot lemma index: %w", err)
+	}
+	defer lemmaRows.Close()
+	for lemmaRows.Next() {
+		var lemma Lemma
+		var hasAI, hasHuman int
+		if err := lemmaRows.Scan(
+			&lemma.ID,
+			&lemma.SortOrder,
+			&lemma.Letter,
+			&lemma.Lemma,
+			&lemma.EntryNumber,
+			&hasAI,
+			&hasHuman,
+			&lemma.LatestAITranslationAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan snapshot lemma index: %w", err)
+		}
+		lemma.HasAITranslation = hasAI != 0
+		lemma.HasHumanTranslation = hasHuman != 0
+		data.Lemmas = append(data.Lemmas, lemma)
+	}
+	if err := lemmaRows.Err(); err != nil {
+		return nil, fmt.Errorf("failed while reading snapshot lemma index: %w", err)
+	}
+	data.TotalCount = len(data.Lemmas)
 	return &data, nil
+}
+
+func EnsureFullLemma(data *LemmaData, lemma *Lemma) *Lemma {
+	if data == nil || lemma == nil || data.SnapshotDBPath == "" || lemma.payloadLoaded {
+		return lemma
+	}
+	db, err := sql.Open("sqlite3", "file:"+data.SnapshotDBPath+"?mode=ro")
+	if err != nil {
+		return lemma
+	}
+	defer db.Close()
+	var payload string
+	if err := db.QueryRow("SELECT payload_json FROM lemmas WHERE id = ?", lemma.ID).Scan(&payload); err != nil {
+		return lemma
+	}
+	var full Lemma
+	if err := json.Unmarshal([]byte(payload), &full); err != nil {
+		return lemma
+	}
+	full.HasAITranslation = lemma.HasAITranslation
+	full.HasHumanTranslation = lemma.HasHumanTranslation
+	full.payloadLoaded = true
+	*lemma = full
+	return lemma
+}
+
+func LoadFullLemmasByIDs(data *LemmaData, ids []int) ([]Lemma, error) {
+	if data == nil || data.SnapshotDBPath == "" || len(ids) == 0 {
+		return nil, nil
+	}
+	seen := map[int]bool{}
+	uniqueIDs := []int{}
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	if len(uniqueIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(uniqueIDs))
+	args := make([]interface{}, len(uniqueIDs))
+	for i, id := range uniqueIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	db, err := sql.Open("sqlite3", "file:"+data.SnapshotDBPath+"?mode=ro")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open snapshot database: %w", err)
+	}
+	defer db.Close()
+	rows, err := db.Query(
+		fmt.Sprintf("SELECT id, payload_json FROM lemmas WHERE id IN (%s)", strings.Join(placeholders, ",")),
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read lemma payloads: %w", err)
+	}
+	defer rows.Close()
+	byID := map[int]Lemma{}
+	for rows.Next() {
+		var id int
+		var payload string
+		if err := rows.Scan(&id, &payload); err != nil {
+			return nil, fmt.Errorf("failed to scan lemma payload: %w", err)
+		}
+		var lemma Lemma
+		if err := json.Unmarshal([]byte(payload), &lemma); err != nil {
+			return nil, fmt.Errorf("failed to parse lemma payload for %d: %w", id, err)
+		}
+		lemma.payloadLoaded = true
+		byID[id] = lemma
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed while reading lemma payloads: %w", err)
+	}
+	lemmas := []Lemma{}
+	for _, id := range ids {
+		if lemma, ok := byID[id]; ok {
+			lemmas = append(lemmas, lemma)
+		}
+	}
+	return lemmas, nil
+}
+
+func QuerySnapshotSearchLemmaIDs(data *LemmaData, queryText string, limit int) map[int]bool {
+	matches := map[int]bool{}
+	if data == nil || data.SnapshotDBPath == "" || strings.TrimSpace(queryText) == "" {
+		return matches
+	}
+	db, err := sql.Open("sqlite3", "file:"+data.SnapshotDBPath+"?mode=ro")
+	if err != nil {
+		return matches
+	}
+	defer db.Close()
+	like := "%" + strings.ReplaceAll(strings.TrimSpace(queryText), "%", "\\%") + "%"
+	sqlText := "SELECT id FROM lemmas WHERE search_text LIKE ? ESCAPE '\\'"
+	args := []interface{}{like}
+	if limit > 0 {
+		sqlText += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := db.Query(sqlText, args...)
+	if err != nil {
+		return matches
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err == nil {
+			matches[id] = true
+		}
+	}
+	return matches
+}
+
+func QuerySnapshotGuidanceRuleLemmaIDs(data *LemmaData, ruleKey string) map[int]bool {
+	matches := map[int]bool{}
+	if data == nil || data.SnapshotDBPath == "" || strings.TrimSpace(ruleKey) == "" {
+		return matches
+	}
+	db, err := sql.Open("sqlite3", "file:"+data.SnapshotDBPath+"?mode=ro")
+	if err != nil {
+		return matches
+	}
+	defer db.Close()
+	rows, err := db.Query("SELECT lemma_id FROM guidance_hit_rules WHERE rule_key = ?", strings.TrimSpace(ruleKey))
+	if err != nil {
+		return matches
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err == nil {
+			matches[id] = true
+		}
+	}
+	return matches
+}
+
+func lookupLemmaIDInSnapshot(data *LemmaData, tableName string, columnName string, id int) int {
+	if data == nil || data.SnapshotDBPath == "" || id <= 0 {
+		return 0
+	}
+	db, err := sql.Open("sqlite3", "file:"+data.SnapshotDBPath+"?mode=ro")
+	if err != nil {
+		return 0
+	}
+	defer db.Close()
+	query := fmt.Sprintf("SELECT lemma_id FROM %s WHERE %s = ?", tableName, columnName)
+	var lemmaID int
+	if err := db.QueryRow(query, id).Scan(&lemmaID); err != nil {
+		return 0
+	}
+	return lemmaID
 }
 
 // OpenDatabase opens SQLite database connection
@@ -2509,7 +2860,7 @@ func GetReviewStats(db *sql.DB) (total, reviewed, reviewedOK, reviewedCorrection
 func FindLemmaByID(data *LemmaData, id int) *Lemma {
 	for i := range data.Lemmas {
 		if data.Lemmas[i].ID == id {
-			return &data.Lemmas[i]
+			return EnsureFullLemma(data, &data.Lemmas[i])
 		}
 	}
 	return nil

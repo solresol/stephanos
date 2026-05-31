@@ -3,8 +3,8 @@
 Export protected translation-guidance scan evidence to an indexed SQLite DB.
 
 The protected CGI reads this file on merah. PostgreSQL on raksasa remains the
-canonical store; this script publishes a readonly, queryable snapshot without
-placing the large scan-evidence table in review_data.json.
+canonical store; this script publishes a readonly, queryable scan-evidence
+snapshot alongside review_data.sqlite.
 """
 
 from __future__ import annotations

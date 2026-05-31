@@ -168,34 +168,14 @@ Since CGI on merah can't easily query PostgreSQL on raksasa, we need to export d
 
 #### Export Script: `export_for_review.py`
 
-**Purpose:** Export all lemma data to JSON for CGI consumption
+**Purpose:** Export all lemma data to SQLite for CGI consumption
 
-**Output:** `review_data.json` containing:
-```json
-{
-  "lemmas": [
-    {
-      "id": 123,
-      "lemma": "Καιρή",
-      "entry_number": 14,
-      "version": "epitome",
-      "greek_text": "...",
-      "english_translation": "...",
-      "type": "city",
-      "volume_label": "Billerbeck vol 3",
-      "meineke_id": "347.3",
-      "billerbeck_id": "K15",
-      "word_count": 50,
-      "image_filenames": ["e9783110219630_i0046.jpg"],
-      "confidence": "normal",
-      "letter": "kappa",
-      "sort_order": 150
-    },
-    ...
-  ],
-  "total_count": 573,
-  "exported_at": "2025-12-22T10:30:00Z"
-}
+**Output:** `review_data.sqlite` containing:
+```sql
+lemmas(id, sort_order, letter, lemma, entry_number, version, payload_json)
+metadata(key, value)
+proper_noun_lookup(proper_noun_id, lemma_id)
+place_cluster_lookup(cluster_id, lemma_id)
 ```
 
 **Ordering:** Entries are sorted by:
@@ -210,7 +190,7 @@ The `sort_order` field provides a simple integer for Previous/Next navigation.
 **Deployment:**
 - Run on raksasa
 - Rsync to merah:/var/www/vhosts/stephanos.symmachus.org/db/
-- CGI reads this file instead of querying database
+- CGI reads this SQLite snapshot instead of querying PostgreSQL
 
 **Sync Frequency:** Daily (via cron)
 
@@ -298,7 +278,7 @@ translation = lemma.corrected_english_translation or lemma.translation or ""
 10 2 * * * cd /home/stephanos/stephanos && uv run import_reviews.py >> logs/review_import.log 2>&1
 
 # Export lemma data for review interface daily at 1 AM
-0 1 * * * cd /home/stephanos/stephanos && uv run export_for_review.py && rsync review_data.json stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ >> logs/export_for_review.log 2>&1
+0 1 * * * cd /home/stephanos/stephanos && uv run export_for_review.py && rsync review_data.sqlite stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ >> logs/export_for_review.log 2>&1
 ```
 
 ### Phase 6: Deployment Process
@@ -394,7 +374,7 @@ sudo htpasswd -c /var/www/vhosts/stephanos.symmachus.org/.htpasswd reviewer1
 - `/var/www/vhosts/stephanos.symmachus.org/cgi-bin/review.cgi`
 - `/var/www/vhosts/stephanos.symmachus.org/cgi-bin/save.cgi`
 - `/var/www/vhosts/stephanos.symmachus.org/db/reviews.db`
-- `/var/www/vhosts/stephanos.symmachus.org/db/review_data.json`
+- `/var/www/vhosts/stephanos.symmachus.org/db/review_data.sqlite`
 - `/var/www/vhosts/stephanos.symmachus.org/.htpasswd`
 - `/etc/httpd/conf.d/stephanos-review.conf`
 

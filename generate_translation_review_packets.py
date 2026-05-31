@@ -3,7 +3,7 @@
 Generate combined PDF review packets for selected Stephanos translation entries.
 
 Data sources:
-- review_data.json (exported lemma/variant data)
+- review_data.sqlite (exported lemma/variant data)
 - ~/stephanos/review_data/reviews.db (human review notes/status)
 
 Output:
@@ -29,7 +29,7 @@ from translation_rendering import render_inline_markup, split_translation_blocks
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-DEFAULT_REVIEW_JSON = REPO_ROOT / "review_data.json"
+DEFAULT_REVIEW_SNAPSHOT = REPO_ROOT / "review_data.sqlite"
 DEFAULT_REVIEW_DB = Path.home() / "stephanos" / "review_data" / "reviews.db"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "exports" / "article_review_packets"
 
@@ -169,14 +169,34 @@ class SourceInfo:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--review-json", type=Path, default=DEFAULT_REVIEW_JSON)
+    parser.add_argument("--review-snapshot", type=Path, default=DEFAULT_REVIEW_SNAPSHOT)
     parser.add_argument("--review-db", type=Path, default=DEFAULT_REVIEW_DB)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     return parser.parse_args()
 
 
-def load_review_data(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+def load_review_snapshot(path: Path, headwords: set[str]) -> dict[str, Any]:
+    if not headwords:
+        return {"lemmas": []}
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    placeholders = ",".join("?" for _ in headwords)
+    try:
+        lemmas = [
+            json.loads(row["payload_json"])
+            for row in conn.execute(
+                f"""
+                SELECT payload_json
+                FROM lemmas
+                WHERE lemma IN ({placeholders})
+                ORDER BY sort_order
+                """,
+                tuple(sorted(headwords)),
+            )
+        ]
+    finally:
+        conn.close()
+    return {"lemmas": lemmas}
 
 
 def load_sqlite_rows(db_path: Path) -> tuple[dict[int, ReviewRow], dict[int, list[dict[str, Any]]]]:
@@ -1376,21 +1396,26 @@ def write_pdf(
 
 def main() -> int:
     args = parse_args()
-    review_data = load_review_data(args.review_json)
+    requested_headwords = {
+        lemma
+        for group in GROUPS
+        for lemma in group.get("lemmas", [])
+    }
+    review_data = load_review_snapshot(args.review_snapshot, requested_headwords)
     review_rows, variant_review_rows = load_sqlite_rows(args.review_db)
 
     lemma_map = {lemma["lemma"]: lemma for lemma in review_data.get("lemmas", [])}
     generated_at_dt = datetime.now()
     generated_at = generated_at_dt.strftime("%Y-%m-%d %H:%M:%S")
     source_infos = [
-        collect_source_info(args.review_json, generated_at_dt=generated_at_dt),
+        collect_source_info(args.review_snapshot, generated_at_dt=generated_at_dt),
         collect_source_info(args.review_db, generated_at_dt=generated_at_dt),
     ]
     source_warning_lines = build_source_warning_lines(source_infos)
 
     manifest: dict[str, Any] = {
         "generated_at": generated_at,
-        "review_json": str(args.review_json),
+        "review_snapshot": str(args.review_snapshot),
         "review_db": str(args.review_db),
         "sources": [
             {

@@ -58,7 +58,7 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return &apiError{
 			Status:  http.StatusInternalServerError,
-			Message: fmt.Sprintf("failed to load review_data.json: %v", err),
+			Message: fmt.Sprintf("failed to load review snapshot: %v", err),
 		}
 	}
 
@@ -94,7 +94,7 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 	effectiveCanon := ApplyCanonicalActions(baselineCanon, actions)
 	effectiveKind, effectiveID := ChooseEffectiveCanonicalRef(effectiveCanon)
 
-	canonicalSource := "review_data_json"
+	canonicalSource := "review_snapshot"
 	notes := []string{}
 	if len(actions) > 0 {
 		canonicalSource = "sqlite_action_log"
@@ -125,7 +125,7 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 
 		if !foundVariant {
 			translationBlocked = true
-			translationBlockReason = "Selected canonical variant not found in review_data.json"
+			translationBlockReason = "Selected canonical variant not found in review snapshot"
 		} else if strings.TrimSpace(translationText) == "" {
 			translationBlocked = true
 			translationBlockReason = "Selected canonical variant has empty translation text"
@@ -134,7 +134,7 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 			translationBlockReason = fmt.Sprintf("Selected canonical variant status is %s", selectedStatus)
 		}
 
-		// Risk gating (legacy lane only in review_data.json).
+		// Risk gating (legacy lane only in the review snapshot).
 		if effectiveKind == "legacy_assembled" && effectiveID == "translation" && lemma.TranslationBlocked {
 			translationBlocked = true
 			if strings.TrimSpace(lemma.TranslationBlockReason) != "" {
@@ -181,12 +181,12 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 		last := actions[len(actions)-1]
 		result["sqlite_canonical_actions_applied"] = len(actions)
 		result["sqlite_last_action"] = map[string]interface{}{
-			"id":               last.ID,
-			"action":           last.Action,
-			"variant_kind":     last.VariantKind,
-			"variant_id":       last.VariantID,
+			"id":                last.ID,
+			"action":            last.Action,
+			"variant_kind":      last.VariantKind,
+			"variant_id":        last.VariantID,
 			"reviewer_username": last.Reviewer,
-			"reviewed_at":      last.ReviewedAt,
+			"reviewed_at":       last.ReviewedAt,
 		}
 	}
 

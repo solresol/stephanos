@@ -372,12 +372,111 @@ const sharedPageStyles = `
         .prompt-artifact-text p:last-child {
             margin-bottom: 0;
         }
-        .guidance-hit-panel {
-            margin-top: 18px;
-        }
-        .guidance-hit-list {
-            display: grid;
-            gap: 8px;
+	        .guidance-hit-panel {
+	            margin-top: 18px;
+	        }
+	        .guidance-coverage-banner {
+	            border-radius: 10px;
+	            margin: 10px 0 12px;
+	            padding: 12px 14px;
+	        }
+	        .guidance-coverage-banner strong {
+	            color: #15324c;
+	        }
+	        .guidance-coverage-complete {
+	            background: #ecfdf3;
+	            border: 1px solid #bfe6ce;
+	            color: #166534;
+	        }
+	        .guidance-coverage-pending,
+	        .guidance-coverage-incomplete {
+	            background: #fff7ed;
+	            border: 1px solid #f8d7b6;
+	            color: #9a3412;
+	        }
+	        .guidance-coverage-failed {
+	            background: #fef2f2;
+	            border: 1px solid #fecaca;
+	            color: #991b1b;
+	        }
+	        .guidance-coverage-unavailable {
+	            background: #f3f4f6;
+	            border: 1px solid #e5e7eb;
+	            color: #6b7280;
+	        }
+	        .guidance-coverage-metrics {
+	            display: flex;
+	            flex-wrap: wrap;
+	            gap: 8px;
+	            margin-top: 10px;
+	        }
+	        .guidance-coverage-metric {
+	            background: rgba(255,255,255,0.72);
+	            border: 1px solid rgba(148, 163, 184, 0.35);
+	            border-radius: 999px;
+	            color: #334155;
+	            font-size: 0.84em;
+	            font-weight: 700;
+	            padding: 5px 10px;
+	        }
+	        .guidance-diagnostic-details {
+	            margin-bottom: 12px;
+	        }
+	        .guidance-missing-rule-list {
+	            display: grid;
+	            gap: 8px;
+	            margin-top: 10px;
+	        }
+	        .guidance-missing-rule {
+	            background: white;
+	            border: 1px solid #e1e8f0;
+	            border-radius: 8px;
+	            padding: 10px 12px;
+	        }
+	        .guidance-missing-rule-title {
+	            color: #15324c;
+	            font-weight: 800;
+	        }
+	        .guidance-rule-status-list {
+	            display: grid;
+	            gap: 6px;
+	            margin-top: 10px;
+	            max-height: 520px;
+	            overflow: auto;
+	        }
+	        .guidance-rule-status-row {
+	            background: white;
+	            border: 1px solid #e1e8f0;
+	            border-left: 4px solid #94a3b8;
+	            border-radius: 8px;
+	            padding: 8px 10px;
+	        }
+	        .guidance-rule-status-row.status-matched {
+	            border-left-color: #16a34a;
+	        }
+	        .guidance-rule-status-row.status-not_matched {
+	            border-left-color: #64748b;
+	        }
+	        .guidance-rule-status-row.status-untested,
+	        .guidance-rule-status-row.status-pending,
+	        .guidance-rule-status-row.status-running {
+	            border-left-color: #f97316;
+	        }
+	        .guidance-rule-status-row.status-uncertain,
+	        .guidance-rule-status-row.status-needs_review,
+	        .guidance-rule-status-row.status-failed {
+	            border-left-color: #dc2626;
+	        }
+	        .guidance-rule-status-title {
+	            align-items: baseline;
+	            display: flex;
+	            flex-wrap: wrap;
+	            gap: 6px;
+	            font-weight: 800;
+	        }
+	        .guidance-hit-list {
+	            display: grid;
+	            gap: 8px;
             margin-top: 10px;
         }
         .guidance-hit-row {
@@ -1013,10 +1112,20 @@ const translationReviewTemplate = `<!DOCTYPE html>
                     {{end}}
                 </div>
 
-                <div class="translation-panel">
-                    <div class="section-title">Current English Translation</div>
-                    <div class="helper-text" style="margin-bottom: 8px;">{{.DisplayedTranslationLabel}}</div>
-                    <div class="translation-block commentary-source" data-commentary-source="translation" tabindex="0" title="Select text here to add commentary">{{.DisplayedTranslation}}</div>
+	                <div class="translation-panel">
+	                    <div class="section-title">Current English Translation</div>
+	                    <div class="helper-text" style="margin-bottom: 8px;">{{.DisplayedTranslationLabel}}</div>
+	                    <div class="guidance-coverage-banner {{.GuidanceCoverageStatusClass}}">
+	                        <div><strong>Current Meineke guidance coverage:</strong> {{.GuidanceCoverage.StatusLabel}}</div>
+	                        <div class="guidance-coverage-metrics">
+	                            <span class="guidance-coverage-metric">{{.GuidanceCoverage.CompletedRules}}/{{.GuidanceCoverage.RequiredRules}} prompt rules checked</span>
+	                            <span class="guidance-coverage-metric">{{.GuidanceCoverage.MatchedRules}} matched</span>
+	                            <span class="guidance-coverage-metric">{{.GuidanceCoverage.NotMatchedRules}} not matched</span>
+	                            {{if .GuidanceCoverage.UncertainRules}}<span class="guidance-coverage-metric">{{.GuidanceCoverage.UncertainRules}} uncertain</span>{{end}}
+	                            {{if .GuidanceCoverageCorpusLabel}}<span class="guidance-coverage-metric">{{.GuidanceCoverageCorpusLabel}}</span>{{end}}
+	                        </div>
+	                    </div>
+	                    <div class="translation-block commentary-source" data-commentary-source="translation" tabindex="0" title="Select text here to add commentary">{{.DisplayedTranslation}}</div>
                     {{if .DisplayedTranslationUserPrompt}}
                     <details class="prompt-artifact-details">
                         <summary>Show user prompt</summary>
@@ -1076,11 +1185,67 @@ const translationReviewTemplate = `<!DOCTYPE html>
                 <input type="hidden" id="canonical_kind" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "kind"}}{{end}}">
                 <input type="hidden" id="canonical_id" value="{{if .Lemma.CanonicalVariantRef}}{{index .Lemma.CanonicalVariantRef "id"}}{{end}}">
 
-                <div class="guidance-hit-panel context-panel">
-                    <div class="section-title">Translation Guidance Hits</div>
-                    <div class="context-note">Current guidance detections for this source text, including completed urgent local formula scans and prompt provenance for the displayed AI run when recorded.</div>
+	                <div class="guidance-hit-panel context-panel">
+	                    <div class="section-title">Translation Guidance Hits</div>
+	                    <div class="context-note">Current guidance detections for this source text, including completed urgent local formula scans and prompt provenance for the displayed AI run when recorded.</div>
+	                    <details class="context-details guidance-diagnostic-details" {{if .GuidanceCoverageDiagnosticOpen}}open{{end}}>
+	                        <summary>Guidance coverage diagnostic</summary>
+	                        <div class="guidance-coverage-metrics">
+	                            <span class="guidance-coverage-metric">Detector: {{if .GuidanceCoverage.DetectorVersion}}{{.GuidanceCoverage.DetectorVersion}}{{else}}unknown{{end}}</span>
+	                            <span class="guidance-coverage-metric">Source text: {{if .GuidanceCoverage.SourceTextVersionID}}{{.GuidanceCoverage.SourceTextVersionID}}{{else}}none{{end}}</span>
+	                            {{if .GuidanceCoverageKindsLabel}}<span class="guidance-coverage-metric">Prompt kinds: {{.GuidanceCoverageKindsLabel}}</span>{{end}}
+	                            {{if .GuidanceCoverage.PendingScans}}<span class="guidance-coverage-metric">{{.GuidanceCoverage.PendingScans}} pending</span>{{end}}
+	                            {{if .GuidanceCoverage.RunningScans}}<span class="guidance-coverage-metric">{{.GuidanceCoverage.RunningScans}} running</span>{{end}}
+	                            {{if .GuidanceCoverage.FailedScans}}<span class="guidance-coverage-metric">{{.GuidanceCoverage.FailedScans}} failed</span>{{end}}
+	                            {{if .GuidanceCoverage.NeedsReviewRules}}<span class="guidance-coverage-metric">{{.GuidanceCoverage.NeedsReviewRules}} need review</span>{{end}}
+	                        </div>
+	                        {{if .GuidanceCoverage.RuleStatuses}}
+	                        <details class="context-details" style="margin-top: 12px;">
+	                            <summary>Show every prompt-rule check ({{len .GuidanceCoverage.RuleStatuses}})</summary>
+	                            <div class="guidance-rule-status-list">
+	                                {{range .GuidanceCoverage.RuleStatuses}}
+	                                <div class="guidance-rule-status-row status-{{.Status}}">
+	                                    <div class="guidance-rule-status-title">
+	                                        <span class="guidance-hit-code">{{if .RuleCode}}{{.RuleCode}}{{else if .RuleKey}}{{.RuleKey}}{{else}}rule #{{.RuleID}}{{end}}</span>
+	                                        <span class="status-pill">{{.Kind}}</span>
+	                                        <span class="status-pill status-{{.Status}}">{{.Status}}</span>
+	                                        <span class="guidance-hit-label">{{.Label}}</span>
+	                                    </div>
+	                                    {{if .PreferredTranslation}}<div class="guidance-hit-meta">Preferred/advisory: {{.PreferredTranslation}}</div>{{end}}
+	                                    <div class="guidance-hit-meta">
+	                                        revision {{.RuleRevisionNumber}}{{if .RuleRevisionCreatedAt}} · created {{.RuleRevisionCreatedAt}}{{end}}
+	                                        {{if .MatchStatus}} · match: {{.MatchStatus}}{{end}}{{if .Confidence}} · confidence: {{.Confidence}}{{end}}{{if .OccurrenceCount}} · occurrences: {{.OccurrenceCount}}{{end}}
+	                                        {{if .QueueStatus}} · queue: {{.QueueStatus}}{{end}}{{if .QueueUpdatedAt}} · queue updated {{.QueueUpdatedAt}}{{end}}{{if .MatchUpdatedAt}} · match updated {{.MatchUpdatedAt}}{{end}}
+	                                    </div>
+	                                    {{if .EvidenceText}}<div class="guidance-hit-evidence">{{.EvidenceText}}</div>{{end}}
+	                                </div>
+	                                {{end}}
+	                            </div>
+	                        </details>
+	                        {{end}}
+	                        {{if .GuidanceCoverage.MissingRuleExamples}}
+	                        <div class="guidance-hit-subheading">Missing prompt-rule checks</div>
+	                        <div class="guidance-missing-rule-list">
+	                            {{range .GuidanceCoverage.MissingRuleExamples}}
+	                            <div class="guidance-missing-rule">
+	                                <div class="guidance-missing-rule-title">{{if .RuleCode}}{{.RuleCode}}{{else if .RuleKey}}{{.RuleKey}}{{else}}rule #{{.RuleID}}{{end}} · {{.Kind}}</div>
+	                                <div>{{.Label}}</div>
+	                                {{if .PreferredTranslation}}<div class="guidance-hit-meta">Preferred/advisory: {{.PreferredTranslation}}</div>{{end}}
+	                                <div class="guidance-hit-meta">revision {{.RuleRevisionNumber}}{{if .RuleRevisionCreatedAt}} · created {{.RuleRevisionCreatedAt}}{{end}} · queue: {{.QueueStatus}}{{if .QueueUpdatedAt}} · updated {{.QueueUpdatedAt}}{{end}}</div>
+	                            </div>
+	                            {{end}}
+	                        </div>
+	                        {{if .GuidanceCoverageMissingRemainder}}
+	                        <div class="helper-text" style="margin-top: 8px;">{{.GuidanceCoverageMissingRemainder}} additional missing rule checks are not shown in this compact export.</div>
+	                        {{end}}
+	                        {{else if .GuidanceCoverage.Complete}}
+	                        <div class="empty-state" style="margin-top: 10px;">All prompt-eligible guidance rules have recorded detector results for this current source text.</div>
+	                        {{else}}
+	                        <div class="empty-state" style="margin-top: 10px;">No missing-rule examples are available in this export.</div>
+	                        {{end}}
+	                    </details>
 
-                    {{if .GuidanceStrongHits}}
+	                    {{if .GuidanceStrongHits}}
                     <div class="guidance-hit-subheading">Matched guidance</div>
                     <div class="guidance-hit-list">
                         {{range .GuidanceStrongHits}}
@@ -1272,7 +1437,14 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                         <td style="border-top: 1px solid #e5edf5; padding: 8px;">
                                             {{index . "kind"}}{{if index . "deprecated"}}<div class="helper-text">{{if index . "deprecation_note"}}{{index . "deprecation_note"}}{{else}}Legacy baseline retained for context.{{end}}</div>{{end}}
                                         </td>
-                                        <td style="border-top: 1px solid #e5edf5; padding: 8px;">{{index . "status"}}</td>
+                                        <td style="border-top: 1px solid #e5edf5; padding: 8px;">
+                                            {{index . "status"}}
+                                            {{if index . "guidance_freshness_state"}}
+                                            <div class="helper-text">
+                                                guidance: {{index . "guidance_freshness_state"}}{{if index . "guidance_freshness_missing_count"}} · missing {{index . "guidance_freshness_missing_count"}}{{end}}{{if index . "guidance_freshness_unprompted_matched_count"}} · unprompted matched {{index . "guidance_freshness_unprompted_matched_count"}}{{end}}
+                                            </div>
+                                            {{end}}
+                                        </td>
                                         <td style="border-top: 1px solid #e5edf5; padding: 8px; white-space: nowrap;">
                                             {{if index . "profile_version"}}
                                                 {{if index . "profile_name"}}{{index . "profile_name"}} {{end}}v{{index . "profile_version"}}

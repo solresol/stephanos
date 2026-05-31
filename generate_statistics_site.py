@@ -1516,6 +1516,7 @@ def generate_navigation(current_page='index', in_subdirectory=False):
         'index': 'Overview',
         'word_count': 'Word Count Statistics',
         'translation_length': 'Translation Length',
+        'prompt_evaluation': 'Prompt Evaluation',
         'regression': 'Stephanos vs Epitomizer Emphasis',
         'categories': 'By Category',
         'category_authors': 'Authors',
@@ -1566,6 +1567,7 @@ def main_menu_item_for_stats_page(current_page: str) -> str:
         "index": "statistics",
         "word_count": "word_count_stats",
         "translation_length": "translation_length",
+        "prompt_evaluation": "prompt_eval",
         "guidance_rules": "guidance_stats",
         "regression": "regression",
         "etymology": "etymology",
@@ -3295,22 +3297,27 @@ def generate_index_page():
     </div>
 
     <div class="section-card">
-        <h3><a href="statistics/regression.html">3. Stephanos vs Epitomizer Emphasis</a></h3>
+        <h3><a href="statistics/prompt_evaluation.html">3. Translation Prompt Evaluation</a></h3>
+        <p>Compare AI prompt versions against approved human translations with length regression, BLEU, trigram overlap, ROUGE-L, chrF, and residual analysis.</p>
+    </div>
+
+    <div class="section-card">
+        <h3><a href="statistics/regression.html">4. Stephanos vs Epitomizer Emphasis</a></h3>
         <p>Discover what the original Stephanos emphasized versus what the Byzantine epitomizer emphasized. Interactive visualizations reveal what was lost in the epitome and what was added or expanded.</p>
     </div>
 
     <div class="section-card">
-        <h3><a href="statistics/etymology.html">4. Etymology Analysis</a></h3>
+        <h3><a href="statistics/etymology.html">5. Etymology Analysis</a></h3>
         <p>Examine the distribution of etymology categories across the corpus, with comparisons between Delta and Non-Delta entries.</p>
     </div>
 
     <div class="section-card">
-        <h3><a href="statistics/parisinus_comparison.html">5. Parisinus Coislinianus 228 vs Epitomised version Comparison</a></h3>
+        <h3><a href="statistics/parisinus_comparison.html">6. Parisinus Coislinianus 228 vs Epitomised version Comparison</a></h3>
         <p>Statistical comparison of word counts between entries from the original Stephanos (Delta) and the Byzantine epitome (Non-Delta).</p>
     </div>
 
     <div class="section-card">
-        <h3><a href="statistics/categories.html">6. Analysis by Category</a></h3>
+        <h3><a href="statistics/categories.html">7. Analysis by Category</a></h3>
         <p>Detailed analysis of how different categories of proper nouns correlate with entry length.
         Explore which authors, historical figures, places, ethnic groups, and deities Stephanos emphasized.</p>
         <div style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 10px;">
@@ -3323,14 +3330,14 @@ def generate_index_page():
     </div>
 
     <div class="section-card">
-        <h3><a href="statistics/pausanias_analysis.html">7. Pausanias Citations</a></h3>
+        <h3><a href="statistics/pausanias_analysis.html">8. Pausanias Citations</a></h3>
         <p>Analysis of Stephanos's citations of Pausanias the Periegete. Did Stephanos have access to the
         complete text of Pausanias, or only certain portions? Statistical analysis of citation distribution
         with links to the cited passages.</p>
     </div>
 
     <div class="section-card">
-        <h3><a href="statistics/guidance_rules.html">8. Guidance Rule Statistics</a></h3>
+        <h3><a href="statistics/guidance_rules.html">9. Guidance Rule Statistics</a></h3>
         <p>Daily statistics for translation-guidance rules: discovery estimates, Zipf-like rank frequency,
         and top-rule headword coverage.</p>
     </div>

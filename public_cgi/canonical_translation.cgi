@@ -15,7 +15,7 @@ POST (requires REMOTE_USER):
 
 Operational note:
   This endpoint MUST be local-only (no SSH proxy). It reads baseline lemma
-  data from ../db/review_data.json and records canonical actions in ../db/reviews.db.
+  data from ../db/review_data.sqlite and records canonical actions in ../db/reviews.db.
   Nightly import applies the action log to PostgreSQL.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ import sqlite3
 from urllib.parse import parse_qs
 
 
-DATA_FILE = "../db/review_data.json"
+SNAPSHOT_DB = "../db/review_data.sqlite"
 SQLITE_DB = "../db/reviews.db"
 
 KIND_PRIORITY = {
@@ -103,32 +103,63 @@ def require_target(params: dict[str, str]) -> tuple[str, str]:
         return "headword", headword
     raise RuntimeError("Provide lemma_id or headword")
 
-def load_review_data() -> dict:
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+def open_snapshot() -> sqlite3.Connection:
+    conn = sqlite3.connect(f"file:{SNAPSHOT_DB}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-def resolve_lemma(data: dict, target_key: str, target_value: str) -> dict:
-    lemmas = data.get("lemmas") or []
-    if target_key == "lemma_id":
-        lemma_id = int(target_value)
-        for lemma in lemmas:
-            if int(lemma.get("id") or 0) == lemma_id:
-                return lemma
-        raise RuntimeError(f"lemma id {lemma_id} not found")
+def decode_snapshot_lemma(row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    payload = row["payload_json"]
+    if not isinstance(payload, str) or not payload.strip():
+        return None
+    decoded = json.loads(payload)
+    if not isinstance(decoded, dict):
+        return None
+    return decoded
 
-    headword = target_value
-    fallback = None
-    for lemma in lemmas:
-        if (lemma.get("lemma") or "") != headword:
-            continue
-        if (lemma.get("version") or "").lower() == "epitome":
+
+def resolve_lemma_from_snapshot(target_key: str, target_value: str) -> dict:
+    with open_snapshot() as conn:
+        if target_key == "lemma_id":
+            lemma_id = int(target_value)
+            row = conn.execute(
+                "SELECT payload_json FROM lemmas WHERE id = ?",
+                (lemma_id,),
+            ).fetchone()
+            lemma = decode_snapshot_lemma(row)
+            if lemma is None:
+                raise RuntimeError(f"lemma id {lemma_id} not found")
             return lemma
-        if fallback is None:
-            fallback = lemma
-    if fallback is not None:
-        return fallback
-    raise RuntimeError(f"headword not found: {headword}")
+
+        headword = target_value
+        rows = conn.execute(
+            """
+            SELECT payload_json
+            FROM lemmas
+            WHERE lemma = ?
+            ORDER BY version, sort_order
+            """,
+            (headword,),
+        ).fetchall()
+        fallback = None
+        for row in rows:
+            lemma = decode_snapshot_lemma(row)
+            if lemma is None:
+                continue
+            if (lemma.get("version") or "").lower() == "epitome":
+                return lemma
+            if fallback is None:
+                fallback = lemma
+        if fallback is not None:
+            return fallback
+    raise RuntimeError(f"headword not found: {target_value}")
+
+
+def resolve_lemma(target_key: str, target_value: str) -> dict:
+    return resolve_lemma_from_snapshot(target_key, target_value)
 
 
 def open_sqlite() -> sqlite3.Connection:
@@ -315,6 +346,9 @@ def is_publishable_local(lemma: dict, v: dict) -> bool:
 
     if kind == "translation_run":
         if status != "approved":
+            return False
+        guidance_state = (v.get("guidance_freshness_state") or "").strip()
+        if guidance_state in {"potentially_outdated", "needs_review", "outdated"}:
             return False
         if v.get("public_eligible") is False:
             return False
@@ -569,8 +603,7 @@ def main():
 
         if method == "GET":
             target_key, target_value = require_target(params)
-            data = load_review_data()
-            lemma = resolve_lemma(data, target_key, target_value)
+            lemma = resolve_lemma(target_key, target_value)
             lemma_id = int(lemma.get("id") or 0)
             with open_sqlite() as conn:
                 ensure_schema(conn)
@@ -586,8 +619,7 @@ def main():
 
         action = (params.get("action") or "set_primary").strip().lower()
         target_key, target_value = require_target(params)
-        data = load_review_data()
-        lemma = resolve_lemma(data, target_key, target_value)
+        lemma = resolve_lemma(target_key, target_value)
         lemma_id = int(lemma.get("id") or 0)
 
         variant_kind = (params.get("variant_kind") or "").strip()

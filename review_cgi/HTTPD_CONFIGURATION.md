@@ -91,7 +91,7 @@ chmod 664 ../db/reviews.db
 chown www:www ../db/reviews.db
 ```
 
-### 3. Deploy Review Data JSON
+### 3. Deploy Review Data SQLite
 
 ```bash
 # On raksasa, export data
@@ -99,11 +99,11 @@ cd ~/stephanos
 uv run export_for_review.py
 
 # Copy to merah
-scp review_data.json stephanos@merah:/var/www/vhosts/stephanos.symmachus.org/db/
+scp review_data.sqlite stephanos@merah:/var/www/vhosts/stephanos.symmachus.org/db/
 
 # On merah, set permissions
-chmod 644 /var/www/vhosts/stephanos.symmachus.org/db/review_data.json
-chown www:www /var/www/vhosts/stephanos.symmachus.org/db/review_data.json
+chmod 644 /var/www/vhosts/stephanos.symmachus.org/db/review_data.sqlite
+chown www:www /var/www/vhosts/stephanos.symmachus.org/db/review_data.sqlite
 ```
 
 ### 4. Setup HTTP Basic Auth Users
@@ -149,7 +149,7 @@ ls -l /var/www/vhosts/stephanos.symmachus.org/cgi-bin/
 ls -l /var/www/vhosts/stephanos.symmachus.org/db/
 
 # Check data file exists
-ls -lh /var/www/vhosts/stephanos.symmachus.org/db/review_data.json
+ls -lh /var/www/vhosts/stephanos.symmachus.org/db/review_data.sqlite
 
 # Test CGI access (should prompt for authentication)
 curl -I http://stephanos.symmachus.org/cgi-bin/review.cgi
@@ -164,7 +164,7 @@ curl -u reviewer1:password http://stephanos.symmachus.org/cgi-bin/review.cgi | h
 |------|-------------------|
 | CGI binaries | `/var/www/vhosts/stephanos.symmachus.org/cgi-bin/*.cgi` |
 | SQLite database | `/var/www/vhosts/stephanos.symmachus.org/db/reviews.db` |
-| Review data JSON | `/var/www/vhosts/stephanos.symmachus.org/db/review_data.json` |
+| Review data SQLite | `/var/www/vhosts/stephanos.symmachus.org/db/review_data.sqlite` |
 | htpasswd file | `/var/www/vhosts/stephanos.symmachus.org/etc/htpasswd` |
 | Page images | `/var/www/vhosts/stephanos.symmachus.org/htdocs/protected/*.jpg` |
 | httpd config | `/etc/httpd.conf` |

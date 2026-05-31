@@ -35,7 +35,11 @@ from openai_batch_utils import (
     update_batch_status,
     write_batch_output,
 )
-from translation_guidance_coverage import CURRENT_DETECTOR_VERSION
+from translation_guidance_coverage import (
+    CURRENT_DETECTOR_VERSION,
+    ensure_translation_guidance_freshness_table,
+    refresh_translation_guidance_freshness,
+)
 
 
 DEFAULT_MODEL = "gpt-5.4-mini"
@@ -1007,6 +1011,11 @@ def upsert_match(cur, job: tuple, result: dict[str, object]) -> None:
             lemma_id=int(lemma_id),
             source_text_version_id=int(source_text_version_id),
         )
+    refresh_translation_guidance_freshness(
+        cur,
+        lemma_id=int(lemma_id),
+        source_text_version_id=int(source_text_version_id),
+    )
 
 
 def mark_job(
@@ -1532,6 +1541,7 @@ def main() -> None:
     cur = conn.cursor()
     ensure_token_accounting_columns(cur)
     ensure_translation_run_outdated_status(cur)
+    ensure_translation_guidance_freshness_table(cur)
     if args.batch:
         ensure_openai_batch_tables(cur)
     conn.commit()

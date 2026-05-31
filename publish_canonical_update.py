@@ -7,7 +7,7 @@ Runs the minimal publish chain needed for canonical changes to appear on public 
 2) export review data
 3) export protected guidance scan DB
 4) regenerate reference site
-5) sync reference site + review data to merah
+5) sync reference site + review snapshot to merah
 """
 from __future__ import annotations
 
@@ -68,11 +68,11 @@ def main():
             300,
         ),
         (
-            "rsync_review_data_to_merah",
+            "rsync_review_snapshot_to_merah",
             [
                 "rsync",
                 "-az",
-                "review_data.json",
+                "review_data.sqlite",
                 "stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/",
             ],
             180,

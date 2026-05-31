@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-Export lemma data from PostgreSQL to JSON for review system.
+Export lemma data from PostgreSQL to SQLite for review system.
 
 This script queries the assembled_lemmas table, orders entries by
-Greek alphabetical order + version, and exports to JSON format
-that the Go CGI programs can read.
+Greek alphabetical order + version, and exports to a SQLite snapshot
+that the CGI programs can read.
 
-Output: review_data.json
+Output: review_data.sqlite
 """
 
 import json
 import re
+import sqlite3
 import unicodedata
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -19,12 +20,18 @@ from pathlib import Path
 import canonical_variants
 from db import get_connection
 from source_documents import PREFERRED_GREEK_SOURCE_DOCUMENTS
+from translation_guidance_coverage import (
+    CURRENT_DETECTOR_VERSION,
+    PROMPT_GUIDANCE_KINDS,
+    required_guidance_rules_sql,
+)
 import wikidata_entity_cache
 
-OUTPUT_FILE = "review_data.json"
+SQLITE_OUTPUT_FILE = "review_data.sqlite"
 _MEINEKE_OBJECT_TAG_RE = re.compile(r"\[/?object[^\]]*\]")
 _OCR_IMAGE_NOTE_RE = re.compile(r"OCR from image ([^\s]+)")
 LEGACY_TRANSLATION_MODEL = "gpt-5.2"
+GUIDANCE_MISSING_RULE_SAMPLE_LIMIT = 20
 GREEK_SOURCE_PRIORITY = {
     source_document: index
     for index, source_document in enumerate(PREFERRED_GREEK_SOURCE_DOCUMENTS)
@@ -112,6 +119,56 @@ def preview_text(text: str, limit: int = 180) -> str:
     if len(preview) > limit:
         return preview[: limit - 3].rstrip() + "..."
     return preview
+
+
+def compact_json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def snapshot_search_text(lemma: dict) -> str:
+    parts = [
+        lemma.get("lemma") or "",
+        lemma.get("letter") or "",
+        lemma.get("greek_text") or "",
+        lemma.get("human_greek_text") or "",
+        lemma.get("meineke_greek_paragraph") or "",
+        lemma.get("english_translation") or "",
+        lemma.get("translation_block_reason") or "",
+    ]
+    for variant in lemma.get("translation_variants") or []:
+        if not isinstance(variant, dict):
+            continue
+        parts.extend(
+            [
+                variant.get("text") or "",
+                variant.get("preview") or "",
+                variant.get("status") or "",
+                variant.get("reviewed_by") or "",
+            ]
+        )
+    for hit in lemma.get("guidance_hits") or []:
+        if not isinstance(hit, dict):
+            continue
+        parts.extend(
+            [
+                hit.get("rule_key") or "",
+                hit.get("label") or "",
+                hit.get("preferred_translation") or "",
+                hit.get("evidence_text") or "",
+            ]
+        )
+    return "\n".join(str(part).strip() for part in parts if str(part or "").strip())
+
+
+def latest_ai_translation_at(lemma: dict) -> str:
+    latest = ""
+    for variant in lemma.get("translation_variants") or []:
+        if not isinstance(variant, dict) or variant.get("kind") != "translation_run":
+            continue
+        created_at = str(variant.get("created_at") or "").strip()
+        if created_at > latest:
+            latest = created_at
+    return latest
 
 
 def coerce_json_list(value) -> list:
@@ -583,6 +640,404 @@ def pg_table_exists(cur, table_name: str) -> bool:
     return bool(cur.fetchone()[0])
 
 
+def fetch_guidance_rule_inventory(cur) -> dict:
+    """Return live guidance-rule corpus counts for review diagnostics."""
+    if not pg_table_exists(cur, "translation_guidance_rules"):
+        return {
+            "total_guidance_rules": 0,
+            "not_retired_guidance_rules": 0,
+            "prompt_guidance_rules": 0,
+        }
+
+    cur.execute(
+        """
+        SELECT
+            COUNT(*) AS total_guidance_rules,
+            COUNT(*) FILTER (WHERE status <> 'retired') AS not_retired_guidance_rules,
+            COUNT(*) FILTER (
+                WHERE status <> 'retired'
+                  AND COALESCE(lifecycle_stage, 'guidance') = 'guidance'
+                  AND kind = ANY(%s)
+            ) AS prompt_guidance_rules
+        FROM translation_guidance_rules
+        """,
+        (list(PROMPT_GUIDANCE_KINDS),),
+    )
+    row = cur.fetchone()
+    return {
+        "total_guidance_rules": int(row[0] or 0),
+        "not_retired_guidance_rules": int(row[1] or 0),
+        "prompt_guidance_rules": int(row[2] or 0),
+    }
+
+
+def guidance_coverage_label(
+    *,
+    required: int,
+    completed: int,
+    missing: int,
+    pending: int,
+    running: int,
+    failed: int,
+) -> tuple[str, str]:
+    if required <= 0:
+        return "unavailable", "No prompt-guidance rules are configured for coverage checks."
+    if missing <= 0:
+        return "complete", f"Guidance complete: {completed}/{required} prompt-eligible rules checked."
+
+    queue_bits = []
+    if pending:
+        queue_bits.append(f"{pending} pending")
+    if running:
+        queue_bits.append(f"{running} running")
+    if failed:
+        queue_bits.append(f"{failed} failed")
+    queue_note = f" ({', '.join(queue_bits)})" if queue_bits else ""
+    if failed:
+        status = "failed"
+    elif pending or running:
+        status = "pending"
+    else:
+        status = "incomplete"
+    return status, f"Guidance incomplete: {completed}/{required} prompt-eligible rules checked; {missing} not checked{queue_note}."
+
+
+def unavailable_guidance_coverage(
+    source_text_version_id: int | str | None,
+    inventory: dict,
+    reason: str,
+) -> dict:
+    return {
+        "available": False,
+        "detector_version": CURRENT_DETECTOR_VERSION,
+        "source_text_version_id": str(source_text_version_id or ""),
+        "status": "unavailable",
+        "status_label": reason,
+        "complete": False,
+        "stale": False,
+        "required_rules": 0,
+        "completed_rules": 0,
+        "missing_rules": 0,
+        "matched_rules": 0,
+        "not_matched_rules": 0,
+        "uncertain_rules": 0,
+        "needs_review_rules": 0,
+        "pending_scans": 0,
+        "running_scans": 0,
+        "failed_scans": 0,
+        "rule_statuses": [],
+        "missing_rule_examples": [],
+        "missing_rule_sample_limit": GUIDANCE_MISSING_RULE_SAMPLE_LIMIT,
+        "total_guidance_rules": int(inventory.get("total_guidance_rules") or 0),
+        "not_retired_guidance_rules": int(inventory.get("not_retired_guidance_rules") or 0),
+        "prompt_guidance_rules": int(inventory.get("prompt_guidance_rules") or 0),
+        "prompt_guidance_kinds": list(PROMPT_GUIDANCE_KINDS),
+    }
+
+
+def fetch_guidance_coverage_by_source(cur) -> tuple[dict[int, dict], dict]:
+    """Build compact current guidance coverage summaries for current Meineke sources."""
+    inventory = fetch_guidance_rule_inventory(cur)
+    required_tables = (
+        "lemma_source_text_versions",
+        "translation_guidance_rules",
+        "translation_guidance_rule_revisions",
+        "translation_guidance_matches",
+        "translation_guidance_scan_queue",
+    )
+    if not all(pg_table_exists(cur, table_name) for table_name in required_tables):
+        return {}, inventory
+
+    cur.execute(
+        f"""
+        WITH required_rules AS (
+            {required_guidance_rules_sql()}
+        )
+        SELECT
+            rr.rule_id,
+            rr.kind,
+            rr.revision_id,
+            COALESCE(r.rule_key, '') AS rule_key,
+            COALESCE(r.rule_code, '') AS rule_code,
+            COALESCE(r.label, '') AS label,
+            COALESCE(r.preferred_translation, '') AS preferred_translation,
+            COALESCE(rv.revision_number, 0) AS revision_number,
+            COALESCE(rv.created_at::text, '') AS revision_created_at
+        FROM required_rules rr
+        JOIN translation_guidance_rules r ON r.id = rr.rule_id
+        JOIN translation_guidance_rule_revisions rv ON rv.id = rr.revision_id
+        ORDER BY rr.kind, r.label, rr.rule_id
+        """,
+        (list(PROMPT_GUIDANCE_KINDS),),
+    )
+    required_rule_details = [
+        {
+            "rule_id": int(row[0]),
+            "kind": row[1] or "",
+            "revision_id": int(row[2]),
+            "rule_key": row[3] or "",
+            "rule_code": row[4] or "",
+            "label": row[5] or "",
+            "preferred_translation": row[6] or "",
+            "rule_revision_number": int(row[7] or 0),
+            "rule_revision_created_at": row[8] or "",
+        }
+        for row in cur.fetchall()
+    ]
+    required_revision_ids = [rule["revision_id"] for rule in required_rule_details]
+    required = len(required_rule_details)
+
+    cur.execute(
+        """
+        SELECT id, lemma_id
+        FROM lemma_source_text_versions
+        WHERE source_document = 'meineke'
+          AND is_current = TRUE
+        ORDER BY id
+        """
+    )
+    current_sources = [(int(row[0]), int(row[1] or 0)) for row in cur.fetchall()]
+    source_ids = [source_id for source_id, _lemma_id in current_sources]
+    if not current_sources or not required_revision_ids:
+        return {}, inventory
+
+    match_counts_by_source = defaultdict(lambda: {
+        "completed_revision_ids": set(),
+        "matched_revision_ids": set(),
+        "not_matched_revision_ids": set(),
+        "uncertain_revision_ids": set(),
+        "needs_review_revision_ids": set(),
+    })
+    cur.execute(
+        """
+        SELECT
+            source_text_version_id,
+            ARRAY_REMOVE(ARRAY_AGG(DISTINCT rule_revision_id), NULL) AS completed_revision_ids,
+            ARRAY_REMOVE(ARRAY_AGG(DISTINCT rule_revision_id) FILTER (WHERE match_status = 'matched'), NULL) AS matched_revision_ids,
+            ARRAY_REMOVE(ARRAY_AGG(DISTINCT rule_revision_id) FILTER (WHERE match_status = 'not_matched'), NULL) AS not_matched_revision_ids,
+            ARRAY_REMOVE(ARRAY_AGG(DISTINCT rule_revision_id) FILTER (WHERE match_status = 'uncertain'), NULL) AS uncertain_revision_ids,
+            ARRAY_REMOVE(ARRAY_AGG(DISTINCT rule_revision_id) FILTER (WHERE match_status = 'needs_review'), NULL) AS needs_review_revision_ids
+        FROM translation_guidance_matches
+        WHERE detector_version = %s
+          AND rule_revision_id = ANY(%s)
+          AND source_text_version_id = ANY(%s)
+        GROUP BY source_text_version_id
+        """,
+        (CURRENT_DETECTOR_VERSION, required_revision_ids, source_ids),
+    )
+    for row in cur.fetchall():
+        source_text_version_id = int(row[0])
+        match_counts_by_source[source_text_version_id] = {
+            "completed_revision_ids": {int(value) for value in (row[1] or [])},
+            "matched_revision_ids": {int(value) for value in (row[2] or [])},
+            "not_matched_revision_ids": {int(value) for value in (row[3] or [])},
+            "uncertain_revision_ids": {int(value) for value in (row[4] or [])},
+            "needs_review_revision_ids": {int(value) for value in (row[5] or [])},
+        }
+
+    cur.execute(
+        """
+        WITH ranked AS (
+            SELECT
+                source_text_version_id,
+                rule_revision_id,
+                id AS match_id,
+                COALESCE(match_status, '') AS match_status,
+                COALESCE(confidence, '') AS confidence,
+                COALESCE(occurrence_count, 0) AS occurrence_count,
+                COALESCE(evidence_text, '') AS evidence_text,
+                COALESCE(detector_kind, '') AS detector_kind,
+                COALESCE(updated_at::text, '') AS updated_at,
+                ROW_NUMBER() OVER (
+                    PARTITION BY source_text_version_id, rule_revision_id
+                    ORDER BY
+                        CASE match_status
+                            WHEN 'matched' THEN 0
+                            WHEN 'needs_review' THEN 1
+                            WHEN 'uncertain' THEN 2
+                            WHEN 'not_matched' THEN 3
+                            WHEN 'skipped' THEN 4
+                            ELSE 5
+                        END,
+                        updated_at DESC NULLS LAST,
+                        id DESC
+                ) AS match_rank
+            FROM translation_guidance_matches
+            WHERE detector_version = %s
+              AND rule_revision_id = ANY(%s)
+              AND source_text_version_id = ANY(%s)
+        )
+        SELECT
+            source_text_version_id,
+            rule_revision_id,
+            match_id,
+            match_status,
+            confidence,
+            occurrence_count,
+            evidence_text,
+            detector_kind,
+            updated_at
+        FROM ranked
+        WHERE match_rank = 1
+        """,
+        (CURRENT_DETECTOR_VERSION, required_revision_ids, source_ids),
+    )
+    match_detail_by_source_revision = {
+        (int(row[0]), int(row[1])): {
+            "match_id": int(row[2] or 0),
+            "match_status": row[3] or "",
+            "confidence": row[4] or "",
+            "occurrence_count": int(row[5] or 0),
+            "evidence_text": row[6] or "",
+            "detector_kind": row[7] or "",
+            "updated_at": row[8] or "",
+        }
+        for row in cur.fetchall()
+    }
+
+    cur.execute(
+        """
+        WITH ranked AS (
+            SELECT
+                source_text_version_id,
+                rule_revision_id,
+                status,
+                updated_at,
+                ROW_NUMBER() OVER (
+                    PARTITION BY source_text_version_id, rule_revision_id
+                    ORDER BY
+                        CASE status
+                            WHEN 'running' THEN 0
+                            WHEN 'pending' THEN 1
+                            WHEN 'failed' THEN 2
+                            ELSE 3
+                        END,
+                        updated_at DESC NULLS LAST,
+                        id DESC
+                ) AS queue_rank
+            FROM translation_guidance_scan_queue
+            WHERE rule_revision_id = ANY(%s)
+              AND source_text_version_id = ANY(%s)
+        )
+        SELECT
+            source_text_version_id,
+            rule_revision_id,
+            COALESCE(status, '') AS status,
+            COALESCE(updated_at::text, '') AS updated_at
+        FROM ranked
+        WHERE queue_rank = 1
+        """,
+        (required_revision_ids, source_ids),
+    )
+    queue_by_source_revision = {
+        (int(row[0]), int(row[1])): {
+            "status": row[2] or "missing",
+            "updated_at": row[3] or "",
+        }
+        for row in cur.fetchall()
+    }
+
+    coverage_by_source = {}
+    for source_text_version_id, _lemma_id in current_sources:
+        match_counts = match_counts_by_source[source_text_version_id]
+        completed_revision_ids = match_counts["completed_revision_ids"]
+        completed = len(completed_revision_ids)
+        missing_rule_examples = []
+        rule_statuses = []
+        pending = 0
+        running = 0
+        failed = 0
+        for rule in required_rule_details:
+            revision_id = rule["revision_id"]
+            queue = queue_by_source_revision.get((source_text_version_id, revision_id), {})
+            queue_status = queue.get("status", "missing")
+            match = match_detail_by_source_revision.get((source_text_version_id, revision_id))
+            if match:
+                rule_status = match["match_status"] or "checked"
+            elif queue_status in {"pending", "running", "failed"}:
+                rule_status = queue_status
+            else:
+                rule_status = "untested"
+            rule_statuses.append(
+                [
+                    rule["rule_id"],
+                    revision_id,
+                    rule["rule_revision_number"],
+                    rule_status,
+                    match.get("match_status", "") if match else "",
+                    match.get("match_id", 0) if match else 0,
+                    match.get("confidence", "") if match else "",
+                    match.get("occurrence_count", 0) if match else 0,
+                    preview_text(match.get("evidence_text", ""), 320) if match else "",
+                    match.get("detector_kind", "") if match else "",
+                    match.get("updated_at", "") if match else "",
+                    queue_status,
+                    queue.get("updated_at", ""),
+                ]
+            )
+            if revision_id in completed_revision_ids:
+                continue
+            if queue_status == "pending":
+                pending += 1
+            elif queue_status == "running":
+                running += 1
+            elif queue_status == "failed":
+                failed += 1
+            if len(missing_rule_examples) < GUIDANCE_MISSING_RULE_SAMPLE_LIMIT:
+                missing_rule_examples.append(
+                    {
+                        "rule_id": rule["rule_id"],
+                        "kind": rule["kind"],
+                        "rule_key": rule["rule_key"],
+                        "rule_code": rule["rule_code"],
+                        "label": rule["label"],
+                        "preferred_translation": rule["preferred_translation"],
+                        "rule_revision_id": revision_id,
+                        "rule_revision_number": rule["rule_revision_number"],
+                        "rule_revision_created_at": rule["rule_revision_created_at"],
+                        "queue_status": queue_status,
+                        "queue_updated_at": queue.get("updated_at", ""),
+                    }
+                )
+        missing = max(required - completed, 0)
+        status, status_label = guidance_coverage_label(
+            required=required,
+            completed=completed,
+            missing=missing,
+            pending=pending,
+            running=running,
+            failed=failed,
+        )
+        coverage_by_source[source_text_version_id] = {
+            "available": True,
+            "detector_version": CURRENT_DETECTOR_VERSION,
+            "source_text_version_id": str(source_text_version_id),
+            "status": status,
+            "status_label": status_label,
+            "complete": status == "complete",
+            "stale": missing > 0,
+            "required_rules": required,
+            "completed_rules": completed,
+            "missing_rules": missing,
+            "matched_rules": len(match_counts["matched_revision_ids"]),
+            "not_matched_rules": len(match_counts["not_matched_revision_ids"]),
+            "uncertain_rules": len(match_counts["uncertain_revision_ids"]),
+            "needs_review_rules": len(match_counts["needs_review_revision_ids"]),
+            "pending_scans": pending,
+            "running_scans": running,
+            "failed_scans": failed,
+            "rule_statuses": rule_statuses,
+            "missing_rule_examples": missing_rule_examples,
+            "missing_rule_sample_limit": GUIDANCE_MISSING_RULE_SAMPLE_LIMIT,
+            "total_guidance_rules": int(inventory.get("total_guidance_rules") or 0),
+            "not_retired_guidance_rules": int(inventory.get("not_retired_guidance_rules") or 0),
+            "prompt_guidance_rules": int(inventory.get("prompt_guidance_rules") or 0),
+            "prompt_guidance_kinds": list(PROMPT_GUIDANCE_KINDS),
+        }
+
+    return coverage_by_source, inventory
+
+
 def fetch_guidance_rule_impacts(cur) -> list[dict]:
     """Find guidance matches whose rule/detection timestamp postdates a translation."""
     required_tables = [
@@ -786,6 +1241,160 @@ def fetch_guidance_rule_impacts(cur) -> list[dict]:
             }
         )
     return impacts
+
+
+def write_sqlite_review_snapshot(output: dict, output_path: Path) -> None:
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    if tmp_path.exists():
+        tmp_path.unlink()
+    conn = sqlite3.connect(tmp_path)
+    try:
+        cur = conn.cursor()
+        cur.executescript(
+            """
+            PRAGMA journal_mode = OFF;
+            PRAGMA synchronous = OFF;
+
+            CREATE TABLE metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE TABLE lemmas (
+                id INTEGER PRIMARY KEY,
+                sort_order INTEGER NOT NULL,
+                letter TEXT NOT NULL,
+                lemma TEXT NOT NULL,
+                entry_number INTEGER NOT NULL DEFAULT 0,
+                version TEXT NOT NULL DEFAULT '',
+                has_ai_translation INTEGER NOT NULL DEFAULT 0,
+                has_human_translation INTEGER NOT NULL DEFAULT 0,
+                latest_ai_translation_at TEXT NOT NULL DEFAULT '',
+                search_text TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL
+            );
+
+            CREATE INDEX lemmas_sort_order_idx ON lemmas(sort_order);
+            CREATE INDEX lemmas_letter_sort_idx ON lemmas(letter, sort_order);
+            CREATE INDEX lemmas_lemma_idx ON lemmas(lemma);
+            CREATE INDEX lemmas_lemma_version_sort_idx ON lemmas(lemma, version, sort_order);
+            CREATE INDEX lemmas_latest_ai_idx ON lemmas(latest_ai_translation_at);
+
+            CREATE TABLE proper_noun_lookup (
+                proper_noun_id INTEGER PRIMARY KEY,
+                lemma_id INTEGER NOT NULL
+            );
+
+            CREATE TABLE place_cluster_lookup (
+                cluster_id INTEGER PRIMARY KEY,
+                lemma_id INTEGER NOT NULL
+            );
+
+            CREATE TABLE guidance_hit_rules (
+                rule_key TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                label TEXT NOT NULL,
+                lemma_id INTEGER NOT NULL
+            );
+
+            CREATE INDEX guidance_hit_rules_rule_idx ON guidance_hit_rules(rule_key, lemma_id);
+            CREATE INDEX guidance_hit_rules_lemma_idx ON guidance_hit_rules(lemma_id);
+            """
+        )
+        metadata = {
+            "exported_at": output["exported_at"],
+            "total_count": str(output["total_count"]),
+            "translation_guidance_rules": compact_json(output.get("translation_guidance_rules", [])),
+            "translation_guidance_rule_impacts": compact_json(output.get("translation_guidance_rule_impacts", [])),
+        }
+        cur.executemany(
+            "INSERT INTO metadata(key, value) VALUES (?, ?)",
+            metadata.items(),
+        )
+        lemma_rows = []
+        proper_noun_rows = []
+        place_cluster_rows = []
+        guidance_hit_rule_rows = []
+        for lemma in output.get("lemmas", []):
+            variants = lemma.get("translation_variants") or []
+            has_ai_translation = any(
+                variant.get("kind") == "translation_run" and (variant.get("text") or "").strip()
+                for variant in variants
+            )
+            has_human_translation = bool(
+                (lemma.get("english_translation") or "").strip()
+                and any(
+                    variant.get("kind") in {"human_translation", "legacy_assembled"}
+                    and (variant.get("text") or "").strip()
+                    for variant in variants
+                )
+            )
+            lemma_rows.append(
+                (
+                    int(lemma["id"]),
+                    int(lemma.get("sort_order") or 0),
+                    lemma.get("letter") or "",
+                    lemma.get("lemma") or "",
+                    int(lemma.get("entry_number") or 0),
+                    lemma.get("version") or "",
+                    1 if has_ai_translation else 0,
+                    1 if has_human_translation else 0,
+                    latest_ai_translation_at(lemma),
+                    snapshot_search_text(lemma),
+                    compact_json(lemma),
+                )
+            )
+            for entity in lemma.get("proper_nouns") or []:
+                proper_noun_id = int(entity.get("id") or 0)
+                if proper_noun_id > 0:
+                    proper_noun_rows.append((proper_noun_id, int(lemma["id"])))
+            for cluster in lemma.get("place_clusters") or []:
+                cluster_id = int(cluster.get("id") or 0)
+                if cluster_id > 0:
+                    place_cluster_rows.append((cluster_id, int(lemma["id"])))
+            for hit in lemma.get("guidance_hits") or []:
+                if not isinstance(hit, dict):
+                    continue
+                if str(hit.get("match_status") or "").strip() != "matched":
+                    continue
+                rule_key = str(hit.get("rule_key") or "").strip()
+                if rule_key:
+                    guidance_hit_rule_rows.append(
+                        (
+                            rule_key,
+                            str(hit.get("kind") or "").strip(),
+                            str(hit.get("label") or "").strip(),
+                            int(lemma["id"]),
+                        )
+                    )
+
+        cur.executemany(
+            """
+            INSERT INTO lemmas (
+                id, sort_order, letter, lemma, entry_number, version,
+                has_ai_translation, has_human_translation,
+                latest_ai_translation_at, search_text, payload_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            lemma_rows,
+        )
+        cur.executemany(
+            "INSERT OR REPLACE INTO proper_noun_lookup(proper_noun_id, lemma_id) VALUES (?, ?)",
+            proper_noun_rows,
+        )
+        cur.executemany(
+            "INSERT OR REPLACE INTO place_cluster_lookup(cluster_id, lemma_id) VALUES (?, ?)",
+            place_cluster_rows,
+        )
+        cur.executemany(
+            "INSERT INTO guidance_hit_rules(rule_key, kind, label, lemma_id) VALUES (?, ?, ?, ?)",
+            guidance_hit_rule_rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    tmp_path.replace(output_path)
 
 
 def export_lemmas():
@@ -1542,14 +2151,41 @@ def export_lemmas():
                 "translation_model": translation_model or "",
             }
 
+    guidance_coverage_by_source, guidance_rule_inventory = fetch_guidance_coverage_by_source(cur)
+
     translation_variants_by_lemma = {}
     cur.execute("SELECT to_regclass('public.translation_runs') IS NOT NULL")
     has_translation_runs = bool(cur.fetchone()[0])
     if has_translation_runs:
+        has_guidance_freshness = pg_table_exists(cur, "translation_guidance_freshness")
         request_payload_select = (
             "COALESCE(tr.request_payload_json, '{}'::jsonb)::text AS request_payload_json"
             if pg_column_exists(cur, "translation_runs", "request_payload_json")
             else "'{}'::text AS request_payload_json"
+        )
+        guidance_freshness_select = (
+            """
+                COALESCE(tgf.state, '') AS guidance_freshness_state,
+                COALESCE(tgf.missing_count, 0) AS guidance_freshness_missing_count,
+                COALESCE(tgf.matched_count, 0) AS guidance_freshness_matched_count,
+                COALESCE(tgf.unprompted_matched_count, 0) AS guidance_freshness_unprompted_matched_count,
+                COALESCE(tgf.last_checked_at::text, '') AS guidance_freshness_checked_at,
+                COALESCE(tgf.notes, '') AS guidance_freshness_notes,
+            """
+            if has_guidance_freshness
+            else """
+                ''::text AS guidance_freshness_state,
+                0::integer AS guidance_freshness_missing_count,
+                0::integer AS guidance_freshness_matched_count,
+                0::integer AS guidance_freshness_unprompted_matched_count,
+                ''::text AS guidance_freshness_checked_at,
+                ''::text AS guidance_freshness_notes,
+            """
+        )
+        guidance_freshness_join = (
+            "LEFT JOIN translation_guidance_freshness tgf ON tgf.run_id = tr.id"
+            if has_guidance_freshness
+            else ""
         )
         cur.execute(
             f"""
@@ -1568,6 +2204,7 @@ def export_lemmas():
                 COALESCE(stv.source_document, '') AS source_document,
                 COALESCE(tr.reviewed_by, '') AS reviewed_by,
                 COALESCE(tr.reviewed_at::text, '') AS reviewed_at,
+                {guidance_freshness_select}
                 {request_payload_select}
             FROM translation_runs tr
             LEFT JOIN translation_prompt_profiles p
@@ -1576,6 +2213,7 @@ def export_lemmas():
               ON pv.id = tr.profile_version_id
             LEFT JOIN lemma_source_text_versions stv
               ON stv.id = tr.source_text_version_id
+            {guidance_freshness_join}
             ORDER BY tr.lemma_id, tr.created_at DESC, tr.id DESC
             """
         )
@@ -1594,6 +2232,12 @@ def export_lemmas():
             source_document,
             reviewed_by,
             reviewed_at,
+            guidance_freshness_state,
+            guidance_freshness_missing_count,
+            guidance_freshness_matched_count,
+            guidance_freshness_unprompted_matched_count,
+            guidance_freshness_checked_at,
+            guidance_freshness_notes,
             request_payload_json,
         ) in cur.fetchall():
             request_payload = coerce_json_object(request_payload_json)
@@ -1611,6 +2255,12 @@ def export_lemmas():
                     "text": translation_text or "",
                     "public_eligible": bool(public_eligible),
                     "public_block_reason": public_block_reason or "",
+                    "guidance_freshness_state": guidance_freshness_state or "",
+                    "guidance_freshness_missing_count": int(guidance_freshness_missing_count or 0),
+                    "guidance_freshness_matched_count": int(guidance_freshness_matched_count or 0),
+                    "guidance_freshness_unprompted_matched_count": int(guidance_freshness_unprompted_matched_count or 0),
+                    "guidance_freshness_checked_at": guidance_freshness_checked_at or "",
+                    "guidance_freshness_notes": guidance_freshness_notes or "",
                     "reviewed_by": reviewed_by or "",
                     "reviewed_at": reviewed_at or "",
                     "request_payload_pretty": pretty_json_object(request_payload),
@@ -2164,6 +2814,14 @@ def export_lemmas():
         current_meineke = current_meineke_by_lemma.get(lemma_id, {})
         current_meineke_version_id = current_meineke.get("id")
         current_meineke_text = current_meineke.get("text_body") or meineke_greek_paragraph or ""
+        guidance_coverage = guidance_coverage_by_source.get(
+            int(current_meineke_version_id or 0),
+            unavailable_guidance_coverage(
+                current_meineke_version_id,
+                guidance_rule_inventory,
+                "No current Meineke source text is available for prompt-guidance coverage.",
+            ),
+        )
         german_ref = german_refs_by_lemma.get(lemma_id, {})
 
         validated_meineke_scan_filenames = []
@@ -2224,6 +2882,7 @@ def export_lemmas():
             "translation_block_reason": risk_by_lemma.get(lemma_id, {}).get("translation_block_reason", ""),
             "translation_difference_evidence": risk_by_lemma.get(lemma_id, {}).get("translation_difference_evidence", "{}"),
             "translation_variants": variants,
+            "guidance_coverage": guidance_coverage,
             "guidance_hits": guidance_hits_by_lemma.get(lemma_id, []),
             "source_text_versions": source_versions_by_lemma.get(lemma_id, []),
             "canonical_variants": canonical_variants_by_lemma.get(lemma_id, []),
@@ -2267,13 +2926,11 @@ def export_lemmas():
         "translation_guidance_rule_impacts": translation_guidance_rule_impacts,
     }
 
-    # Write to file
-    output_path = Path(OUTPUT_FILE)
-    with output_path.open('w', encoding='utf-8') as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
+    sqlite_output_path = Path(SQLITE_OUTPUT_FILE)
+    write_sqlite_review_snapshot(output, sqlite_output_path)
 
-    print(f"Exported {len(lemmas)} lemmas to {output_path.absolute()}")
-    print(f"File size: {output_path.stat().st_size:,} bytes")
+    print(f"Exported {len(lemmas)} lemmas to {sqlite_output_path.absolute()}")
+    print(f"SQLite size: {sqlite_output_path.stat().st_size:,} bytes")
 
     # Print summary by letter
     letter_counts = {}

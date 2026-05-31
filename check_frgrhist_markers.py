@@ -10,7 +10,7 @@ into public pages or exports.
 Examples:
   uv run check_frgrhist_markers.py --db
   uv run check_frgrhist_markers.py --path reference_site
-  uv run check_frgrhist_markers.py --path review_data.json
+  uv run check_frgrhist_markers.py --path reference_site
 """
 
 from __future__ import annotations
@@ -195,4 +195,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -285,6 +285,24 @@ echo "Step 4d5: Syncing review database from merah..." | tee -a "$LOGFILE"
 echo "Step 4d6: Importing reviews into PostgreSQL..." | tee -a "$LOGFILE"
 uv run import_reviews.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 4d6a: Reconcile AI translation freshness against current guidance rules
+TRANSLATION_GUIDANCE_FRESHNESS_ENABLED="${TRANSLATION_GUIDANCE_FRESHNESS_ENABLED:-1}"
+TRANSLATION_GUIDANCE_FRESHNESS_QUEUE_LIMIT="${TRANSLATION_GUIDANCE_FRESHNESS_QUEUE_LIMIT:-2000}"
+TRANSLATION_GUIDANCE_FRESHNESS_QUEUE_PRIORITY="${TRANSLATION_GUIDANCE_FRESHNESS_QUEUE_PRIORITY:-20}"
+if [ "$TRANSLATION_GUIDANCE_FRESHNESS_ENABLED" != "0" ]; then
+    echo "Step 4d6a: Refreshing translation guidance freshness..." | tee -a "$LOGFILE"
+    guidance_freshness_args=(
+        uv run refresh_translation_guidance_freshness.py
+        --source-document all
+        --guidance-queue-priority "$TRANSLATION_GUIDANCE_FRESHNESS_QUEUE_PRIORITY"
+        --created-by "run_daily_pipeline.sh"
+    )
+    if [ "$TRANSLATION_GUIDANCE_FRESHNESS_QUEUE_LIMIT" -gt 0 ]; then
+        guidance_freshness_args+=(--enqueue-missing --max-guidance-queue-rows "$TRANSLATION_GUIDANCE_FRESHNESS_QUEUE_LIMIT")
+    fi
+    "${guidance_freshness_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation-guidance freshness refresh failed" | tee -a "$LOGFILE"
+fi
+
 # Step 4d7: Incrementally queue prompt-eligible guidance scans before translation
 TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT="${TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT:-2000}"
 TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT="${TRANSLATION_GUIDANCE_SCAN_SOURCE_LIMIT:-}"
@@ -546,6 +564,10 @@ uv run generate_word_lemma_indexes.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 7a: Generating statistics website..." | tee -a "$LOGFILE"
 uv run generate_statistics_site.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 7a0a: Generate translation prompt evaluation pages
+echo "Step 7a0a: Generating translation prompt evaluation..." | tee -a "$LOGFILE"
+uv run generate_translation_prompt_evaluation.py 2>&1 | tee -a "$LOGFILE"
+
 # Step 7a1: Generate pipeline progress page
 echo "Step 7a1: Generating pipeline progress page..." | tee -a "$LOGFILE"
 uv run generate_pipeline_progress.py 2>&1 | tee -a "$LOGFILE"
@@ -710,8 +732,8 @@ for topostext_export in \
 done
 # Deploy nodegoat exports
 rsync -az exports/nodegoat/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/nodegoat/ 2>&1 | tee -a "$LOGFILE"
-# Deploy review data JSON
-rsync -az review_data.json stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ 2>&1 | tee -a "$LOGFILE"
+# Deploy review data snapshot
+rsync -az review_data.sqlite stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ 2>&1 | tee -a "$LOGFILE"
 # Deploy protected scan evidence database
 rsync -az guidance_scan_results.db stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ 2>&1 | tee -a "$LOGFILE"
 # Deploy review CGI binaries from current source

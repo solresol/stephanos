@@ -25,6 +25,7 @@ from import_translation_guidance_spreadsheets import (
     normalize_label as normalize_guidance_label,
     update_rule as update_guidance_rule,
 )
+from translation_guidance_coverage import refresh_translation_guidance_freshness
 
 SQLITE_DB = Path.home() / "stephanos" / "review_data" / "reviews.db"
 LOG_FILE = Path.home() / "stephanos" / "logs" / "review_import.log"
@@ -2171,6 +2172,34 @@ def import_reviews():
         sqlite_conn.close()
         pg_conn.close()
         return 1
+
+    guidance_freshness_stats = {}
+    if guidance_applied and not guidance_errors:
+        try:
+            guidance_freshness_stats = refresh_translation_guidance_freshness(
+                pg_cur,
+                source_document="preferred",
+                enqueue_missing=True,
+                missing_priority=20,
+                requested_by="import_reviews.py",
+                max_queue_rows=2000,
+                mark_outdated_matches=True,
+            )
+            log(
+                "Translation guidance freshness refresh: "
+                f"runs={guidance_freshness_stats['runs_checked']}, "
+                f"current={guidance_freshness_stats['current']}, "
+                f"potentially_outdated={guidance_freshness_stats['potentially_outdated']}, "
+                f"outdated={guidance_freshness_stats['outdated']}, "
+                f"queued_missing={guidance_freshness_stats['missing_scan_rows_inserted']}, "
+                f"retranslation_requests={guidance_freshness_stats['translation_requests_inserted']}"
+            )
+        except Exception as e:
+            log(f"ERROR: Translation guidance freshness refresh failed: {e}")
+            pg_conn.rollback()
+            sqlite_conn.close()
+            pg_conn.close()
+            return 1
 
     place_cluster_applied = place_cluster_skipped = place_cluster_errors = 0
     try:

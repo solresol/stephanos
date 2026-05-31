@@ -43,43 +43,49 @@ type LetterEntryOption struct {
 }
 
 type PageData struct {
-	Lemma                           *Lemma
-	Review                          *Review
-	TotalCount                      int
-	ReviewedCount                   int
-	PercentComplete                 int
-	CurrentPosition                 int
-	HasPrevious                     bool
-	HasNext                         bool
-	PreviousID                      int
-	NextID                          int
-	HasNextUnreviewed               bool
-	LetterName                      string
-	LetterNav                       []LetterNav
-	LetterEntryOptions              []LetterEntryOption
-	FinalReviewURL                  string
-	ShowMeineke                     bool
-	BillerbeckCompareText           string
-	MeinekeStatus                   string
-	MeinekeStatusLabel              string
-	WorkingGreekLabel               string
-	WorkingGreekSourceTextVersionID string
-	DisplayedTranslation            string
-	DisplayedTranslationLabel       string
-	DisplayedTranslationRunID       int
-	DisplayedTranslationUserPrompt  string
-	LatestAIRequestPayloadPretty    string
-	EntityContextTranslation        string
-	EntityContextTranslationLabel   string
-	SourceLookupLinks               []SourceLookupLink
-	PlaceClusterCount               int
-	OtherEntityCount                int
-	PrimaryEntities                 []ProperNoun
-	SecondaryEntities               []ProperNoun
-	LegacyPlaceEntities             []ProperNoun
-	GuidanceStrongHits              []GuidanceHitView
-	GuidanceUncertainHits           []GuidanceHitView
-	GuidanceProperNounHits          []GuidanceHitView
+	Lemma                            *Lemma
+	Review                           *Review
+	TotalCount                       int
+	ReviewedCount                    int
+	PercentComplete                  int
+	CurrentPosition                  int
+	HasPrevious                      bool
+	HasNext                          bool
+	PreviousID                       int
+	NextID                           int
+	HasNextUnreviewed                bool
+	LetterName                       string
+	LetterNav                        []LetterNav
+	LetterEntryOptions               []LetterEntryOption
+	FinalReviewURL                   string
+	ShowMeineke                      bool
+	BillerbeckCompareText            string
+	MeinekeStatus                    string
+	MeinekeStatusLabel               string
+	WorkingGreekLabel                string
+	WorkingGreekSourceTextVersionID  string
+	DisplayedTranslation             string
+	DisplayedTranslationLabel        string
+	DisplayedTranslationRunID        int
+	DisplayedTranslationUserPrompt   string
+	LatestAIRequestPayloadPretty     string
+	GuidanceCoverage                 GuidanceCoverage
+	GuidanceCoverageStatusClass      string
+	GuidanceCoverageCorpusLabel      string
+	GuidanceCoverageKindsLabel       string
+	GuidanceCoverageMissingRemainder int
+	GuidanceCoverageDiagnosticOpen   bool
+	EntityContextTranslation         string
+	EntityContextTranslationLabel    string
+	SourceLookupLinks                []SourceLookupLink
+	PlaceClusterCount                int
+	OtherEntityCount                 int
+	PrimaryEntities                  []ProperNoun
+	SecondaryEntities                []ProperNoun
+	LegacyPlaceEntities              []ProperNoun
+	GuidanceStrongHits               []GuidanceHitView
+	GuidanceUncertainHits            []GuidanceHitView
+	GuidanceProperNounHits           []GuidanceHitView
 }
 
 func yesNoLabel(value bool) string {
@@ -92,6 +98,9 @@ func yesNoLabel(value bool) string {
 func lemmaHasAITranslation(lemma *Lemma) bool {
 	if lemma == nil {
 		return false
+	}
+	if lemma.HasAITranslation {
+		return true
 	}
 	for _, variant := range lemma.TranslationVariants {
 		if mapStringValue(variant, "kind") != "translation_run" {
@@ -113,6 +122,9 @@ func lemmaHasHumanTranslation(lemma *Lemma, review *Review) bool {
 	}
 	if lemma == nil {
 		return false
+	}
+	if lemma.HasHumanTranslation {
+		return true
 	}
 	for _, variant := range lemma.TranslationVariants {
 		if mapStringValue(variant, "kind") != "human_translation" {
@@ -273,6 +285,146 @@ func joinNonEmpty(parts ...string) string {
 		}
 	}
 	return strings.Join(values, " · ")
+}
+
+func normalizeGuidanceCoverage(coverage GuidanceCoverage) GuidanceCoverage {
+	coverage.Status = strings.TrimSpace(coverage.Status)
+	coverage.StatusLabel = strings.TrimSpace(coverage.StatusLabel)
+	if coverage.Status == "" {
+		switch {
+		case !coverage.Available:
+			coverage.Status = "unavailable"
+		case coverage.RequiredRules > 0 && coverage.MissingRules == 0:
+			coverage.Status = "complete"
+		case coverage.FailedScans > 0:
+			coverage.Status = "failed"
+		case coverage.PendingScans > 0 || coverage.RunningScans > 0:
+			coverage.Status = "pending"
+		default:
+			coverage.Status = "incomplete"
+		}
+	}
+	if coverage.StatusLabel == "" {
+		switch coverage.Status {
+		case "complete":
+			coverage.StatusLabel = fmt.Sprintf("Guidance complete: %d/%d prompt-eligible rules checked.", coverage.CompletedRules, coverage.RequiredRules)
+		case "failed":
+			coverage.StatusLabel = fmt.Sprintf("Guidance incomplete: %d/%d prompt-eligible rules checked; %d scans failed.", coverage.CompletedRules, coverage.RequiredRules, coverage.FailedScans)
+		case "pending":
+			coverage.StatusLabel = fmt.Sprintf("Guidance incomplete: %d/%d prompt-eligible rules checked; %d not checked.", coverage.CompletedRules, coverage.RequiredRules, coverage.MissingRules)
+		case "incomplete":
+			coverage.StatusLabel = fmt.Sprintf("Guidance incomplete: %d/%d prompt-eligible rules checked; %d not checked.", coverage.CompletedRules, coverage.RequiredRules, coverage.MissingRules)
+		default:
+			coverage.StatusLabel = "Guidance coverage is unavailable for this source text."
+		}
+	}
+	if coverage.MissingRuleSampleLimit <= 0 {
+		coverage.MissingRuleSampleLimit = len(coverage.MissingRuleExamples)
+	}
+	coverage.Complete = coverage.Available && coverage.RequiredRules > 0 && coverage.MissingRules == 0
+	coverage.Stale = coverage.Available && coverage.MissingRules > 0
+	return coverage
+}
+
+func enrichGuidanceRuleStatuses(statuses []GuidanceRuleStatus, rules []TranslationGuidanceRule) []GuidanceRuleStatus {
+	if len(statuses) == 0 || len(rules) == 0 {
+		return statuses
+	}
+	ruleByID := make(map[int]TranslationGuidanceRule, len(rules))
+	for _, rule := range rules {
+		ruleByID[rule.ID] = rule
+	}
+	for index, status := range statuses {
+		rule, ok := ruleByID[status.RuleID]
+		if !ok {
+			continue
+		}
+		if status.Kind == "" {
+			status.Kind = rule.Kind
+		}
+		if status.RuleKey == "" {
+			status.RuleKey = rule.RuleKey
+		}
+		if status.RuleCode == "" {
+			status.RuleCode = rule.RuleCode
+		}
+		if status.Label == "" {
+			status.Label = rule.Label
+		}
+		if status.PreferredTranslation == "" {
+			status.PreferredTranslation = rule.PreferredTranslation
+		}
+		if status.RuleRevisionNumber == 0 {
+			status.RuleRevisionNumber = rule.RevisionNumber
+		}
+		statuses[index] = status
+	}
+	return statuses
+}
+
+func guidanceCoverageStatusClass(coverage GuidanceCoverage) string {
+	switch strings.TrimSpace(coverage.Status) {
+	case "complete":
+		return "guidance-coverage-complete"
+	case "pending":
+		return "guidance-coverage-pending"
+	case "failed":
+		return "guidance-coverage-failed"
+	case "incomplete":
+		return "guidance-coverage-incomplete"
+	default:
+		return "guidance-coverage-unavailable"
+	}
+}
+
+func guidanceCoverageCorpusLabel(coverage GuidanceCoverage) string {
+	parts := []string{}
+	if coverage.TotalGuidanceRules > 0 {
+		parts = append(parts, fmt.Sprintf("%d total guidance rules", coverage.TotalGuidanceRules))
+	}
+	if coverage.NotRetiredGuidanceRules > 0 {
+		parts = append(parts, fmt.Sprintf("%d not retired", coverage.NotRetiredGuidanceRules))
+	}
+	if coverage.PromptGuidanceRules > 0 {
+		parts = append(parts, fmt.Sprintf("%d prompt-eligible", coverage.PromptGuidanceRules))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " · ")
+}
+
+func guidanceCoverageKindLabel(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case "contextual_bias":
+		return "contextual bias"
+	case "proper_noun":
+		return "proper noun"
+	default:
+		return strings.ReplaceAll(strings.TrimSpace(kind), "_", " ")
+	}
+}
+
+func guidanceCoverageKindsLabel(coverage GuidanceCoverage) string {
+	if len(coverage.PromptGuidanceKinds) == 0 {
+		return ""
+	}
+	labels := make([]string, 0, len(coverage.PromptGuidanceKinds))
+	for _, kind := range coverage.PromptGuidanceKinds {
+		label := guidanceCoverageKindLabel(kind)
+		if label != "" {
+			labels = append(labels, label)
+		}
+	}
+	return strings.Join(labels, ", ")
+}
+
+func guidanceCoverageMissingRemainder(coverage GuidanceCoverage) int {
+	remainder := coverage.MissingRules - len(coverage.MissingRuleExamples)
+	if remainder < 0 {
+		return 0
+	}
+	return remainder
 }
 
 func latestAITranslationRunLabel(variant map[string]interface{}) string {
@@ -779,6 +931,9 @@ func FindLemmaByProperNounID(data *LemmaData, properNounID int) *Lemma {
 	if data == nil || properNounID <= 0 {
 		return nil
 	}
+	if lemmaID := lookupLemmaIDInSnapshot(data, "proper_noun_lookup", "proper_noun_id", properNounID); lemmaID > 0 {
+		return FindLemmaByID(data, lemmaID)
+	}
 	for i := range data.Lemmas {
 		for _, entity := range data.Lemmas[i].ProperNouns {
 			if entity.ID == properNounID {
@@ -792,6 +947,9 @@ func FindLemmaByProperNounID(data *LemmaData, properNounID int) *Lemma {
 func FindLemmaByPlaceClusterID(data *LemmaData, clusterID int) *Lemma {
 	if data == nil || clusterID <= 0 {
 		return nil
+	}
+	if lemmaID := lookupLemmaIDInSnapshot(data, "place_cluster_lookup", "cluster_id", clusterID); lemmaID > 0 {
+		return FindLemmaByID(data, lemmaID)
 	}
 	for i := range data.Lemmas {
 		for _, cluster := range data.Lemmas[i].PlaceClusters {
@@ -833,7 +991,7 @@ func selectCurrentLemma(db *sql.DB, data *LemmaData, params url.Values) *Lemma {
 	if currentLemma == nil && len(data.Lemmas) > 0 {
 		currentLemma = &data.Lemmas[0]
 	}
-	return currentLemma
+	return EnsureFullLemma(data, currentLemma)
 }
 
 func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, error) {
@@ -918,6 +1076,8 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 		len(currentLemma.MeinekeScanFilenames) > 0
 	workingGreekTitle, sourceTextVersionID := workingGreekLabel(currentLemma)
 	displayedTranslation, displayedTranslationLabel, displayedTranslationRunID, displayedTranslationUserPrompt := chooseDisplayedEnglishTranslation(currentLemma)
+	guidanceCoverage := normalizeGuidanceCoverage(currentLemma.GuidanceCoverage)
+	guidanceCoverage.RuleStatuses = enrichGuidanceRuleStatuses(guidanceCoverage.RuleStatuses, data.TranslationGuidanceRules)
 	entityTranslation, entityTranslationLabel := chooseEntityContextTranslation(review, currentLemma)
 	primaryEntities, secondaryEntities, legacyPlaceEntities := splitEntityBuckets(currentLemma)
 	localUrgentGuidanceHits, err := FetchUrgentGuidanceHitsForLemma(db, currentLemma.ID)
@@ -928,40 +1088,46 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 	guidanceStrongHits, guidanceUncertainHits, guidanceProperNounHits := splitGuidanceHitViews(currentLemma, displayedTranslationRunID)
 
 	pageData := &PageData{
-		Lemma:                           currentLemma,
-		Review:                          review,
-		TotalCount:                      len(data.Lemmas),
-		ReviewedCount:                   reviewed,
-		PercentComplete:                 percentComplete,
-		CurrentPosition:                 currentLemma.SortOrder + 1,
-		HasPrevious:                     prevLemma != nil,
-		HasNext:                         nextLemma != nil,
-		HasNextUnreviewed:               nextUnreviewed != nil,
-		LetterName:                      GetGreekLetterName(currentLemma.Letter),
-		LetterNav:                       GetLetterNavigation(data),
-		LetterEntryOptions:              buildLetterEntryOptions(db, data, currentLemma),
-		FinalReviewURL:                  finalReviewURLForLemma(currentLemma),
-		ShowMeineke:                     showMeineke,
-		BillerbeckCompareText:           billerbeckText,
-		MeinekeStatus:                   meinekeStatus,
-		MeinekeStatusLabel:              meinekeStatusLabel(meinekeStatus),
-		WorkingGreekLabel:               workingGreekTitle,
-		WorkingGreekSourceTextVersionID: sourceTextVersionID,
-		DisplayedTranslation:            displayedTranslation,
-		DisplayedTranslationLabel:       displayedTranslationLabel,
-		DisplayedTranslationRunID:       displayedTranslationRunID,
-		DisplayedTranslationUserPrompt:  displayedTranslationUserPrompt,
-		EntityContextTranslation:        entityTranslation,
-		EntityContextTranslationLabel:   entityTranslationLabel,
-		SourceLookupLinks:               buildSourceLookupLinks(currentLemma),
-		PlaceClusterCount:               len(currentLemma.PlaceClusters),
-		OtherEntityCount:                len(primaryEntities) + len(secondaryEntities) + len(legacyPlaceEntities),
-		PrimaryEntities:                 primaryEntities,
-		SecondaryEntities:               secondaryEntities,
-		LegacyPlaceEntities:             legacyPlaceEntities,
-		GuidanceStrongHits:              guidanceStrongHits,
-		GuidanceUncertainHits:           guidanceUncertainHits,
-		GuidanceProperNounHits:          guidanceProperNounHits,
+		Lemma:                            currentLemma,
+		Review:                           review,
+		TotalCount:                       len(data.Lemmas),
+		ReviewedCount:                    reviewed,
+		PercentComplete:                  percentComplete,
+		CurrentPosition:                  currentLemma.SortOrder + 1,
+		HasPrevious:                      prevLemma != nil,
+		HasNext:                          nextLemma != nil,
+		HasNextUnreviewed:                nextUnreviewed != nil,
+		LetterName:                       GetGreekLetterName(currentLemma.Letter),
+		LetterNav:                        GetLetterNavigation(data),
+		LetterEntryOptions:               buildLetterEntryOptions(db, data, currentLemma),
+		FinalReviewURL:                   finalReviewURLForLemma(currentLemma),
+		ShowMeineke:                      showMeineke,
+		BillerbeckCompareText:            billerbeckText,
+		MeinekeStatus:                    meinekeStatus,
+		MeinekeStatusLabel:               meinekeStatusLabel(meinekeStatus),
+		WorkingGreekLabel:                workingGreekTitle,
+		WorkingGreekSourceTextVersionID:  sourceTextVersionID,
+		DisplayedTranslation:             displayedTranslation,
+		DisplayedTranslationLabel:        displayedTranslationLabel,
+		DisplayedTranslationRunID:        displayedTranslationRunID,
+		DisplayedTranslationUserPrompt:   displayedTranslationUserPrompt,
+		GuidanceCoverage:                 guidanceCoverage,
+		GuidanceCoverageStatusClass:      guidanceCoverageStatusClass(guidanceCoverage),
+		GuidanceCoverageCorpusLabel:      guidanceCoverageCorpusLabel(guidanceCoverage),
+		GuidanceCoverageKindsLabel:       guidanceCoverageKindsLabel(guidanceCoverage),
+		GuidanceCoverageMissingRemainder: guidanceCoverageMissingRemainder(guidanceCoverage),
+		GuidanceCoverageDiagnosticOpen:   guidanceCoverage.Stale || guidanceCoverage.Status == "failed",
+		EntityContextTranslation:         entityTranslation,
+		EntityContextTranslationLabel:    entityTranslationLabel,
+		SourceLookupLinks:                buildSourceLookupLinks(currentLemma),
+		PlaceClusterCount:                len(currentLemma.PlaceClusters),
+		OtherEntityCount:                 len(primaryEntities) + len(secondaryEntities) + len(legacyPlaceEntities),
+		PrimaryEntities:                  primaryEntities,
+		SecondaryEntities:                secondaryEntities,
+		LegacyPlaceEntities:              legacyPlaceEntities,
+		GuidanceStrongHits:               guidanceStrongHits,
+		GuidanceUncertainHits:            guidanceUncertainHits,
+		GuidanceProperNounHits:           guidanceProperNounHits,
 	}
 	if prevLemma != nil {
 		pageData.PreviousID = prevLemma.ID

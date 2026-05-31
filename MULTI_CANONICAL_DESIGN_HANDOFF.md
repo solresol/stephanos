@@ -20,7 +20,7 @@ It also records the current decision:
 
 2. Source of truth:
 - Postgres on `raksasa` remains authoritative.
-- `review_data.json` is a nightly snapshot deployed to `merah`.
+- `review_data.sqlite` is a nightly snapshot deployed to `merah`.
 
 3. Nodegoat limitation:
 - Nodegoat has a single effective translation lane for what we sync.

@@ -2,10 +2,10 @@
 -- PostgreSQL database dump
 --
 
-\restrict j6o0nlMAQ0EWKSs7GA93JsG4eLKuF7WR50KH9zHtHNRBCdNoRp3xIS9r97F9jnT
+\restrict C65gMWIkPgiRotgxxkUFlq4lX3xdd9wW4D7TTncSYGLjnlh4v5Uk16ucLxORFht
 
--- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
--- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
+-- Dumped from database version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
+-- Dumped by pg_dump version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -2323,6 +2323,75 @@ ALTER SEQUENCE public.translation_guidance_backlog_items_id_seq OWNED BY public.
 
 
 --
+-- Name: translation_guidance_freshness; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_freshness (
+    id integer NOT NULL,
+    run_id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    source_text_version_id integer NOT NULL,
+    detector_version text NOT NULL,
+    state text DEFAULT 'unavailable'::text NOT NULL,
+    required_rule_revision_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
+    missing_rule_revision_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
+    matched_rule_revision_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
+    uncertain_rule_revision_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
+    needs_review_rule_revision_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
+    unprompted_matched_rule_revision_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
+    required_count integer DEFAULT 0 NOT NULL,
+    completed_count integer DEFAULT 0 NOT NULL,
+    missing_count integer DEFAULT 0 NOT NULL,
+    matched_count integer DEFAULT 0 NOT NULL,
+    uncertain_count integer DEFAULT 0 NOT NULL,
+    needs_review_count integer DEFAULT 0 NOT NULL,
+    unprompted_matched_count integer DEFAULT 0 NOT NULL,
+    stale_since timestamp with time zone,
+    resolved_at timestamp with time zone,
+    last_checked_at timestamp with time zone DEFAULT now() NOT NULL,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT translation_guidance_freshness_counts_check CHECK (((required_count >= 0) AND (completed_count >= 0) AND (missing_count >= 0) AND (matched_count >= 0) AND (uncertain_count >= 0) AND (needs_review_count >= 0) AND (unprompted_matched_count >= 0))),
+    CONSTRAINT translation_guidance_freshness_state_check CHECK ((state = ANY (ARRAY['current'::text, 'potentially_outdated'::text, 'outdated'::text, 'needs_review'::text, 'blocked'::text, 'unavailable'::text])))
+);
+
+
+--
+-- Name: TABLE translation_guidance_freshness; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.translation_guidance_freshness IS 'Reversible freshness state for AI translation runs relative to the current prompt-eligible translation-guidance rule set.';
+
+
+--
+-- Name: COLUMN translation_guidance_freshness.state; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_guidance_freshness.state IS 'current, potentially_outdated, outdated, needs_review, blocked, or unavailable for this AI run under detector_version.';
+
+
+--
+-- Name: translation_guidance_freshness_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_guidance_freshness_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_guidance_freshness_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_guidance_freshness_id_seq OWNED BY public.translation_guidance_freshness.id;
+
+
+--
 -- Name: translation_guidance_matches; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3202,6 +3271,13 @@ ALTER TABLE ONLY public.translation_guidance_backlog_items ALTER COLUMN id SET D
 
 
 --
+-- Name: translation_guidance_freshness id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_freshness ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_freshness_id_seq'::regclass);
+
+
+--
 -- Name: translation_guidance_matches id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -3843,6 +3919,22 @@ ALTER TABLE ONLY public.translation_guidance_action_import_map
 
 ALTER TABLE ONLY public.translation_guidance_backlog_items
     ADD CONSTRAINT translation_guidance_backlog_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_freshness translation_guidance_freshness_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_freshness
+    ADD CONSTRAINT translation_guidance_freshness_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_freshness translation_guidance_freshness_run_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_freshness
+    ADD CONSTRAINT translation_guidance_freshness_run_id_key UNIQUE (run_id);
 
 
 --
@@ -4804,6 +4896,27 @@ CREATE INDEX translation_guidance_backlog_items_status_idx ON public.translation
 
 
 --
+-- Name: translation_guidance_freshness_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_freshness_lemma_idx ON public.translation_guidance_freshness USING btree (lemma_id, state, run_id);
+
+
+--
+-- Name: translation_guidance_freshness_source_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_freshness_source_idx ON public.translation_guidance_freshness USING btree (source_text_version_id, state, run_id);
+
+
+--
+-- Name: translation_guidance_freshness_state_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_freshness_state_idx ON public.translation_guidance_freshness USING btree (state, updated_at DESC, run_id);
+
+
+--
 -- Name: translation_guidance_matches_lemma_status_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5627,6 +5740,30 @@ ALTER TABLE ONLY public.translation_guidance_backlog_items
 
 
 --
+-- Name: translation_guidance_freshness translation_guidance_freshness_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_freshness
+    ADD CONSTRAINT translation_guidance_freshness_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_freshness translation_guidance_freshness_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_freshness
+    ADD CONSTRAINT translation_guidance_freshness_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.translation_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_freshness translation_guidance_freshness_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_freshness
+    ADD CONSTRAINT translation_guidance_freshness_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
 -- Name: translation_guidance_matches translation_guidance_matches_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5838,5 +5975,5 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict j6o0nlMAQ0EWKSs7GA93JsG4eLKuF7WR50KH9zHtHNRBCdNoRp3xIS9r97F9jnT
+\unrestrict C65gMWIkPgiRotgxxkUFlq4lX3xdd9wW4D7TTncSYGLjnlh4v5Uk16ucLxORFht
 

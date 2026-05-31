@@ -64,6 +64,8 @@ type FinalReviewPageData struct {
 	SelectedRuleLabel  string
 }
 
+const finalReviewMaxPayloadRows = 250
+
 func main() {
 	fmt.Println("Content-Type: text/html; charset=utf-8")
 	fmt.Println()
@@ -90,7 +92,11 @@ func main() {
 
 	query, _ := url.ParseQuery(os.Getenv("QUERY_STRING"))
 	filters := parseFinalReviewFilters(query)
-	pageData := buildFinalReviewPageData(data, reviews, filters)
+	pageData, err := buildFinalReviewPageData(data, reviews, filters)
+	if err != nil {
+		showError(fmt.Sprintf("Failed to build final review data: %v", err))
+		return
+	}
 
 	tmpl, err := template.New("final_review").Funcs(template.FuncMap{
 		"kindLabel":         finalReviewKindLabel,
@@ -190,7 +196,7 @@ func fetchFinalReviewReviews(db *sql.DB) (map[int]*Review, error) {
 	return reviews, nil
 }
 
-func buildFinalReviewPageData(data *LemmaData, reviews map[int]*Review, filters FinalReviewFilters) FinalReviewPageData {
+func buildFinalReviewPageData(data *LemmaData, reviews map[int]*Review, filters FinalReviewFilters) (FinalReviewPageData, error) {
 	impactByLemma := map[int][]GuidanceRuleImpact{}
 	for _, impact := range data.GuidanceRuleImpacts {
 		impactByLemma[impact.LemmaID] = append(impactByLemma[impact.LemmaID], impact)
@@ -222,7 +228,20 @@ func buildFinalReviewPageData(data *LemmaData, reviews map[int]*Review, filters 
 		SelectedRuleLabel: selectedRuleLabel,
 	}
 
-	for _, lemma := range data.Lemmas {
+	for i := range data.Lemmas {
+		lemma := data.Lemmas[i]
+		if lemma.Letter != "" && !lettersSeen[lemma.Letter] {
+			lettersSeen[lemma.Letter] = true
+			letters = append(letters, lemma.Letter)
+		}
+	}
+
+	candidateIDs := finalReviewCandidateLemmaIDs(data, reviews, filters, impactByLemma)
+	fullLemmas, err := LoadFullLemmasByIDs(data, candidateIDs)
+	if err != nil {
+		return page, err
+	}
+	for _, lemma := range fullLemmas {
 		if lemma.Letter != "" && !lettersSeen[lemma.Letter] {
 			lettersSeen[lemma.Letter] = true
 			letters = append(letters, lemma.Letter)
@@ -253,7 +272,108 @@ func buildFinalReviewPageData(data *LemmaData, reviews map[int]*Review, filters 
 	page.Letters = letters
 	page.Rows = rows
 	page.DisplayedRows = len(rows)
-	return page
+	return page, nil
+}
+
+func finalReviewCandidateLemmaIDs(data *LemmaData, reviews map[int]*Review, filters FinalReviewFilters, impactByLemma map[int][]GuidanceRuleImpact) []int {
+	if data == nil {
+		return nil
+	}
+	searchMatches := map[int]bool{}
+	if strings.TrimSpace(filters.Query) != "" {
+		searchMatches = QuerySnapshotSearchLemmaIDs(data, filters.Query, 5000)
+	}
+	ruleMatches := map[int]bool{}
+	if strings.TrimSpace(filters.RuleKey) != "" {
+		ruleMatches = QuerySnapshotGuidanceRuleLemmaIDs(data, filters.RuleKey)
+		for lemmaID, impacts := range impactByLemma {
+			for _, impact := range impacts {
+				if impact.RuleKey == filters.RuleKey {
+					ruleMatches[lemmaID] = true
+					break
+				}
+			}
+		}
+	}
+	candidates := make([]Lemma, 0, len(data.Lemmas))
+	for i := range data.Lemmas {
+		lemma := data.Lemmas[i]
+		if filters.Letter != "" && lemma.Letter != filters.Letter {
+			continue
+		}
+		if strings.TrimSpace(filters.Query) != "" && !searchMatches[lemma.ID] {
+			continue
+		}
+		if filters.ImpactOnly && len(impactByLemma[lemma.ID]) == 0 {
+			continue
+		}
+		if strings.TrimSpace(filters.RuleKey) != "" && !ruleMatches[lemma.ID] {
+			continue
+		}
+		if !finalReviewIndexStatusMatches(lemma, reviews[lemma.ID], filters.Status) {
+			continue
+		}
+		candidates = append(candidates, lemma)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		left := candidates[i]
+		right := candidates[j]
+		switch filters.Sort {
+		case "headword":
+			if left.Lemma != right.Lemma {
+				return left.Lemma < right.Lemma
+			}
+		case "latest_ai":
+			if left.LatestAITranslationAt != right.LatestAITranslationAt {
+				return left.LatestAITranslationAt > right.LatestAITranslationAt
+			}
+		case "final_updated":
+			leftReview := reviews[left.ID]
+			rightReview := reviews[right.ID]
+			leftTime := time.Time{}
+			rightTime := time.Time{}
+			if leftReview != nil && leftReview.ReviewedAt != nil {
+				leftTime = *leftReview.ReviewedAt
+			}
+			if rightReview != nil && rightReview.ReviewedAt != nil {
+				rightTime = *rightReview.ReviewedAt
+			}
+			if !leftTime.Equal(rightTime) {
+				return leftTime.After(rightTime)
+			}
+		}
+		if left.EntryNumber != right.EntryNumber {
+			return left.EntryNumber < right.EntryNumber
+		}
+		return left.SortOrder < right.SortOrder
+	})
+	if len(candidates) > finalReviewMaxPayloadRows {
+		candidates = candidates[:finalReviewMaxPayloadRows]
+	}
+	ids := make([]int, 0, len(candidates))
+	for _, lemma := range candidates {
+		ids = append(ids, lemma.ID)
+	}
+	return ids
+}
+
+func finalReviewIndexStatusMatches(lemma Lemma, review *Review, status string) bool {
+	hasReviewed := review != nil && strings.TrimSpace(review.ReviewedEnglishTranslation) != ""
+	hasFirstPass := review != nil && strings.TrimSpace(review.CorrectedEnglishTranslation) != ""
+	switch status {
+	case "all":
+		return true
+	case "human_reviewed":
+		return hasReviewed
+	case "human_first_pass":
+		return !hasReviewed && hasFirstPass
+	case "ai_translation":
+		return !hasReviewed && !hasFirstPass && lemma.HasAITranslation
+	case "needs_review":
+		return !hasReviewed
+	default:
+		return hasReviewed
+	}
 }
 
 func buildFinalReviewRow(lemma Lemma, review *Review, impacts []GuidanceRuleImpact) FinalReviewRow {
@@ -721,14 +841,29 @@ func buildFinalReviewRuleOptions(data *LemmaData, impactByLemma map[int][]Guidan
 			item.option.Count++
 		}
 	}
-	for _, lemma := range data.Lemmas {
-		for _, hit := range lemma.GuidanceHits {
-			if strings.TrimSpace(hit.MatchStatus) == "matched" {
-				add(hit.RuleKey, hit.Kind, hit.Label, lemma.ID)
+	if data != nil && data.SnapshotDBPath != "" {
+		if db, err := sql.Open("sqlite3", "file:"+data.SnapshotDBPath+"?mode=ro"); err == nil {
+			rows, err := db.Query(`
+				SELECT rule_key, kind, label, lemma_id
+				FROM guidance_hit_rules
+				ORDER BY rule_key, lemma_id
+			`)
+			if err == nil {
+				for rows.Next() {
+					var ruleKey, kind, label string
+					var lemmaID int
+					if err := rows.Scan(&ruleKey, &kind, &label, &lemmaID); err == nil {
+						add(ruleKey, kind, label, lemmaID)
+					}
+				}
+				rows.Close()
 			}
+			db.Close()
 		}
-		for _, impact := range impactByLemma[lemma.ID] {
-			add(impact.RuleKey, impact.Kind, impact.Label, lemma.ID)
+	}
+	for lemmaID, impacts := range impactByLemma {
+		for _, impact := range impacts {
+			add(impact.RuleKey, impact.Kind, impact.Label, lemmaID)
 		}
 	}
 	var options []FinalReviewRuleOption

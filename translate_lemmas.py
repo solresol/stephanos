@@ -35,8 +35,10 @@ from translation_run_utils import DEFAULT_TRANSLATION_MODEL, lookup_public_block
 from translation_guidance_coverage import (
     CURRENT_DETECTOR_VERSION,
     PROMPT_GUIDANCE_KINDS,
+    ensure_translation_guidance_freshness_table,
     enqueue_missing_guidance,
     guidance_coverage_counts,
+    refresh_translation_guidance_freshness,
 )
 
 DEFAULT_DAILY_TOKEN_LIMIT = 100_000
@@ -1192,6 +1194,7 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                 )
                 if metadata.get("guidance_context"):
                     record_translation_run_guidance_matches(cur, run_id, metadata["guidance_context"])
+                refresh_translation_guidance_freshness(cur, run_id=run_id)
                 if requested_runs == 1 and is_public_greek_source_document(source_document):
                     project_legacy_translation(
                         cur,
@@ -1426,6 +1429,7 @@ def main():
         return
 
     ensure_translation_run_request_payload(cur)
+    ensure_translation_guidance_freshness_table(cur)
     conn.commit()
 
     client = None
@@ -1649,6 +1653,7 @@ def main():
                 )
                 if guidance_provenance_enabled:
                     record_translation_run_guidance_matches(cur, run_id, guidance_context)
+                refresh_translation_guidance_freshness(cur, run_id=run_id)
 
                 # Back-compat projection: only for single-run requests so we don't
                 # accidentally "pick a winner" among multiple variants.

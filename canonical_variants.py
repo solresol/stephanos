@@ -110,8 +110,19 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
                 "publishable": False,
                 "block_reason": "translation_runs table missing",
             }
+        has_guidance_freshness = table_exists(cur, "translation_guidance_freshness")
+        guidance_freshness_select = (
+            "COALESCE(tgf.state, '') AS guidance_freshness_state"
+            if has_guidance_freshness
+            else "''::text AS guidance_freshness_state"
+        )
+        guidance_freshness_join = (
+            "LEFT JOIN translation_guidance_freshness tgf ON tgf.run_id = tr.id"
+            if has_guidance_freshness
+            else ""
+        )
         cur.execute(
-            """
+            f"""
             SELECT
                 tr.id,
                 COALESCE(tr.translation_text, ''),
@@ -122,7 +133,8 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
                 COALESCE(tr.model, ''),
                 COALESCE(p.name, ''),
                 pv.version,
-                COALESCE(stv.source_document, '')
+                COALESCE(stv.source_document, ''),
+                {guidance_freshness_select}
             FROM translation_runs tr
             LEFT JOIN translation_prompt_profiles p
               ON p.id = tr.profile_id
@@ -130,6 +142,7 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
               ON pv.id = tr.profile_version_id
             LEFT JOIN lemma_source_text_versions stv
               ON stv.id = tr.source_text_version_id
+            {guidance_freshness_join}
             WHERE tr.id = %s
               AND tr.lemma_id = %s
             LIMIT 1
@@ -148,6 +161,12 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
         status = (row[2] or "").strip()
         public_eligible = bool(row[3])
         public_block_reason = (row[4] or "").strip()
+        guidance_freshness_state = (row[10] or "").strip()
+        guidance_freshness_blocked = guidance_freshness_state in {
+            "potentially_outdated",
+            "needs_review",
+            "outdated",
+        }
 
         publishable = (
             status == "approved"
@@ -155,10 +174,13 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
             and not public_block_reason
             and bool(translation_text)
             and not blocked
+            and not guidance_freshness_blocked
         )
         if not publishable and not block_reason:
             if status != "approved":
                 block_reason = f"translation_run status is {status or 'unknown'}"
+            elif guidance_freshness_blocked:
+                block_reason = f"translation_run guidance freshness is {guidance_freshness_state}"
             elif not public_eligible:
                 block_reason = "translation_run is not public_eligible"
             elif public_block_reason:
@@ -178,6 +200,7 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
             "id": variant_id,
             "source_document": (row[9] or "").strip(),
             "source_text_version_id": str(row[5] or ""),
+            "guidance_freshness_state": guidance_freshness_state,
             "model": (row[6] or "").strip(),
             "profile_name": (row[7] or "").strip(),
             "profile_version": int(row[8]) if row[8] is not None else None,

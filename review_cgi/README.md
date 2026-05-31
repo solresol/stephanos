@@ -54,7 +54,7 @@ The solution is to use `github.com/mattn/go-sqlite3` which requires CGO but work
 
 - CGI binaries: `/var/www/vhosts/stephanos.symmachus.org/cgi-bin/`
 - Data files: `/var/www/vhosts/stephanos.symmachus.org/db/`
-  - `review_data.json` - Exported lemma data from PostgreSQL
+  - `review_data.sqlite` - Exported review snapshot from PostgreSQL
   - `reviews.db` - SQLite database for review state
 
 ### httpd.conf Configuration
@@ -72,7 +72,7 @@ location "/cgi-bin/*" {
 
 - CGI runs under httpd/slowcgi chroot semantics, but admin SSH sessions are not chrooted.
 - Static linking avoids 500 errors after OpenBSD upgrades when the `/var/www` chroot has stale `libc` or `libpthread` copies.
-- `canonical_translation.cgi` must resolve canonicals from local `../db/reviews.db` plus `../db/review_data.json`; do not implement SSH proxy calls from CGI.
+- `canonical_translation.cgi` must resolve canonicals from local `../db/reviews.db` plus `../db/review_data.sqlite`; do not implement SSH proxy calls from CGI.
 - Do not create or manage `/var/www/home/...` manually for this workflow.
 
 ## Database Schema

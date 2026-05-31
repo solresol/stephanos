@@ -55,7 +55,7 @@ The Stephanos Review System is now live, providing a web interface for human rev
 │   └── save.cgi (12.0MB, 755)
 ├── db/
 │   ├── reviews.db (28KB, 664)
-│   └── review_data.json (591KB, 644)
+│   └── review_data.sqlite
 ├── etc/
 │   └── htpasswd (existing)
 └── htdocs/
