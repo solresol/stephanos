@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict C65gMWIkPgiRotgxxkUFlq4lX3xdd9wW4D7TTncSYGLjnlh4v5Uk16ucLxORFht
+\restrict aLUec5MngDdtXAVlZaiufl7u67FmOaanMRRfocgPPLjJopucmZhyA6fca1aso07
 
 -- Dumped from database version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
@@ -1367,6 +1367,7 @@ CREATE TABLE public.lemma_source_text_versions (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     notes text,
     CONSTRAINT lemma_source_text_versions_created_by_type_check CHECK ((created_by_type = ANY (ARRAY['ocr'::text, 'human'::text, 'import'::text, 'system'::text]))),
+    CONSTRAINT lemma_source_text_versions_public_source_policy_check CHECK ((is_public_greek = (source_document = ANY (ARRAY['meineke'::text, 'kiesling'::text])))),
     CONSTRAINT lemma_source_text_versions_source_document_check CHECK ((source_document = ANY (ARRAY['billerbeck'::text, 'meineke'::text, 'kiesling'::text]))),
     CONSTRAINT lemma_source_text_versions_source_variant_check CHECK ((source_variant = ANY (ARRAY['ocr'::text, 'manual'::text, 'csv_fallback'::text])))
 );
@@ -5975,5 +5976,5 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict C65gMWIkPgiRotgxxkUFlq4lX3xdd9wW4D7TTncSYGLjnlh4v5Uk16ucLxORFht
+\unrestrict aLUec5MngDdtXAVlZaiufl7u67FmOaanMRRfocgPPLjJopucmZhyA6fca1aso07
 

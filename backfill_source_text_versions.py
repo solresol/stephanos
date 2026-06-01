@@ -10,6 +10,7 @@ import unicodedata
 from collections import defaultdict
 
 from db import get_connection
+from source_documents import is_public_greek_source_document
 
 
 def ensure_tables(cur):
@@ -144,7 +145,7 @@ def backfill_billerbeck(cur):
             text_body=text,
             created_by_type=created_by_type,
             notes=notes,
-            is_public_greek=True,
+            is_public_greek=is_public_greek_source_document("billerbeck"),
         ):
             inserted += 1
     return inserted
@@ -307,7 +308,7 @@ def backfill_meineke_fallback(cur):
             text_body=text,
             created_by_type="import",
             notes="Backfilled from meineke_headwords.greek_paragraph",
-            is_public_greek=False,
+            is_public_greek=is_public_greek_source_document("meineke"),
         ):
             inserted += 1
     return inserted

@@ -17,6 +17,7 @@ import unicodedata
 from datetime import datetime, timezone
 
 from db import get_connection
+from source_documents import is_public_greek_source_document
 
 _NORMALIZED_LEMMA_INDEX = None
 _GREEK_BLOCK_RE = re.compile(r"[\u0370-\u03FF\u1F00-\u1FFF]")
@@ -325,7 +326,7 @@ def insert_meineke_version(cur, lemma_id, text_body, source_variant, created_by,
             lemma_id, source_document, source_variant, text_body, text_hash,
             is_current, is_public_greek, created_by_type, created_by, created_at, notes
         )
-        VALUES (%s, 'meineke', %s, %s, %s, %s, FALSE, %s, %s, %s, %s)
+        VALUES (%s, 'meineke', %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
@@ -334,6 +335,7 @@ def insert_meineke_version(cur, lemma_id, text_body, source_variant, created_by,
             text_body,
             text_hash,
             (not keep_existing_current),
+            is_public_greek_source_document("meineke"),
             "ocr" if source_variant == "ocr" else "import",
             created_by,
             datetime.now(timezone.utc).isoformat(),

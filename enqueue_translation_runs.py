@@ -9,8 +9,8 @@ import unicodedata
 
 from db import get_connection
 from source_documents import (
+    PREFERRED_GREEK_SOURCE_DOCUMENTS,
     PREFERRED_SOURCE_DOCUMENT,
-    SOURCE_DOCUMENT_CLI_CHOICES,
     normalize_source_document,
     public_source_document_list_sql,
     source_document_priority_sql,
@@ -431,7 +431,11 @@ def main():
     parser = argparse.ArgumentParser(description="Enqueue translation run requests.")
     parser.add_argument("--profile", required=True, help="Prompt profile name")
     parser.add_argument("--profile-version", type=int, help="Prompt profile version (default: latest active)")
-    parser.add_argument("--source-document", default=PREFERRED_SOURCE_DOCUMENT, choices=SOURCE_DOCUMENT_CLI_CHOICES)
+    parser.add_argument(
+        "--source-document",
+        default=PREFERRED_SOURCE_DOCUMENT,
+        choices=(PREFERRED_SOURCE_DOCUMENT, *PREFERRED_GREEK_SOURCE_DOCUMENTS),
+    )
     parser.add_argument("--lemma-id", type=int, help="Queue only a single lemma id")
     parser.add_argument("--lemma-ids", type=parse_lemma_ids, help="Comma/space-separated explicit lemma id list")
     parser.add_argument("--letter", help="Greek letter filter, e.g. kappa")

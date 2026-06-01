@@ -735,6 +735,21 @@ def mark_request_pending(cur, request_id: int, error_message: str | None = None)
     )
 
 
+def cancel_non_public_source_request(cur, *, request_id: int, lemma: str, source_document: str | None) -> bool:
+    source_document = (source_document or "").strip().lower()
+    if is_public_greek_source_document(source_document):
+        return False
+    _public_eligible, public_block_reason = lookup_public_block(
+        cur,
+        lemma_id=0,
+        source_document=source_document,
+    )
+    reason = public_block_reason or f"Source document '{source_document or 'unknown'}' is not licensed for translation."
+    mark_request_done(cur, request_id, "cancelled", reason)
+    print(f"Request {request_id}: skipped {lemma} because {reason}")
+    return True
+
+
 def insert_run(
     cur,
     *,
@@ -934,6 +949,15 @@ def submit_translation_batch(
             )
             conn.commit()
             print(f"Request {request_id}: skipped {lemma} because it already has a human translation.")
+            continue
+
+        if cancel_non_public_source_request(
+            cur,
+            request_id=request_id,
+            lemma=lemma or "",
+            source_document=source_document,
+        ):
+            conn.commit()
             continue
 
         existing_count = completed_run_count(cur, request_id)
@@ -1524,6 +1548,15 @@ def main():
             )
             conn.commit()
             print(f"Request {request_id}: skipped {lemma} because it already has a human translation.")
+            continue
+
+        if cancel_non_public_source_request(
+            cur,
+            request_id=request_id,
+            lemma=lemma or "",
+            source_document=source_document,
+        ):
+            conn.commit()
             continue
 
         existing_count = completed_run_count(cur, request_id)

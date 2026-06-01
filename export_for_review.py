@@ -19,7 +19,7 @@ from pathlib import Path
 
 import canonical_variants
 from db import get_connection
-from source_documents import PREFERRED_GREEK_SOURCE_DOCUMENTS
+from source_documents import PREFERRED_GREEK_SOURCE_DOCUMENTS, source_document_priority_sql
 from translation_guidance_coverage import (
     CURRENT_DETECTOR_VERSION,
     PROMPT_GUIDANCE_KINDS,
@@ -620,17 +620,31 @@ def enrich_place_clusters_with_wikidata_metadata(place_clusters_by_lemma: dict[i
 
 
 def sort_translation_variants(variants: list[dict]) -> list[dict]:
-    """Keep authorative variants first and push legacy baselines to the end."""
+    """Keep authoritative/public variants first and push legacy baselines to the end."""
     kind_priority = {
         "human_translation": 0,
         "translation_run": 1,
         "legacy_assembled": 2,
+    }
+    status_priority = {
+        "approved": 0,
+        "completed": 1,
+        "needs_review": 2,
+        "blocked": 3,
+        "outdated": 4,
+        "hidden": 5,
+        "failed": 6,
     }
     return sorted(
         variants,
         key=lambda item: (
             kind_priority.get(item.get("kind", ""), 99),
             1 if item.get("deprecated") else 0,
+            GREEK_SOURCE_PRIORITY.get(item.get("source_document", ""), 99),
+            0 if item.get("public_eligible", True) else 1,
+            status_priority.get(item.get("status", ""), 99),
+            str(item.get("created_at", "")),
+            str(item.get("id", "")),
         ),
     )
 
@@ -2214,7 +2228,22 @@ def export_lemmas():
             LEFT JOIN lemma_source_text_versions stv
               ON stv.id = tr.source_text_version_id
             {guidance_freshness_join}
-            ORDER BY tr.lemma_id, tr.created_at DESC, tr.id DESC
+            ORDER BY
+                tr.lemma_id,
+                {source_document_priority_sql("COALESCE(stv.source_document, '')")},
+                COALESCE(tr.public_eligible, TRUE) DESC,
+                CASE COALESCE(tr.status, '')
+                    WHEN 'approved' THEN 0
+                    WHEN 'completed' THEN 1
+                    WHEN 'needs_review' THEN 2
+                    WHEN 'blocked' THEN 3
+                    WHEN 'outdated' THEN 4
+                    WHEN 'hidden' THEN 5
+                    WHEN 'failed' THEN 6
+                    ELSE 99
+                END,
+                tr.created_at DESC,
+                tr.id DESC
             """
         )
         for (

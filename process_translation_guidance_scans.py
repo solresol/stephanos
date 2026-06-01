@@ -37,6 +37,7 @@ from openai_batch_utils import (
 )
 from translation_guidance_coverage import (
     CURRENT_DETECTOR_VERSION,
+    PUBLIC_GUIDANCE_SOURCE_DOCUMENTS,
     ensure_translation_guidance_freshness_table,
     refresh_translation_guidance_freshness,
 )
@@ -49,7 +50,7 @@ DETECTOR_VERSION = CURRENT_DETECTOR_VERSION
 TERMINAL_BATCH_STATUSES = {"completed", "failed", "expired", "cancelled"}
 GUIDANCE_RETRANSLATION_PRIORITY = 20
 GUIDANCE_RETRANSLATION_CREATED_BY = "process_translation_guidance_scans.py:guidance-impact"
-OUTDATABLE_AI_RUN_STATUSES = ("approved", "completed", "hidden")
+OUTDATABLE_AI_RUN_STATUSES = ("approved", "completed")
 
 GREEK_ARTICLE_CANDIDATES = {
     "ο",
@@ -862,8 +863,10 @@ def mark_ai_translations_outdated_for_guidance_match(
                 tr.error_message
             FROM translation_runs tr
             JOIN assembled_lemmas a ON a.id = tr.lemma_id
+            JOIN lemma_source_text_versions stv ON stv.id = tr.source_text_version_id
             WHERE tr.lemma_id = %s
               AND tr.source_text_version_id = %s
+              AND stv.source_document = ANY(%s)
               AND tr.status = ANY(%s)
               AND COALESCE(tr.translation_text, '') != ''
               AND COALESCE(a.reviewed_english_translation, '') = ''
@@ -932,6 +935,7 @@ def mark_ai_translations_outdated_for_guidance_match(
         [
             lemma_id,
             source_text_version_id,
+            list(PUBLIC_GUIDANCE_SOURCE_DOCUMENTS),
             list(OUTDATABLE_AI_RUN_STATUSES),
             *([match_id, rule_revision_id] if has_run_guidance_matches else []),
             match_id,

@@ -293,7 +293,7 @@ if [ "$TRANSLATION_GUIDANCE_FRESHNESS_ENABLED" != "0" ]; then
     echo "Step 4d6a: Refreshing translation guidance freshness..." | tee -a "$LOGFILE"
     guidance_freshness_args=(
         uv run refresh_translation_guidance_freshness.py
-        --source-document all
+        --source-document preferred
         --guidance-queue-priority "$TRANSLATION_GUIDANCE_FRESHNESS_QUEUE_PRIORITY"
         --created-by "run_daily_pipeline.sh"
     )

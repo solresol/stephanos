@@ -7,7 +7,7 @@ CURRENT_DETECTOR_VERSION = "translation_guidance_scan_v4"
 
 PROMPT_GUIDANCE_KINDS = ("formula", "gloss", "contextual_bias")
 PUBLIC_GUIDANCE_SOURCE_DOCUMENTS = ("kiesling", "meineke")
-OUTDATABLE_AI_RUN_STATUSES = ("approved", "completed", "hidden")
+OUTDATABLE_AI_RUN_STATUSES = ("approved", "completed")
 FRESHNESS_TRACKED_AI_RUN_STATUSES = (*OUTDATABLE_AI_RUN_STATUSES, "blocked", "outdated")
 GUIDANCE_RETRANSLATION_PRIORITY = 20
 GUIDANCE_RETRANSLATION_CREATED_BY = "translation_guidance_freshness:guidance-impact"
@@ -722,8 +722,10 @@ def mark_ai_translations_outdated_for_guidance_match(
                 tr.top_p
             FROM translation_runs tr
             JOIN assembled_lemmas a ON a.id = tr.lemma_id
+            JOIN lemma_source_text_versions stv ON stv.id = tr.source_text_version_id
             WHERE tr.lemma_id = %s
               AND tr.source_text_version_id = %s
+              AND stv.source_document = ANY(%s)
               AND tr.status = ANY(%s)
               AND COALESCE(tr.translation_text, '') != ''
               AND COALESCE(a.reviewed_english_translation, '') = ''
@@ -792,6 +794,7 @@ def mark_ai_translations_outdated_for_guidance_match(
         [
             lemma_id,
             source_text_version_id,
+            list(PUBLIC_GUIDANCE_SOURCE_DOCUMENTS),
             list(OUTDATABLE_AI_RUN_STATUSES),
             *([match_id, rule_revision_id] if has_run_guidance_matches else []),
             match_id,

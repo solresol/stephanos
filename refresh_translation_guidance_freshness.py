@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-text-version-id", type=int, help="Refresh runs for one source text")
     parser.add_argument(
         "--source-document",
-        default="all",
+        default=PREFERRED_SOURCE_DOCUMENT,
         choices=source_document_choices,
         help="Source-document scope for bulk refresh",
     )

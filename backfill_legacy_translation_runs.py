@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 
 from db import get_connection
-from source_documents import is_public_greek_source_document
+from source_documents import PREFERRED_GREEK_SOURCE_DOCUMENTS, is_public_greek_source_document
 from translation_run_utils import DEFAULT_TRANSLATION_MODEL, lookup_public_block
 
 
@@ -263,11 +263,10 @@ def main():
     parser.add_argument(
         "--source-document",
         default="meineke",
-        choices=["meineke", "billerbeck", "kiesling"],
+        choices=list(PREFERRED_GREEK_SOURCE_DOCUMENTS),
         help=(
             "Source document for source_text_version lookup. Defaults to Meineke, "
-            "the public translation source; use billerbeck only for an explicit "
-            "historical Billerbeck backfill."
+            "the public translation source."
         ),
     )
     parser.add_argument("--model", default=DEFAULT_TRANSLATION_MODEL, help="Model name for backfilled rows")
