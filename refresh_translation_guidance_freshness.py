@@ -87,10 +87,10 @@ def main() -> None:
     print(f"Potentially out-of-date: {stats['potentially_outdated']}")
     print(f"Needs review: {stats['needs_review']}")
     print(f"Outdated: {stats['outdated']}")
-    print(f"Blocked: {stats['blocked']}")
     print(f"Unavailable: {stats['unavailable']}")
     print(f"Missing guidance rows inserted: {stats['missing_scan_rows_inserted']}")
     print(f"Missing guidance rows skipped: {stats['missing_scan_rows_skipped']}")
+    print(f"Missing guidance rows promoted: {stats['missing_scan_rows_promoted']}")
     print(f"Runs marked hard-outdated: {stats['runs_marked_outdated']}")
     print(f"Replacement translation requests inserted: {stats['translation_requests_inserted']}")
     if args.dry_run:

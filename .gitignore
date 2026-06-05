@@ -1,11 +1,15 @@
 stephanos.db
 progress.html
+review_data.json
 reference_site/
 pipeline.log
+topostext_pipeline.log
+topostext_pipeline.lock
 __pycache__/
 *.pyc
 config.py
 stephanos.ini
+.claude/settings.local.json
 pdf_pages/
 pdf_pages_billerbeck_german/
 exports/

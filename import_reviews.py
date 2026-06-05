@@ -35,6 +35,28 @@ COMMENTARY_UPDATED_BY_PREFIX = "merah_review:"
 GUIDANCE_ACTION_SOURCE = "merah_translation_guidance_actions"
 GUIDANCE_SCAN_REQUEST_SOURCE = "merah_translation_guidance_scan_requests"
 GUIDANCE_SCAN_REQUEST_SOURCE_PREFIX = "merah_scan_request:"
+TRANSLATION_RUN_VARIANT_STATUSES = {
+    "draft",
+    "completed",
+    "failed",
+    "approved",
+    "rejected",
+    "hidden",
+    "outdated",
+}
+HUMAN_TRANSLATION_VARIANT_STATUSES = {
+    "draft",
+    "approved",
+    "rejected",
+    "hidden",
+}
+LEGACY_ASSEMBLED_VARIANT_STATUSES = {
+    "draft",
+    "approved",
+    "rejected",
+    "hidden",
+    "blocked",
+}
 
 
 def log(message):
@@ -72,6 +94,21 @@ def pg_column_exists(cur, table_name: str, column_name: str) -> bool:
         (table_name, column_name),
     )
     return cur.fetchone() is not None
+
+
+def normalize_variant_review_status(variant_kind: str, variant_status: str | None) -> str:
+    status = (variant_status or "").strip() or "draft"
+    if variant_kind == "translation_run":
+        if status == "blocked":
+            return "outdated"
+        return status if status in TRANSLATION_RUN_VARIANT_STATUSES else "draft"
+    if variant_kind == "human_translation":
+        if status == "blocked":
+            return "hidden"
+        return status if status in HUMAN_TRANSLATION_VARIANT_STATUSES else "draft"
+    if variant_kind == "legacy_assembled":
+        return status if status in LEGACY_ASSEMBLED_VARIANT_STATUSES else "draft"
+    return status if status in {"draft", "approved", "rejected", "hidden"} else "draft"
 
 
 def derive_effective_review_status(
@@ -1793,7 +1830,8 @@ def import_variant_reviews(sqlite_cur, pg_cur):
         lemma_id = row["lemma_id"]
         variant_kind = (row["variant_kind"] or "").strip()
         variant_id = (row["variant_id"] or "").strip()
-        variant_status = (row["variant_status"] or "draft").strip()
+        raw_variant_status = (row["variant_status"] or "draft").strip()
+        variant_status = normalize_variant_review_status(variant_kind, raw_variant_status)
         set_canonical = bool(row["set_canonical"] or 0)
         if use_canonical_actions:
             set_canonical = False
@@ -1829,6 +1867,7 @@ def import_variant_reviews(sqlite_cur, pg_cur):
             continue
 
         try:
+            pg_cur.execute("SAVEPOINT import_variant_review_row")
             if variant_kind == "translation_run":
                 pg_cur.execute(
                     """
@@ -1892,7 +1931,13 @@ def import_variant_reviews(sqlite_cur, pg_cur):
                         canonical_set_count += 1
                     else:
                         canonical_skipped_count += 1
+            pg_cur.execute("RELEASE SAVEPOINT import_variant_review_row")
         except Exception as e:
+            try:
+                pg_cur.execute("ROLLBACK TO SAVEPOINT import_variant_review_row")
+                pg_cur.execute("RELEASE SAVEPOINT import_variant_review_row")
+            except Exception:
+                pass
             log(f"  ERROR importing variant review lemma={lemma_id} kind={variant_kind} id={variant_id}: {e}")
             error_count += 1
 

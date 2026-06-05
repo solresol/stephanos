@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS public.translation_guidance_freshness (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT translation_guidance_freshness_state_check
-        CHECK (state IN ('current', 'potentially_outdated', 'outdated', 'needs_review', 'blocked', 'unavailable')),
+        CHECK (state IN ('current', 'potentially_outdated', 'outdated', 'needs_review', 'unavailable')),
     CONSTRAINT translation_guidance_freshness_counts_check
         CHECK (
             required_count >= 0
@@ -84,4 +84,4 @@ COMMENT ON TABLE public.translation_guidance_freshness IS
     'Reversible freshness state for AI translation runs relative to the current prompt-eligible translation-guidance rule set.';
 
 COMMENT ON COLUMN public.translation_guidance_freshness.state IS
-    'current, potentially_outdated, outdated, needs_review, blocked, or unavailable for this AI run under detector_version.';
+    'current, potentially_outdated, outdated, needs_review, or unavailable for this AI run under detector_version.';

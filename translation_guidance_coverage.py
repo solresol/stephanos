@@ -8,7 +8,7 @@ CURRENT_DETECTOR_VERSION = "translation_guidance_scan_v4"
 PROMPT_GUIDANCE_KINDS = ("formula", "gloss", "contextual_bias")
 PUBLIC_GUIDANCE_SOURCE_DOCUMENTS = ("kiesling", "meineke")
 OUTDATABLE_AI_RUN_STATUSES = ("approved", "completed")
-FRESHNESS_TRACKED_AI_RUN_STATUSES = (*OUTDATABLE_AI_RUN_STATUSES, "blocked", "outdated")
+FRESHNESS_TRACKED_AI_RUN_STATUSES = (*OUTDATABLE_AI_RUN_STATUSES, "outdated")
 GUIDANCE_RETRANSLATION_PRIORITY = 20
 GUIDANCE_RETRANSLATION_CREATED_BY = "translation_guidance_freshness:guidance-impact"
 
@@ -56,6 +56,16 @@ def ensure_translation_run_outdated_status(cur) -> None:
         return
     cur.execute(
         """
+        UPDATE public.translation_runs
+        SET status = 'outdated',
+            public_eligible = FALSE,
+            public_block_reason = COALESCE(NULLIF(public_block_reason, ''), 'Retired blocked translation status'),
+            error_message = COALESCE(NULLIF(error_message, ''), 'Retired blocked translation status')
+        WHERE status = 'blocked'
+        """
+    )
+    cur.execute(
+        """
         SELECT pg_get_constraintdef(oid)
         FROM pg_constraint
         WHERE conrelid = 'public.translation_runs'::regclass
@@ -84,7 +94,6 @@ def ensure_translation_run_outdated_status(cur) -> None:
                     'approved'::text,
                     'rejected'::text,
                     'hidden'::text,
-                    'blocked'::text,
                     'outdated'::text
                 ]
             )
@@ -130,7 +139,7 @@ def ensure_translation_guidance_freshness_table(cur) -> bool:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             CONSTRAINT translation_guidance_freshness_state_check
-                CHECK (state IN ('current', 'potentially_outdated', 'outdated', 'needs_review', 'blocked', 'unavailable')),
+                CHECK (state IN ('current', 'potentially_outdated', 'outdated', 'needs_review', 'unavailable')),
             CONSTRAINT translation_guidance_freshness_counts_check
                 CHECK (
                     required_count >= 0
@@ -199,6 +208,19 @@ def ensure_translation_guidance_freshness_table(cur) -> bool:
         )
         if cur.fetchone() is None:
             cur.execute(ddl)
+    cur.execute(
+        """
+        UPDATE public.translation_guidance_freshness
+        SET state = 'outdated',
+            notes = CASE
+                WHEN COALESCE(notes, '') = '' THEN 'Converted from retired blocked freshness state.'
+                ELSE notes
+            END,
+            updated_at = NOW(),
+            last_checked_at = NOW()
+        WHERE state = 'blocked'
+        """
+    )
     return True
 
 
@@ -400,6 +422,7 @@ def enqueue_missing_guidance(
 ) -> dict[str, int]:
     inserted = 0
     skipped = 0
+    promoted = 0
     missing_rules = fetch_missing_guidance_rules(
         cur,
         source_text_version_id=source_text_version_id,
@@ -409,6 +432,30 @@ def enqueue_missing_guidance(
         if max_rows is not None and inserted >= max_rows:
             break
         detector_kind = DETECTOR_BY_KIND[kind]
+        cur.execute(
+            """
+            UPDATE translation_guidance_scan_queue
+            SET priority = LEAST(priority, %s),
+                requested_by = %s,
+                notes = COALESCE(%s, notes),
+                updated_at = NOW()
+            WHERE rule_revision_id = %s
+              AND lemma_id = %s
+              AND source_text_version_id = %s
+              AND status IN ('pending', 'running')
+              AND priority > %s
+            """,
+            (
+                priority,
+                requested_by,
+                notes,
+                revision_id,
+                lemma_id,
+                source_text_version_id,
+                priority,
+            ),
+        )
+        promoted += cur.rowcount
         cur.execute(
             """
             INSERT INTO translation_guidance_scan_queue (
@@ -466,6 +513,7 @@ def enqueue_missing_guidance(
         "needed": len(missing_rules),
         "inserted": inserted,
         "skipped": skipped,
+        "promoted": promoted,
     }
 
 
@@ -948,10 +996,10 @@ def refresh_translation_guidance_freshness(
         "potentially_outdated": 0,
         "outdated": 0,
         "needs_review": 0,
-        "blocked": 0,
         "unavailable": 0,
         "missing_scan_rows_inserted": 0,
         "missing_scan_rows_skipped": 0,
+        "missing_scan_rows_promoted": 0,
         "runs_marked_outdated": 0,
         "translation_requests_inserted": 0,
     }
@@ -995,8 +1043,7 @@ def refresh_translation_guidance_freshness(
             tr.lemma_id,
             tr.source_text_version_id,
             COALESCE(tr.status, '') AS status,
-            COALESCE(tr.public_eligible, TRUE) AS public_eligible,
-            COALESCE(tr.public_block_reason, '') AS public_block_reason
+            COALESCE(tr.public_eligible, TRUE) AS public_eligible
         FROM translation_runs tr
         JOIN lemma_source_text_versions stv ON stv.id = tr.source_text_version_id
         WHERE {' AND '.join(where)}
@@ -1013,7 +1060,6 @@ def refresh_translation_guidance_freshness(
         current_lemma_id = int(row[1])
         current_source_text_version_id = int(row[2])
         run_status = row[3] or ""
-        public_block_reason = (row[5] or "").strip()
 
         if not guidance_available:
             state = "unavailable"
@@ -1080,9 +1126,6 @@ def refresh_translation_guidance_freshness(
             if run_status == "outdated" or unprompted_matched_ids:
                 state = "outdated"
                 notes = "A matched prompt-guidance rule is not recorded in this AI run's prompt."
-            elif run_status == "blocked":
-                state = "blocked"
-                notes = public_block_reason or "The translation run is blocked."
             elif missing_ids:
                 state = "potentially_outdated"
                 notes = "One or more current prompt-guidance rules have not been checked for this source text."
@@ -1093,7 +1136,7 @@ def refresh_translation_guidance_freshness(
                 state = "current"
                 notes = "All current prompt-guidance rules are checked and no unprompted matched guidance remains."
 
-            if state == "potentially_outdated" and enqueue_missing:
+            if state in {"potentially_outdated", "outdated"} and missing_ids and enqueue_missing:
                 remaining_rows = None
                 if max_queue_rows is not None:
                     remaining_rows = max(int(max_queue_rows) - stats["missing_scan_rows_inserted"], 0)
@@ -1112,6 +1155,7 @@ def refresh_translation_guidance_freshness(
                     )
                     stats["missing_scan_rows_inserted"] += queued["inserted"]
                     stats["missing_scan_rows_skipped"] += queued["skipped"]
+                    stats["missing_scan_rows_promoted"] += queued.get("promoted", 0)
 
         upsert_translation_guidance_freshness(
             cur,

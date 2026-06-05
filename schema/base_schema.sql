@@ -2883,7 +2883,7 @@ CREATE TABLE public.translation_runs (
     error_message text,
     request_payload_json jsonb DEFAULT '{}'::jsonb NOT NULL,
     CONSTRAINT translation_runs_run_index_check CHECK ((run_index > 0)),
-    CONSTRAINT translation_runs_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'completed'::text, 'failed'::text, 'approved'::text, 'rejected'::text, 'hidden'::text, 'blocked'::text, 'outdated'::text])))
+    CONSTRAINT translation_runs_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'completed'::text, 'failed'::text, 'approved'::text, 'rejected'::text, 'hidden'::text, 'outdated'::text])))
 );
 
 
@@ -5839,4 +5839,3 @@ ALTER TABLE ONLY public.translation_runs
 --
 
 \unrestrict j6o0nlMAQ0EWKSs7GA93JsG4eLKuF7WR50KH9zHtHNRBCdNoRp3xIS9r97F9jnT
-

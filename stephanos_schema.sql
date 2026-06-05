@@ -2354,7 +2354,7 @@ CREATE TABLE public.translation_guidance_freshness (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT translation_guidance_freshness_counts_check CHECK (((required_count >= 0) AND (completed_count >= 0) AND (missing_count >= 0) AND (matched_count >= 0) AND (uncertain_count >= 0) AND (needs_review_count >= 0) AND (unprompted_matched_count >= 0))),
-    CONSTRAINT translation_guidance_freshness_state_check CHECK ((state = ANY (ARRAY['current'::text, 'potentially_outdated'::text, 'outdated'::text, 'needs_review'::text, 'blocked'::text, 'unavailable'::text])))
+    CONSTRAINT translation_guidance_freshness_state_check CHECK ((state = ANY (ARRAY['current'::text, 'potentially_outdated'::text, 'outdated'::text, 'needs_review'::text, 'unavailable'::text])))
 );
 
 
@@ -2369,7 +2369,7 @@ COMMENT ON TABLE public.translation_guidance_freshness IS 'Reversible freshness 
 -- Name: COLUMN translation_guidance_freshness.state; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.translation_guidance_freshness.state IS 'current, potentially_outdated, outdated, needs_review, blocked, or unavailable for this AI run under detector_version.';
+COMMENT ON COLUMN public.translation_guidance_freshness.state IS 'current, potentially_outdated, outdated, needs_review, or unavailable for this AI run under detector_version.';
 
 
 --
@@ -2953,7 +2953,7 @@ CREATE TABLE public.translation_runs (
     error_message text,
     request_payload_json jsonb DEFAULT '{}'::jsonb NOT NULL,
     CONSTRAINT translation_runs_run_index_check CHECK ((run_index > 0)),
-    CONSTRAINT translation_runs_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'completed'::text, 'failed'::text, 'approved'::text, 'rejected'::text, 'hidden'::text, 'blocked'::text, 'outdated'::text])))
+    CONSTRAINT translation_runs_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'completed'::text, 'failed'::text, 'approved'::text, 'rejected'::text, 'hidden'::text, 'outdated'::text])))
 );
 
 
@@ -5977,4 +5977,3 @@ ALTER TABLE ONLY public.translation_runs
 --
 
 \unrestrict aLUec5MngDdtXAVlZaiufl7u67FmOaanMRRfocgPPLjJopucmZhyA6fca1aso07
-

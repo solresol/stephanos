@@ -759,6 +759,16 @@ def ensure_translation_run_outdated_status(cur) -> None:
         return
     cur.execute(
         """
+        UPDATE public.translation_runs
+        SET status = 'outdated',
+            public_eligible = FALSE,
+            public_block_reason = COALESCE(NULLIF(public_block_reason, ''), 'Retired blocked translation status'),
+            error_message = COALESCE(NULLIF(error_message, ''), 'Retired blocked translation status')
+        WHERE status = 'blocked'
+        """
+    )
+    cur.execute(
+        """
         SELECT pg_get_constraintdef(oid)
         FROM pg_constraint
         WHERE conrelid = 'public.translation_runs'::regclass
@@ -787,7 +797,6 @@ def ensure_translation_run_outdated_status(cur) -> None:
                     'approved'::text,
                     'rejected'::text,
                     'hidden'::text,
-                    'blocked'::text,
                     'outdated'::text
                 ]
             )

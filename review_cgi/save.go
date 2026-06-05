@@ -10,6 +10,66 @@ import (
 	"strings"
 )
 
+func normalizeVariantReviewStatus(variantKind string, variantStatus string) string {
+	status := strings.TrimSpace(variantStatus)
+	if status == "" {
+		status = "draft"
+	}
+	switch variantKind {
+	case "translation_run":
+		if status == "blocked" {
+			return "outdated"
+		}
+		valid := map[string]bool{
+			"draft":     true,
+			"completed": true,
+			"failed":    true,
+			"approved":  true,
+			"rejected":  true,
+			"hidden":    true,
+			"outdated":  true,
+		}
+		if valid[status] {
+			return status
+		}
+	case "human_translation":
+		if status == "blocked" {
+			return "hidden"
+		}
+		valid := map[string]bool{
+			"draft":    true,
+			"approved": true,
+			"rejected": true,
+			"hidden":   true,
+		}
+		if valid[status] {
+			return status
+		}
+	case "legacy_assembled":
+		valid := map[string]bool{
+			"draft":    true,
+			"approved": true,
+			"rejected": true,
+			"hidden":   true,
+			"blocked":  true,
+		}
+		if valid[status] {
+			return status
+		}
+	default:
+		valid := map[string]bool{
+			"draft":    true,
+			"approved": true,
+			"rejected": true,
+			"hidden":   true,
+		}
+		if valid[status] {
+			return status
+		}
+	}
+	return "draft"
+}
+
 func main() {
 	// Read POST data
 	contentLength := os.Getenv("CONTENT_LENGTH")
@@ -546,16 +606,7 @@ func main() {
 	if variantID == "" {
 		variantID = "translation"
 	}
-	validVariantStatuses := map[string]bool{
-		"draft":    true,
-		"approved": true,
-		"rejected": true,
-		"hidden":   true,
-		"blocked":  true,
-	}
-	if !validVariantStatuses[variantStatus] {
-		variantStatus = "draft"
-	}
+	variantStatus = normalizeVariantReviewStatus(variantKind, variantStatus)
 
 	// Load configuration
 	config := GetConfig()

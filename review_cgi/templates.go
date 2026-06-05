@@ -1391,7 +1391,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                     <option value="approved">approved</option>
                                     <option value="rejected">rejected</option>
                                     <option value="hidden">hidden</option>
-                                    <option value="blocked" {{if .Lemma.TranslationBlocked}}selected{{end}}>blocked</option>
+                                    <option value="outdated">outdated</option>
                                 </select>
                             </div>
                             <div class="form-group">
@@ -1704,7 +1704,6 @@ const translationReviewTemplate = `<!DOCTYPE html>
                 }
             }
             if (blockedLegacy && statusSelect) {
-                statusSelect.value = 'blocked';
                 var canonicalAction = document.getElementById('canonical_action');
                 if (canonicalAction) {
                     canonicalAction.value = '';
