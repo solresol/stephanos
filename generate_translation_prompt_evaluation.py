@@ -9,6 +9,7 @@ import csv
 from datetime import datetime, timezone
 import html
 import math
+import os
 from pathlib import Path
 import re
 import unicodedata
@@ -54,6 +55,42 @@ ROW_CSV = OUTPUT_DIR / "prompt_evaluation_rows.csv"
 ENGLISH_TOKEN_RE = re.compile(r"[A-Za-z]+(?:[''][A-Za-z]+)?|\d+")
 GREEK_TOKEN_PATTERN = r"(?u)[\u0370-\u03FF\u1F00-\u1FFF]{2,}"
 ENGLISH_TFIDF_TOKEN_PATTERN = r"(?u)[A-Za-z][A-Za-z''\-]*"
+PAPER_METRICS = ("BLEU-4", "chrF++", "METEOR", "ROUGE-L", "BERTScore", "COMET", "BLEURT")
+METRIC_KEY_BY_NAME = {
+    "BLEU-4": "bleu4",
+    "chrF++": "chrfpp",
+    "METEOR": "meteor",
+    "ROUGE-L": "rouge_l",
+    "BERTScore": "bertscore",
+    "COMET": "comet",
+    "BLEURT": "bleurt",
+}
+METRIC_NAME_BY_KEY = {value: key for key, value in METRIC_KEY_BY_NAME.items()}
+METRIC_ALIASES = {
+    "bleu": "BLEU-4",
+    "bleu4": "BLEU-4",
+    "bleu-4": "BLEU-4",
+    "chrf": "chrF++",
+    "chrf++": "chrF++",
+    "meteor": "METEOR",
+    "rouge": "ROUGE-L",
+    "rouge-l": "ROUGE-L",
+    "rougel": "ROUGE-L",
+    "bertscore": "BERTScore",
+    "bert-score": "BERTScore",
+    "bert": "BERTScore",
+    "comet": "COMET",
+    "bleurt": "BLEURT",
+}
+SUMMARY_METRIC_FIELDS = [
+    ("mean_bleu4", "BLEU-4"),
+    ("mean_chrfpp", "chrF++"),
+    ("mean_meteor", "METEOR"),
+    ("mean_rouge_l", "ROUGE-L"),
+    ("mean_bertscore", "BERTScore"),
+    ("mean_comet", "COMET"),
+    ("mean_bleurt", "BLEURT"),
+]
 
 
 def esc(value: object) -> str:
@@ -74,6 +111,32 @@ def normalize_text(value: str) -> str:
 
 def english_tokens(value: str) -> list[str]:
     return ENGLISH_TOKEN_RE.findall(normalize_text(value))
+
+
+def parse_metric_names(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return PAPER_METRICS
+    names = []
+    for raw_name in re.split(r"[, ]+", value.strip()):
+        if not raw_name:
+            continue
+        canonical = METRIC_ALIASES.get(raw_name.lower())
+        if not canonical:
+            valid = ", ".join(PAPER_METRICS)
+            raise ValueError(f"Unknown metric '{raw_name}'. Expected one of: {valid}")
+        if canonical not in names:
+            names.append(canonical)
+    return tuple(names)
+
+
+def finite_float(value: object) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(numeric) or math.isinf(numeric):
+        return None
+    return numeric
 
 
 def ngram_counts(tokens: list[str], n: int) -> Counter[tuple[str, ...]]:
@@ -216,12 +279,253 @@ def chrf_score(candidate_text: str, reference_text: str, *, max_order: int = 6, 
     return ((1 + beta_sq) * precision * recall / (beta_sq * precision + recall)) if precision + recall else 0.0
 
 
+class EmptyWordNet:
+    """Avoid hard failure when NLTK is present but WordNet data is not installed."""
+
+    @staticmethod
+    def synsets(_word: str) -> list[object]:
+        return []
+
+
+class TranslationMetricEvaluator:
+    """Compute the automated MT metrics used by Zainaldin et al. 2026 when available."""
+
+    def __init__(
+        self,
+        metric_names: tuple[str, ...],
+        *,
+        use_gpu: bool = False,
+        bertscore_batch_size: int = 16,
+        comet_batch_size: int = 8,
+    ) -> None:
+        self.metric_names = metric_names
+        self.metric_keys = tuple(METRIC_KEY_BY_NAME[name] for name in metric_names)
+        self.use_gpu = use_gpu
+        self.bertscore_batch_size = bertscore_batch_size
+        self.comet_batch_size = comet_batch_size
+        self.handlers: dict[str, object] = {}
+        self.status: dict[str, str] = {}
+        self._setup_metrics()
+
+    def _mark_unavailable(self, key: str, reason: str) -> None:
+        self.status[METRIC_NAME_BY_KEY[key]] = f"unavailable: {reason}"
+
+    def _mark_available(self, key: str, detail: str) -> None:
+        self.status[METRIC_NAME_BY_KEY[key]] = detail
+
+    def _setup_metrics(self) -> None:
+        if "bleu4" in self.metric_keys or "chrfpp" in self.metric_keys:
+            try:
+                from sacrebleu.metrics import BLEU, CHRF
+
+                if "bleu4" in self.metric_keys:
+                    self.handlers["bleu4"] = BLEU(effective_order=True)
+                    self._mark_available("bleu4", "SacreBLEU sentence BLEU-4")
+                if "chrfpp" in self.metric_keys:
+                    self.handlers["chrfpp"] = CHRF(word_order=2)
+                    self._mark_available("chrfpp", "SacreBLEU chrF++ with word_order=2")
+            except ImportError as exc:
+                if "bleu4" in self.metric_keys:
+                    self._mark_unavailable("bleu4", f"sacrebleu missing ({exc})")
+                if "chrfpp" in self.metric_keys:
+                    self._mark_unavailable("chrfpp", f"sacrebleu missing ({exc})")
+
+        if "meteor" in self.metric_keys:
+            try:
+                import nltk
+                from nltk.translate.meteor_score import meteor_score
+
+                wordnet = EmptyWordNet()
+                try:
+                    from nltk.corpus import wordnet as nltk_wordnet
+
+                    try:
+                        nltk_wordnet.synsets("translation")
+                    except LookupError:
+                        nltk.download("wordnet", quiet=True)
+                        nltk.download("omw-1.4", quiet=True)
+                        nltk_wordnet.synsets("translation")
+                    wordnet = nltk_wordnet
+                    wordnet_detail = "with WordNet synonyms"
+                except Exception:
+                    wordnet_detail = "without WordNet synonyms"
+                self.handlers["meteor"] = (meteor_score, wordnet)
+                self._mark_available("meteor", f"NLTK METEOR {wordnet_detail}")
+            except ImportError as exc:
+                self._mark_unavailable("meteor", f"nltk missing ({exc})")
+
+        if "rouge_l" in self.metric_keys:
+            try:
+                from rouge_score import rouge_scorer
+
+                self.handlers["rouge_l"] = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+                self._mark_available("rouge_l", "rouge-score ROUGE-L with stemming")
+            except ImportError as exc:
+                self._mark_unavailable("rouge_l", f"rouge-score missing ({exc}); using local LCS fallback")
+
+        if "bertscore" in self.metric_keys:
+            try:
+                import bert_score
+
+                self.handlers["bertscore"] = bert_score
+                self._mark_available("bertscore", "bert-score F1")
+            except ImportError as exc:
+                self._mark_unavailable("bertscore", f"bert-score missing ({exc})")
+
+        if "comet" in self.metric_keys:
+            try:
+                from comet import download_model, load_from_checkpoint
+
+                model_name = os.environ.get("STEPHANOS_COMET_MODEL", "Unbabel/wmt22-comet-da")
+                model_path = download_model(model_name)
+                model = load_from_checkpoint(model_path)
+                if self.use_gpu:
+                    model = model.cuda()
+                self.handlers["comet"] = model
+                self._mark_available("comet", f"{model_name}")
+            except ImportError as exc:
+                self._mark_unavailable("comet", f"unbabel-comet missing ({exc})")
+            except Exception as exc:
+                self._mark_unavailable("comet", f"initialization failed ({exc})")
+
+        if "bleurt" in self.metric_keys:
+            try:
+                from bleurt import score as bleurt_score
+
+                checkpoint = os.environ.get("BLEURT_CHECKPOINT", "bleurt-20")
+                self.handlers["bleurt"] = bleurt_score.BleurtScorer(checkpoint)
+                self._mark_available("bleurt", f"BLEURT checkpoint {checkpoint}")
+            except ImportError as exc:
+                self._mark_unavailable("bleurt", f"bleurt missing ({exc})")
+            except Exception as exc:
+                self._mark_unavailable("bleurt", f"initialization failed ({exc})")
+
+        for name in self.metric_names:
+            self.status.setdefault(name, "not requested")
+
+    def apply(self, rows: list[dict[str, object]]) -> None:
+        for row in rows:
+            self._apply_lexical_metrics(row)
+        self._apply_bertscore(rows)
+        self._apply_comet(rows)
+        self._apply_bleurt(rows)
+
+    def _apply_lexical_metrics(self, row: dict[str, object]) -> None:
+        hypothesis = str(row.get("ai_translation_text") or "")
+        reference = str(row.get("human_translation_text") or "")
+        refs = [reference]
+        ai_tokens = row["ai_tokens"]
+        human_tokens = row["human_tokens"]
+
+        if "bleu4" in self.metric_keys:
+            scorer = self.handlers.get("bleu4")
+            if scorer is not None:
+                row["bleu4"] = float(scorer.sentence_score(hypothesis, refs).score) / 100.0
+            else:
+                row["bleu4"] = sentence_bleu(ai_tokens, human_tokens)
+
+        if "chrfpp" in self.metric_keys:
+            scorer = self.handlers.get("chrfpp")
+            if scorer is not None:
+                row["chrfpp"] = float(scorer.sentence_score(hypothesis, refs).score) / 100.0
+            else:
+                row["chrfpp"] = chrf_score(hypothesis, reference)
+
+        if "meteor" in self.metric_keys:
+            handler = self.handlers.get("meteor")
+            if handler is not None:
+                meteor_score, wordnet = handler
+                row["meteor"] = float(meteor_score([human_tokens], ai_tokens, wordnet=wordnet))
+            else:
+                row["meteor"] = float("nan")
+
+        if "rouge_l" in self.metric_keys:
+            scorer = self.handlers.get("rouge_l")
+            if scorer is not None:
+                row["rouge_l"] = float(scorer.score(reference, hypothesis)["rougeL"].fmeasure)
+            else:
+                row["rouge_l"] = rouge_l_f1(ai_tokens, human_tokens)
+
+        row["sentence_bleu"] = row.get("bleu4", sentence_bleu(ai_tokens, human_tokens))
+        row["rouge_l_f1"] = row.get("rouge_l", rouge_l_f1(ai_tokens, human_tokens))
+        row["chrf"] = row.get("chrfpp", chrf_score(hypothesis, reference))
+
+    def _apply_bertscore(self, rows: list[dict[str, object]]) -> None:
+        if "bertscore" not in self.metric_keys or "bertscore" not in self.handlers or not rows:
+            return
+        bert_score = self.handlers["bertscore"]
+        candidates = [str(row.get("ai_translation_text") or "") for row in rows]
+        references = [str(row.get("human_translation_text") or "") for row in rows]
+        try:
+            precision, recall, f1 = bert_score.score(
+                candidates,
+                references,
+                lang="en",
+                verbose=False,
+                device="cuda" if self.use_gpu else "cpu",
+                batch_size=self.bertscore_batch_size,
+            )
+            for row, p_value, r_value, f_value in zip(rows, precision, recall, f1, strict=True):
+                row["bertscore"] = float(f_value)
+                row["bertscore_precision"] = float(p_value)
+                row["bertscore_recall"] = float(r_value)
+        except Exception as exc:
+            self._mark_unavailable("bertscore", f"calculation failed ({exc})")
+
+    def _apply_comet(self, rows: list[dict[str, object]]) -> None:
+        if "comet" not in self.metric_keys or "comet" not in self.handlers or not rows:
+            return
+        try:
+            import torch
+
+            os.environ["TOKENIZERS_PARALLELISM"] = "false"
+            num_workers = 1 if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else 0
+        except Exception:
+            num_workers = 0
+        data = [
+            {
+                "src": str(row.get("source_text") or ""),
+                "mt": str(row.get("ai_translation_text") or ""),
+                "ref": str(row.get("human_translation_text") or ""),
+            }
+            for row in rows
+        ]
+        try:
+            output = self.handlers["comet"].predict(
+                data,
+                batch_size=self.comet_batch_size,
+                gpus=1 if self.use_gpu else 0,
+                num_workers=num_workers,
+                progress_bar=False,
+            )
+            scores = output["scores"] if isinstance(output, dict) else output.scores
+            for row, score in zip(rows, scores, strict=True):
+                row["comet"] = float(score)
+        except Exception as exc:
+            self._mark_unavailable("comet", f"calculation failed ({exc})")
+
+    def _apply_bleurt(self, rows: list[dict[str, object]]) -> None:
+        if "bleurt" not in self.metric_keys or "bleurt" not in self.handlers or not rows:
+            return
+        try:
+            scores = self.handlers["bleurt"].score(
+                references=[str(row.get("human_translation_text") or "") for row in rows],
+                candidates=[str(row.get("ai_translation_text") or "") for row in rows],
+            )
+            for row, score in zip(rows, scores, strict=True):
+                row["bleurt"] = float(score)
+        except Exception as exc:
+            self._mark_unavailable("bleurt", f"calculation failed ({exc})")
+
+
 def mean(values: list[float]) -> float:
-    return float(sum(values) / len(values)) if values else float("nan")
+    finite_values = [value for value in (finite_float(value) for value in values) if value is not None]
+    return float(sum(finite_values) / len(finite_values)) if finite_values else float("nan")
 
 
 def median(values: list[float]) -> float:
-    return float(np.median(np.asarray(values, dtype=float))) if values else float("nan")
+    finite_values = [value for value in (finite_float(value) for value in values) if value is not None]
+    return float(np.median(np.asarray(finite_values, dtype=float))) if finite_values else float("nan")
 
 
 def regression_stats(rows: list[dict[str, object]]) -> dict[str, float]:
@@ -279,7 +583,11 @@ def regression_stats(rows: list[dict[str, object]]) -> dict[str, float]:
     return result
 
 
-def build_pair_rows(db_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+def build_pair_rows(
+    db_rows: list[dict[str, object]],
+    *,
+    metric_evaluator: TranslationMetricEvaluator,
+) -> list[dict[str, object]]:
     rows = []
     for db_row in db_rows:
         human_tokens = english_tokens(str(db_row["human_translation_text"] or ""))
@@ -292,12 +600,10 @@ def build_pair_rows(db_rows: list[dict[str, object]]) -> list[dict[str, object]]
         pair["human_word_count"] = len(human_tokens)
         pair["ai_word_count"] = len(ai_tokens)
         pair["raw_length_delta"] = len(ai_tokens) - len(human_tokens)
-        pair["sentence_bleu"] = sentence_bleu(ai_tokens, human_tokens)
-        pair["rouge_l_f1"] = rouge_l_f1(ai_tokens, human_tokens)
-        pair["chrf"] = chrf_score(str(db_row["ai_translation_text"] or ""), str(db_row["human_translation_text"] or ""))
         for n in range(1, 5):
             pair.update(overlap_stats(ai_tokens, human_tokens, n))
         rows.append(pair)
+    metric_evaluator.apply(rows)
     return rows
 
 
@@ -330,11 +636,14 @@ def summarize_prompt(rows: list[dict[str, object]]) -> dict[str, object]:
             ]
         ),
         "corpus_bleu": corpus_bleu(rows),
-        "mean_sentence_bleu": mean([row["sentence_bleu"] for row in rows]),
-        "mean_rouge_l_f1": mean([row["rouge_l_f1"] for row in rows]),
-        "mean_chrf": mean([row["chrf"] for row in rows]),
+        "mean_sentence_bleu": mean([row.get("sentence_bleu") for row in rows]),
+        "mean_rouge_l_f1": mean([row.get("rouge_l_f1") for row in rows]),
+        "mean_chrf": mean([row.get("chrf") for row in rows]),
         **regression,
     }
+    for summary_field, metric_name in SUMMARY_METRIC_FIELDS:
+        row_key = METRIC_KEY_BY_NAME[metric_name]
+        summary[summary_field] = mean([row.get(row_key) for row in rows])
     for n in range(1, 5):
         summary.update(aggregate_overlap(rows, n))
         summary[f"mean_{n}gram_f1"] = mean([row[f"{n}gram_f1"] for row in rows])
@@ -345,7 +654,11 @@ def summarize_prompt(rows: list[dict[str, object]]) -> dict[str, object]:
 
 
 def fetch_comparison_rows(*, approved_human_only: bool) -> list[dict[str, object]]:
-    human_status_clause = "AND ht.status = 'approved'" if approved_human_only else ""
+    human_status_clause = (
+        "AND ht.status = 'approved' AND ht.stage IN ('reviewed', 'final')"
+        if approved_human_only
+        else ""
+    )
     conn = get_connection(dict_cursor=True)
     cur = conn.cursor()
     for table_name in (
@@ -359,6 +672,7 @@ def fetch_comparison_rows(*, approved_human_only: bool) -> list[dict[str, object
             raise RuntimeError(f"Missing required table: {table_name}")
 
     query = f"""
+        WITH ranked AS (
         SELECT
             tr.id AS run_id,
             tr.lemma_id,
@@ -400,7 +714,22 @@ def fetch_comparison_rows(*, approved_human_only: bool) -> list[dict[str, object
                 ''
             ) AS source_text,
             COALESCE(stv.source_document, '') AS source_document,
-            stv.id AS source_text_version_id
+            stv.id AS source_text_version_id,
+            ROW_NUMBER() OVER (
+                PARTITION BY tr.lemma_id, tr.profile_version_id
+                ORDER BY
+                    CASE
+                        WHEN stv.id IS NOT NULL AND tr.source_text_version_id = stv.id THEN 0
+                        ELSE 1
+                    END,
+                    CASE tr.status
+                        WHEN 'approved' THEN 0
+                        WHEN 'completed' THEN 1
+                        ELSE 2
+                    END,
+                    COALESCE(tr.reviewed_at, tr.completed_at, tr.created_at) DESC,
+                    tr.id DESC
+            ) AS run_rank
         FROM translation_runs tr
         JOIN translation_prompt_profiles p ON p.id = tr.profile_id
         JOIN translation_prompt_profile_versions pv ON pv.id = tr.profile_version_id
@@ -433,7 +762,11 @@ def fetch_comparison_rows(*, approved_human_only: bool) -> list[dict[str, object
         ) stv ON TRUE
         WHERE tr.status IN ('completed', 'approved')
           AND COALESCE(tr.translation_text, '') <> ''
-        ORDER BY p.name, pv.version, tr.lemma_id, tr.id
+        )
+        SELECT *
+        FROM ranked
+        WHERE run_rank = 1
+        ORDER BY profile_name, profile_version, lemma_id, run_id
     """
     cur.execute(query)
     rows = list(cur.fetchall())
@@ -661,10 +994,13 @@ def metric_block(summary: dict[str, object]) -> str:
         ("Distinct lemmas", f"{int(summary['lemma_count']):,}"),
         ("Slope", format_number(summary["slope"])),
         ("R^2", format_number(summary["r2"])),
-        ("BLEU", format_percent(summary["corpus_bleu"])),
-        ("Trigram F1", format_percent(summary["corpus_3gram_f1"])),
-        ("ROUGE-L F1", format_percent(summary["mean_rouge_l_f1"])),
-        ("chrF", format_percent(summary["mean_chrf"])),
+        ("BLEU-4", format_percent(summary["mean_bleu4"])),
+        ("chrF++", format_percent(summary["mean_chrfpp"])),
+        ("METEOR", format_percent(summary["mean_meteor"])),
+        ("ROUGE-L", format_percent(summary["mean_rouge_l"])),
+        ("BERTScore", format_percent(summary["mean_bertscore"])),
+        ("COMET", format_percent(summary["mean_comet"])),
+        ("BLEURT", format_percent(summary["mean_bleurt"])),
     ]
     return '<div class="metric-grid">' + "".join(
         f'<div class="metric"><span class="label">{esc(label)}</span><span class="value">{esc(value)}</span></div>'
@@ -687,10 +1023,13 @@ def render_summary_table(summaries: list[dict[str, object]]) -> str:
   <td>{format_number(summary['r2'])}</td>
   <td>{format_number(summary['p_value'], 4)}</td>
   <td>{format_number(summary['slope_distance_from_1'])}</td>
-  <td>{format_percent(summary['corpus_bleu'])}</td>
-  <td>{format_percent(summary['corpus_3gram_f1'])}</td>
-  <td>{format_percent(summary['mean_rouge_l_f1'])}</td>
-  <td>{format_percent(summary['mean_chrf'])}</td>
+  <td>{format_percent(summary['mean_bleu4'])}</td>
+  <td>{format_percent(summary['mean_chrfpp'])}</td>
+  <td>{format_percent(summary['mean_meteor'])}</td>
+  <td>{format_percent(summary['mean_rouge_l'])}</td>
+  <td>{format_percent(summary['mean_bertscore'])}</td>
+  <td>{format_percent(summary['mean_comet'])}</td>
+  <td>{format_percent(summary['mean_bleurt'])}</td>
   <td>{format_number(summary['mean_abs_length_residual'])}</td>
 </tr>"""
         )
@@ -706,10 +1045,13 @@ def render_summary_table(summaries: list[dict[str, object]]) -> str:
       <th>R^2</th>
       <th>Slope p</th>
       <th>|slope - 1|</th>
-      <th>BLEU</th>
-      <th>Trigram F1</th>
-      <th>ROUGE-L F1</th>
-      <th>chrF</th>
+      <th>BLEU-4</th>
+      <th>chrF++</th>
+      <th>METEOR</th>
+      <th>ROUGE-L</th>
+      <th>BERTScore</th>
+      <th>COMET</th>
+      <th>BLEURT</th>
       <th>Mean abs residual</th>
     </tr>
   </thead>
@@ -745,7 +1087,7 @@ def save_scatter_plot(rows: list[dict[str, object]], summary: dict[str, object],
         f"slope = {format_number(summary['slope'])}\n"
         f"R^2 = {format_number(summary['r2'])}\n"
         f"p = {format_number(summary['p_value'], 4)}\n"
-        f"BLEU = {format_percent(summary['corpus_bleu'])}"
+        f"BLEU-4 = {format_percent(summary['mean_bleu4'])}"
     )
     ax.text(
         0.02,
@@ -773,7 +1115,7 @@ def save_trend_plot(summaries: list[dict[str, object]], output_path: Path) -> bo
     fig, axes = plt.subplots(3, 1, figsize=(9, 10.5), sharex=True)
     metrics = [
         ("r2", "R^2", None),
-        ("corpus_bleu", "Corpus BLEU", None),
+        ("mean_bleu4", "Mean BLEU-4", None),
         ("slope", "Slope", 1.0),
     ]
     for ax, (key, label, target) in zip(axes, metrics, strict=True):
@@ -990,9 +1332,13 @@ def render_residual_table(rows: list[dict[str, object]]) -> str:
   <td>{int(row['human_word_count'])}</td>
   <td>{int(row['ai_word_count'])}</td>
   <td>{format_number(row['length_residual'])}</td>
-  <td>{format_percent(row['sentence_bleu'])}</td>
-  <td>{format_percent(row['3gram_f1'])}</td>
-  <td>{format_percent(row['rouge_l_f1'])}</td>
+  <td>{format_percent(row.get('bleu4'))}</td>
+  <td>{format_percent(row.get('chrfpp'))}</td>
+  <td>{format_percent(row.get('meteor'))}</td>
+  <td>{format_percent(row.get('rouge_l'))}</td>
+  <td>{format_percent(row.get('bertscore'))}</td>
+  <td>{format_percent(row.get('comet'))}</td>
+  <td>{format_percent(row.get('bleurt'))}</td>
   <td>{esc(row['human_stage'])}/{esc(row['human_status'])}</td>
   <td>{int(row['run_id'])}</td>
   <td>{esc(row['model'])}</td>
@@ -1006,9 +1352,13 @@ def render_residual_table(rows: list[dict[str, object]]) -> str:
       <th>Human words</th>
       <th>AI words</th>
       <th>Residual</th>
-      <th>Sentence BLEU</th>
-      <th>Trigram F1</th>
-      <th>ROUGE-L F1</th>
+      <th>BLEU-4</th>
+      <th>chrF++</th>
+      <th>METEOR</th>
+      <th>ROUGE-L</th>
+      <th>BERTScore</th>
+      <th>COMET</th>
+      <th>BLEURT</th>
       <th>Human</th>
       <th>Run</th>
       <th>Model</th>
@@ -1061,8 +1411,14 @@ def render_detail_page(
         f"""<h2>Translation Similarity Metrics</h2>
 <table>
   <tbody>
-    <tr><th>Smoothed corpus BLEU</th><td>{format_percent(summary['corpus_bleu'])}</td></tr>
-    <tr><th>Mean sentence BLEU</th><td>{format_percent(summary['mean_sentence_bleu'])}</td></tr>
+    <tr><th>Mean BLEU-4</th><td>{format_percent(summary['mean_bleu4'])}</td></tr>
+    <tr><th>Mean chrF++</th><td>{format_percent(summary['mean_chrfpp'])}</td></tr>
+    <tr><th>Mean METEOR</th><td>{format_percent(summary['mean_meteor'])}</td></tr>
+    <tr><th>Mean ROUGE-L</th><td>{format_percent(summary['mean_rouge_l'])}</td></tr>
+    <tr><th>Mean BERTScore</th><td>{format_percent(summary['mean_bertscore'])}</td></tr>
+    <tr><th>Mean COMET</th><td>{format_percent(summary['mean_comet'])}</td></tr>
+    <tr><th>Mean BLEURT</th><td>{format_percent(summary['mean_bleurt'])}</td></tr>
+    <tr><th>Legacy smoothed corpus BLEU</th><td>{format_percent(summary['corpus_bleu'])}</td></tr>
     <tr><th>Unigram F1</th><td>{format_percent(summary['corpus_1gram_f1'])}</td></tr>
     <tr><th>Bigram F1</th><td>{format_percent(summary['corpus_2gram_f1'])}</td></tr>
     <tr><th>Trigram precision</th><td>{format_percent(summary['corpus_3gram_precision'])}</td></tr>
@@ -1070,8 +1426,6 @@ def render_detail_page(
     <tr><th>Trigram F1</th><td>{format_percent(summary['corpus_3gram_f1'])}</td></tr>
     <tr><th>Trigram Jaccard</th><td>{format_percent(summary['corpus_3gram_jaccard'])}</td></tr>
     <tr><th>4-gram F1</th><td>{format_percent(summary['corpus_4gram_f1'])}</td></tr>
-    <tr><th>Mean ROUGE-L F1</th><td>{format_percent(summary['mean_rouge_l_f1'])}</td></tr>
-    <tr><th>Mean chrF</th><td>{format_percent(summary['mean_chrf'])}</td></tr>
   </tbody>
 </table>"""
     )
@@ -1123,21 +1477,48 @@ def render_unevaluable_table(unevaluable: list[dict[str, object]]) -> str:
 </table>"""
 
 
+def render_metric_status_table(metric_status: dict[str, str]) -> str:
+    rows = []
+    for metric_name in PAPER_METRICS:
+        status = metric_status.get(metric_name, "not requested")
+        status_class = "warning" if status.startswith("unavailable") else "note"
+        rows.append(
+            f"""<tr>
+  <td>{esc(metric_name)}</td>
+  <td class="{esc(status_class)}">{esc(status)}</td>
+</tr>"""
+        )
+    return f"""<h2>Metric Engines</h2>
+<p class="note">The paper metric set is BLEU-4, chrF++, METEOR, ROUGE-L, BERTScore, COMET, and BLEURT. Lexical metrics run locally; BERTScore, COMET, and BLEURT require their model packages/checkpoints to be installed on the machine that runs the daily pipeline.</p>
+<table>
+  <thead>
+    <tr><th>Metric</th><th>Status for this run</th></tr>
+  </thead>
+  <tbody>{''.join(rows)}</tbody>
+</table>"""
+
+
 def render_main_page(
     summaries: list[dict[str, object]],
     *,
     trend_image: str | None,
     approved_human_only: bool,
     unevaluable: list[dict[str, object]],
+    metric_status: dict[str, str],
 ) -> str:
     html_parts = [page_header("Translation Prompt Evaluation", depth=1)]
     html_parts.append(
-        "<p>This page compares each AI translation prompt version against the best available human translation for the same lemma. Length regression uses human word count as x and AI word count as y; a slope near 1 and intercept near 0 means the AI is matching human translation length. BLEU, n-gram overlap, ROUGE-L, and chrF are exact-overlap metrics, so they are conservative when a good translation uses different wording.</p>"
+        '<p>This page compares each AI translation prompt version against the best available human translation for the same lemma, using the automated MT metric set from Zainaldin et al. 2026: BLEU-4, chrF++, METEOR, ROUGE-L, BERTScore, COMET, and BLEURT. Length regression and residual tables remain as local diagnostics for translation-length drift.</p>'
     )
-    human_scope = "approved human translations only" if approved_human_only else "any non-empty human translation, regardless of status"
+    human_scope = (
+        "approved reviewed/final human translations only"
+        if approved_human_only
+        else "any non-empty human translation, regardless of status"
+    )
     html_parts.append(
-        f'<p class="note">Inputs: AI runs with status <code>completed</code> or <code>approved</code>, non-empty translation text, and {esc(human_scope)}. Full translation texts are used for metrics but are not printed on these pages.</p>'
+        f'<p class="note">Inputs: one representative AI run per lemma and prompt version, preferring the current preferred source text, with status <code>completed</code> or <code>approved</code>, non-empty translation text, and {esc(human_scope)}. Full translation texts are used for metrics but are not printed on these pages.</p>'
     )
+    html_parts.append(render_metric_status_table(metric_status))
     if not summaries:
         html_parts.append('<p class="warning">No prompt versions currently have both AI runs and human translations.</p>')
         html_parts.append(render_unevaluable_table(unevaluable))
@@ -1175,6 +1556,13 @@ def write_csv_outputs(summaries: list[dict[str, object]], grouped_rows: dict[tup
         "p_value",
         "slope_stderr",
         "slope_distance_from_1",
+        "mean_bleu4",
+        "mean_chrfpp",
+        "mean_meteor",
+        "mean_rouge_l",
+        "mean_bertscore",
+        "mean_comet",
+        "mean_bleurt",
         "corpus_bleu",
         "mean_sentence_bleu",
         "corpus_1gram_f1",
@@ -1214,6 +1602,15 @@ def write_csv_outputs(summaries: list[dict[str, object]], grouped_rows: dict[tup
         "predicted_ai_word_count",
         "length_residual",
         "abs_length_residual",
+        "bleu4",
+        "chrfpp",
+        "meteor",
+        "rouge_l",
+        "bertscore",
+        "bertscore_precision",
+        "bertscore_recall",
+        "comet",
+        "bleurt",
         "sentence_bleu",
         "rouge_l_f1",
         "chrf",
@@ -1237,11 +1634,26 @@ def write_csv_outputs(summaries: list[dict[str, object]], grouped_rows: dict[tup
                 writer.writerow({field: row.get(field, "") for field in row_fields})
 
 
-def generate_reports(*, approved_human_only: bool, min_galton_samples: int, min_galton_df: int) -> list[dict[str, object]]:
+def generate_reports(
+    *,
+    approved_human_only: bool,
+    min_galton_samples: int,
+    min_galton_df: int,
+    metric_names: tuple[str, ...],
+    use_gpu: bool,
+    bertscore_batch_size: int,
+    comet_batch_size: int,
+) -> list[dict[str, object]]:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     DETAIL_DIR.mkdir(parents=True, exist_ok=True)
     IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
+    metric_evaluator = TranslationMetricEvaluator(
+        metric_names,
+        use_gpu=use_gpu,
+        bertscore_batch_size=bertscore_batch_size,
+        comet_batch_size=comet_batch_size,
+    )
     prompt_metadata = fetch_prompt_run_metadata()
     db_rows = fetch_comparison_rows(approved_human_only=approved_human_only)
     grouped_db_rows: dict[tuple[str, int, int], list[dict[str, object]]] = defaultdict(list)
@@ -1252,7 +1664,7 @@ def generate_reports(*, approved_human_only: bool, min_galton_samples: int, min_
     summaries = []
     grouped_pair_rows: dict[tuple[str, int, int], list[dict[str, object]]] = {}
     for key, rows_for_prompt in grouped_db_rows.items():
-        pair_rows = build_pair_rows(rows_for_prompt)
+        pair_rows = build_pair_rows(rows_for_prompt, metric_evaluator=metric_evaluator)
         if not pair_rows:
             continue
         summary = summarize_prompt(pair_rows)
@@ -1271,7 +1683,7 @@ def generate_reports(*, approved_human_only: bool, min_galton_samples: int, min_
         grouped_pair_rows[key] = pair_rows
 
     evaluated_keys = set(grouped_pair_rows)
-    human_scope = "approved human translation" if approved_human_only else "non-empty human translation in any status"
+    human_scope = "approved reviewed/final human translation" if approved_human_only else "non-empty human translation in any status"
     unevaluable = []
     for key, metadata in prompt_metadata.items():
         if key in evaluated_keys:
@@ -1311,6 +1723,7 @@ def generate_reports(*, approved_human_only: bool, min_galton_samples: int, min_
             trend_image=trend_filename,
             approved_human_only=approved_human_only,
             unevaluable=unevaluable,
+            metric_status=metric_evaluator.status,
         ),
         encoding="utf-8",
     )
@@ -1322,12 +1735,35 @@ def main() -> None:
     parser.add_argument(
         "--approved-human-only",
         action="store_true",
-        help="Restrict human comparison rows to approved human translations.",
+        help="Compatibility flag; approved reviewed/final human translations are the default ground truth.",
     )
     parser.add_argument(
         "--include-draft-human",
         action="store_true",
-        help="Deprecated compatibility flag; any non-empty human translation is included by default.",
+        help="Include any non-empty human translation instead of only approved reviewed/final ground truth.",
+    )
+    parser.add_argument(
+        "--metrics",
+        default=",".join(PAPER_METRICS),
+        help="Comma-separated metric list. Defaults to the Zainaldin et al. 2026 set: "
+        + ", ".join(PAPER_METRICS),
+    )
+    parser.add_argument(
+        "--use-gpu",
+        action="store_true",
+        help="Use GPU for optional neural metrics when the installed packages support it.",
+    )
+    parser.add_argument(
+        "--bertscore-batch-size",
+        type=int,
+        default=16,
+        help="Batch size for BERTScore when bert-score is installed.",
+    )
+    parser.add_argument(
+        "--comet-batch-size",
+        type=int,
+        default=8,
+        help="Batch size for COMET when unbabel-comet is installed.",
     )
     parser.add_argument(
         "--min-galton-samples",
@@ -1342,18 +1778,24 @@ def main() -> None:
         help="Minimum document frequency for residual term features.",
     )
     args = parser.parse_args()
+    metric_names = parse_metric_names(args.metrics)
+    approved_human_only = not args.include_draft_human
 
     summaries = generate_reports(
-        approved_human_only=args.approved_human_only,
+        approved_human_only=approved_human_only,
         min_galton_samples=args.min_galton_samples,
         min_galton_df=args.min_galton_df,
+        metric_names=metric_names,
+        use_gpu=args.use_gpu,
+        bertscore_batch_size=args.bertscore_batch_size,
+        comet_batch_size=args.comet_batch_size,
     )
     print(f"Generated {len(summaries)} prompt evaluation page(s).")
     for summary in summaries:
         print(
             f"  {summary['profile_name']} v{summary['profile_version']}: "
             f"{summary['pair_count']} pairs, R^2={format_number(summary['r2'])}, "
-            f"BLEU={format_percent(summary['corpus_bleu'])}, slope={format_number(summary['slope'])}"
+            f"BLEU-4={format_percent(summary['mean_bleu4'])}, slope={format_number(summary['slope'])}"
         )
     print(f"Main page: {MAIN_PAGE}")
 

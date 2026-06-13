@@ -3298,7 +3298,7 @@ def generate_index_page():
 
     <div class="section-card">
         <h3><a href="statistics/prompt_evaluation.html">3. Translation Prompt Evaluation</a></h3>
-        <p>Compare AI prompt versions against approved human translations with length regression, BLEU, trigram overlap, ROUGE-L, chrF, and residual analysis.</p>
+        <p>Compare AI prompt versions against approved human translations with BLEU-4, chrF++, METEOR, ROUGE-L, BERTScore, COMET, BLEURT, length regression, and residual analysis.</p>
     </div>
 
     <div class="section-card">

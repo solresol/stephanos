@@ -133,6 +133,43 @@ func TestGuidanceRuleStatusUnmarshalsCompactExportRow(t *testing.T) {
 	}
 }
 
+func TestLoadGuidanceRulesFromSQLiteMetadata(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "review_data.sqlite")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);`)
+	if err != nil {
+		t.Fatalf("create metadata schema: %v", err)
+	}
+	rulesJSON := `[{"id":2,"rule_key":"gloss:test","kind":"gloss","label":"λόγος","preferred_translation":"account","status":"","application_mode":"","bias_strength":"","lifecycle_stage":"","revision_number":3}]`
+	_, err = db.Exec(
+		`INSERT INTO metadata(key, value) VALUES (?, ?)`,
+		"translation_guidance_rules",
+		rulesJSON,
+	)
+	if err != nil {
+		t.Fatalf("insert guidance metadata: %v", err)
+	}
+
+	rules, err := LoadGuidanceRules(dbPath)
+	if err != nil {
+		t.Fatalf("load sqlite guidance rules: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("expected one guidance rule, got %d", len(rules))
+	}
+	if rules[0].RuleKey != "gloss:test" || rules[0].Status != "in_progress" {
+		t.Fatalf("unexpected loaded rule: %+v", rules[0])
+	}
+	if rules[0].LifecycleStage == "" || rules[0].ApplicationMode == "" {
+		t.Fatalf("expected rule defaults to be normalized: %+v", rules[0])
+	}
+}
+
 func TestLoadLemmaDataFromSQLiteLoadsIndexAndPayloadOnDemand(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "review_data.sqlite")
 	db, err := sql.Open("sqlite3", dbPath)

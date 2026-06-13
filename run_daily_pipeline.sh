@@ -323,6 +323,29 @@ if [ "$TRANSLATION_GUIDANCE_SCAN_QUEUE_LIMIT" -gt 0 ]; then
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation-guidance enqueue step failed" | tee -a "$LOGFILE"
 fi
 
+# Step 4d7a: Queue guidance needed for approved-human translation evaluation backfill
+HUMAN_EVAL_TRANSLATION_ENABLED="${HUMAN_EVAL_TRANSLATION_ENABLED:-1}"
+HUMAN_EVAL_TRANSLATION_PROFILE="${HUMAN_EVAL_TRANSLATION_PROFILE:-legacy_scholarly}"
+HUMAN_EVAL_TRANSLATION_VERSIONS="${HUMAN_EVAL_TRANSLATION_VERSIONS:-1,2,3}"
+HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT="${HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT:-preferred}"
+HUMAN_EVAL_TRANSLATION_GUIDANCE_LIMIT="${HUMAN_EVAL_TRANSLATION_GUIDANCE_LIMIT:-300}"
+HUMAN_EVAL_TRANSLATION_ENQUEUE_LIMIT="${HUMAN_EVAL_TRANSLATION_ENQUEUE_LIMIT:-90}"
+HUMAN_EVAL_TRANSLATION_PRIORITY="${HUMAN_EVAL_TRANSLATION_PRIORITY:-5}"
+HUMAN_EVAL_TRANSLATION_CREATED_BY="${HUMAN_EVAL_TRANSLATION_CREATED_BY:-run_daily_pipeline.sh:human-eval}"
+if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_TRANSLATION_GUIDANCE_LIMIT" -gt 0 ]; then
+    echo "Step 4d7a: Queueing guidance for approved-human evaluation translations..." | tee -a "$LOGFILE"
+    uv run enqueue_human_evaluation_translations.py \
+        --profile "$HUMAN_EVAL_TRANSLATION_PROFILE" \
+        --versions "$HUMAN_EVAL_TRANSLATION_VERSIONS" \
+        --source-document "$HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT" \
+        --limit "$HUMAN_EVAL_TRANSLATION_GUIDANCE_LIMIT" \
+        --priority "$HUMAN_EVAL_TRANSLATION_PRIORITY" \
+        --created-by "$HUMAN_EVAL_TRANSLATION_CREATED_BY" \
+        --prepare-guidance-first \
+        --guidance-only \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: approved-human evaluation guidance queue step failed" | tee -a "$LOGFILE"
+fi
+
 # Step 4d8: Process a bounded translation-guidance scan batch before translation
 TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT="${TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT:-2000}"
 TRANSLATION_GUIDANCE_SCAN_MODEL="${TRANSLATION_GUIDANCE_SCAN_MODEL:-gpt-5.4-mini}"
@@ -361,6 +384,20 @@ if [ "$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT" -gt 0 ]; then
         guidance_process_args+=(--delay "$TRANSLATION_GUIDANCE_SCAN_DELAY")
     fi
     "${guidance_process_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation-guidance scan step failed" | tee -a "$LOGFILE"
+fi
+
+# Step 4d8a: Queue approved-human evaluation translation requests before normal translation work
+if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
+    echo "Step 4d8a: Enqueuing approved-human evaluation translations..." | tee -a "$LOGFILE"
+    uv run enqueue_human_evaluation_translations.py \
+        --profile "$HUMAN_EVAL_TRANSLATION_PROFILE" \
+        --versions "$HUMAN_EVAL_TRANSLATION_VERSIONS" \
+        --source-document "$HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT" \
+        --limit "$HUMAN_EVAL_TRANSLATION_ENQUEUE_LIMIT" \
+        --priority "$HUMAN_EVAL_TRANSLATION_PRIORITY" \
+        --created-by "$HUMAN_EVAL_TRANSLATION_CREATED_BY" \
+        --require-guidance-complete \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: approved-human evaluation translation enqueue step failed" | tee -a "$LOGFILE"
 fi
 
 # Step 4e: Enqueue preferred-source translation run requests (set TRANSLATION_ENQUEUE_LIMIT=0 to disable)
@@ -411,6 +448,9 @@ if [ "$TRANSLATION_USE_BATCH" != "0" ]; then
     fi
 else
     translation_args+=(--delay 1)
+fi
+if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ]; then
+    translation_args+=(--allow-human-evaluation-translations)
 fi
 "${translation_args[@]}" 2>&1 | tee -a "$LOGFILE"
 
@@ -566,7 +606,7 @@ uv run generate_statistics_site.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 7a0a: Generate translation prompt evaluation pages
 echo "Step 7a0a: Generating translation prompt evaluation..." | tee -a "$LOGFILE"
-uv run generate_translation_prompt_evaluation.py 2>&1 | tee -a "$LOGFILE"
+uv run generate_translation_prompt_evaluation.py --approved-human-only 2>&1 | tee -a "$LOGFILE"
 
 # Step 7a1: Generate pipeline progress page
 echo "Step 7a1: Generating pipeline progress page..." | tee -a "$LOGFILE"

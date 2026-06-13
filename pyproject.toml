@@ -23,4 +23,7 @@ dependencies = [
     "umap-learn>=0.5.11",
     "rapidfuzz>=3.14.3",
     "openpyxl>=3.1.5",
+    "sacrebleu>=2.6.0",
+    "nltk>=3.9.4",
+    "rouge-score>=0.1.2",
 ]

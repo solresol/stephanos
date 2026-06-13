@@ -46,6 +46,13 @@ MAX_GUIDANCE_CONTEXT_ROWS = 24
 MAX_SOURCE_PASSAGE_CONTEXT_ROWS = 4
 MAX_CONTEXT_FIELD_CHARS = 900
 CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
+HUMAN_EVALUATION_REQUEST_MARKERS = (
+    "human_evaluation",
+    "human-evaluation",
+    "human_eval",
+    "human-eval",
+    "enqueue_human_evaluation_translations.py",
+)
 
 TRANSLATE_TOOL = {
     "type": "function",
@@ -146,6 +153,11 @@ def has_human_translation(cur, lemma_id: int) -> bool:
     )
     row = cur.fetchone()
     return bool(row[0]) if row else False
+
+
+def is_human_evaluation_request(created_by: str | None) -> bool:
+    created_by = (created_by or "").strip().casefold()
+    return bool(created_by) and any(marker in created_by for marker in HUMAN_EVALUATION_REQUEST_MARKERS)
 
 
 def ensure_translation_run_guidance_matches(cur) -> bool:
@@ -649,6 +661,7 @@ def fetch_requests(cur, request_limit: int | None):
             r.id AS request_id,
             r.lemma_id,
             r.requested_runs,
+            COALESCE(r.created_by, '') AS created_by,
             COALESCE(r.model, %s) AS model_name,
             COALESCE(r.temperature, 1.0) AS temperature,
             COALESCE(r.top_p, 1.0) AS top_p,
@@ -918,6 +931,7 @@ def submit_translation_batch(
         request_id,
         lemma_id,
         requested_runs,
+        request_created_by,
         model_name,
         temperature,
         top_p,
@@ -940,7 +954,11 @@ def submit_translation_batch(
             print("Daily token limit already reached; not submitting a translation batch.")
             break
 
-        if request_has_human_translation or has_human_translation(cur, lemma_id):
+        if (
+            request_has_human_translation or has_human_translation(cur, lemma_id)
+        ) and not (
+            args.allow_human_evaluation_translations and is_human_evaluation_request(request_created_by)
+        ):
             mark_request_done(
                 cur,
                 request_id,
@@ -1426,6 +1444,11 @@ def main():
         action="store_true",
         help="Translate even if prompt-eligible guidance has not been fully evaluated for the source text",
     )
+    parser.add_argument(
+        "--allow-human-evaluation-translations",
+        action="store_true",
+        help="Run requests explicitly queued for approved-human evaluation even when the lemma already has a human translation.",
+    )
     parser.add_argument("--no-source-passage-context", action="store_true", help="Do not add resolved external source passages to prompts")
     args = parser.parse_args()
 
@@ -1519,6 +1542,7 @@ def main():
         request_id,
         lemma_id,
         requested_runs,
+        request_created_by,
         model_name,
         temperature,
         top_p,
@@ -1539,7 +1563,11 @@ def main():
             print(f"Reached run limit ({args.run_limit}).")
             break
 
-        if request_has_human_translation or has_human_translation(cur, lemma_id):
+        if (
+            request_has_human_translation or has_human_translation(cur, lemma_id)
+        ) and not (
+            args.allow_human_evaluation_translations and is_human_evaluation_request(request_created_by)
+        ):
             mark_request_done(
                 cur,
                 request_id,

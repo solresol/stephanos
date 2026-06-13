@@ -180,6 +180,11 @@ type TranslationGuidanceAction struct {
 }
 
 func LoadGuidanceRules(filepath string) ([]TranslationGuidanceRule, error) {
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(filepath)), ".sqlite") ||
+		strings.HasSuffix(strings.ToLower(strings.TrimSpace(filepath)), ".db") {
+		return LoadGuidanceRulesFromSQLite(filepath)
+	}
+
 	file, err := os.Open(filepath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open data file: %w", err)
@@ -192,15 +197,45 @@ func LoadGuidanceRules(filepath string) ([]TranslationGuidanceRule, error) {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 
-	for i := range data.TranslationGuidanceRules {
-		rule := &data.TranslationGuidanceRules[i]
+	normalizeAndSortGuidanceRules(data.TranslationGuidanceRules)
+	return data.TranslationGuidanceRules, nil
+}
+
+func LoadGuidanceRulesFromSQLite(filepath string) ([]TranslationGuidanceRule, error) {
+	db, err := sql.Open("sqlite3", "file:"+filepath+"?mode=ro")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open snapshot database: %w", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("failed to ping snapshot database: %w", err)
+	}
+
+	var rawRules string
+	if err := db.QueryRow("SELECT value FROM metadata WHERE key = ?", "translation_guidance_rules").Scan(&rawRules); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("snapshot database does not contain translation_guidance_rules metadata")
+		}
+		return nil, fmt.Errorf("failed to read snapshot guidance rules: %w", err)
+	}
+
+	var rules []TranslationGuidanceRule
+	if err := json.Unmarshal([]byte(rawRules), &rules); err != nil {
+		return nil, fmt.Errorf("failed to parse snapshot guidance rules: %w", err)
+	}
+	normalizeAndSortGuidanceRules(rules)
+	return rules, nil
+}
+
+func normalizeAndSortGuidanceRules(rules []TranslationGuidanceRule) {
+	for i := range rules {
+		rule := &rules[i]
 		rule.Status = normalizeGuidanceStatus(rule.Kind, rule.Status)
 		rule.ApplicationMode = normalizeGuidanceApplicationMode(rule.Kind, rule.ApplicationMode)
 		rule.BiasStrength = normalizeGuidanceBiasStrength(rule.BiasStrength)
 		rule.LifecycleStage = normalizeGuidanceLifecycleStage(rule.Status, rule.PreferredTranslation, rule.LifecycleStage)
 	}
-	sortGuidanceRules(data.TranslationGuidanceRules)
-	return data.TranslationGuidanceRules, nil
+	sortGuidanceRules(rules)
 }
 
 func EnsureGuidanceSchema(db *sql.DB) error {
