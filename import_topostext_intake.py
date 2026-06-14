@@ -18,7 +18,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from psycopg2.extras import Json, execute_values
+from psycopg2.extras import execute_values
 
 from generate_topostext_intake_report import (
     DEFAULT_PAULY_WORKBOOK_NAME,
@@ -92,6 +92,7 @@ PLACE_TYPE_TERMS: list[tuple[str, str]] = [
     ("χωρίον", "place"),
 ]
 GREEK_WORD_RE = re.compile(r"[\u0370-\u03ff\u1f00-\u1fff]+")
+BRACKETED_LATIN_LABEL_RE = re.compile(r"\[\s*([A-Za-z][A-Za-z0-9 ._\-]{1,80}?)\s*\]")
 PLACE_TYPE_BY_NORMALIZED: dict[str, tuple[str, str]] = {}
 for _term, _kind in PLACE_TYPE_TERMS:
     PLACE_TYPE_BY_NORMALIZED[
@@ -151,10 +152,49 @@ class GreekToken:
     end: int
 
 
+@dataclass(frozen=True)
+class LatinLabel:
+    sequence: int
+    label_text: str
+    normalized_label: str
+    context_before: str = ""
+    context_after: str = ""
+
+
 def normalize_greek_key(value: str) -> str:
     text = unicodedata.normalize("NFD", (value or "").casefold())
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     return text.replace("ς", "σ")
+
+
+def bracketed_latin_labels(text: str, *, context_chars: int = 80) -> list[LatinLabel]:
+    labels = []
+    for sequence, match in enumerate(BRACKETED_LATIN_LABEL_RE.finditer(text or ""), start=1):
+        label_text = normalize_space(match.group(1))
+        normalized_label = normalize_latin_key(label_text)
+        if not label_text or not normalized_label:
+            continue
+        labels.append(
+            LatinLabel(
+                sequence=sequence,
+                label_text=label_text,
+                normalized_label=normalized_label,
+                context_before=normalize_space((text or "")[max(0, match.start() - context_chars) : match.start()]),
+                context_after=normalize_space((text or "")[match.end() : match.end() + context_chars]),
+            )
+        )
+    return labels
+
+
+def ordered_label_texts(labels: list[LatinLabel]) -> list[str]:
+    seen = set()
+    output = []
+    for label in labels:
+        if label.normalized_label in seen:
+            continue
+        seen.add(label.normalized_label)
+        output.append(label.label_text)
+    return output
 
 
 def greek_tokens(text: str) -> list[GreekToken]:
@@ -299,7 +339,7 @@ def re_candidate_index(re_lookup: dict[str, object]) -> tuple[dict[str, list[dic
     return exact, prefix
 
 
-def re_search_terms(mention: Mention) -> list[str]:
+def re_search_terms(mention: Mention, extra_terms: list[str] | None = None) -> list[str]:
     terms = []
     raw_values = []
     if mention.authority_class != "zzz":
@@ -307,6 +347,7 @@ def re_search_terms(mention: Mention) -> list[str]:
     raw_values.append(mention.mention_text)
     if use_entry_title_for_re_candidate(mention):
         raw_values.append(mention.entry_title)
+    raw_values.extend(extra_terms or [])
     for raw in raw_values:
         normalized = normalize_latin_key(raw)
         if len(normalized) >= 3 and normalized not in terms:
@@ -318,6 +359,7 @@ def re_candidate_suggestions(
     mention: Mention,
     exact_index: dict[str, list[dict[str, str]]],
     prefix_index: dict[str, list[dict[str, str]]],
+    extra_search_terms: list[str] | None = None,
     limit: int = 5,
 ) -> tuple[dict[str, str], ...]:
     if mention.authority_class == "re":
@@ -326,7 +368,7 @@ def re_candidate_suggestions(
         return ()
     candidates: list[dict[str, str]] = []
     seen: set[str] = set()
-    for term in re_search_terms(mention):
+    for term in re_search_terms(mention, extra_search_terms):
         for candidate in exact_index.get(term, []):
             if candidate["re_id"] in seen:
                 continue
@@ -354,6 +396,7 @@ def build_review_hints(
     mention: Mention,
     exact_re_index: dict[str, list[dict[str, str]]] | None = None,
     prefix_re_index: dict[str, list[dict[str, str]]] | None = None,
+    extra_search_terms: list[str] | None = None,
 ) -> ReviewHints:
     place_type_term, place_type_kind, region_hint, region_hint_source = infer_place_type_and_region(mention)
     suggested_tag_name, tag_review_reason = tag_suggestion(mention, place_type_term, place_type_kind)
@@ -361,6 +404,7 @@ def build_review_hints(
         mention,
         exact_re_index or {},
         prefix_re_index or {},
+        extra_search_terms,
     )
     return ReviewHints(
         suggested_tag_name=suggested_tag_name,
@@ -548,7 +592,6 @@ def import_snapshot(
                 entry.edate,
                 entry.text,
                 text_sha256(entry.text),
-                Json({}),
             )
             for entry in parsed.entries
         ]
@@ -565,8 +608,7 @@ def import_snapshot(
                 wdate,
                 edate,
                 entry_text,
-                text_sha256,
-                metadata
+                text_sha256
             )
             VALUES %s
             """,
@@ -584,10 +626,26 @@ def import_snapshot(
         )
         entry_ids = {int(row[0]): int(row[1]) for row in cur.fetchall()}
 
+        entry_labels_by_sequence = {
+            entry.sequence: bracketed_latin_labels(entry.text)
+            for entry in parsed.entries
+        }
+
         mention_rows = []
+        re_candidates_by_mention_sequence: dict[int, tuple[dict[str, str], ...]] = {}
+        label_hints_by_mention_sequence: dict[int, list[LatinLabel]] = {}
         for mention in parsed.mentions:
             namespace, authority_id = authority_namespace_and_id(mention)
-            hints = build_review_hints(mention, exact_re_index, prefix_re_index)
+            label_hints = bracketed_latin_labels(mention.context)
+            extra_search_terms = ordered_label_texts(label_hints)
+            hints = build_review_hints(
+                mention,
+                exact_re_index,
+                prefix_re_index,
+                extra_search_terms=extra_search_terms,
+            )
+            re_candidates_by_mention_sequence[mention.sequence] = hints.re_candidates
+            label_hints_by_mention_sequence[mention.sequence] = label_hints
             mention_rows.append(
                 (
                     metadata.snapshot_id,
@@ -623,10 +681,8 @@ def import_snapshot(
                     hints.place_type_kind,
                     hints.region_hint,
                     hints.region_hint_source,
-                    Json(list(hints.re_candidates)),
                     len(hints.re_candidates),
                     fingerprints[mention.sequence],
-                    Json({}),
                 )
             )
 
@@ -667,16 +723,164 @@ def import_snapshot(
                 place_type_kind,
                 region_hint,
                 region_hint_source,
-                re_candidate_ids,
                 re_candidate_count,
-                mention_fingerprint,
-                metadata
+                mention_fingerprint
             )
             VALUES %s
             """,
             mention_rows,
             page_size=1000,
         )
+
+        cur.execute(
+            """
+            SELECT entry_sequence, id
+            FROM topostext_intake_entries
+            WHERE snapshot_id = %s
+            """,
+            (metadata.snapshot_id,),
+        )
+        entry_ids = {int(row[0]): int(row[1]) for row in cur.fetchall()}
+
+        label_rows = []
+        for entry in parsed.entries:
+            entry_id = entry_ids[entry.sequence]
+            for label in entry_labels_by_sequence.get(entry.sequence, []):
+                label_rows.append(
+                    (
+                        metadata.snapshot_id,
+                        entry_id,
+                        label.sequence,
+                        label.label_text,
+                        label.normalized_label,
+                        label.context_before,
+                        label.context_after,
+                    )
+                )
+        if label_rows:
+            execute_values(
+                cur,
+                """
+                INSERT INTO topostext_intake_entry_latin_labels (
+                    snapshot_id,
+                    entry_id,
+                    label_sequence,
+                    label_text,
+                    normalized_label,
+                    context_before,
+                    context_after
+                )
+                VALUES %s
+                ON CONFLICT (entry_id, label_sequence) DO NOTHING
+                """,
+                label_rows,
+                page_size=500,
+            )
+
+        cur.execute(
+            """
+            SELECT mention_sequence, id
+            FROM topostext_intake_mentions
+            WHERE snapshot_id = %s
+            """,
+            (metadata.snapshot_id,),
+        )
+        mention_ids = {int(row[0]): int(row[1]) for row in cur.fetchall()}
+
+        re_candidate_rows = []
+        for mention_sequence, candidates in re_candidates_by_mention_sequence.items():
+            mention_id = mention_ids[mention_sequence]
+            for rank, candidate in enumerate(candidates, start=1):
+                re_candidate_rows.append(
+                    (
+                        metadata.snapshot_id,
+                        mention_id,
+                        rank,
+                        candidate.get("re_id") or "",
+                        candidate.get("label") or "",
+                        candidate.get("match") or "",
+                        candidate.get("short_definition") or "",
+                        candidate.get("article_item") or "",
+                        candidate.get("subject_item") or "",
+                        candidate.get("subject_label") or "",
+                    )
+                )
+        if re_candidate_rows:
+            execute_values(
+                cur,
+                """
+                INSERT INTO topostext_intake_re_candidates (
+                    snapshot_id,
+                    mention_id,
+                    candidate_rank,
+                    re_id,
+                    label,
+                    match_kind,
+                    short_definition,
+                    article_item,
+                    subject_item,
+                    subject_label
+                )
+                VALUES %s
+                ON CONFLICT (mention_id, candidate_rank) DO NOTHING
+                """,
+                re_candidate_rows,
+                page_size=1000,
+            )
+
+        if label_rows:
+            cur.execute(
+                """
+                SELECT entry_id, normalized_label, id
+                FROM topostext_intake_entry_latin_labels
+                WHERE snapshot_id = %s
+                """,
+                (metadata.snapshot_id,),
+            )
+            label_ids_by_entry_and_normalized: dict[tuple[int, str], list[int]] = defaultdict(list)
+            for entry_id, normalized_label, label_id in cur.fetchall():
+                label_ids_by_entry_and_normalized[(int(entry_id), str(normalized_label))].append(
+                    int(label_id)
+                )
+
+            mention_by_sequence = {mention.sequence: mention for mention in parsed.mentions}
+            label_hint_rows = []
+            for mention_sequence, label_hints in label_hints_by_mention_sequence.items():
+                if not label_hints:
+                    continue
+                mention = mention_by_sequence[mention_sequence]
+                entry_id = entry_ids[mention.entry_sequence]
+                mention_id = mention_ids[mention_sequence]
+                for label in label_hints:
+                    label_ids = label_ids_by_entry_and_normalized.get(
+                        (entry_id, label.normalized_label),
+                        [],
+                    )
+                    for label_id in label_ids:
+                        label_hint_rows.append(
+                            (
+                                metadata.snapshot_id,
+                                mention_id,
+                                label_id,
+                                "context",
+                            )
+                        )
+            if label_hint_rows:
+                execute_values(
+                    cur,
+                    """
+                    INSERT INTO topostext_intake_mention_latin_label_hints (
+                        snapshot_id,
+                        mention_id,
+                        latin_label_id,
+                        hint_source
+                    )
+                    VALUES %s
+                    ON CONFLICT (mention_id, latin_label_id, hint_source) DO NOTHING
+                    """,
+                    label_hint_rows,
+                    page_size=1000,
+                )
         conn.commit()
     except Exception:
         conn.rollback()

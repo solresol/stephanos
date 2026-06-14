@@ -19,12 +19,16 @@ from generate_topostext_authority_status_page import (
     build_ethnic_suggestion_rows,
     build_new_id_rows,
     build_re_candidate_rows as build_status_re_candidate_rows,
+    fetch_namespace_rows,
+    fetch_status_rows,
 )
 from import_topostext_intake import (
     action_status,
     authority_namespace_and_id,
+    bracketed_latin_labels,
     build_review_hints,
     re_candidate_index,
+    re_search_terms,
     placeholder_code,
     stable_mention_fingerprints,
 )
@@ -238,6 +242,77 @@ class ToposTextIntakeReportTests(unittest.TestCase):
         self.assertEqual(hints.re_candidates[0]["re_id"], "RE:Agessos")
         self.assertEqual(hints.re_candidates[0]["match"], "exact")
 
+    def test_bracketed_latin_labels_are_extracted_as_structured_hints(self):
+        labels = bracketed_latin_labels("ἔστι καὶ [ Axia ] πόλις Ἰταλίας καὶ [Herakleia Pontika].")
+
+        self.assertEqual([label.label_text for label in labels], ["Axia", "Herakleia Pontika"])
+        self.assertEqual([label.normalized_label for label in labels], ["axia", "herakleiapontika"])
+        self.assertIn("πόλις", labels[0].context_after)
+
+    def test_bracketed_latin_labels_can_seed_re_candidate_search(self):
+        parsed = parse_topostext_html(
+            """<p work="241" id="A102.1"><PRN id="zzz">Ἀξιεύς</PRN> near [ Axia ] in Italy.</p>"""
+        )
+        labels = bracketed_latin_labels(parsed.mentions[0].context)
+        exact_index, prefix_index = re_candidate_index(
+            {
+                "RE:Axia": ReEnrichment(
+                    re_id="RE:Axia",
+                    short_definition="Stadt in Italien",
+                    subject_item="https://www.wikidata.org/wiki/Q2",
+                )
+            }
+        )
+        hints = build_review_hints(
+            parsed.mentions[0],
+            exact_index,
+            prefix_index,
+            extra_search_terms=[label.label_text for label in labels],
+        )
+
+        self.assertEqual(re_search_terms(parsed.mentions[0], ["Axia"])[-1], "axia")
+        self.assertEqual(hints.re_candidates[0]["re_id"], "RE:Axia")
+        self.assertEqual(hints.re_candidates[0]["match"], "exact")
+
+    def test_review_groups_use_typed_re_candidates_and_latin_hints(self):
+        rows = [
+            {
+                "action_status": "needs_authority_id",
+                "authority_class": "zzz",
+                "authority_namespace": "unresolved",
+                "authority_id": "",
+                "tag_name": "prn",
+                "tag_id": "zzz",
+                "mention_text": "Ἀξιεύς",
+                "re_namespace_id": "",
+                "re_short_definition": "",
+                "re_article_item": "",
+                "re_subject_item": "",
+                "re_subject_label": "",
+                "entry_key": "241:A102.1",
+                "entry_title": "Axia",
+                "context": "near [ Axia ]",
+                "authority_url": "",
+                "re_candidate_count": 1,
+                "re_candidates": [
+                    {
+                        "re_id": "RE:Axia",
+                        "label": "Axia",
+                        "match": "exact",
+                        "short_definition": "Stadt in Italien",
+                    }
+                ],
+                "latin_label_hints": ["Axia"],
+            }
+        ]
+
+        groups = build_review_groups(rows)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].re_candidate_count, 1)
+        self.assertEqual(groups[0].re_candidates[0]["re_id"], "RE:Axia")
+        self.assertEqual(groups[0].latin_label_hints, ["Axia"])
+
     def test_history_pair_summary_pairs_changed_surface(self):
         older = SnapshotSummary(1, "fetched", "2026-05-15", "a" * 64, "old.html", 100, 1, 1)
         newer = SnapshotSummary(2, "fetched", "2026-05-16", "b" * 64, "new.html", 120, 1, 1)
@@ -382,6 +457,44 @@ class ToposTextIntakeReportTests(unittest.TestCase):
         self.assertEqual(len(build_status_re_candidate_rows(rows)), 1)
         self.assertEqual(len(build_ethnic_suggestion_rows(rows)), 1)
         self.assertEqual(len(build_new_id_rows(rows)), 1)
+
+    def test_authority_namespace_rows_do_not_require_topostext_snapshot_id(self):
+        class FakeCursor:
+            def execute(self, *_args, **_kwargs):
+                return None
+
+            def fetchall(self):
+                return [
+                    {
+                        "namespace": "wikidata",
+                        "authority_records": 1,
+                        "linked_entities": 1,
+                        "current_mentions": 2,
+                    }
+                ]
+
+        rows = fetch_namespace_rows(FakeCursor())
+
+        self.assertEqual(rows[0]["namespace"], "wikidata")
+
+    def test_authority_status_rows_do_not_require_topostext_snapshot_id(self):
+        class FakeCursor:
+            def execute(self, *_args, **_kwargs):
+                return None
+
+            def fetchall(self):
+                return [
+                    {
+                        "resolution_status": "candidate",
+                        "entity_kind": "place",
+                        "entity_count": 1,
+                        "with_preferred_authority": 0,
+                    }
+                ]
+
+        rows = fetch_status_rows(FakeCursor())
+
+        self.assertEqual(rows[0]["resolution_status"], "candidate")
 
 
 if __name__ == "__main__":

@@ -20,6 +20,8 @@ from pathlib import Path
 
 from generate_topostext_review_page import (
     FINAL_STATUSES,
+    attach_latin_label_hints,
+    attach_re_candidates,
     build_snapshot_diff,
     choose_snapshots,
     fetch_entries,
@@ -153,7 +155,10 @@ def fetch_topostext_work_rows(cur, snapshot_id: int) -> list[dict]:
         """,
         (snapshot_id, list(FINAL_STATUSES)),
     )
-    return [dict(row) for row in cur.fetchall()]
+    rows = [dict(row) for row in cur.fetchall()]
+    attach_re_candidates(cur, rows, snapshot_id)
+    attach_latin_label_hints(cur, rows, snapshot_id)
+    return rows
 
 
 def build_re_candidate_rows(rows: list[dict]) -> list[dict]:
@@ -225,6 +230,7 @@ def write_re_candidates_csv(path: Path, rows: list[dict]) -> None:
         "region_hint",
         "re_candidate_count",
         "re_candidates",
+        "latin_label_hints",
         "context",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -235,6 +241,7 @@ def write_re_candidates_csv(path: Path, rows: list[dict]) -> None:
                 {
                     **{name: row.get(name, "") for name in fieldnames},
                     "re_candidates": format_re_candidates(row_candidates(row), limit=8),
+                    "latin_label_hints": "; ".join(row.get("latin_label_hints") or []),
                 }
             )
 
@@ -319,6 +326,8 @@ def render_work_table(rows: list[dict], *, limit: int, table_kind: str) -> str:
             hints.append(f"region {row.get('region_hint')}")
         if table_kind == "re":
             hints.append(format_re_candidates(row_candidates(row), limit=5))
+        if row.get("latin_label_hints"):
+            hints.append("Latin hint " + ", ".join(row.get("latin_label_hints")[:3]))
 
         body.append(
             "<tr>"

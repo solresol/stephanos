@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict aLUec5MngDdtXAVlZaiufl7u67FmOaanMRRfocgPPLjJopucmZhyA6fca1aso07
+\restrict 3qMOxrEUoQ9qCJDtrTQSSCNnKysG7wGcrGpIHNqjgYJAnbRmep8erwvTiJA6N90
 
 -- Dumped from database version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
@@ -2168,7 +2168,6 @@ CREATE TABLE public.topostext_intake_entries (
     entry_text text DEFAULT ''::text NOT NULL,
     text_sha256 text NOT NULL,
     imported_at timestamp with time zone DEFAULT now() NOT NULL,
-    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
     CONSTRAINT topostext_intake_entries_sequence_check CHECK ((entry_sequence > 0)),
     CONSTRAINT topostext_intake_entries_text_sha256_check CHECK ((text_sha256 ~ '^[0-9a-f]{64}$'::text))
 );
@@ -2191,6 +2190,79 @@ CREATE SEQUENCE public.topostext_intake_entries_id_seq
 --
 
 ALTER SEQUENCE public.topostext_intake_entries_id_seq OWNED BY public.topostext_intake_entries.id;
+
+
+--
+-- Name: topostext_intake_entry_latin_labels; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.topostext_intake_entry_latin_labels (
+    id bigint NOT NULL,
+    snapshot_id bigint NOT NULL,
+    entry_id bigint NOT NULL,
+    label_sequence integer NOT NULL,
+    label_text text NOT NULL,
+    normalized_label text NOT NULL,
+    context_before text DEFAULT ''::text NOT NULL,
+    context_after text DEFAULT ''::text NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT topostext_intake_entry_latin_labels_normalized_check CHECK ((btrim(normalized_label) <> ''::text)),
+    CONSTRAINT topostext_intake_entry_latin_labels_sequence_check CHECK ((label_sequence > 0)),
+    CONSTRAINT topostext_intake_entry_latin_labels_text_check CHECK ((btrim(label_text) <> ''::text))
+);
+
+
+--
+-- Name: topostext_intake_entry_latin_labels_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.topostext_intake_entry_latin_labels_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: topostext_intake_entry_latin_labels_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.topostext_intake_entry_latin_labels_id_seq OWNED BY public.topostext_intake_entry_latin_labels.id;
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.topostext_intake_mention_latin_label_hints (
+    id bigint NOT NULL,
+    snapshot_id bigint NOT NULL,
+    mention_id bigint NOT NULL,
+    latin_label_id bigint NOT NULL,
+    hint_source text DEFAULT 'context'::text NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT topostext_intake_mention_latin_label_hints_source_check CHECK ((hint_source = 'context'::text))
+);
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.topostext_intake_mention_latin_label_hints_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.topostext_intake_mention_latin_label_hints_id_seq OWNED BY public.topostext_intake_mention_latin_label_hints.id;
 
 
 --
@@ -2228,14 +2300,12 @@ CREATE TABLE public.topostext_intake_mentions (
     re_match_source text DEFAULT ''::text NOT NULL,
     mention_fingerprint text NOT NULL,
     imported_at timestamp with time zone DEFAULT now() NOT NULL,
-    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
     suggested_tag_name text DEFAULT ''::text NOT NULL,
     tag_review_reason text DEFAULT ''::text NOT NULL,
     place_type_term text DEFAULT ''::text NOT NULL,
     place_type_kind text DEFAULT ''::text NOT NULL,
     region_hint text DEFAULT ''::text NOT NULL,
     region_hint_source text DEFAULT ''::text NOT NULL,
-    re_candidate_ids jsonb DEFAULT '[]'::jsonb NOT NULL,
     re_candidate_count integer DEFAULT 0 NOT NULL,
     CONSTRAINT topostext_intake_mentions_entry_sequence_check CHECK ((entry_mention_sequence > 0)),
     CONSTRAINT topostext_intake_mentions_fingerprint_check CHECK ((mention_fingerprint ~ '^[0-9a-f]{64}$'::text)),
@@ -2261,6 +2331,47 @@ CREATE SEQUENCE public.topostext_intake_mentions_id_seq
 --
 
 ALTER SEQUENCE public.topostext_intake_mentions_id_seq OWNED BY public.topostext_intake_mentions.id;
+
+
+--
+-- Name: topostext_intake_re_candidates; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.topostext_intake_re_candidates (
+    id bigint NOT NULL,
+    snapshot_id bigint NOT NULL,
+    mention_id bigint NOT NULL,
+    candidate_rank integer NOT NULL,
+    re_id text NOT NULL,
+    label text DEFAULT ''::text NOT NULL,
+    match_kind text DEFAULT ''::text NOT NULL,
+    short_definition text DEFAULT ''::text NOT NULL,
+    article_item text DEFAULT ''::text NOT NULL,
+    subject_item text DEFAULT ''::text NOT NULL,
+    subject_label text DEFAULT ''::text NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT topostext_intake_re_candidates_rank_check CHECK ((candidate_rank > 0)),
+    CONSTRAINT topostext_intake_re_candidates_re_id_check CHECK ((btrim(re_id) <> ''::text))
+);
+
+
+--
+-- Name: topostext_intake_re_candidates_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.topostext_intake_re_candidates_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: topostext_intake_re_candidates_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.topostext_intake_re_candidates_id_seq OWNED BY public.topostext_intake_re_candidates.id;
 
 
 --
@@ -3258,10 +3369,31 @@ ALTER TABLE ONLY public.topostext_intake_entries ALTER COLUMN id SET DEFAULT nex
 
 
 --
+-- Name: topostext_intake_entry_latin_labels id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entry_latin_labels ALTER COLUMN id SET DEFAULT nextval('public.topostext_intake_entry_latin_labels_id_seq'::regclass);
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mention_latin_label_hints ALTER COLUMN id SET DEFAULT nextval('public.topostext_intake_mention_latin_label_hints_id_seq'::regclass);
+
+
+--
 -- Name: topostext_intake_mentions id; Type: DEFAULT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.topostext_intake_mentions ALTER COLUMN id SET DEFAULT nextval('public.topostext_intake_mentions_id_seq'::regclass);
+
+
+--
+-- Name: topostext_intake_re_candidates id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_re_candidates ALTER COLUMN id SET DEFAULT nextval('public.topostext_intake_re_candidates_id_seq'::regclass);
 
 
 --
@@ -3891,6 +4023,38 @@ ALTER TABLE ONLY public.topostext_intake_entries
 
 
 --
+-- Name: topostext_intake_entry_latin_labels topostext_intake_entry_latin_labels_entry_sequence_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entry_latin_labels
+    ADD CONSTRAINT topostext_intake_entry_latin_labels_entry_sequence_key UNIQUE (entry_id, label_sequence);
+
+
+--
+-- Name: topostext_intake_entry_latin_labels topostext_intake_entry_latin_labels_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entry_latin_labels
+    ADD CONSTRAINT topostext_intake_entry_latin_labels_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints topostext_intake_mention_latin_label_hints_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mention_latin_label_hints
+    ADD CONSTRAINT topostext_intake_mention_latin_label_hints_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints topostext_intake_mention_latin_label_hints_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mention_latin_label_hints
+    ADD CONSTRAINT topostext_intake_mention_latin_label_hints_unique UNIQUE (mention_id, latin_label_id, hint_source);
+
+
+--
 -- Name: topostext_intake_mentions topostext_intake_mentions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3904,6 +4068,22 @@ ALTER TABLE ONLY public.topostext_intake_mentions
 
 ALTER TABLE ONLY public.topostext_intake_mentions
     ADD CONSTRAINT topostext_intake_mentions_snapshot_sequence_key UNIQUE (snapshot_id, mention_sequence);
+
+
+--
+-- Name: topostext_intake_re_candidates topostext_intake_re_candidates_mention_rank_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_re_candidates
+    ADD CONSTRAINT topostext_intake_re_candidates_mention_rank_key UNIQUE (mention_id, candidate_rank);
+
+
+--
+-- Name: topostext_intake_re_candidates topostext_intake_re_candidates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_re_candidates
+    ADD CONSTRAINT topostext_intake_re_candidates_pkey PRIMARY KEY (id);
 
 
 --
@@ -4820,6 +5000,20 @@ CREATE INDEX topostext_intake_entries_text_sha_idx ON public.topostext_intake_en
 
 
 --
+-- Name: topostext_intake_entry_latin_labels_snapshot_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_entry_latin_labels_snapshot_idx ON public.topostext_intake_entry_latin_labels USING btree (snapshot_id, normalized_label);
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints_snapshot_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_mention_latin_label_hints_snapshot_idx ON public.topostext_intake_mention_latin_label_hints USING btree (snapshot_id, mention_id);
+
+
+--
 -- Name: topostext_intake_mentions_action_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4880,6 +5074,20 @@ CREATE INDEX topostext_intake_mentions_snapshot_entry_idx ON public.topostext_in
 --
 
 CREATE INDEX topostext_intake_mentions_suggested_tag_idx ON public.topostext_intake_mentions USING btree (snapshot_id, suggested_tag_name) WHERE (suggested_tag_name <> ''::text);
+
+
+--
+-- Name: topostext_intake_re_candidates_re_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_re_candidates_re_idx ON public.topostext_intake_re_candidates USING btree (re_id);
+
+
+--
+-- Name: topostext_intake_re_candidates_snapshot_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_re_candidates_snapshot_idx ON public.topostext_intake_re_candidates USING btree (snapshot_id, mention_id, candidate_rank);
 
 
 --
@@ -5693,6 +5901,46 @@ ALTER TABLE ONLY public.topostext_intake_entries
 
 
 --
+-- Name: topostext_intake_entry_latin_labels topostext_intake_entry_latin_labels_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entry_latin_labels
+    ADD CONSTRAINT topostext_intake_entry_latin_labels_entry_id_fkey FOREIGN KEY (entry_id) REFERENCES public.topostext_intake_entries(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_entry_latin_labels topostext_intake_entry_latin_labels_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entry_latin_labels
+    ADD CONSTRAINT topostext_intake_entry_latin_labels_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.entity_source_snapshots(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints topostext_intake_mention_latin_label_hints_latin_label_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mention_latin_label_hints
+    ADD CONSTRAINT topostext_intake_mention_latin_label_hints_latin_label_id_fkey FOREIGN KEY (latin_label_id) REFERENCES public.topostext_intake_entry_latin_labels(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints topostext_intake_mention_latin_label_hints_mention_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mention_latin_label_hints
+    ADD CONSTRAINT topostext_intake_mention_latin_label_hints_mention_id_fkey FOREIGN KEY (mention_id) REFERENCES public.topostext_intake_mentions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints topostext_intake_mention_latin_label_hints_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mention_latin_label_hints
+    ADD CONSTRAINT topostext_intake_mention_latin_label_hints_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.entity_source_snapshots(id) ON DELETE CASCADE;
+
+
+--
 -- Name: topostext_intake_mentions topostext_intake_mentions_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5706,6 +5954,22 @@ ALTER TABLE ONLY public.topostext_intake_mentions
 
 ALTER TABLE ONLY public.topostext_intake_mentions
     ADD CONSTRAINT topostext_intake_mentions_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.entity_source_snapshots(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_re_candidates topostext_intake_re_candidates_mention_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_re_candidates
+    ADD CONSTRAINT topostext_intake_re_candidates_mention_id_fkey FOREIGN KEY (mention_id) REFERENCES public.topostext_intake_mentions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_re_candidates topostext_intake_re_candidates_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_re_candidates
+    ADD CONSTRAINT topostext_intake_re_candidates_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.entity_source_snapshots(id) ON DELETE CASCADE;
 
 
 --
@@ -5976,4 +6240,4 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict aLUec5MngDdtXAVlZaiufl7u67FmOaanMRRfocgPPLjJopucmZhyA6fca1aso07
+\unrestrict 3qMOxrEUoQ9qCJDtrTQSSCNnKysG7wGcrGpIHNqjgYJAnbRmep8erwvTiJA6N90

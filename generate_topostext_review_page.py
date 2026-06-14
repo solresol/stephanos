@@ -84,8 +84,9 @@ class ReviewGroup:
     place_type_term: str = ""
     place_type_kind: str = ""
     region_hint: str = ""
-    re_candidate_ids: list[dict] = field(default_factory=list)
+    re_candidates: list[dict] = field(default_factory=list)
     re_candidate_count: int = 0
+    latin_label_hints: list[str] = field(default_factory=list)
     count: int = 0
     entries: set[str] = field(default_factory=set)
     first_entry: str = ""
@@ -106,14 +107,81 @@ def link_or_text(label: str, url: str) -> str:
 
 
 def row_candidates(row: dict) -> list[dict]:
-    raw = row.get("re_candidate_ids") or []
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            return []
-        return parsed if isinstance(parsed, list) else []
+    raw = row.get("re_candidates") or []
     return raw if isinstance(raw, list) else []
+
+
+def attach_re_candidates(cur, rows: list[dict], snapshot_id: int) -> None:
+    if not rows or not table_exists(cur, "topostext_intake_re_candidates"):
+        return
+    mention_ids = [row["id"] for row in rows if row.get("id") is not None]
+    if not mention_ids:
+        return
+    cur.execute(
+        """
+        SELECT
+            mention_id,
+            re_id,
+            label,
+            match_kind,
+            short_definition,
+            article_item,
+            subject_item,
+            subject_label
+        FROM topostext_intake_re_candidates
+        WHERE snapshot_id = %s
+          AND mention_id = ANY(%s)
+        ORDER BY mention_id, candidate_rank
+        """,
+        (snapshot_id, mention_ids),
+    )
+    by_mention: dict[int, list[dict]] = defaultdict(list)
+    for row in cur.fetchall():
+        by_mention[int(row["mention_id"])].append(
+            {
+                "re_id": row["re_id"] or "",
+                "label": row["label"] or "",
+                "match": row["match_kind"] or "",
+                "short_definition": row["short_definition"] or "",
+                "article_item": row["article_item"] or "",
+                "subject_item": row["subject_item"] or "",
+                "subject_label": row["subject_label"] or "",
+            }
+        )
+    for row in rows:
+        candidates = by_mention.get(int(row.get("id") or 0), [])
+        row["re_candidates"] = candidates
+        row["re_candidate_count"] = len(candidates)
+
+
+def attach_latin_label_hints(cur, rows: list[dict], snapshot_id: int) -> None:
+    if not rows or not table_exists(cur, "topostext_intake_mention_latin_label_hints"):
+        return
+    mention_ids = [row["id"] for row in rows if row.get("id") is not None]
+    if not mention_ids:
+        return
+    cur.execute(
+        """
+        SELECT
+            h.mention_id,
+            l.label_text,
+            h.hint_source
+        FROM topostext_intake_mention_latin_label_hints h
+        JOIN topostext_intake_entry_latin_labels l
+          ON l.id = h.latin_label_id
+        WHERE h.snapshot_id = %s
+          AND h.mention_id = ANY(%s)
+        ORDER BY h.mention_id, l.label_sequence
+        """,
+        (snapshot_id, mention_ids),
+    )
+    by_mention: dict[int, list[str]] = defaultdict(list)
+    for row in cur.fetchall():
+        label = row["label_text"] or ""
+        if label and label not in by_mention[int(row["mention_id"])]:
+            by_mention[int(row["mention_id"])].append(label)
+    for row in rows:
+        row["latin_label_hints"] = by_mention.get(int(row.get("id") or 0), [])
 
 
 def format_re_candidates(candidates: list[dict], limit: int = 3) -> str:
@@ -213,7 +281,10 @@ def fetch_mentions(cur, snapshot_id: int) -> list[dict]:
         """,
         (snapshot_id,),
     )
-    return [dict(row) for row in cur.fetchall()]
+    rows = [dict(row) for row in cur.fetchall()]
+    attach_re_candidates(cur, rows, snapshot_id)
+    attach_latin_label_hints(cur, rows, snapshot_id)
+    return rows
 
 
 def fetch_entries(cur, snapshot_id: int) -> list[dict]:
@@ -287,8 +358,9 @@ def build_review_groups(rows: list[dict]) -> list[ReviewGroup]:
                 place_type_term=row.get("place_type_term") or "",
                 place_type_kind=row.get("place_type_kind") or "",
                 region_hint=row.get("region_hint") or "",
-                re_candidate_ids=row_candidates(row),
+                re_candidates=row_candidates(row),
                 re_candidate_count=int(row.get("re_candidate_count") or 0),
+                latin_label_hints=list(row.get("latin_label_hints") or []),
                 first_entry=row.get("entry_key") or "",
                 first_title=row.get("entry_title") or "",
                 first_context=row.get("context") or "",
@@ -313,9 +385,12 @@ def build_review_groups(rows: list[dict]) -> list[ReviewGroup]:
         ):
             if not getattr(group, attr) and row.get(attr):
                 setattr(group, attr, row[attr])
-        if not group.re_candidate_ids and row_candidates(row):
-            group.re_candidate_ids = row_candidates(row)
-            group.re_candidate_count = int(row.get("re_candidate_count") or len(group.re_candidate_ids))
+        if not group.re_candidates and row_candidates(row):
+            group.re_candidates = row_candidates(row)
+            group.re_candidate_count = int(row.get("re_candidate_count") or len(group.re_candidates))
+        for label in row.get("latin_label_hints") or []:
+            if label not in group.latin_label_hints:
+                group.latin_label_hints.append(label)
 
     return sorted(
         groups.values(),
@@ -503,6 +578,7 @@ def write_review_queue_csv(path: Path, groups: list[ReviewGroup]) -> None:
         "place_type_term",
         "place_type_kind",
         "region_hint",
+        "latin_label_hints",
         "re_candidates",
         "first_entry",
         "first_title",
@@ -535,7 +611,8 @@ def write_review_queue_csv(path: Path, groups: list[ReviewGroup]) -> None:
                     "place_type_term": group.place_type_term,
                     "place_type_kind": group.place_type_kind,
                     "region_hint": group.region_hint,
-                    "re_candidates": format_re_candidates(group.re_candidate_ids, limit=5),
+                    "latin_label_hints": "; ".join(group.latin_label_hints),
+                    "re_candidates": format_re_candidates(group.re_candidates, limit=5),
                     "first_entry": group.first_entry,
                     "first_title": group.first_title,
                     "first_context": group.first_context,
@@ -577,6 +654,7 @@ def write_re_candidates_csv(path: Path, rows: list[dict]) -> None:
         "mention_text",
         "re_candidate_count",
         "re_candidates",
+        "latin_label_hints",
         "context",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -593,6 +671,7 @@ def write_re_candidates_csv(path: Path, rows: list[dict]) -> None:
                     "mention_text": row.get("mention_text", ""),
                     "re_candidate_count": row.get("re_candidate_count", 0),
                     "re_candidates": format_re_candidates(row_candidates(row), limit=5),
+                    "latin_label_hints": "; ".join(row.get("latin_label_hints") or []),
                     "context": row.get("context", ""),
                 }
             )
@@ -635,8 +714,10 @@ def render_group_table(groups: list[ReviewGroup], limit: int) -> str:
             suggestions.append(f"type {group.place_type_term}")
         if group.region_hint:
             suggestions.append(f"region {group.region_hint}")
-        if group.re_candidate_ids:
-            suggestions.append(format_re_candidates(group.re_candidate_ids))
+        if group.re_candidates:
+            suggestions.append(format_re_candidates(group.re_candidates))
+        if group.latin_label_hints:
+            suggestions.append("Latin hint " + ", ".join(group.latin_label_hints[:3]))
         body.append(
             "<tr>"
             f"<td>{render_cell(ACTION_STATUS_LABELS.get(group.action_status, group.action_status))}</td>"
@@ -765,12 +846,13 @@ def render_re_candidate_table(rows: list[dict], limit: int) -> str:
             f"<td>{render_cell(row.get('mention_text'))}</td>"
             f"<td>{render_cell(row.get('re_candidate_count'))}</td>"
             f"<td>{render_cell(format_re_candidates(row_candidates(row), limit=5))}</td>"
+            f"<td>{render_cell('; '.join(row.get('latin_label_hints') or []))}</td>"
             f"<td>{render_cell(row.get('context'))}</td>"
             "</tr>"
         )
     return (
         "<table><thead><tr>"
-        "<th>Entry</th><th>Queue</th><th>Tag</th><th>ID</th><th>Surface</th><th>Candidates</th><th>Possible RE matches</th><th>Context</th>"
+        "<th>Entry</th><th>Queue</th><th>Tag</th><th>ID</th><th>Surface</th><th>Candidates</th><th>Possible RE matches</th><th>Latin hints</th><th>Context</th>"
         "</tr></thead><tbody>"
         + "".join(body)
         + "</tbody></table>"
