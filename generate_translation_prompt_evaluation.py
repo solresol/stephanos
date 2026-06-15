@@ -8,16 +8,17 @@ from collections import Counter, defaultdict
 import csv
 from datetime import datetime, timezone
 import html
+import json
 import math
 import os
 from pathlib import Path
 import re
+import subprocess
 import unicodedata
 
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -51,6 +52,8 @@ IMAGE_DIR = OUTPUT_DIR / "prompt_images"
 MAIN_PAGE = OUTPUT_DIR / "prompt_evaluation.html"
 SUMMARY_CSV = OUTPUT_DIR / "prompt_evaluation_metrics.csv"
 ROW_CSV = OUTPUT_DIR / "prompt_evaluation_rows.csv"
+NEURAL_METRICS_HELPER = Path(__file__).with_name("compute_neural_translation_metrics.py")
+DEFAULT_NEURAL_METRICS_PYTHON = Path("/home/stephanos/metric-envs/neural-metrics/bin/python")
 
 ENGLISH_TOKEN_RE = re.compile(r"[A-Za-z]+(?:[''][A-Za-z]+)?|\d+")
 GREEK_TOKEN_PATTERN = r"(?u)[\u0370-\u03FF\u1F00-\u1FFF]{2,}"
@@ -90,6 +93,11 @@ SUMMARY_METRIC_FIELDS = [
     ("mean_bertscore", "BERTScore"),
     ("mean_comet", "COMET"),
     ("mean_bleurt", "BLEURT"),
+]
+TREND_CHART_SPECS = [
+    ("r2", "R^2", None, "prompt_evaluation_trend_r2.png"),
+    ("mean_bleu4", "Mean BLEU-4", None, "prompt_evaluation_trend_bleu4.png"),
+    ("slope", "Length slope", 1.0, "prompt_evaluation_trend_slope.png"),
 ]
 
 
@@ -297,12 +305,15 @@ class TranslationMetricEvaluator:
         use_gpu: bool = False,
         bertscore_batch_size: int = 16,
         comet_batch_size: int = 8,
+        neural_metrics_python: str | None = None,
     ) -> None:
         self.metric_names = metric_names
         self.metric_keys = tuple(METRIC_KEY_BY_NAME[name] for name in metric_names)
         self.use_gpu = use_gpu
         self.bertscore_batch_size = bertscore_batch_size
         self.comet_batch_size = comet_batch_size
+        self.neural_metrics_python = resolve_neural_metrics_python(neural_metrics_python)
+        self.sidecar_metric_keys: set[str] = set()
         self.handlers: dict[str, object] = {}
         self.status: dict[str, str] = {}
         self._setup_metrics()
@@ -312,6 +323,13 @@ class TranslationMetricEvaluator:
 
     def _mark_available(self, key: str, detail: str) -> None:
         self.status[METRIC_NAME_BY_KEY[key]] = detail
+
+    def _mark_sidecar(self, key: str, reason: str) -> None:
+        if self.neural_metrics_python and NEURAL_METRICS_HELPER.exists():
+            self.sidecar_metric_keys.add(key)
+            self._mark_available(key, f"sidecar pending via {self.neural_metrics_python} ({reason})")
+        else:
+            self._mark_unavailable(key, reason)
 
     def _setup_metrics(self) -> None:
         if "bleu4" in self.metric_keys or "chrfpp" in self.metric_keys:
@@ -370,7 +388,7 @@ class TranslationMetricEvaluator:
                 self.handlers["bertscore"] = bert_score
                 self._mark_available("bertscore", "bert-score F1")
             except ImportError as exc:
-                self._mark_unavailable("bertscore", f"bert-score missing ({exc})")
+                self._mark_sidecar("bertscore", f"bert-score missing from main env ({exc})")
 
         if "comet" in self.metric_keys:
             try:
@@ -384,9 +402,9 @@ class TranslationMetricEvaluator:
                 self.handlers["comet"] = model
                 self._mark_available("comet", f"{model_name}")
             except ImportError as exc:
-                self._mark_unavailable("comet", f"unbabel-comet missing ({exc})")
+                self._mark_sidecar("comet", f"unbabel-comet missing from main env ({exc})")
             except Exception as exc:
-                self._mark_unavailable("comet", f"initialization failed ({exc})")
+                self._mark_sidecar("comet", f"main-env initialization failed ({exc})")
 
         if "bleurt" in self.metric_keys:
             try:
@@ -396,9 +414,9 @@ class TranslationMetricEvaluator:
                 self.handlers["bleurt"] = bleurt_score.BleurtScorer(checkpoint)
                 self._mark_available("bleurt", f"BLEURT checkpoint {checkpoint}")
             except ImportError as exc:
-                self._mark_unavailable("bleurt", f"bleurt missing ({exc})")
+                self._mark_sidecar("bleurt", f"bleurt missing from main env ({exc})")
             except Exception as exc:
-                self._mark_unavailable("bleurt", f"initialization failed ({exc})")
+                self._mark_sidecar("bleurt", f"main-env initialization failed ({exc})")
 
         for name in self.metric_names:
             self.status.setdefault(name, "not requested")
@@ -409,6 +427,71 @@ class TranslationMetricEvaluator:
         self._apply_bertscore(rows)
         self._apply_comet(rows)
         self._apply_bleurt(rows)
+        self._apply_sidecar_metrics(rows)
+
+    def _apply_sidecar_metrics(self, rows: list[dict[str, object]]) -> None:
+        metric_keys = sorted(self.sidecar_metric_keys)
+        if not metric_keys or not rows or not self.neural_metrics_python:
+            return
+        payload = {
+            "metrics": metric_keys,
+            "use_gpu": self.use_gpu,
+            "bertscore_batch_size": self.bertscore_batch_size,
+            "comet_batch_size": self.comet_batch_size,
+            "comet_model": os.environ.get("STEPHANOS_COMET_MODEL", "Unbabel/wmt22-comet-da"),
+            "bleurt_checkpoint": os.environ.get("BLEURT_CHECKPOINT", ""),
+            "rows": [
+                {
+                    "row_index": row_index,
+                    "source": str(row.get("source_text") or ""),
+                    "candidate": str(row.get("ai_translation_text") or ""),
+                    "reference": str(row.get("human_translation_text") or ""),
+                }
+                for row_index, row in enumerate(rows)
+            ],
+        }
+        timeout = int(os.environ.get("STEPHANOS_NEURAL_METRICS_TIMEOUT", "7200"))
+        env = dict(os.environ)
+        env["TOKENIZERS_PARALLELISM"] = "false"
+        try:
+            completed = subprocess.run(
+                [self.neural_metrics_python, str(NEURAL_METRICS_HELPER)],
+                input=json.dumps(payload, ensure_ascii=False),
+                capture_output=True,
+                check=False,
+                encoding="utf-8",
+                env=env,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            for key in metric_keys:
+                self._mark_unavailable(key, f"sidecar invocation failed ({exc})")
+            return
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "no output").strip().splitlines()[-1]
+            for key in metric_keys:
+                self._mark_unavailable(key, f"sidecar failed ({detail})")
+            return
+        try:
+            response = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            for key in metric_keys:
+                self._mark_unavailable(key, f"sidecar returned invalid JSON ({exc})")
+            return
+
+        for key, status in dict(response.get("status") or {}).items():
+            if key in METRIC_NAME_BY_KEY:
+                if str(status).startswith("unavailable:"):
+                    self._mark_unavailable(key, str(status).removeprefix("unavailable:").strip())
+                else:
+                    self._mark_available(key, str(status))
+        for item in response.get("scores") or []:
+            row_index = int(item.get("row_index"))
+            if row_index < 0 or row_index >= len(rows):
+                continue
+            for metric_key in ("bertscore", "bertscore_precision", "bertscore_recall", "comet", "bleurt"):
+                if metric_key in item:
+                    rows[row_index][metric_key] = float(item[metric_key])
 
     def _apply_lexical_metrics(self, row: dict[str, object]) -> None:
         hypothesis = str(row.get("ai_translation_text") or "")
@@ -848,6 +931,26 @@ def format_date(value: object) -> str:
     return str(value)
 
 
+def prompt_summary_sort_key(summary: dict[str, object]) -> tuple[str, int, int]:
+    return (
+        str(summary.get("profile_name") or "").casefold(),
+        int(summary.get("profile_version") or 0),
+        int(summary.get("profile_version_id") or 0),
+    )
+
+
+def resolve_neural_metrics_python(value: str | None = None) -> str | None:
+    candidates = [
+        value,
+        os.environ.get("STEPHANOS_NEURAL_METRICS_PYTHON"),
+        str(DEFAULT_NEURAL_METRICS_PYTHON),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            return candidate
+    return None
+
+
 def page_header(title: str, *, depth: int, current_item: str = "prompt_eval") -> str:
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     return f"""<!DOCTYPE html>
@@ -911,6 +1014,38 @@ def page_header(title: str, *, depth: int, current_item: str = "prompt_eval") ->
       height: auto;
       margin: 18px 0;
       max-width: 100%;
+    }}
+    .chart-grid {{
+      align-items: start;
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      margin: 18px 0;
+    }}
+    @media (min-width: 900px) {{
+      .chart-grid {{
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }}
+    }}
+    .chart-grid figure {{
+      margin: 0;
+    }}
+    .chart-grid img {{
+      margin: 0;
+      width: 100%;
+    }}
+    .chart-grid figcaption {{
+      color: #5c6b7f;
+      font-size: 0.9rem;
+      margin-top: 6px;
+    }}
+    .table-wrap {{
+      margin: 18px 0;
+      overflow-x: auto;
+    }}
+    .table-wrap table {{
+      margin: 0;
+      min-width: 1320px;
     }}
     pre {{
       background: #fff;
@@ -1010,7 +1145,7 @@ def metric_block(summary: dict[str, object]) -> str:
 
 def render_summary_table(summaries: list[dict[str, object]]) -> str:
     rows = []
-    for summary in summaries:
+    for summary in sorted(summaries, key=prompt_summary_sort_key):
         detail_href = f"prompts/{summary['detail_filename']}"
         rows.append(
             f"""<tr>
@@ -1030,10 +1165,15 @@ def render_summary_table(summaries: list[dict[str, object]]) -> str:
   <td>{format_percent(summary['mean_bertscore'])}</td>
   <td>{format_percent(summary['mean_comet'])}</td>
   <td>{format_percent(summary['mean_bleurt'])}</td>
+  <td>{format_percent(summary['corpus_3gram_precision'])}</td>
+  <td>{format_percent(summary['corpus_3gram_recall'])}</td>
+  <td>{format_percent(summary['corpus_3gram_f1'])}</td>
+  <td>{format_percent(summary['corpus_3gram_jaccard'])}</td>
   <td>{format_number(summary['mean_abs_length_residual'])}</td>
 </tr>"""
         )
-    return f"""<table>
+    return f"""<div class="table-wrap">
+<table>
   <thead>
     <tr>
       <th>Prompt</th>
@@ -1052,13 +1192,18 @@ def render_summary_table(summaries: list[dict[str, object]]) -> str:
       <th>BERTScore</th>
       <th>COMET</th>
       <th>BLEURT</th>
+      <th>Trigram precision</th>
+      <th>Trigram recall</th>
+      <th>Trigram F1</th>
+      <th>Trigram Jaccard</th>
       <th>Mean abs residual</th>
     </tr>
   </thead>
   <tbody>
     {''.join(rows)}
   </tbody>
-</table>"""
+</table>
+</div>"""
 
 
 def save_scatter_plot(rows: list[dict[str, object]], summary: dict[str, object], output_path: Path) -> None:
@@ -1105,48 +1250,48 @@ def save_scatter_plot(rows: list[dict[str, object]], summary: dict[str, object],
     plt.close(fig)
 
 
-def save_trend_plot(summaries: list[dict[str, object]], output_path: Path) -> bool:
+def save_trend_charts(summaries: list[dict[str, object]], output_dir: Path) -> list[tuple[str, str]]:
     if not summaries:
-        return False
+        return []
     by_profile: dict[str, list[dict[str, object]]] = defaultdict(list)
     for summary in summaries:
         by_profile[str(summary["profile_name"])].append(summary)
 
-    fig, axes = plt.subplots(3, 1, figsize=(9, 10.5), sharex=True)
-    metrics = [
-        ("r2", "R^2", None),
-        ("mean_bleu4", "Mean BLEU-4", None),
-        ("slope", "Slope", 1.0),
-    ]
-    for ax, (key, label, target) in zip(axes, metrics, strict=True):
+    chart_paths = []
+    for key, label, target, filename in TREND_CHART_SPECS:
+        fig, ax = plt.subplots(figsize=(5.4, 3.35))
         for profile_name, profile_summaries in sorted(by_profile.items()):
-            profile_summaries.sort(
-                key=lambda item: (
-                    item.get("first_translation_at") or item.get("prompt_created_at"),
-                    int(item["profile_version"]),
-                    int(item["profile_version_id"]),
-                )
-            )
-            x = [
-                item.get("first_translation_at") or item.get("prompt_created_at")
-                for item in profile_summaries
+            points = [
+                (int(item["profile_version"]), finite_float(item.get(key)))
+                for item in sorted(profile_summaries, key=prompt_summary_sort_key)
             ]
-            y = [float(item[key]) for item in profile_summaries]
-            ax.plot(x, y, marker="o", linewidth=2, label=profile_name)
+            points = [(version, value) for version, value in points if value is not None]
+            if not points:
+                continue
+            x = np.asarray([version for version, _ in points], dtype=float)
+            y = np.asarray([value for _, value in points], dtype=float)
+            ax.scatter(x, y, s=58, label=profile_name, alpha=0.88, edgecolor="#223", linewidth=0.4)
+            if len(points) >= 2 and len(set(x)) >= 2:
+                fit_slope, fit_intercept = np.polyfit(x, y, deg=1)
+                line_x = np.linspace(float(np.min(x)), float(np.max(x)), 100)
+                line_y = fit_intercept + fit_slope * line_x
+                ax.plot(line_x, line_y, linewidth=1.8, linestyle="--", alpha=0.9)
         if target is not None:
             ax.axhline(target, color="#7b8794", linestyle="--", linewidth=1.2)
+        all_versions = sorted({int(item["profile_version"]) for item in summaries})
+        if all_versions:
+            ax.set_xticks(all_versions)
+            ax.set_xlim(min(all_versions) - 0.2, max(all_versions) + 0.2)
+        ax.set_xlabel("Prompt version")
         ax.set_ylabel(label)
+        ax.set_title(f"{label} by prompt version")
         ax.grid(True, color="#d7dee9", linewidth=0.7)
         ax.legend(loc="best")
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=3, maxticks=6))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-    axes[-1].set_xlabel("First translation date for prompt version")
-    fig.suptitle("Translation prompt evaluation over time", y=0.995)
-    fig.autofmt_xdate(rotation=30, ha="right")
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=160)
-    plt.close(fig)
-    return True
+        fig.tight_layout()
+        fig.savefig(output_dir / filename, dpi=160)
+        plt.close(fig)
+        chart_paths.append((filename, label))
+    return chart_paths
 
 
 def fit_residual_terms(
@@ -1489,7 +1634,7 @@ def render_metric_status_table(metric_status: dict[str, str]) -> str:
 </tr>"""
         )
     return f"""<h2>Metric Engines</h2>
-<p class="note">The paper metric set is BLEU-4, chrF++, METEOR, ROUGE-L, BERTScore, COMET, and BLEURT. Lexical metrics run locally; BERTScore, COMET, and BLEURT require their model packages/checkpoints to be installed on the machine that runs the daily pipeline.</p>
+<p class="note">The paper metric set is BLEU-4, chrF++, METEOR, ROUGE-L, BERTScore, COMET, and BLEURT. Lexical metrics run locally. BERTScore needs the <code>bert-score</code> package, COMET needs <code>unbabel-comet</code>, and BLEURT needs the BLEURT package plus a local checkpoint path in <code>BLEURT_CHECKPOINT</code>.</p>
 <table>
   <thead>
     <tr><th>Metric</th><th>Status for this run</th></tr>
@@ -1501,7 +1646,7 @@ def render_metric_status_table(metric_status: dict[str, str]) -> str:
 def render_main_page(
     summaries: list[dict[str, object]],
     *,
-    trend_image: str | None,
+    trend_charts: list[tuple[str, str]],
     approved_human_only: bool,
     unevaluable: list[dict[str, object]],
     metric_status: dict[str, str],
@@ -1524,8 +1669,16 @@ def render_main_page(
         html_parts.append(render_unevaluable_table(unevaluable))
         html_parts.append(page_footer())
         return "\n".join(html_parts)
-    if trend_image:
-        html_parts.append(f'<img src="prompt_images/{esc(trend_image)}" alt="Prompt evaluation trend plot">')
+    if trend_charts:
+        chart_figures = []
+        for filename, label in trend_charts:
+            chart_figures.append(
+                f"""<figure>
+  <img src="prompt_images/{esc(filename)}" alt="{esc(label)} by prompt version">
+  <figcaption>{esc(label)} by prompt version with best-fit line.</figcaption>
+</figure>"""
+            )
+        html_parts.append('<div class="chart-grid">' + "".join(chart_figures) + "</div>")
     html_parts.append(render_summary_table(summaries))
     html_parts.append(render_unevaluable_table(unevaluable))
     html_parts.append(
@@ -1563,14 +1716,14 @@ def write_csv_outputs(summaries: list[dict[str, object]], grouped_rows: dict[tup
         "mean_bertscore",
         "mean_comet",
         "mean_bleurt",
-        "corpus_bleu",
-        "mean_sentence_bleu",
-        "corpus_1gram_f1",
-        "corpus_2gram_f1",
         "corpus_3gram_precision",
         "corpus_3gram_recall",
         "corpus_3gram_f1",
         "corpus_3gram_jaccard",
+        "corpus_bleu",
+        "mean_sentence_bleu",
+        "corpus_1gram_f1",
+        "corpus_2gram_f1",
         "corpus_4gram_f1",
         "mean_rouge_l_f1",
         "mean_chrf",
@@ -1643,6 +1796,7 @@ def generate_reports(
     use_gpu: bool,
     bertscore_batch_size: int,
     comet_batch_size: int,
+    neural_metrics_python: str | None,
 ) -> list[dict[str, object]]:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     DETAIL_DIR.mkdir(parents=True, exist_ok=True)
@@ -1653,6 +1807,7 @@ def generate_reports(
         use_gpu=use_gpu,
         bertscore_batch_size=bertscore_batch_size,
         comet_batch_size=comet_batch_size,
+        neural_metrics_python=neural_metrics_python,
     )
     prompt_metadata = fetch_prompt_run_metadata()
     db_rows = fetch_comparison_rows(approved_human_only=approved_human_only)
@@ -1695,14 +1850,7 @@ def generate_reports(
             item["reason"] = f"no {human_scope} for its translated lemmas"
         unevaluable.append(item)
 
-    summaries.sort(
-        key=lambda item: (
-            item.get("first_translation_at") or item.get("prompt_created_at"),
-            str(item["profile_name"]),
-            int(item["profile_version"]),
-            int(item["profile_version_id"]),
-        )
-    )
+    summaries.sort(key=prompt_summary_sort_key)
     unevaluable.sort(
         key=lambda item: (
             item.get("first_translation_at") or item.get("prompt_created_at"),
@@ -1711,16 +1859,15 @@ def generate_reports(
             int(item["profile_version_id"]),
         )
     )
-    trend_filename = None
+    trend_charts = []
     if summaries:
-        trend_filename = "translation_prompt_evaluation_trends.png"
-        save_trend_plot(summaries, IMAGE_DIR / trend_filename)
+        trend_charts = save_trend_charts(summaries, IMAGE_DIR)
 
     write_csv_outputs(summaries, grouped_pair_rows)
     MAIN_PAGE.write_text(
         render_main_page(
             summaries,
-            trend_image=trend_filename,
+            trend_charts=trend_charts,
             approved_human_only=approved_human_only,
             unevaluable=unevaluable,
             metric_status=metric_evaluator.status,
@@ -1766,6 +1913,14 @@ def main() -> None:
         help="Batch size for COMET when unbabel-comet is installed.",
     )
     parser.add_argument(
+        "--neural-metrics-python",
+        default=None,
+        help=(
+            "Python executable for the optional neural-metrics sidecar. Defaults to "
+            "STEPHANOS_NEURAL_METRICS_PYTHON or /home/stephanos/metric-envs/neural-metrics/bin/python when present."
+        ),
+    )
+    parser.add_argument(
         "--min-galton-samples",
         type=int,
         default=30,
@@ -1789,6 +1944,7 @@ def main() -> None:
         use_gpu=args.use_gpu,
         bertscore_batch_size=args.bertscore_batch_size,
         comet_batch_size=args.comet_batch_size,
+        neural_metrics_python=args.neural_metrics_python,
     )
     print(f"Generated {len(summaries)} prompt evaluation page(s).")
     for summary in summaries:
