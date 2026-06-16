@@ -14,8 +14,10 @@ from generate_translation_prompt_evaluation import (
     render_synthetic_zainaldi_galen_section,
     render_summary_table,
     save_metric_length_plots,
+    save_synthetic_zainaldi_charts,
     save_trend_charts,
     synthetic_zainaldi_galen_rows,
+    zainaldi_paper_metric_rows,
 )
 
 
@@ -203,12 +205,67 @@ class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
             "outside_observed_range": True,
         }
 
-        html = render_synthetic_zainaldi_galen_section([regression])
+        html = render_synthetic_zainaldi_galen_section(
+            [regression],
+            chart_paths=[
+                (
+                    "synthetic_zainaldi_galen_aggregate_comparison.png",
+                    "Synthetic prompt versions vs Zainaldin aggregate scores",
+                )
+            ],
+        )
 
         self.assertIn("Synthetic comparison to Zainaldi et al Galen translation", html)
         self.assertIn("220.5", html)
         self.assertIn("42.0%", html)
         self.assertIn("yes", html)
+        self.assertIn("Zainaldin et al. reported metrics", html)
+        self.assertIn("91.4%", html)
+        self.assertIn("synthetic_zainaldi_galen_aggregate_comparison.png", html)
+
+    def test_zainaldi_paper_metric_rows_include_table_one_aggregates(self) -> None:
+        rows = zainaldi_paper_metric_rows()
+        mix_aggregate = next(row for row in rows if row["text"] == "Mix." and row["model"] == "Aggregate")
+        comp_aggregate = next(row for row in rows if row["text"] == "Comp." and row["model"] == "Aggregate")
+
+        self.assertAlmostEqual(float(mix_aggregate["bertscore"]), 0.914)
+        self.assertAlmostEqual(float(mix_aggregate["comet"]), 0.801)
+        self.assertAlmostEqual(float(comp_aggregate["bleurt"]), 0.449)
+
+    def test_synthetic_zainaldi_charts_are_written(self) -> None:
+        prompt_summary = summary(1)
+        synthetic_rows = []
+        for metric_name, metric_key in [
+            ("BLEU-4", "bleu4"),
+            ("chrF++", "chrfpp"),
+            ("METEOR", "meteor"),
+            ("ROUGE-L", "rouge_l"),
+            ("BERTScore", "bertscore"),
+            ("COMET", "comet"),
+            ("BLEURT", "bleurt"),
+        ]:
+            synthetic_rows.append(
+                {
+                    "profile_name": prompt_summary["profile_name"],
+                    "profile_version": prompt_summary["profile_version"],
+                    "profile_version_id": prompt_summary["profile_version_id"],
+                    "metric_key": metric_key,
+                    "metric_label": metric_name,
+                    "predicted_score": 0.5,
+                }
+            )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            charts = save_synthetic_zainaldi_charts(synthetic_rows, Path(temp_dir))
+
+            self.assertEqual(
+                [filename for filename, _ in charts],
+                [
+                    "synthetic_zainaldi_galen_aggregate_comparison.png",
+                    "synthetic_zainaldi_galen_delta_heatmap.png",
+                ],
+            )
+            for filename, _ in charts:
+                self.assertTrue((Path(temp_dir) / filename).is_file())
 
 
 if __name__ == "__main__":

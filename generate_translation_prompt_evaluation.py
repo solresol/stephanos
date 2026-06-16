@@ -55,6 +55,7 @@ SUMMARY_CSV = OUTPUT_DIR / "prompt_evaluation_metrics.csv"
 ROW_CSV = OUTPUT_DIR / "prompt_evaluation_rows.csv"
 METRIC_LENGTH_CSV = OUTPUT_DIR / "prompt_evaluation_metric_length_regressions.csv"
 SYNTHETIC_ZAINALDI_GALEN_CSV = OUTPUT_DIR / "prompt_evaluation_synthetic_zainaldi_galen.csv"
+ZAINALDI_PAPER_METRICS_CSV = OUTPUT_DIR / "prompt_evaluation_zainaldi_paper_metrics.csv"
 NEURAL_METRICS_HELPER = Path(__file__).with_name("compute_neural_translation_metrics.py")
 DEFAULT_NEURAL_METRICS_PYTHON = Path("/home/stephanos/metric-envs/neural-metrics/bin/python")
 
@@ -120,6 +121,123 @@ METRIC_LENGTH_ORDER = {metric_key: index for index, (metric_key, _) in enumerate
 SIGNIFICANCE_ALPHA = 0.05
 SYNTHETIC_ZAINALDI_GALEN_TITLE = "Synthetic comparison to Zainaldi et al Galen translation"
 ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH = 220.5
+ZAINALDI_PAPER_URL = "https://arxiv.org/abs/2602.24119"
+SYNTHETIC_ZAINALDI_CHART_SPECS = [
+    (
+        "synthetic_zainaldi_galen_aggregate_comparison.png",
+        "Synthetic prompt versions vs Zainaldin aggregate scores",
+    ),
+    (
+        "synthetic_zainaldi_galen_delta_heatmap.png",
+        "Synthetic minus Zainaldin aggregate score differences",
+    ),
+]
+ZAINALDI_PAPER_METRICS = [
+    {
+        "text": "Mix.",
+        "model": "ChatGPT",
+        "metrics": {
+            "BLEU-4": 0.314,
+            "chrF++": 0.534,
+            "METEOR": 0.464,
+            "ROUGE-L": 0.509,
+            "BERTScore": 0.910,
+            "COMET": 0.799,
+            "BLEURT": 0.498,
+        },
+    },
+    {
+        "text": "Mix.",
+        "model": "Claude",
+        "metrics": {
+            "BLEU-4": 0.342,
+            "chrF++": 0.554,
+            "METEOR": 0.485,
+            "ROUGE-L": 0.553,
+            "BERTScore": 0.916,
+            "COMET": 0.798,
+            "BLEURT": 0.504,
+        },
+    },
+    {
+        "text": "Mix.",
+        "model": "Gemini",
+        "metrics": {
+            "BLEU-4": 0.342,
+            "chrF++": 0.570,
+            "METEOR": 0.500,
+            "ROUGE-L": 0.560,
+            "BERTScore": 0.915,
+            "COMET": 0.807,
+            "BLEURT": 0.513,
+        },
+    },
+    {
+        "text": "Mix.",
+        "model": "Aggregate",
+        "metrics": {
+            "BLEU-4": 0.333,
+            "chrF++": 0.553,
+            "METEOR": 0.483,
+            "ROUGE-L": 0.541,
+            "BERTScore": 0.914,
+            "COMET": 0.801,
+            "BLEURT": 0.505,
+        },
+    },
+    {
+        "text": "Comp.",
+        "model": "ChatGPT",
+        "metrics": {
+            "BLEU-4": 0.157,
+            "chrF++": 0.474,
+            "METEOR": 0.401,
+            "ROUGE-L": 0.457,
+            "BERTScore": 0.891,
+            "COMET": 0.751,
+            "BLEURT": 0.426,
+        },
+    },
+    {
+        "text": "Comp.",
+        "model": "Claude",
+        "metrics": {
+            "BLEU-4": 0.167,
+            "chrF++": 0.494,
+            "METEOR": 0.429,
+            "ROUGE-L": 0.478,
+            "BERTScore": 0.897,
+            "COMET": 0.765,
+            "BLEURT": 0.462,
+        },
+    },
+    {
+        "text": "Comp.",
+        "model": "Gemini",
+        "metrics": {
+            "BLEU-4": 0.190,
+            "chrF++": 0.512,
+            "METEOR": 0.444,
+            "ROUGE-L": 0.478,
+            "BERTScore": 0.899,
+            "COMET": 0.773,
+            "BLEURT": 0.458,
+        },
+    },
+    {
+        "text": "Comp.",
+        "model": "Aggregate",
+        "metrics": {
+            "BLEU-4": 0.171,
+            "chrF++": 0.493,
+            "METEOR": 0.425,
+            "ROUGE-L": 0.471,
+            "BERTScore": 0.895,
+            "COMET": 0.763,
+            "BLEURT": 0.449,
+        },
+    },
+]
 
 
 def esc(value: object) -> str:
@@ -895,6 +1013,47 @@ def synthetic_zainaldi_galen_rows(regressions: list[dict[str, object]]) -> list[
     return rows
 
 
+def synthetic_scores_by_prompt(synthetic_rows: list[dict[str, object]]) -> dict[tuple[str, int, int], dict[str, object]]:
+    prompts: dict[tuple[str, int, int], dict[str, object]] = {}
+    for row in synthetic_rows:
+        key = (
+            str(row.get("profile_name") or ""),
+            int(row.get("profile_version") or 0),
+            int(row.get("profile_version_id") or 0),
+        )
+        prompt = prompts.setdefault(
+            key,
+            {
+                "profile_name": row.get("profile_name"),
+                "profile_version": row.get("profile_version"),
+                "profile_version_id": row.get("profile_version_id"),
+                "source_word_min": row.get("source_word_min"),
+                "source_word_max": row.get("source_word_max"),
+                "outside_observed_range": row.get("outside_observed_range"),
+                "metrics": {},
+            },
+        )
+        prompt["metrics"][str(row["metric_label"])] = row
+    return prompts
+
+
+def zainaldi_paper_metric_rows() -> list[dict[str, object]]:
+    rows = []
+    for item in ZAINALDI_PAPER_METRICS:
+        row = {"text": item["text"], "model": item["model"]}
+        for metric_name in PAPER_METRICS:
+            row[METRIC_KEY_BY_NAME[metric_name]] = item["metrics"][metric_name]
+        rows.append(row)
+    return rows
+
+
+def zainaldi_aggregate_metric_map(text_name: str) -> dict[str, float]:
+    for item in ZAINALDI_PAPER_METRICS:
+        if item["text"] == text_name and item["model"] == "Aggregate":
+            return dict(item["metrics"])
+    return {}
+
+
 def build_pair_rows(
     db_rows: list[dict[str, object]],
     *,
@@ -1587,6 +1746,97 @@ def save_metric_length_plots(
     return regressions
 
 
+def save_synthetic_zainaldi_charts(
+    synthetic_rows: list[dict[str, object]],
+    output_dir: Path,
+) -> list[tuple[str, str]]:
+    prompts = synthetic_scores_by_prompt(synthetic_rows)
+    if not prompts:
+        return []
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    chart_paths: list[tuple[str, str]] = []
+    metrics = list(PAPER_METRICS)
+    x = np.arange(len(metrics), dtype=float)
+    synthetic_series = []
+    for key in sorted(prompts, key=lambda item: (item[0].casefold(), item[1], item[2])):
+        prompt = prompts[key]
+        label = f"Synthetic v{prompt['profile_version']}"
+        values = [
+            finite_float(prompt["metrics"].get(metric_name, {}).get("predicted_score"))
+            for metric_name in metrics
+        ]
+        synthetic_series.append((label, values))
+
+    aggregate_series = [
+        ("Zainaldin Mix. aggregate", [zainaldi_aggregate_metric_map("Mix.").get(metric) for metric in metrics]),
+        ("Zainaldin Comp. aggregate", [zainaldi_aggregate_metric_map("Comp.").get(metric) for metric in metrics]),
+    ]
+
+    filename, label = SYNTHETIC_ZAINALDI_CHART_SPECS[0]
+    fig, ax = plt.subplots(figsize=(11.2, 5.25))
+    series = synthetic_series + aggregate_series
+    bar_width = min(0.14, 0.78 / max(1, len(series)))
+    offsets = (np.arange(len(series), dtype=float) - (len(series) - 1) / 2) * bar_width
+    for offset, (series_label, values) in zip(offsets, series, strict=True):
+        plotted = [value * 100 if value is not None else float("nan") for value in values]
+        ax.bar(x + offset, plotted, width=bar_width, label=series_label, alpha=0.88)
+    ax.axhline(0, color="#7b8794", linewidth=1.0)
+    ax.set_xticks(x)
+    ax.set_xticklabels(metrics, rotation=25, ha="right")
+    ax.set_ylabel("Metric score (%)")
+    ax.set_title("Synthetic Stephanos prompts vs Zainaldin et al. aggregate Galen metrics")
+    ax.grid(True, axis="y", color="#d7dee9", linewidth=0.7)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3)
+    fig.tight_layout()
+    fig.savefig(output_dir / filename, dpi=160)
+    plt.close(fig)
+    chart_paths.append((filename, label))
+
+    delta_rows = []
+    delta_labels = []
+    for aggregate_text in ("Mix.", "Comp."):
+        aggregate_metrics = zainaldi_aggregate_metric_map(aggregate_text)
+        for synthetic_label, values in synthetic_series:
+            deltas = []
+            for metric_name, synthetic_value in zip(metrics, values, strict=True):
+                aggregate_value = aggregate_metrics.get(metric_name)
+                if synthetic_value is None or aggregate_value is None:
+                    deltas.append(float("nan"))
+                else:
+                    deltas.append((synthetic_value - aggregate_value) * 100)
+            delta_rows.append(deltas)
+            delta_labels.append(f"{synthetic_label} - {aggregate_text}")
+    if delta_rows:
+        filename, label = SYNTHETIC_ZAINALDI_CHART_SPECS[1]
+        delta_array = np.asarray(delta_rows, dtype=float)
+        finite_values = delta_array[np.isfinite(delta_array)]
+        max_abs = max(5.0, float(np.max(np.abs(finite_values)))) if finite_values.size else 5.0
+        fig, ax = plt.subplots(figsize=(10.8, 4.75))
+        image = ax.imshow(delta_array, cmap="RdBu", vmin=-max_abs, vmax=max_abs, aspect="auto")
+        ax.set_xticks(np.arange(len(metrics)))
+        ax.set_xticklabels(metrics, rotation=25, ha="right")
+        ax.set_yticks(np.arange(len(delta_labels)))
+        ax.set_yticklabels(delta_labels)
+        ax.set_title("Synthetic Stephanos minus Zainaldin aggregate scores")
+        for row_index in range(delta_array.shape[0]):
+            for col_index in range(delta_array.shape[1]):
+                value = delta_array[row_index, col_index]
+                if math.isnan(value):
+                    text_value = "N/A"
+                else:
+                    text_value = f"{value:+.1f}"
+                ax.text(col_index, row_index, text_value, ha="center", va="center", fontsize=8.2)
+        cbar = fig.colorbar(image, ax=ax)
+        cbar.set_label("Difference (percentage points)")
+        fig.tight_layout()
+        fig.savefig(output_dir / filename, dpi=160)
+        plt.close(fig)
+        chart_paths.append((filename, label))
+
+    return chart_paths
+
+
 def fit_residual_terms(
     rows: list[dict[str, object]],
     *,
@@ -2053,29 +2303,42 @@ def render_metric_length_detail_section(regressions: list[dict[str, object]]) ->
 {render_metric_length_regression_table(regressions, include_prompt=False)}"""
 
 
-def render_synthetic_zainaldi_galen_section(synthetic_rows: list[dict[str, object]]) -> str:
+def render_zainaldi_paper_metrics_table() -> str:
+    metric_headers = "".join(f"<th>{esc(metric_name)}</th>" for metric_name in PAPER_METRICS)
+    rows = []
+    for item in ZAINALDI_PAPER_METRICS:
+        cells = "".join(f"<td>{format_percent(item['metrics'][metric_name])}</td>" for metric_name in PAPER_METRICS)
+        rows.append(
+            f"""<tr>
+  <td>{esc(item['text'])}</td>
+  <td>{esc(item['model'])}</td>
+  {cells}
+</tr>"""
+        )
+    return f"""<h3>Zainaldin et al. reported metrics</h3>
+<p class="note">Table 1 of <a href="{esc(ZAINALDI_PAPER_URL)}">Zainaldin et al. 2026</a> reports these values as mean scores multiplied by 100; the table below displays the same scale as percentages.</p>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Text</th>
+      <th>Model</th>
+      {metric_headers}
+    </tr>
+  </thead>
+  <tbody>{''.join(rows)}</tbody>
+</table>
+</div>"""
+
+
+def render_synthetic_zainaldi_galen_section(
+    synthetic_rows: list[dict[str, object]],
+    *,
+    chart_paths: list[tuple[str, str]],
+) -> str:
     if not synthetic_rows:
         return ""
-    by_prompt: dict[tuple[str, int, int], dict[str, object]] = {}
-    metric_values: dict[tuple[str, int, int], dict[str, dict[str, object]]] = defaultdict(dict)
-    for row in synthetic_rows:
-        key = (
-            str(row.get("profile_name") or ""),
-            int(row.get("profile_version") or 0),
-            int(row.get("profile_version_id") or 0),
-        )
-        by_prompt.setdefault(
-            key,
-            {
-                "profile_name": row.get("profile_name"),
-                "profile_version": row.get("profile_version"),
-                "profile_version_id": row.get("profile_version_id"),
-                "source_word_min": row.get("source_word_min"),
-                "source_word_max": row.get("source_word_max"),
-                "outside_observed_range": row.get("outside_observed_range"),
-            },
-        )
-        metric_values[key][str(row["metric_label"])] = row
+    by_prompt = synthetic_scores_by_prompt(synthetic_rows)
 
     rows = []
     for key in sorted(
@@ -2087,7 +2350,7 @@ def render_synthetic_zainaldi_galen_section(synthetic_rows: list[dict[str, objec
         extrapolation = "yes" if prompt.get("outside_observed_range") else "no"
         cells = []
         for metric_name in PAPER_METRICS:
-            metric_row = metric_values[key].get(metric_name)
+            metric_row = prompt["metrics"].get(metric_name)
             cells.append(
                 f"<td>{format_percent(metric_row.get('predicted_score')) if metric_row else 'N/A'}</td>"
             )
@@ -2102,8 +2365,19 @@ def render_synthetic_zainaldi_galen_section(synthetic_rows: list[dict[str, objec
         )
 
     metric_headers = "".join(f"<th>{esc(metric_name)}</th>" for metric_name in PAPER_METRICS)
+    chart_figures = []
+    for filename, label in chart_paths:
+        chart_figures.append(
+            f"""<figure>
+  <img src="prompt_images/{esc(filename)}" alt="{esc(label)}">
+  <figcaption>{esc(label)}.</figcaption>
+</figure>"""
+        )
+    charts = '<div class="chart-grid">' + "".join(chart_figures) + "</div>" if chart_figures else ""
     return f"""<h2>{esc(SYNTHETIC_ZAINALDI_GALEN_TITLE)}</h2>
-<p class="note">Zainaldi et al.'s Galen translation is represented here by its reported mean passage length of {format_number(ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH, 1)} words. The values below are raw ordinary-least-squares predictions from the metric-vs-passage-length regressions above; they are not clamped to metric bounds.</p>
+<p class="note">Zainaldi et al.'s Galen translation is represented here by its reported mean passage length of {format_number(ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH, 1)} words. The Stephanos values below are raw ordinary-least-squares predictions from the metric-vs-passage-length regressions above; they are not clamped to metric bounds.</p>
+{charts}
+<h3>Synthetic Stephanos metrics at {format_number(ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH, 1)} words</h3>
 <div class="table-wrap">
 <table>
   <thead>
@@ -2117,7 +2391,8 @@ def render_synthetic_zainaldi_galen_section(synthetic_rows: list[dict[str, objec
   </thead>
   <tbody>{''.join(rows)}</tbody>
 </table>
-</div>"""
+</div>
+{render_zainaldi_paper_metrics_table()}"""
 
 
 def render_main_page(
@@ -2129,6 +2404,7 @@ def render_main_page(
     metric_status: dict[str, str],
     metric_length_regressions: list[dict[str, object]],
     synthetic_zainaldi_galen_rows: list[dict[str, object]],
+    synthetic_zainaldi_chart_paths: list[tuple[str, str]],
 ) -> str:
     html_parts = [page_header("Translation Prompt Evaluation", depth=1)]
     html_parts.append(
@@ -2159,7 +2435,13 @@ def render_main_page(
             )
         html_parts.append('<div class="chart-grid">' + "".join(chart_figures) + "</div>")
     html_parts.append(render_metric_length_pattern_section(metric_length_regressions))
-    html_parts.append(render_synthetic_zainaldi_galen_section(synthetic_zainaldi_galen_rows))
+    html_parts.append(
+        render_synthetic_zainaldi_galen_section(
+            synthetic_zainaldi_galen_rows,
+            chart_paths=synthetic_zainaldi_chart_paths,
+        )
+    )
+    html_parts.append("<h2>Prompt Version Summary</h2>")
     html_parts.append(render_summary_table(summaries))
     html_parts.append(render_unevaluable_table(unevaluable))
     html_parts.append(
@@ -2169,6 +2451,7 @@ def render_main_page(
   <li><a href="prompt_evaluation_rows.csv">Per-run comparison rows CSV</a></li>
   <li><a href="prompt_evaluation_metric_length_regressions.csv">Metric vs passage length regression CSV</a></li>
   <li><a href="prompt_evaluation_synthetic_zainaldi_galen.csv">Synthetic Zainaldi Galen comparison CSV</a></li>
+  <li><a href="prompt_evaluation_zainaldi_paper_metrics.csv">Zainaldi paper metrics CSV</a></li>
 </ul>"""
     )
     html_parts.append(page_footer())
@@ -2331,6 +2614,23 @@ def write_csv_outputs(
         for item in sorted(synthetic_zainaldi_galen_rows, key=metric_length_sort_key):
             writer.writerow({field: item.get(field, "") for field in synthetic_fields})
 
+    zainaldi_fields = [
+        "text",
+        "model",
+        "bleu4",
+        "chrfpp",
+        "meteor",
+        "rouge_l",
+        "bertscore",
+        "comet",
+        "bleurt",
+    ]
+    with ZAINALDI_PAPER_METRICS_CSV.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=zainaldi_fields)
+        writer.writeheader()
+        for item in zainaldi_paper_metric_rows():
+            writer.writerow({field: item.get(field, "") for field in zainaldi_fields})
+
 
 def generate_reports(
     *,
@@ -2414,6 +2714,7 @@ def generate_reports(
         trend_charts = save_trend_charts(summaries, IMAGE_DIR)
 
     synthetic_zainaldi_rows = synthetic_zainaldi_galen_rows(all_metric_length_regressions)
+    synthetic_zainaldi_chart_paths = save_synthetic_zainaldi_charts(synthetic_zainaldi_rows, IMAGE_DIR)
     write_csv_outputs(summaries, grouped_pair_rows, all_metric_length_regressions, synthetic_zainaldi_rows)
     MAIN_PAGE.write_text(
         render_main_page(
@@ -2424,6 +2725,7 @@ def generate_reports(
             metric_status=metric_evaluator.status,
             metric_length_regressions=all_metric_length_regressions,
             synthetic_zainaldi_galen_rows=synthetic_zainaldi_rows,
+            synthetic_zainaldi_chart_paths=synthetic_zainaldi_chart_paths,
         ),
         encoding="utf-8",
     )
