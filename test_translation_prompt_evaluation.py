@@ -7,12 +7,15 @@ os.environ.setdefault("DB_HOST", "raksasa")
 os.environ.setdefault("DB_USER", "stephanos")
 
 from generate_translation_prompt_evaluation import (
+    ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH,
     metric_length_pattern_counts,
     metric_length_regression,
     render_metric_length_pattern_section,
+    render_synthetic_zainaldi_galen_section,
     render_summary_table,
     save_metric_length_plots,
     save_trend_charts,
+    synthetic_zainaldi_galen_rows,
 )
 
 
@@ -157,6 +160,55 @@ class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
             self.assertIn("chrfpp", plotted_metrics)
             for item in plotted:
                 self.assertTrue((Path(temp_dir) / Path(str(item["plot_filename"])).name).is_file())
+
+    def test_synthetic_zainaldi_galen_rows_predict_from_regression_at_220_5_words(self) -> None:
+        prompt_summary = summary(2)
+        regression = metric_length_regression(
+            [
+                {"source_word_count": 100, "bleurt": 0.50},
+                {"source_word_count": 200, "bleurt": 0.70},
+                {"source_word_count": 300, "bleurt": 0.90},
+            ],
+            metric_key="bleurt",
+            metric_label="BLEURT",
+        )
+        regression.update(
+            {
+                "profile_name": prompt_summary["profile_name"],
+                "profile_version": prompt_summary["profile_version"],
+                "profile_version_id": prompt_summary["profile_version_id"],
+                "detail_filename": prompt_summary["detail_filename"],
+            }
+        )
+
+        rows = synthetic_zainaldi_galen_rows([regression])
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["synthetic_passage_length"], ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH)
+        self.assertAlmostEqual(float(rows[0]["predicted_score"]), 0.741, places=3)
+        self.assertFalse(rows[0]["outside_observed_range"])
+
+    def test_synthetic_zainaldi_galen_section_uses_requested_title(self) -> None:
+        prompt_summary = summary(1)
+        regression = {
+            "profile_name": prompt_summary["profile_name"],
+            "profile_version": prompt_summary["profile_version"],
+            "profile_version_id": prompt_summary["profile_version_id"],
+            "metric_key": "bleurt",
+            "metric_label": "BLEURT",
+            "synthetic_passage_length": ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH,
+            "predicted_score": 0.42,
+            "source_word_min": 10,
+            "source_word_max": 90,
+            "outside_observed_range": True,
+        }
+
+        html = render_synthetic_zainaldi_galen_section([regression])
+
+        self.assertIn("Synthetic comparison to Zainaldi et al Galen translation", html)
+        self.assertIn("220.5", html)
+        self.assertIn("42.0%", html)
+        self.assertIn("yes", html)
 
 
 if __name__ == "__main__":

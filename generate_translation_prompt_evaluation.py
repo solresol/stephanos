@@ -54,6 +54,7 @@ MAIN_PAGE = OUTPUT_DIR / "prompt_evaluation.html"
 SUMMARY_CSV = OUTPUT_DIR / "prompt_evaluation_metrics.csv"
 ROW_CSV = OUTPUT_DIR / "prompt_evaluation_rows.csv"
 METRIC_LENGTH_CSV = OUTPUT_DIR / "prompt_evaluation_metric_length_regressions.csv"
+SYNTHETIC_ZAINALDI_GALEN_CSV = OUTPUT_DIR / "prompt_evaluation_synthetic_zainaldi_galen.csv"
 NEURAL_METRICS_HELPER = Path(__file__).with_name("compute_neural_translation_metrics.py")
 DEFAULT_NEURAL_METRICS_PYTHON = Path("/home/stephanos/metric-envs/neural-metrics/bin/python")
 
@@ -117,6 +118,8 @@ METRIC_LENGTH_SPECS = [
 ]
 METRIC_LENGTH_ORDER = {metric_key: index for index, (metric_key, _) in enumerate(METRIC_LENGTH_SPECS)}
 SIGNIFICANCE_ALPHA = 0.05
+SYNTHETIC_ZAINALDI_GALEN_TITLE = "Synthetic comparison to Zainaldi et al Galen translation"
+ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH = 220.5
 
 
 def esc(value: object) -> str:
@@ -716,6 +719,9 @@ def metric_length_regression(
         "r2": float("nan"),
         "p_value": float("nan"),
         "slope_stderr": float("nan"),
+        "source_word_min": float("nan"),
+        "source_word_max": float("nan"),
+        "source_word_mean": float("nan"),
         "direction": "not enough data",
         "pattern": "not enough data",
         "status": "needs at least two rows with metric scores",
@@ -727,6 +733,13 @@ def metric_length_regression(
 
     x = np.asarray([point[0] for point in points], dtype=float)
     y = np.asarray([point[1] for point in points], dtype=float)
+    result.update(
+        {
+            "source_word_min": float(np.nanmin(x)),
+            "source_word_max": float(np.nanmax(x)),
+            "source_word_mean": float(np.nanmean(x)),
+        }
+    )
     if np.nanvar(x) <= 0:
         result.update(
             {
@@ -837,6 +850,49 @@ def metric_length_pattern_counts(regressions: list[dict[str, object]]) -> dict[s
             1 for item in evaluable if item.get("direction") == "negative" and item.get("significant")
         ),
     }
+
+
+def synthetic_metric_prediction(regression: dict[str, object], passage_length: float) -> float:
+    intercept = finite_float(regression.get("intercept"))
+    slope = finite_float(regression.get("slope"))
+    if intercept is None or slope is None:
+        return float("nan")
+    return intercept + slope * passage_length
+
+
+def synthetic_zainaldi_galen_rows(regressions: list[dict[str, object]]) -> list[dict[str, object]]:
+    paper_metric_keys = set(METRIC_KEY_BY_NAME.values())
+    rows = []
+    for item in sorted(regressions, key=metric_length_sort_key):
+        if item.get("metric_key") not in paper_metric_keys:
+            continue
+        predicted_score = synthetic_metric_prediction(item, ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH)
+        source_word_min = finite_float(item.get("source_word_min"))
+        source_word_max = finite_float(item.get("source_word_max"))
+        outside_observed_range = False
+        if source_word_min is not None and source_word_max is not None:
+            outside_observed_range = not source_word_min <= ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH <= source_word_max
+        rows.append(
+            {
+                "profile_name": item.get("profile_name"),
+                "profile_version": item.get("profile_version"),
+                "profile_version_id": item.get("profile_version_id"),
+                "metric_key": item.get("metric_key"),
+                "metric_label": item.get("metric_label"),
+                "synthetic_passage_length": ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH,
+                "predicted_score": predicted_score,
+                "source_word_min": item.get("source_word_min"),
+                "source_word_max": item.get("source_word_max"),
+                "outside_observed_range": outside_observed_range,
+                "regression_slope": item.get("slope"),
+                "regression_intercept": item.get("intercept"),
+                "regression_r": item.get("r"),
+                "regression_r2": item.get("r2"),
+                "regression_p_value": item.get("p_value"),
+                "regression_status": item.get("status"),
+            }
+        )
+    return rows
 
 
 def build_pair_rows(
@@ -1997,6 +2053,73 @@ def render_metric_length_detail_section(regressions: list[dict[str, object]]) ->
 {render_metric_length_regression_table(regressions, include_prompt=False)}"""
 
 
+def render_synthetic_zainaldi_galen_section(synthetic_rows: list[dict[str, object]]) -> str:
+    if not synthetic_rows:
+        return ""
+    by_prompt: dict[tuple[str, int, int], dict[str, object]] = {}
+    metric_values: dict[tuple[str, int, int], dict[str, dict[str, object]]] = defaultdict(dict)
+    for row in synthetic_rows:
+        key = (
+            str(row.get("profile_name") or ""),
+            int(row.get("profile_version") or 0),
+            int(row.get("profile_version_id") or 0),
+        )
+        by_prompt.setdefault(
+            key,
+            {
+                "profile_name": row.get("profile_name"),
+                "profile_version": row.get("profile_version"),
+                "profile_version_id": row.get("profile_version_id"),
+                "source_word_min": row.get("source_word_min"),
+                "source_word_max": row.get("source_word_max"),
+                "outside_observed_range": row.get("outside_observed_range"),
+            },
+        )
+        metric_values[key][str(row["metric_label"])] = row
+
+    rows = []
+    for key in sorted(
+        by_prompt,
+        key=lambda item: (item[0].casefold(), item[1], item[2]),
+    ):
+        prompt = by_prompt[key]
+        range_text = f"{format_number(prompt.get('source_word_min'))}-{format_number(prompt.get('source_word_max'))}"
+        extrapolation = "yes" if prompt.get("outside_observed_range") else "no"
+        cells = []
+        for metric_name in PAPER_METRICS:
+            metric_row = metric_values[key].get(metric_name)
+            cells.append(
+                f"<td>{format_percent(metric_row.get('predicted_score')) if metric_row else 'N/A'}</td>"
+            )
+        rows.append(
+            f"""<tr>
+  <td>{esc(prompt['profile_name'])} v{esc(prompt['profile_version'])}</td>
+  <td>{format_number(ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH, 1)}</td>
+  <td>{esc(range_text)}</td>
+  <td>{esc(extrapolation)}</td>
+  {''.join(cells)}
+</tr>"""
+        )
+
+    metric_headers = "".join(f"<th>{esc(metric_name)}</th>" for metric_name in PAPER_METRICS)
+    return f"""<h2>{esc(SYNTHETIC_ZAINALDI_GALEN_TITLE)}</h2>
+<p class="note">Zainaldi et al.'s Galen translation is represented here by its reported mean passage length of {format_number(ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH, 1)} words. The values below are raw ordinary-least-squares predictions from the metric-vs-passage-length regressions above; they are not clamped to metric bounds.</p>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Prompt</th>
+      <th>Synthetic passage words</th>
+      <th>Observed source word range</th>
+      <th>Extrapolated?</th>
+      {metric_headers}
+    </tr>
+  </thead>
+  <tbody>{''.join(rows)}</tbody>
+</table>
+</div>"""
+
+
 def render_main_page(
     summaries: list[dict[str, object]],
     *,
@@ -2005,6 +2128,7 @@ def render_main_page(
     unevaluable: list[dict[str, object]],
     metric_status: dict[str, str],
     metric_length_regressions: list[dict[str, object]],
+    synthetic_zainaldi_galen_rows: list[dict[str, object]],
 ) -> str:
     html_parts = [page_header("Translation Prompt Evaluation", depth=1)]
     html_parts.append(
@@ -2035,6 +2159,7 @@ def render_main_page(
             )
         html_parts.append('<div class="chart-grid">' + "".join(chart_figures) + "</div>")
     html_parts.append(render_metric_length_pattern_section(metric_length_regressions))
+    html_parts.append(render_synthetic_zainaldi_galen_section(synthetic_zainaldi_galen_rows))
     html_parts.append(render_summary_table(summaries))
     html_parts.append(render_unevaluable_table(unevaluable))
     html_parts.append(
@@ -2043,6 +2168,7 @@ def render_main_page(
   <li><a href="prompt_evaluation_metrics.csv">Prompt metrics CSV</a></li>
   <li><a href="prompt_evaluation_rows.csv">Per-run comparison rows CSV</a></li>
   <li><a href="prompt_evaluation_metric_length_regressions.csv">Metric vs passage length regression CSV</a></li>
+  <li><a href="prompt_evaluation_synthetic_zainaldi_galen.csv">Synthetic Zainaldi Galen comparison CSV</a></li>
 </ul>"""
     )
     html_parts.append(page_footer())
@@ -2053,6 +2179,7 @@ def write_csv_outputs(
     summaries: list[dict[str, object]],
     grouped_rows: dict[tuple[str, int, int], list[dict[str, object]]],
     metric_length_regressions: list[dict[str, object]],
+    synthetic_zainaldi_galen_rows: list[dict[str, object]],
 ) -> None:
     summary_fields = [
         "profile_name",
@@ -2167,6 +2294,9 @@ def write_csv_outputs(
         "r2",
         "p_value",
         "slope_stderr",
+        "source_word_min",
+        "source_word_max",
+        "source_word_mean",
         "status",
         "plot_filename",
         "detail_filename",
@@ -2176,6 +2306,30 @@ def write_csv_outputs(
         writer.writeheader()
         for item in sorted(metric_length_regressions, key=metric_length_sort_key):
             writer.writerow({field: item.get(field, "") for field in metric_length_fields})
+
+    synthetic_fields = [
+        "profile_name",
+        "profile_version",
+        "profile_version_id",
+        "metric_key",
+        "metric_label",
+        "synthetic_passage_length",
+        "predicted_score",
+        "source_word_min",
+        "source_word_max",
+        "outside_observed_range",
+        "regression_slope",
+        "regression_intercept",
+        "regression_r",
+        "regression_r2",
+        "regression_p_value",
+        "regression_status",
+    ]
+    with SYNTHETIC_ZAINALDI_GALEN_CSV.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=synthetic_fields)
+        writer.writeheader()
+        for item in sorted(synthetic_zainaldi_galen_rows, key=metric_length_sort_key):
+            writer.writerow({field: item.get(field, "") for field in synthetic_fields})
 
 
 def generate_reports(
@@ -2259,7 +2413,8 @@ def generate_reports(
     if summaries:
         trend_charts = save_trend_charts(summaries, IMAGE_DIR)
 
-    write_csv_outputs(summaries, grouped_pair_rows, all_metric_length_regressions)
+    synthetic_zainaldi_rows = synthetic_zainaldi_galen_rows(all_metric_length_regressions)
+    write_csv_outputs(summaries, grouped_pair_rows, all_metric_length_regressions, synthetic_zainaldi_rows)
     MAIN_PAGE.write_text(
         render_main_page(
             summaries,
@@ -2268,6 +2423,7 @@ def generate_reports(
             unevaluable=unevaluable,
             metric_status=metric_evaluator.status,
             metric_length_regressions=all_metric_length_regressions,
+            synthetic_zainaldi_galen_rows=synthetic_zainaldi_rows,
         ),
         encoding="utf-8",
     )
