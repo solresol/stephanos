@@ -49,14 +49,17 @@ from source_documents import source_document_priority_sql
 OUTPUT_DIR = Path("reference_site/statistics")
 DETAIL_DIR = OUTPUT_DIR / "prompts"
 IMAGE_DIR = OUTPUT_DIR / "prompt_images"
+METRIC_LENGTH_IMAGE_DIR = IMAGE_DIR / "metric_length"
 MAIN_PAGE = OUTPUT_DIR / "prompt_evaluation.html"
 SUMMARY_CSV = OUTPUT_DIR / "prompt_evaluation_metrics.csv"
 ROW_CSV = OUTPUT_DIR / "prompt_evaluation_rows.csv"
+METRIC_LENGTH_CSV = OUTPUT_DIR / "prompt_evaluation_metric_length_regressions.csv"
 NEURAL_METRICS_HELPER = Path(__file__).with_name("compute_neural_translation_metrics.py")
 DEFAULT_NEURAL_METRICS_PYTHON = Path("/home/stephanos/metric-envs/neural-metrics/bin/python")
 
 ENGLISH_TOKEN_RE = re.compile(r"[A-Za-z]+(?:[''][A-Za-z]+)?|\d+")
 GREEK_TOKEN_PATTERN = r"(?u)[\u0370-\u03FF\u1F00-\u1FFF]{2,}"
+GREEK_TOKEN_RE = re.compile(GREEK_TOKEN_PATTERN)
 ENGLISH_TFIDF_TOKEN_PATTERN = r"(?u)[A-Za-z][A-Za-z''\-]*"
 PAPER_METRICS = ("BLEU-4", "chrF++", "METEOR", "ROUGE-L", "BERTScore", "COMET", "BLEURT")
 METRIC_KEY_BY_NAME = {
@@ -99,6 +102,21 @@ TREND_CHART_SPECS = [
     ("mean_bleu4", "Mean BLEU-4", None, "prompt_evaluation_trend_bleu4.png"),
     ("slope", "Length slope", 1.0, "prompt_evaluation_trend_slope.png"),
 ]
+METRIC_LENGTH_SPECS = [
+    ("bleu4", "BLEU-4"),
+    ("chrfpp", "chrF++"),
+    ("meteor", "METEOR"),
+    ("rouge_l", "ROUGE-L"),
+    ("bertscore", "BERTScore"),
+    ("comet", "COMET"),
+    ("bleurt", "BLEURT"),
+    ("3gram_precision", "Trigram precision"),
+    ("3gram_recall", "Trigram recall"),
+    ("3gram_f1", "Trigram F1"),
+    ("3gram_jaccard", "Trigram Jaccard"),
+]
+METRIC_LENGTH_ORDER = {metric_key: index for index, (metric_key, _) in enumerate(METRIC_LENGTH_SPECS)}
+SIGNIFICANCE_ALPHA = 0.05
 
 
 def esc(value: object) -> str:
@@ -119,6 +137,10 @@ def normalize_text(value: str) -> str:
 
 def english_tokens(value: str) -> list[str]:
     return ENGLISH_TOKEN_RE.findall(normalize_text(value))
+
+
+def greek_tokens(value: str) -> list[str]:
+    return GREEK_TOKEN_RE.findall(unicodedata.normalize("NFKC", value or ""))
 
 
 def parse_metric_names(value: str | None) -> tuple[str, ...]:
@@ -666,6 +688,157 @@ def regression_stats(rows: list[dict[str, object]]) -> dict[str, float]:
     return result
 
 
+def metric_length_points(rows: list[dict[str, object]], metric_key: str) -> list[tuple[float, float]]:
+    points = []
+    for row in rows:
+        passage_length = finite_float(row.get("source_word_count"))
+        metric_value = finite_float(row.get(metric_key))
+        if passage_length is None or metric_value is None:
+            continue
+        points.append((passage_length, metric_value))
+    return points
+
+
+def metric_length_regression(
+    rows: list[dict[str, object]],
+    *,
+    metric_key: str,
+    metric_label: str,
+) -> dict[str, object]:
+    points = metric_length_points(rows, metric_key)
+    result: dict[str, object] = {
+        "metric_key": metric_key,
+        "metric_label": metric_label,
+        "n": len(points),
+        "slope": float("nan"),
+        "intercept": float("nan"),
+        "r": float("nan"),
+        "r2": float("nan"),
+        "p_value": float("nan"),
+        "slope_stderr": float("nan"),
+        "direction": "not enough data",
+        "pattern": "not enough data",
+        "status": "needs at least two rows with metric scores",
+        "significant": False,
+        "plot_filename": "",
+    }
+    if len(points) < 2:
+        return result
+
+    x = np.asarray([point[0] for point in points], dtype=float)
+    y = np.asarray([point[1] for point in points], dtype=float)
+    if np.nanvar(x) <= 0:
+        result.update(
+            {
+                "direction": "not enough data",
+                "pattern": "not enough length variance",
+                "status": "passage length has no variance",
+            }
+        )
+        return result
+    if np.nanvar(y) <= 0:
+        result.update(
+            {
+                "slope": 0.0,
+                "intercept": float(np.nanmean(y)),
+                "r": 0.0,
+                "r2": 0.0,
+                "p_value": float("nan"),
+                "direction": "flat",
+                "pattern": "flat",
+                "status": "metric has no variance",
+            }
+        )
+        return result
+
+    if scipy_stats is not None:
+        fit = scipy_stats.linregress(x, y)
+        result.update(
+            {
+                "slope": float(fit.slope),
+                "intercept": float(fit.intercept),
+                "r": float(fit.rvalue),
+                "r2": float(fit.rvalue * fit.rvalue),
+                "p_value": float(fit.pvalue),
+                "slope_stderr": float(fit.stderr),
+            }
+        )
+    else:
+        slope, intercept = np.polyfit(x, y, deg=1)
+        predicted = intercept + slope * x
+        ss_res = float(np.sum((y - predicted) ** 2))
+        ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+        r = float(np.corrcoef(x, y)[0, 1])
+        result.update(
+            {
+                "slope": float(slope),
+                "intercept": float(intercept),
+                "r": r,
+                "r2": 1 - ss_res / ss_tot if ss_tot else float("nan"),
+            }
+        )
+
+    r_value = finite_float(result.get("r"))
+    p_value = finite_float(result.get("p_value"))
+    if r_value is None or abs(r_value) < 1e-12:
+        direction = "flat"
+    elif r_value > 0:
+        direction = "positive"
+    else:
+        direction = "negative"
+    significant = p_value is not None and p_value < SIGNIFICANCE_ALPHA and direction in {"positive", "negative"}
+    if significant:
+        pattern = f"significant {direction}"
+    elif direction == "flat":
+        pattern = "flat"
+    else:
+        pattern = direction
+    result.update(
+        {
+            "direction": direction,
+            "pattern": pattern,
+            "status": "ok",
+            "significant": significant,
+        }
+    )
+    return result
+
+
+def metric_length_regressions_for_prompt(
+    summary: dict[str, object],
+    rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    regressions = []
+    for metric_key, metric_label in METRIC_LENGTH_SPECS:
+        regression = metric_length_regression(rows, metric_key=metric_key, metric_label=metric_label)
+        regression.update(
+            {
+                "profile_name": summary["profile_name"],
+                "profile_version": summary["profile_version"],
+                "profile_version_id": summary["profile_version_id"],
+                "detail_filename": summary["detail_filename"],
+            }
+        )
+        regressions.append(regression)
+    return regressions
+
+
+def metric_length_pattern_counts(regressions: list[dict[str, object]]) -> dict[str, int]:
+    evaluable = [item for item in regressions if item.get("status") in {"ok", "metric has no variance"}]
+    return {
+        "evaluable": len(evaluable),
+        "positive": sum(1 for item in evaluable if item.get("direction") == "positive"),
+        "negative": sum(1 for item in evaluable if item.get("direction") == "negative"),
+        "flat": sum(1 for item in evaluable if item.get("direction") == "flat"),
+        "significant_positive": sum(
+            1 for item in evaluable if item.get("direction") == "positive" and item.get("significant")
+        ),
+        "significant_negative": sum(
+            1 for item in evaluable if item.get("direction") == "negative" and item.get("significant")
+        ),
+    }
+
+
 def build_pair_rows(
     db_rows: list[dict[str, object]],
     *,
@@ -682,6 +855,9 @@ def build_pair_rows(
         pair["ai_tokens"] = ai_tokens
         pair["human_word_count"] = len(human_tokens)
         pair["ai_word_count"] = len(ai_tokens)
+        source_tokens = greek_tokens(str(db_row.get("source_text") or ""))
+        pair["source_word_count"] = len(source_tokens) if source_tokens else len(human_tokens)
+        pair["passage_length_source"] = "source_text" if source_tokens else "human_translation_fallback"
         pair["raw_length_delta"] = len(ai_tokens) - len(human_tokens)
         for n in range(1, 5):
             pair.update(overlap_stats(ai_tokens, human_tokens, n))
@@ -706,6 +882,10 @@ def summarize_prompt(rows: list[dict[str, object]]) -> dict[str, object]:
         "usable_run_lemma_count": rows[0].get("usable_run_lemma_count"),
         "pair_count": len(rows),
         "lemma_count": len({row["lemma_id"] for row in rows}),
+        "source_word_mean": mean([row["source_word_count"] for row in rows]),
+        "passage_length_fallback_count": sum(
+            1 for row in rows if row.get("passage_length_source") == "human_translation_fallback"
+        ),
         "human_word_mean": mean([row["human_word_count"] for row in rows]),
         "ai_word_mean": mean([row["ai_word_count"] for row in rows]),
         "mean_raw_length_delta": mean([row["raw_length_delta"] for row in rows]),
@@ -1294,6 +1474,63 @@ def save_trend_charts(summaries: list[dict[str, object]], output_dir: Path) -> l
     return chart_paths
 
 
+def save_metric_length_plot(rows: list[dict[str, object]], regression: dict[str, object], output_path: Path) -> None:
+    points = metric_length_points(rows, str(regression["metric_key"]))
+    x = np.asarray([point[0] for point in points], dtype=float)
+    y = np.asarray([point[1] for point in points], dtype=float)
+
+    fig, ax = plt.subplots(figsize=(5.6, 3.65))
+    ax.scatter(x, y, s=42, alpha=0.78, color="#2f6fb2", edgecolor="#172235", linewidth=0.35)
+    if len(points) >= 2 and np.nanvar(x) > 0 and not math.isnan(float(regression.get("slope", float("nan")))):
+        x_min = float(np.min(x))
+        x_max = float(np.max(x))
+        line_x = np.linspace(x_min, x_max, 120)
+        line_y = float(regression["intercept"]) + float(regression["slope"]) * line_x
+        ax.plot(line_x, line_y, color="#c94f1a", linewidth=1.9, linestyle="--", label="OLS fit")
+        ax.legend(loc="best")
+    ax.set_xlabel("Passage length (source words)")
+    ax.set_ylabel(str(regression["metric_label"]))
+    ax.set_title(f"{regression['metric_label']} vs passage length")
+    ax.grid(True, color="#d7dee9", linewidth=0.7)
+    annotation = (
+        f"n = {int(regression['n'])}\n"
+        f"r = {format_number(regression['r'])}\n"
+        f"R^2 = {format_number(regression['r2'])}\n"
+        f"p = {format_number(regression['p_value'], 4)}\n"
+        f"slope = {format_number(regression['slope'], 5)}"
+    )
+    ax.text(
+        0.02,
+        0.98,
+        annotation,
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=8.5,
+        bbox=dict(facecolor="white", edgecolor="#b7c2d0", alpha=0.92),
+    )
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+
+
+def save_metric_length_plots(
+    rows: list[dict[str, object]],
+    summary: dict[str, object],
+    output_dir: Path,
+) -> list[dict[str, object]]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    prompt_slug = summary["detail_filename"].replace(".html", "")
+    regressions = metric_length_regressions_for_prompt(summary, rows)
+    for regression in regressions:
+        if regression["status"] not in {"ok", "metric has no variance"}:
+            continue
+        filename = f"{prompt_slug}-{slugify(str(regression['metric_label']))}-vs-passage-length.png"
+        save_metric_length_plot(rows, regression, output_dir / filename)
+        regression["plot_filename"] = f"metric_length/{filename}"
+    return regressions
+
+
 def fit_residual_terms(
     rows: list[dict[str, object]],
     *,
@@ -1518,6 +1755,7 @@ def render_detail_page(
     rows: list[dict[str, object]],
     *,
     scatter_path: str,
+    metric_length_regressions: list[dict[str, object]],
     min_galton_samples: int,
     min_galton_df: int,
 ) -> str:
@@ -1545,6 +1783,8 @@ def render_detail_page(
     <tr><th>R^2</th><td>{format_number(summary['r2'])}</td></tr>
     <tr><th>P-value</th><td>{format_number(summary['p_value'], 4)}</td></tr>
     <tr><th>Pearson r</th><td>{format_number(summary['r'])}</td></tr>
+    <tr><th>Mean source words</th><td>{format_number(summary['source_word_mean'])}</td></tr>
+    <tr><th>Length fallback rows</th><td>{int(summary['passage_length_fallback_count']):,}</td></tr>
     <tr><th>Mean human words</th><td>{format_number(summary['human_word_mean'])}</td></tr>
     <tr><th>Mean AI words</th><td>{format_number(summary['ai_word_mean'])}</td></tr>
     <tr><th>Mean absolute length residual</th><td>{format_number(summary['mean_abs_length_residual'])}</td></tr>
@@ -1552,6 +1792,7 @@ def render_detail_page(
   </tbody>
 </table>"""
     )
+    html_parts.append(render_metric_length_detail_section(metric_length_regressions))
     html_parts.append(
         f"""<h2>Translation Similarity Metrics</h2>
 <table>
@@ -1643,6 +1884,119 @@ def render_metric_status_table(metric_status: dict[str, str]) -> str:
 </table>"""
 
 
+def metric_length_sort_key(item: dict[str, object]) -> tuple[str, int, int, int]:
+    return (
+        str(item.get("profile_name") or "").casefold(),
+        int(item.get("profile_version") or 0),
+        int(item.get("profile_version_id") or 0),
+        METRIC_LENGTH_ORDER.get(str(item.get("metric_key") or ""), 999),
+    )
+
+
+def metric_length_pattern_sentence(regressions: list[dict[str, object]]) -> str:
+    counts = metric_length_pattern_counts(regressions)
+    evaluable = counts["evaluable"]
+    if not evaluable:
+        return "No metric-length regressions had enough scored rows to classify a direction."
+    if counts["positive"] > counts["negative"]:
+        majority = "positive correlations are more common"
+    elif counts["negative"] > counts["positive"]:
+        majority = "negative correlations are more common"
+    else:
+        majority = "positive and negative correlations are evenly split"
+    return (
+        f"Across {evaluable:,} evaluable metric/prompt regressions, {majority}: "
+        f"{counts['positive']:,} positive, {counts['negative']:,} negative, and {counts['flat']:,} flat. "
+        f"Using p < {SIGNIFICANCE_ALPHA:g}, {counts['significant_positive']:,} are significantly positive "
+        f"and {counts['significant_negative']:,} are significantly negative."
+    )
+
+
+def render_metric_length_regression_table(
+    regressions: list[dict[str, object]],
+    *,
+    include_prompt: bool,
+) -> str:
+    rows = []
+    for item in sorted(regressions, key=metric_length_sort_key):
+        prompt_cell = ""
+        if include_prompt:
+            detail_href = f"prompts/{item['detail_filename']}"
+            prompt_cell = (
+                f'<td><a href="{esc(detail_href)}">{esc(item["profile_name"])} '
+                f'v{esc(item["profile_version"])}</a></td>'
+            )
+        rows.append(
+            f"""<tr>
+  {prompt_cell}
+  <td>{esc(item['metric_label'])}</td>
+  <td>{int(item['n']):,}</td>
+  <td>{esc(item['pattern'])}</td>
+  <td>{format_number(item['r'])}</td>
+  <td>{format_number(item['r2'])}</td>
+  <td>{format_number(item['p_value'], 4)}</td>
+  <td>{format_number(item['slope'], 5)}</td>
+  <td>{esc(item['status'])}</td>
+</tr>"""
+        )
+    prompt_header = "<th>Prompt</th>" if include_prompt else ""
+    return f"""<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      {prompt_header}
+      <th>Metric</th>
+      <th>Rows</th>
+      <th>Pattern</th>
+      <th>Pearson r</th>
+      <th>R^2</th>
+      <th>P-value</th>
+      <th>Slope</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>{''.join(rows)}</tbody>
+</table>
+</div>"""
+
+
+def render_metric_length_pattern_section(regressions: list[dict[str, object]]) -> str:
+    if not regressions:
+        return ""
+    counts = metric_length_pattern_counts(regressions)
+    return f"""<h2>Metric vs Passage Length Patterns</h2>
+<p class="note">Passage length is measured as the source Greek token count when source text is available, falling back to human translation word count only when a source passage has no Greek tokens. Each row regresses one metric against passage length for one prompt version.</p>
+<div class="metric-grid">
+  <div class="metric"><span class="label">Evaluable regressions</span><span class="value">{counts['evaluable']:,}</span></div>
+  <div class="metric"><span class="label">Positive</span><span class="value">{counts['positive']:,}</span></div>
+  <div class="metric"><span class="label">Negative</span><span class="value">{counts['negative']:,}</span></div>
+  <div class="metric"><span class="label">Significant positive</span><span class="value">{counts['significant_positive']:,}</span></div>
+  <div class="metric"><span class="label">Significant negative</span><span class="value">{counts['significant_negative']:,}</span></div>
+</div>
+<p>{esc(metric_length_pattern_sentence(regressions))}</p>
+{render_metric_length_regression_table(regressions, include_prompt=True)}"""
+
+
+def render_metric_length_detail_section(regressions: list[dict[str, object]]) -> str:
+    if not regressions:
+        return ""
+    figures = []
+    for item in sorted(regressions, key=metric_length_sort_key):
+        if not item.get("plot_filename"):
+            continue
+        figures.append(
+            f"""<figure>
+  <img src="../prompt_images/{esc(item['plot_filename'])}" alt="{esc(item['metric_label'])} vs passage length">
+  <figcaption>{esc(item['metric_label'])}: {esc(item['pattern'])}; r = {format_number(item['r'])}, R^2 = {format_number(item['r2'])}, p = {format_number(item['p_value'], 4)}.</figcaption>
+</figure>"""
+        )
+    charts = '<div class="chart-grid">' + "".join(figures) + "</div>" if figures else ""
+    return f"""<h2>Metric vs Passage Length</h2>
+<p class="note">These plots test whether score changes with source passage length for this prompt version. The dashed line is an ordinary least-squares fit; the annotation reports n, r, R^2, p-value, and slope.</p>
+{charts}
+{render_metric_length_regression_table(regressions, include_prompt=False)}"""
+
+
 def render_main_page(
     summaries: list[dict[str, object]],
     *,
@@ -1650,6 +2004,7 @@ def render_main_page(
     approved_human_only: bool,
     unevaluable: list[dict[str, object]],
     metric_status: dict[str, str],
+    metric_length_regressions: list[dict[str, object]],
 ) -> str:
     html_parts = [page_header("Translation Prompt Evaluation", depth=1)]
     html_parts.append(
@@ -1679,6 +2034,7 @@ def render_main_page(
 </figure>"""
             )
         html_parts.append('<div class="chart-grid">' + "".join(chart_figures) + "</div>")
+    html_parts.append(render_metric_length_pattern_section(metric_length_regressions))
     html_parts.append(render_summary_table(summaries))
     html_parts.append(render_unevaluable_table(unevaluable))
     html_parts.append(
@@ -1686,13 +2042,18 @@ def render_main_page(
 <ul>
   <li><a href="prompt_evaluation_metrics.csv">Prompt metrics CSV</a></li>
   <li><a href="prompt_evaluation_rows.csv">Per-run comparison rows CSV</a></li>
+  <li><a href="prompt_evaluation_metric_length_regressions.csv">Metric vs passage length regression CSV</a></li>
 </ul>"""
     )
     html_parts.append(page_footer())
     return "\n".join(html_parts)
 
 
-def write_csv_outputs(summaries: list[dict[str, object]], grouped_rows: dict[tuple[str, int, int], list[dict[str, object]]]) -> None:
+def write_csv_outputs(
+    summaries: list[dict[str, object]],
+    grouped_rows: dict[tuple[str, int, int], list[dict[str, object]]],
+    metric_length_regressions: list[dict[str, object]],
+) -> None:
     summary_fields = [
         "profile_name",
         "profile_version",
@@ -1702,6 +2063,8 @@ def write_csv_outputs(summaries: list[dict[str, object]], grouped_rows: dict[tup
         "usable_run_lemma_count",
         "pair_count",
         "lemma_count",
+        "source_word_mean",
+        "passage_length_fallback_count",
         "slope",
         "intercept",
         "r2",
@@ -1749,6 +2112,8 @@ def write_csv_outputs(summaries: list[dict[str, object]], grouped_rows: dict[tup
         "human_translation_id",
         "human_stage",
         "human_status",
+        "source_word_count",
+        "passage_length_source",
         "human_word_count",
         "ai_word_count",
         "raw_length_delta",
@@ -1786,6 +2151,32 @@ def write_csv_outputs(summaries: list[dict[str, object]], grouped_rows: dict[tup
             for row in rows:
                 writer.writerow({field: row.get(field, "") for field in row_fields})
 
+    metric_length_fields = [
+        "profile_name",
+        "profile_version",
+        "profile_version_id",
+        "metric_key",
+        "metric_label",
+        "n",
+        "direction",
+        "pattern",
+        "significant",
+        "slope",
+        "intercept",
+        "r",
+        "r2",
+        "p_value",
+        "slope_stderr",
+        "status",
+        "plot_filename",
+        "detail_filename",
+    ]
+    with METRIC_LENGTH_CSV.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=metric_length_fields)
+        writer.writeheader()
+        for item in sorted(metric_length_regressions, key=metric_length_sort_key):
+            writer.writerow({field: item.get(field, "") for field in metric_length_fields})
+
 
 def generate_reports(
     *,
@@ -1801,6 +2192,7 @@ def generate_reports(
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     DETAIL_DIR.mkdir(parents=True, exist_ok=True)
     IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    METRIC_LENGTH_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
     metric_evaluator = TranslationMetricEvaluator(
         metric_names,
@@ -1818,6 +2210,7 @@ def generate_reports(
 
     summaries = []
     grouped_pair_rows: dict[tuple[str, int, int], list[dict[str, object]]] = {}
+    all_metric_length_regressions: list[dict[str, object]] = []
     for key, rows_for_prompt in grouped_db_rows.items():
         pair_rows = build_pair_rows(rows_for_prompt, metric_evaluator=metric_evaluator)
         if not pair_rows:
@@ -1826,10 +2219,13 @@ def generate_reports(
         summary.update(prompt_metadata.get(key, {}))
         scatter_filename = summary["detail_filename"].replace(".html", "-scatter.png")
         save_scatter_plot(pair_rows, summary, IMAGE_DIR / scatter_filename)
+        metric_length_regressions = save_metric_length_plots(pair_rows, summary, METRIC_LENGTH_IMAGE_DIR)
+        all_metric_length_regressions.extend(metric_length_regressions)
         detail_html = render_detail_page(
             summary,
             pair_rows,
             scatter_path=scatter_filename,
+            metric_length_regressions=metric_length_regressions,
             min_galton_samples=min_galton_samples,
             min_galton_df=min_galton_df,
         )
@@ -1863,7 +2259,7 @@ def generate_reports(
     if summaries:
         trend_charts = save_trend_charts(summaries, IMAGE_DIR)
 
-    write_csv_outputs(summaries, grouped_pair_rows)
+    write_csv_outputs(summaries, grouped_pair_rows, all_metric_length_regressions)
     MAIN_PAGE.write_text(
         render_main_page(
             summaries,
@@ -1871,6 +2267,7 @@ def generate_reports(
             approved_human_only=approved_human_only,
             unevaluable=unevaluable,
             metric_status=metric_evaluator.status,
+            metric_length_regressions=all_metric_length_regressions,
         ),
         encoding="utf-8",
     )

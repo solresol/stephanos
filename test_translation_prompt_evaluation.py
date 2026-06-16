@@ -7,7 +7,11 @@ os.environ.setdefault("DB_HOST", "raksasa")
 os.environ.setdefault("DB_USER", "stephanos")
 
 from generate_translation_prompt_evaluation import (
+    metric_length_pattern_counts,
+    metric_length_regression,
+    render_metric_length_pattern_section,
     render_summary_table,
+    save_metric_length_plots,
     save_trend_charts,
 )
 
@@ -21,6 +25,8 @@ def summary(version: int) -> dict[str, object]:
         "first_translation_at": None,
         "pair_count": 10 + version,
         "lemma_count": 10 + version,
+        "source_word_mean": 12.0 + version,
+        "passage_length_fallback_count": 0,
         "slope": 1.0 + version / 100,
         "intercept": 0.5,
         "r2": 0.9 + version / 100,
@@ -73,6 +79,84 @@ class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
             )
             for filename, _ in charts:
                 self.assertTrue((Path(temp_dir) / filename).is_file())
+
+    def test_metric_length_regression_identifies_positive_and_negative_correlations(self) -> None:
+        positive_rows = [
+            {"source_word_count": 10, "bleurt": 0.20},
+            {"source_word_count": 20, "bleurt": 0.30},
+            {"source_word_count": 30, "bleurt": 0.40},
+        ]
+        negative_rows = [
+            {"source_word_count": 10, "chrfpp": 0.60},
+            {"source_word_count": 20, "chrfpp": 0.40},
+            {"source_word_count": 30, "chrfpp": 0.20},
+        ]
+
+        positive = metric_length_regression(positive_rows, metric_key="bleurt", metric_label="BLEURT")
+        negative = metric_length_regression(negative_rows, metric_key="chrfpp", metric_label="chrF++")
+
+        self.assertEqual(positive["direction"], "positive")
+        self.assertAlmostEqual(float(positive["r2"]), 1.0)
+        self.assertEqual(negative["direction"], "negative")
+        self.assertAlmostEqual(float(negative["r2"]), 1.0)
+        counts = metric_length_pattern_counts([positive, negative])
+        self.assertEqual(counts["positive"], 1)
+        self.assertEqual(counts["negative"], 1)
+
+    def test_metric_length_pattern_section_summarizes_direction_counts(self) -> None:
+        prompt_summary = summary(1)
+        regressions = [
+            {
+                **metric_length_regression(
+                    [
+                        {"source_word_count": 10, "bleurt": 0.20},
+                        {"source_word_count": 20, "bleurt": 0.30},
+                        {"source_word_count": 30, "bleurt": 0.40},
+                    ],
+                    metric_key="bleurt",
+                    metric_label="BLEURT",
+                ),
+                "profile_name": prompt_summary["profile_name"],
+                "profile_version": prompt_summary["profile_version"],
+                "profile_version_id": prompt_summary["profile_version_id"],
+                "detail_filename": prompt_summary["detail_filename"],
+            }
+        ]
+
+        html = render_metric_length_pattern_section(regressions)
+
+        self.assertIn("Metric vs Passage Length Patterns", html)
+        self.assertIn("Positive", html)
+        self.assertIn("BLEURT", html)
+        self.assertIn("significant positive", html)
+
+    def test_metric_length_plots_are_written_for_scored_metrics(self) -> None:
+        rows = [
+            {
+                "source_word_count": 10,
+                "bleurt": 0.20,
+                "chrfpp": 0.60,
+            },
+            {
+                "source_word_count": 20,
+                "bleurt": 0.30,
+                "chrfpp": 0.50,
+            },
+            {
+                "source_word_count": 30,
+                "bleurt": 0.40,
+                "chrfpp": 0.40,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            regressions = save_metric_length_plots(rows, summary(1), Path(temp_dir))
+
+            plotted = [item for item in regressions if item.get("plot_filename")]
+            plotted_metrics = {item["metric_key"] for item in plotted}
+            self.assertIn("bleurt", plotted_metrics)
+            self.assertIn("chrfpp", plotted_metrics)
+            for item in plotted:
+                self.assertTrue((Path(temp_dir) / Path(str(item["plot_filename"])).name).is_file())
 
 
 if __name__ == "__main__":
