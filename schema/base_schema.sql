@@ -2639,8 +2639,16 @@ CREATE TABLE public.translation_prompt_profile_versions (
     notes text,
     active boolean DEFAULT true NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    metadata_text text
+    metadata_text text,
+    uses_guidance_context boolean DEFAULT false NOT NULL
 );
+
+
+--
+-- Name: COLUMN translation_prompt_profile_versions.uses_guidance_context; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_prompt_profile_versions.uses_guidance_context IS 'Whether translation workers may add matched entry-specific translation guidance to prompts for this prompt-version.';
 
 
 --
