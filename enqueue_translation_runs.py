@@ -142,6 +142,21 @@ def column_exists(cur, table_name: str, column_name: str) -> bool:
     return cur.fetchone() is not None
 
 
+def profile_version_uses_guidance_context(cur, profile_version_id: int) -> bool:
+    if not column_exists(cur, "translation_prompt_profile_versions", "uses_guidance_context"):
+        return False
+    cur.execute(
+        """
+        SELECT COALESCE(uses_guidance_context, FALSE)
+        FROM translation_prompt_profile_versions
+        WHERE id = %s
+        """,
+        (int(profile_version_id),),
+    )
+    row = cur.fetchone()
+    return bool(row[0]) if row else False
+
+
 def resolve_profile(cur, profile_name: str):
     cur.execute(
         "SELECT id FROM translation_prompt_profiles WHERE name = %s AND active = TRUE LIMIT 1",
@@ -516,6 +531,7 @@ def main():
 
     profile_id = resolve_profile(cur, args.profile)
     profile_version_id = resolve_profile_version(cur, profile_id, args.profile_version)
+    uses_guidance_context = profile_version_uses_guidance_context(cur, profile_version_id)
     cur.execute("SELECT to_regclass('public.human_translations') IS NOT NULL")
     has_human_translations = bool(cur.fetchone()[0])
     has_priority_column = column_exists(cur, "translation_run_requests", "priority")
@@ -544,7 +560,10 @@ def main():
         conn.close()
         return
 
-    if args.prepare_guidance_first or args.require_guidance_complete:
+    if (args.prepare_guidance_first or args.require_guidance_complete) and not uses_guidance_context:
+        print("Prompt version does not use guidance context; skipping guidance-first enqueue checks.")
+
+    if uses_guidance_context and (args.prepare_guidance_first or args.require_guidance_complete):
         ready = []
         incomplete = []
         guidance_rows_inserted = 0

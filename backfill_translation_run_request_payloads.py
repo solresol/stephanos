@@ -39,6 +39,12 @@ def column_exists(cur, table_name: str, column_name: str) -> bool:
     return cur.fetchone() is not None
 
 
+def prompt_version_guidance_expr(cur, alias: str = "pv") -> str:
+    if column_exists(cur, "translation_prompt_profile_versions", "uses_guidance_context"):
+        return f"COALESCE({alias}.uses_guidance_context, FALSE)"
+    return "FALSE"
+
+
 def ensure_request_payload_column(cur) -> None:
     if column_exists(cur, "translation_runs", "request_payload_json"):
         return
@@ -86,7 +92,7 @@ def fetch_backfill_candidates(cur, limit: int | None) -> list[dict]:
                 ELSE 0
              END = tr.run_index
         JOIN openai_batch_jobs j ON j.id = i.batch_job_id
-        WHERE COALESCE(tr.request_payload_json, '{}'::jsonb) = '{}'::jsonb
+        WHERE COALESCE(tr.request_payload_json, '{{}}'::jsonb) = '{{}}'::jsonb
           AND COALESCE(j.input_path, '') <> ''
         ORDER BY tr.id
     """
@@ -132,8 +138,9 @@ def build_request_payload(candidate: dict, batch_record: dict) -> dict:
 def fetch_reconstruct_candidates(cur, headwords: list[str]) -> list[dict]:
     if not headwords:
         return []
+    uses_guidance_context_expr = prompt_version_guidance_expr(cur, alias="pv")
     cur.execute(
-        """
+        f"""
         SELECT
             tr.id AS run_id,
             tr.request_id,
@@ -147,12 +154,13 @@ def fetch_reconstruct_candidates(cur, headwords: list[str]) -> list[dict]:
             stv.source_document,
             a.id AS lemma_id,
             a.lemma,
-            a.entry_number
+            a.entry_number,
+            {uses_guidance_context_expr} AS uses_guidance_context
         FROM translation_runs tr
         JOIN translation_prompt_profile_versions pv ON pv.id = tr.profile_version_id
         JOIN lemma_source_text_versions stv ON stv.id = tr.source_text_version_id
         JOIN assembled_lemmas a ON a.id = tr.lemma_id
-        WHERE COALESCE(tr.request_payload_json, '{}'::jsonb) = '{}'::jsonb
+        WHERE COALESCE(tr.request_payload_json, '{{}}'::jsonb) = '{{}}'::jsonb
           AND a.lemma = ANY(%s)
         ORDER BY a.lemma, tr.created_at DESC, tr.id DESC
         """,
@@ -173,17 +181,20 @@ def fetch_reconstruct_candidates(cur, headwords: list[str]) -> list[dict]:
             "lemma_id": int(row[10]),
             "lemma": row[11] or "",
             "entry_number": int(row[12]) if row[12] is not None else None,
+            "uses_guidance_context": bool(row[13]),
         }
         for row in cur.fetchall()
     ]
 
 
 def reconstruct_request_payload(cur, candidate: dict) -> dict:
-    guidance_context = fetch_guidance_context(
-        cur,
-        lemma_id=candidate["lemma_id"],
-        source_text_version_id=candidate["source_text_version_id"],
-    )
+    guidance_context = []
+    if candidate.get("uses_guidance_context"):
+        guidance_context = fetch_guidance_context(
+            cur,
+            lemma_id=candidate["lemma_id"],
+            source_text_version_id=candidate["source_text_version_id"],
+        )
     source_passage_context = fetch_source_passage_context(
         cur,
         lemma_id=candidate["lemma_id"],

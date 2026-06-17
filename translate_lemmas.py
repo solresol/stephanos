@@ -42,7 +42,9 @@ from translation_guidance_coverage import (
 )
 
 DEFAULT_DAILY_TOKEN_LIMIT = 100_000
-MAX_GUIDANCE_CONTEXT_ROWS = 24
+# Keep this above the current prompt-guidance rule count so a guidance-enabled
+# run can record every matched rule and satisfy freshness checks.
+MAX_GUIDANCE_CONTEXT_ROWS = 200
 MAX_SOURCE_PASSAGE_CONTEXT_ROWS = 4
 MAX_CONTEXT_FIELD_CHARS = 900
 CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
@@ -102,6 +104,12 @@ def column_exists(cur, table_name: str, column_name: str) -> bool:
         (table_name, column_name),
     )
     return cur.fetchone() is not None
+
+
+def prompt_version_guidance_expr(cur, alias: str = "pv") -> str:
+    if column_exists(cur, "translation_prompt_profile_versions", "uses_guidance_context"):
+        return f"COALESCE({alias}.uses_guidance_context, FALSE)"
+    return "FALSE"
 
 
 def human_translation_exists_sql(cur) -> str:
@@ -652,6 +660,7 @@ def extract_translation_from_response_body(body: dict) -> tuple[str, int]:
 def fetch_requests(cur, request_limit: int | None):
     has_human_translation_expr = human_translation_exists_sql(cur)
     kappa_headword_expr = "left(trim(COALESCE(a.lemma, '')), 1) IN ('Κ', 'κ')"
+    uses_guidance_context_expr = prompt_version_guidance_expr(cur, alias="pv")
     if column_exists(cur, "translation_run_requests", "priority"):
         order_by = "r.priority ASC, has_human_translation ASC, kappa_headword DESC, r.created_at, r.id"
     else:
@@ -670,6 +679,7 @@ def fetch_requests(cur, request_limit: int | None):
             pv.id AS profile_version_id,
             pv.version AS profile_version_number,
             pv.prompt_text,
+            {uses_guidance_context_expr} AS uses_guidance_context,
             stv.id AS source_text_version_id,
             stv.text_body AS source_text,
             stv.source_document,
@@ -940,6 +950,7 @@ def submit_translation_batch(
         profile_version_id,
         profile_version_number,
         prompt_text,
+        prompt_uses_guidance_context,
         source_text_version_id,
         source_text,
         source_document,
@@ -998,7 +1009,9 @@ def submit_translation_batch(
             )
             continue
 
-        if not args.no_guidance_context and not args.allow_incomplete_guidance:
+        request_uses_guidance_context = bool(prompt_uses_guidance_context) and not args.no_guidance_context
+
+        if request_uses_guidance_context and not args.allow_incomplete_guidance:
             coverage = guidance_coverage_counts(
                 cur,
                 source_text_version_id=source_text_version_id,
@@ -1042,7 +1055,7 @@ def submit_translation_batch(
             run_index = existing_count + run_offset
             guidance_context = []
             source_passage_context = []
-            if not args.no_guidance_context:
+            if request_uses_guidance_context:
                 guidance_context = fetch_guidance_context(
                     cur,
                     lemma_id=lemma_id,
@@ -1095,6 +1108,7 @@ def submit_translation_batch(
                     "model": model_name,
                     "temperature": temperature,
                     "top_p": top_p,
+                    "prompt_uses_guidance_context": bool(prompt_uses_guidance_context),
                     "guidance_context": guidance_context,
                     "source_passage_context": source_passage_context,
                     "request_payload": request_payload,
@@ -1551,6 +1565,7 @@ def main():
         profile_version_id,
         profile_version_number,
         prompt_text,
+        prompt_uses_guidance_context,
         source_text_version_id,
         source_text,
         source_document,
@@ -1594,7 +1609,9 @@ def main():
             conn.commit()
             continue
 
-        if not args.no_guidance_context and not args.allow_incomplete_guidance:
+        request_uses_guidance_context = bool(prompt_uses_guidance_context) and not args.no_guidance_context
+
+        if request_uses_guidance_context and not args.allow_incomplete_guidance:
             coverage = guidance_coverage_counts(
                 cur,
                 source_text_version_id=source_text_version_id,
@@ -1651,7 +1668,7 @@ def main():
             try:
                 guidance_context = []
                 source_passage_context = []
-                if not args.no_guidance_context:
+                if request_uses_guidance_context:
                     guidance_context = fetch_guidance_context(
                         cur,
                         lemma_id=lemma_id,
@@ -1712,7 +1729,7 @@ def main():
                     public_block_reason=public_block_reason,
                     request_payload=request_payload,
                 )
-                if guidance_provenance_enabled:
+                if guidance_provenance_enabled and request_uses_guidance_context:
                     record_translation_run_guidance_matches(cur, run_id, guidance_context)
                 refresh_translation_guidance_freshness(cur, run_id=run_id)
 
