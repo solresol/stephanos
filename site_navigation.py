@@ -91,6 +91,7 @@ MENU_SECTIONS: tuple[MenuSection, ...] = (
         "Operations",
         (
             MenuItem("pipeline", "Pipeline Status", "pipeline.html"),
+            MenuItem("translation_operations", "Translation Operations", "statistics/translation_operations.html"),
             MenuItem("progress", "Processing Progress", "progress.html"),
             MenuItem("page_scans", "Page Scans", "protected/", protected=True),
             MenuItem("text_comparison", "Greek Text Review", "protected/meineke_comparison.html", protected=True),

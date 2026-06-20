@@ -257,6 +257,10 @@ uv run seed_translation_profiles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning:
 echo "Step 4d2: Seeding curated translation styles..." | tee -a "$LOGFILE"
 uv run seed_translation_styles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: style seed failed" | tee -a "$LOGFILE"
 
+# Step 4d2a: Seed approved-human translation experiment profiles (idempotent)
+echo "Step 4d2a: Seeding translation experiment profiles..." | tee -a "$LOGFILE"
+uv run seed_translation_experiment_profiles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: experiment profile seed failed" | tee -a "$LOGFILE"
+
 # Step 4d3: Backfill authoritative translation runs from compatibility columns
 echo "Step 4d3: Backfilling authoritative translation runs..." | tee -a "$LOGFILE"
 uv run backfill_legacy_translation_runs.py --source-document meineke 2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation backfill failed" | tee -a "$LOGFILE"
@@ -346,6 +350,31 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_TRANSLATION_GU
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: approved-human evaluation guidance queue step failed" | tee -a "$LOGFILE"
 fi
 
+# Step 4d7b: Queue guidance for approved-human translation experiments
+HUMAN_EVAL_EXPERIMENT_ENABLED="${HUMAN_EVAL_EXPERIMENT_ENABLED:-1}"
+HUMAN_EVAL_EXPERIMENT_PROFILES="${HUMAN_EVAL_EXPERIMENT_PROFILES:-legacy_scholarly_v3_temp0 legacy_scholarly_v3_temp04 legacy_scholarly_v3_temp07 legacy_scholarly_v4_reasoning legacy_scholarly_v4_reasoning_medium legacy_scholarly_v4_reasoning_high legacy_scholarly_v4_mini legacy_scholarly_v4_mini_medium legacy_scholarly_v4_mini_high}"
+HUMAN_EVAL_EXPERIMENT_SOURCE_DOCUMENT="${HUMAN_EVAL_EXPERIMENT_SOURCE_DOCUMENT:-$HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT}"
+HUMAN_EVAL_EXPERIMENT_GUIDANCE_LIMIT="${HUMAN_EVAL_EXPERIMENT_GUIDANCE_LIMIT:-30}"
+HUMAN_EVAL_EXPERIMENT_ENQUEUE_LIMIT="${HUMAN_EVAL_EXPERIMENT_ENQUEUE_LIMIT:-1}"
+HUMAN_EVAL_EXPERIMENT_MAX_OPEN_REQUESTS="${HUMAN_EVAL_EXPERIMENT_MAX_OPEN_REQUESTS:-1}"
+HUMAN_EVAL_EXPERIMENT_PRIORITY="${HUMAN_EVAL_EXPERIMENT_PRIORITY:-4}"
+HUMAN_EVAL_EXPERIMENT_CREATED_BY="${HUMAN_EVAL_EXPERIMENT_CREATED_BY:-run_daily_pipeline.sh:human-eval-experiment}"
+if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_GUIDANCE_LIMIT" -gt 0 ]; then
+    echo "Step 4d7b: Queueing guidance for approved-human translation experiments..." | tee -a "$LOGFILE"
+    for experiment_profile in $HUMAN_EVAL_EXPERIMENT_PROFILES; do
+        uv run enqueue_human_evaluation_translations.py \
+            --profile "$experiment_profile" \
+            --versions 1 \
+            --source-document "$HUMAN_EVAL_EXPERIMENT_SOURCE_DOCUMENT" \
+            --limit "$HUMAN_EVAL_EXPERIMENT_GUIDANCE_LIMIT" \
+            --priority "$HUMAN_EVAL_EXPERIMENT_PRIORITY" \
+            --created-by "$HUMAN_EVAL_EXPERIMENT_CREATED_BY" \
+            --prepare-guidance-first \
+            --guidance-only \
+            2>&1 | tee -a "$LOGFILE" || echo "  Warning: approved-human experiment guidance queue failed for ${experiment_profile}" | tee -a "$LOGFILE"
+    done
+fi
+
 # Step 4d8: Process a bounded translation-guidance scan batch before translation
 TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT="${TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT:-2000}"
 TRANSLATION_GUIDANCE_SCAN_MODEL="${TRANSLATION_GUIDANCE_SCAN_MODEL:-gpt-5.4-mini}"
@@ -400,6 +429,23 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_TRANSLATION_EN
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: approved-human evaluation translation enqueue step failed" | tee -a "$LOGFILE"
 fi
 
+# Step 4d8b: Queue approved-human translation experiment requests slowly
+if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_ENQUEUE_LIMIT" -gt 0 ]; then
+    echo "Step 4d8b: Enqueuing approved-human translation experiments..." | tee -a "$LOGFILE"
+    for experiment_profile in $HUMAN_EVAL_EXPERIMENT_PROFILES; do
+        uv run enqueue_human_evaluation_translations.py \
+            --profile "$experiment_profile" \
+            --versions 1 \
+            --source-document "$HUMAN_EVAL_EXPERIMENT_SOURCE_DOCUMENT" \
+            --limit "$HUMAN_EVAL_EXPERIMENT_ENQUEUE_LIMIT" \
+            --max-open-requests "$HUMAN_EVAL_EXPERIMENT_MAX_OPEN_REQUESTS" \
+            --priority "$HUMAN_EVAL_EXPERIMENT_PRIORITY" \
+            --created-by "$HUMAN_EVAL_EXPERIMENT_CREATED_BY" \
+            --require-guidance-complete \
+            2>&1 | tee -a "$LOGFILE" || echo "  Warning: approved-human experiment enqueue failed for ${experiment_profile}" | tee -a "$LOGFILE"
+    done
+fi
+
 # Step 4e: Enqueue preferred-source translation run requests (set TRANSLATION_ENQUEUE_LIMIT=0 to disable)
 TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-20}"
 TRANSLATION_ENQUEUE_ORDER="${TRANSLATION_ENQUEUE_ORDER:-canonical}"
@@ -431,13 +477,33 @@ if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
     "${translation_enqueue_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: enqueue step failed" | tee -a "$LOGFILE"
 fi
 
-# Step 5: Translate Meineke lemmas with gpt-5.5 after guidance coverage is complete
-echo "Step 5: Translating lemmas with gpt-5.5..." | tee -a "$LOGFILE"
+# Step 5r: Translate Responses API/reasoning requests slowly before the batch lane
+TRANSLATION_RESPONSES_RUN_LIMIT="${TRANSLATION_RESPONSES_RUN_LIMIT:-1}"
+TRANSLATION_RESPONSES_REQUEST_LIMIT="${TRANSLATION_RESPONSES_REQUEST_LIMIT:-10}"
+TRANSLATION_RESPONSES_DAILY_TOKEN_LIMIT="${TRANSLATION_RESPONSES_DAILY_TOKEN_LIMIT:-50000}"
+if [ "$TRANSLATION_RESPONSES_RUN_LIMIT" -gt 0 ]; then
+    echo "Step 5r: Translating Responses API requests slowly..." | tee -a "$LOGFILE"
+    response_translation_args=(
+        uv run translate_lemmas.py
+        --api-mode responses
+        --request-limit "$TRANSLATION_RESPONSES_REQUEST_LIMIT"
+        --run-limit "$TRANSLATION_RESPONSES_RUN_LIMIT"
+        --daily-token-limit "$TRANSLATION_RESPONSES_DAILY_TOKEN_LIMIT"
+        --delay 1
+    )
+    if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ]; then
+        response_translation_args+=(--allow-human-evaluation-translations)
+    fi
+    "${response_translation_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Responses API translation step failed" | tee -a "$LOGFILE"
+fi
+
+# Step 5: Translate Chat Completions requests with gpt-5.5 after guidance coverage is complete
+echo "Step 5: Translating Chat Completions translation requests..." | tee -a "$LOGFILE"
 TRANSLATION_USE_BATCH="${TRANSLATION_USE_BATCH:-1}"
 TRANSLATION_BATCH_WAIT="${TRANSLATION_BATCH_WAIT:-1}"
 TRANSLATION_BATCH_POLL_INTERVAL="${TRANSLATION_BATCH_POLL_INTERVAL:-30}"
 TRANSLATION_BATCH_TIMEOUT="${TRANSLATION_BATCH_TIMEOUT:-0}"
-translation_args=(uv run translate_lemmas.py)
+translation_args=(uv run translate_lemmas.py --api-mode chat_completions)
 if [ "$TRANSLATION_USE_BATCH" != "0" ]; then
     translation_args+=(--batch)
     if [ "$TRANSLATION_BATCH_WAIT" != "0" ]; then
@@ -611,6 +677,10 @@ uv run generate_translation_prompt_evaluation.py --approved-human-only 2>&1 | te
 # Step 7a0a1: Generate v3 translation quality predictor page
 echo "Step 7a0a1: Generating translation quality predictor page..." | tee -a "$LOGFILE"
 uv run generate_translation_quality_predictor_page.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 7a0b: Generate translation operations/cost page
+echo "Step 7a0b: Generating translation operations page..." | tee -a "$LOGFILE"
+uv run generate_translation_operations_page.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 7a1: Generate pipeline progress page
 echo "Step 7a1: Generating pipeline progress page..." | tee -a "$LOGFILE"

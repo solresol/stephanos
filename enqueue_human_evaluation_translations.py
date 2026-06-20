@@ -26,6 +26,8 @@ from translation_run_utils import DEFAULT_TRANSLATION_MODEL
 DEFAULT_PROFILE = "legacy_scholarly"
 DEFAULT_VERSIONS = (1, 2, 3)
 SUCCESSFUL_RUN_STATUSES = ("completed", "approved")
+API_MODE_CHAT_COMPLETIONS = "chat_completions"
+API_MODE_RESPONSES = "responses"
 
 
 def parse_versions(value: str | None) -> list[int]:
@@ -81,10 +83,27 @@ def resolve_profile(cur, profile_name: str) -> int:
     return int(row[0])
 
 
-def resolve_profile_versions(cur, profile_id: int, versions: list[int]) -> list[dict[str, int]]:
+def resolve_profile_versions(cur, profile_id: int, versions: list[int]) -> list[dict[str, object]]:
+    optional_columns = [
+        ("default_model", "NULLIF(default_model, '')", "NULL"),
+        ("default_temperature", "default_temperature", "NULL"),
+        ("default_top_p", "default_top_p", "NULL"),
+        ("default_api_mode", "COALESCE(NULLIF(default_api_mode, ''), 'chat_completions')", "'chat_completions'"),
+        ("default_reasoning_effort", "NULLIF(default_reasoning_effort, '')", "NULL"),
+        ("default_requested_runs", "GREATEST(COALESCE(default_requested_runs, 1), 1)", "1"),
+        ("approved_human_queue_priority", "GREATEST(COALESCE(approved_human_queue_priority, 5), 0)", "5"),
+        ("approved_human_only", "COALESCE(approved_human_only, FALSE)", "FALSE"),
+    ]
+    select_parts = ["id", "version"]
+    for column_name, expression, fallback in optional_columns:
+        select_parts.append(
+            f"{expression} AS {column_name}"
+            if column_exists(cur, "translation_prompt_profile_versions", column_name)
+            else f"{fallback} AS {column_name}"
+        )
     cur.execute(
-        """
-        SELECT id, version
+        f"""
+        SELECT {", ".join(select_parts)}
         FROM translation_prompt_profile_versions
         WHERE profile_id = %s
           AND version = ANY(%s)
@@ -92,7 +111,16 @@ def resolve_profile_versions(cur, profile_id: int, versions: list[int]) -> list[
         """,
         (int(profile_id), [int(version) for version in versions]),
     )
-    rows = [{"profile_version_id": int(row[0]), "version": int(row[1])} for row in cur.fetchall()]
+    keys = ["profile_version_id", "version", *[column_name for column_name, _expr, _fallback in optional_columns]]
+    rows = []
+    for row in cur.fetchall():
+        item = dict(zip(keys, row))
+        item["profile_version_id"] = int(item["profile_version_id"])
+        item["version"] = int(item["version"])
+        item["default_requested_runs"] = int(item.get("default_requested_runs") or 1)
+        item["approved_human_queue_priority"] = int(item.get("approved_human_queue_priority") or 5)
+        item["approved_human_only"] = bool(item.get("approved_human_only"))
+        rows.append(item)
     found = {row["version"] for row in rows}
     missing = [version for version in versions if version not in found]
     if missing:
@@ -223,6 +251,10 @@ def fetch_missing_requests(
     """
     params.append(list(SUCCESSFUL_RUN_STATUSES))
     cur.execute(query, params)
+    version_defaults = {
+        int(row["profile_version_id"]): row
+        for row in profile_versions
+    }
     return [
         {
             "lemma_id": int(row[0]),
@@ -233,6 +265,13 @@ def fetch_missing_requests(
             "profile_id": int(row[5]),
             "profile_version_id": int(row[6]),
             "profile_version": int(row[7]),
+            "default_model": version_defaults[int(row[6])].get("default_model"),
+            "default_temperature": version_defaults[int(row[6])].get("default_temperature"),
+            "default_top_p": version_defaults[int(row[6])].get("default_top_p"),
+            "default_api_mode": version_defaults[int(row[6])].get("default_api_mode"),
+            "default_reasoning_effort": version_defaults[int(row[6])].get("default_reasoning_effort"),
+            "default_requested_runs": version_defaults[int(row[6])].get("default_requested_runs"),
+            "approved_human_queue_priority": version_defaults[int(row[6])].get("approved_human_queue_priority"),
         }
         for row in cur.fetchall()
     ]
@@ -275,20 +314,52 @@ def queue_guidance(cur, rows: list[dict[str, object]], *, created_by: str, prior
     return ready_rows, inserted, len(incomplete_source_ids)
 
 
+def count_open_requests(cur, profile_versions: list[dict[str, object]]) -> int:
+    profile_version_ids = [int(row["profile_version_id"]) for row in profile_versions]
+    if not profile_version_ids:
+        return 0
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM translation_run_requests
+        WHERE profile_version_id = ANY(%s)
+          AND status IN ('pending', 'running')
+        """,
+        (profile_version_ids,),
+    )
+    row = cur.fetchone()
+    return int(row[0] or 0) if row else 0
+
+
 def enqueue_requests(
     cur,
     rows: list[dict[str, object]],
     *,
-    requested_runs: int,
-    model: str,
-    temperature: float,
-    top_p: float,
+    requested_runs: int | None,
+    model: str | None,
+    temperature: float | None,
+    top_p: float | None,
+    api_mode: str | None,
+    reasoning_effort: str | None,
     created_by: str,
-    priority: int,
+    priority: int | None,
     has_priority_column: bool,
+    has_api_mode_column: bool,
+    has_reasoning_effort_column: bool,
 ) -> int:
     inserted = 0
     for row in rows:
+        effective_requested_runs = int(requested_runs or row.get("default_requested_runs") or 1)
+        effective_model = model or row.get("default_model") or DEFAULT_TRANSLATION_MODEL
+        effective_temperature = temperature if temperature is not None else row.get("default_temperature")
+        effective_top_p = top_p if top_p is not None else row.get("default_top_p")
+        effective_api_mode = api_mode or row.get("default_api_mode") or API_MODE_CHAT_COMPLETIONS
+        effective_reasoning_effort = (
+            reasoning_effort
+            if reasoning_effort is not None
+            else row.get("default_reasoning_effort")
+        )
+        effective_priority = int(priority if priority is not None else row.get("approved_human_queue_priority") or 5)
         columns = [
             "lemma_id",
             "profile_id",
@@ -306,16 +377,22 @@ def enqueue_requests(
             int(row["profile_id"]),
             int(row["profile_version_id"]),
             int(row["source_text_version_id"]),
-            int(requested_runs),
-            model,
-            float(temperature),
-            float(top_p),
+            effective_requested_runs,
+            effective_model,
+            effective_temperature,
+            effective_top_p,
             "pending",
             created_by,
         ]
         if has_priority_column:
             columns.append("priority")
-            values.append(int(priority))
+            values.append(effective_priority)
+        if has_api_mode_column:
+            columns.append("api_mode")
+            values.append(effective_api_mode)
+        if has_reasoning_effort_column:
+            columns.append("reasoning_effort")
+            values.append((effective_reasoning_effort or "").strip() or None)
         placeholders = ", ".join(["%s"] * len(values))
         cur.execute(
             f"""
@@ -342,7 +419,7 @@ def print_preview(rows: list[dict[str, object]], *, max_rows: int = 30) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Queue missing v1/v2/v3 translations for approved human ground-truth lemmas."
+        description="Queue missing prompt-version translations for approved human ground-truth lemmas."
     )
     parser.add_argument("--profile", default=DEFAULT_PROFILE, help="Prompt profile name")
     parser.add_argument("--versions", type=parse_versions, default=list(DEFAULT_VERSIONS), help="Prompt versions, e.g. 1,2,3")
@@ -353,11 +430,22 @@ def main() -> None:
         help="Current source text to translate; preferred chooses Kiesling before Meineke.",
     )
     parser.add_argument("--limit", type=int, help="Maximum missing translation requests to queue")
-    parser.add_argument("--priority", type=int, default=5, help="Lower values run earlier")
-    parser.add_argument("--requested-runs", type=int, default=1)
-    parser.add_argument("--model", default=DEFAULT_TRANSLATION_MODEL)
-    parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument(
+        "--max-open-requests",
+        type=int,
+        help="Do not queue more rows when this profile/version set already has this many pending/running requests.",
+    )
+    parser.add_argument("--priority", type=int, help="Lower values run earlier; defaults to the prompt version setting")
+    parser.add_argument("--requested-runs", type=int, help="Override the prompt version requested-run count")
+    parser.add_argument("--model", help="Override the prompt version default model")
+    parser.add_argument("--temperature", type=float, help="Override the prompt version default temperature")
+    parser.add_argument("--top-p", type=float, help="Override the prompt version default top_p")
+    parser.add_argument(
+        "--api-mode",
+        choices=(API_MODE_CHAT_COMPLETIONS, API_MODE_RESPONSES),
+        help="Override the prompt version default OpenAI API mode",
+    )
+    parser.add_argument("--reasoning-effort", help="Override the prompt version default Responses reasoning effort")
     parser.add_argument("--created-by", default="enqueue_human_evaluation_translations.py")
     parser.add_argument("--include-quarantined", action="store_true")
     parser.add_argument(
@@ -385,9 +473,11 @@ def main() -> None:
 
     if args.limit is not None and args.limit < 0:
         parser.error("--limit must be non-negative")
-    if args.priority < 0:
+    if args.max_open_requests is not None and args.max_open_requests < 0:
+        parser.error("--max-open-requests must be non-negative")
+    if args.priority is not None and args.priority < 0:
         parser.error("--priority must be non-negative")
-    if args.requested_runs <= 0:
+    if args.requested_runs is not None and args.requested_runs <= 0:
         parser.error("--requested-runs must be positive")
 
     conn = get_connection()
@@ -409,6 +499,12 @@ def main() -> None:
 
     profile_id = resolve_profile(cur, args.profile)
     profile_versions = resolve_profile_versions(cur, profile_id, args.versions)
+    open_requests = count_open_requests(cur, profile_versions)
+    resolved_priority = (
+        int(args.priority)
+        if args.priority is not None
+        else min(int(row.get("approved_human_queue_priority") or 5) for row in profile_versions)
+    )
     rows = fetch_missing_requests(
         cur,
         profile_id=profile_id,
@@ -420,6 +516,13 @@ def main() -> None:
     if args.limit is not None and not args.require_guidance_complete:
         rows = rows[: args.limit]
 
+    if args.max_open_requests is not None and open_requests >= args.max_open_requests:
+        print(
+            "Open approved-human evaluation translation requests already at cap: "
+            f"{open_requests}/{args.max_open_requests}"
+        )
+        rows = []
+
     print(f"Missing approved-human evaluation translation requests: {len(rows)}")
     if rows:
         print_preview(rows)
@@ -429,7 +532,7 @@ def main() -> None:
             cur,
             rows,
             created_by=args.created_by,
-            priority=args.priority,
+            priority=resolved_priority,
         )
         print(f"Missing guidance queue rows inserted: {guidance_inserted}")
         print(f"Guidance-incomplete source texts: {incomplete_sources}")
@@ -451,9 +554,13 @@ def main() -> None:
             model=args.model,
             temperature=args.temperature,
             top_p=args.top_p,
+            api_mode=args.api_mode,
+            reasoning_effort=args.reasoning_effort,
             created_by=args.created_by,
             priority=args.priority,
             has_priority_column=column_exists(cur, "translation_run_requests", "priority"),
+            has_api_mode_column=column_exists(cur, "translation_run_requests", "api_mode"),
+            has_reasoning_effort_column=column_exists(cur, "translation_run_requests", "reasoning_effort"),
         )
 
     if args.dry_run:

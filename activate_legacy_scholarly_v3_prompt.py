@@ -15,6 +15,20 @@ PROFILE_NAME = "legacy_scholarly"
 PROMPT_FILE = Path(__file__).with_name("TRANSLATION_PROMPT_LEGACY_SCHOLARLY_V3_REVISED.md")
 
 
+def column_exists(cur, table_name: str, column_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s
+          AND column_name = %s
+        """,
+        (table_name, column_name),
+    )
+    return cur.fetchone() is not None
+
+
 def extract_code_block(markdown: str, heading: str) -> str:
     pattern = rf"## {re.escape(heading)}\s+```(?:text)?\n(.*?)\n```"
     match = re.search(pattern, markdown, re.DOTALL)
@@ -110,6 +124,29 @@ def main() -> None:
                 (profile_id, PROMPT_VERSION, prompt_text, notes, metadata_text, should_activate),
             )
             version_id = int(cur.fetchone()[0])
+
+            updates = []
+            if column_exists(cur, "translation_prompt_profile_versions", "approved_human_only"):
+                updates.append("approved_human_only = FALSE")
+            if column_exists(cur, "translation_prompt_profile_versions", "default_model"):
+                updates.append("default_model = COALESCE(NULLIF(default_model, ''), 'gpt-5.5')")
+            if column_exists(cur, "translation_prompt_profile_versions", "default_temperature"):
+                updates.append("default_temperature = COALESCE(default_temperature, 1.0)")
+            if column_exists(cur, "translation_prompt_profile_versions", "default_top_p"):
+                updates.append("default_top_p = COALESCE(default_top_p, 1.0)")
+            if column_exists(cur, "translation_prompt_profile_versions", "default_api_mode"):
+                updates.append("default_api_mode = COALESCE(NULLIF(default_api_mode, ''), 'chat_completions')")
+            if column_exists(cur, "translation_prompt_profile_versions", "default_requested_runs"):
+                updates.append("default_requested_runs = GREATEST(COALESCE(default_requested_runs, 1), 1)")
+            if updates:
+                cur.execute(
+                    f"""
+                    UPDATE translation_prompt_profile_versions
+                    SET {", ".join(updates)}
+                    WHERE id = %s
+                    """,
+                    (version_id,),
+                )
 
             if args.dry_run:
                 conn.rollback()

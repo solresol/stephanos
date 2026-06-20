@@ -48,6 +48,10 @@ MAX_GUIDANCE_CONTEXT_ROWS = 200
 MAX_SOURCE_PASSAGE_CONTEXT_ROWS = 4
 MAX_CONTEXT_FIELD_CHARS = 900
 CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
+RESPONSES_ENDPOINT = "/v1/responses"
+API_MODE_CHAT_COMPLETIONS = "chat_completions"
+API_MODE_RESPONSES = "responses"
+API_MODES = {API_MODE_CHAT_COMPLETIONS, API_MODE_RESPONSES}
 HUMAN_EVALUATION_REQUEST_MARKERS = (
     "human_evaluation",
     "human-evaluation",
@@ -73,6 +77,39 @@ TRANSLATE_TOOL = {
         },
     },
 }
+
+RESPONSES_TRANSLATE_TOOL = {
+    "type": "function",
+    "name": "submit_translation",
+    "description": "Submit a translation variant",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "translation": {
+                "type": "string",
+                "description": "English translation output",
+            }
+        },
+        "required": ["translation"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+def normalize_api_mode(api_mode: str | None) -> str:
+    value = (api_mode or "").strip() or API_MODE_CHAT_COMPLETIONS
+    if value not in API_MODES:
+        raise ValueError(f"Unsupported translation API mode: {value}")
+    return value
+
+
+def normalize_optional_float(value, default: float | None = None) -> float | None:
+    if value is None:
+        return default
+    return float(value)
+
+
 def get_tokens_today(cur):
     today = datetime.now(timezone.utc).date().isoformat()
     cur.execute(
@@ -109,6 +146,12 @@ def column_exists(cur, table_name: str, column_name: str) -> bool:
 def prompt_version_guidance_expr(cur, alias: str = "pv") -> str:
     if column_exists(cur, "translation_prompt_profile_versions", "uses_guidance_context"):
         return f"COALESCE({alias}.uses_guidance_context, FALSE)"
+    return "FALSE"
+
+
+def prompt_version_approved_only_expr(cur, alias: str = "pv") -> str:
+    if column_exists(cur, "translation_prompt_profile_versions", "approved_human_only"):
+        return f"COALESCE({alias}.approved_human_only, FALSE)"
     return "FALSE"
 
 
@@ -161,6 +204,28 @@ def has_human_translation(cur, lemma_id: int) -> bool:
     )
     row = cur.fetchone()
     return bool(row[0]) if row else False
+
+
+def approved_human_translation_exists_sql(cur) -> str:
+    if table_exists(cur, "human_translations"):
+        human_table_clause = """
+            OR EXISTS (
+                SELECT 1
+                FROM human_translations ht
+                WHERE ht.lemma_id = a.id
+                  AND ht.status = 'approved'
+                  AND ht.stage IN ('reviewed', 'final')
+                  AND COALESCE(ht.translation_text, '') != ''
+            )
+        """
+    else:
+        human_table_clause = ""
+    return f"""
+        (
+            COALESCE(a.reviewed_english_translation, '') != ''
+            {human_table_clause}
+        )
+    """
 
 
 def is_human_evaluation_request(created_by: str | None) -> bool:
@@ -568,8 +633,8 @@ Additional translation context:
 def build_chat_completion_body(
     *,
     model: str,
-    temperature: float,
-    top_p: float,
+    temperature: float | None,
+    top_p: float | None,
     system_prompt: str,
     lemma: str,
     entry_number: int | None,
@@ -577,10 +642,8 @@ def build_chat_completion_body(
     guidance_context=None,
     source_passage_context=None,
 ) -> dict:
-    return {
+    body = {
         "model": model,
-        "temperature": temperature,
-        "top_p": top_p,
         "messages": [
             {"role": "system", "content": system_prompt},
             {
@@ -597,13 +660,52 @@ def build_chat_completion_body(
         "tools": [TRANSLATE_TOOL],
         "tool_choice": {"type": "function", "function": {"name": "submit_translation"}},
     }
+    body["temperature"] = 1.0 if temperature is None else float(temperature)
+    body["top_p"] = 1.0 if top_p is None else float(top_p)
+    return body
+
+
+def build_responses_body(
+    *,
+    model: str,
+    reasoning_effort: str | None,
+    system_prompt: str,
+    lemma: str,
+    entry_number: int | None,
+    source_text: str,
+    guidance_context=None,
+    source_passage_context=None,
+) -> dict:
+    body = {
+        "model": model,
+        "instructions": system_prompt,
+        "input": [
+            {
+                "role": "user",
+                "content": build_translation_prompt(
+                    lemma=lemma,
+                    entry_number=entry_number,
+                    source_text=source_text,
+                    guidance_context=guidance_context,
+                    source_passage_context=source_passage_context,
+                ),
+            }
+        ],
+        "tools": [RESPONSES_TRANSLATE_TOOL],
+        "tool_choice": {"type": "function", "name": "submit_translation"},
+    }
+    if reasoning_effort:
+        body["reasoning"] = {"effort": reasoning_effort}
+    return body
 
 
 def build_translation_request_artifact(
     *,
     model: str,
-    temperature: float,
-    top_p: float,
+    temperature: float | None,
+    top_p: float | None,
+    api_mode: str,
+    reasoning_effort: str | None,
     system_prompt: str,
     lemma: str,
     entry_number: int | None,
@@ -614,14 +716,22 @@ def build_translation_request_artifact(
     custom_id: str | None = None,
     exact_payload: bool = True,
 ) -> dict:
-    artifact = {
-        "api": "openai.chat.completions",
-        "method": "POST",
-        "url": CHAT_COMPLETIONS_ENDPOINT,
-        "transport": transport,
-        "exact_payload": exact_payload,
-        "captured_at": datetime.now(timezone.utc).isoformat(),
-        "body": build_chat_completion_body(
+    api_mode = normalize_api_mode(api_mode)
+    if api_mode == API_MODE_RESPONSES:
+        body = build_responses_body(
+            model=model,
+            reasoning_effort=reasoning_effort,
+            system_prompt=system_prompt,
+            lemma=lemma,
+            entry_number=entry_number,
+            source_text=source_text,
+            guidance_context=guidance_context,
+            source_passage_context=source_passage_context,
+        )
+        api_name = "openai.responses"
+        endpoint = RESPONSES_ENDPOINT
+    else:
+        body = build_chat_completion_body(
             model=model,
             temperature=temperature,
             top_p=top_p,
@@ -631,16 +741,41 @@ def build_translation_request_artifact(
             source_text=source_text,
             guidance_context=guidance_context,
             source_passage_context=source_passage_context,
-        ),
+        )
+        api_name = "openai.chat.completions"
+        endpoint = CHAT_COMPLETIONS_ENDPOINT
+    artifact = {
+        "api": api_name,
+        "api_mode": api_mode,
+        "method": "POST",
+        "url": endpoint,
+        "transport": transport,
+        "exact_payload": exact_payload,
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "body": body,
     }
     if custom_id:
         artifact["custom_id"] = custom_id
     return artifact
 
 
-def extract_translation_from_response_body(body: dict) -> tuple[str, int]:
+def token_usage_from_body(body: dict) -> dict[str, int]:
     usage = body.get("usage") or {}
-    tokens_used = int(usage.get("total_tokens") or 0)
+    input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+    output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+    output_details = usage.get("completion_tokens_details") or usage.get("output_tokens_details") or {}
+    reasoning_tokens = int(output_details.get("reasoning_tokens") or 0)
+    total_tokens = int(usage.get("total_tokens") or (input_tokens + output_tokens) or 0)
+    return {
+        "total_tokens": total_tokens,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "reasoning_tokens": reasoning_tokens,
+    }
+
+
+def extract_translation_from_chat_completion_body(body: dict) -> tuple[str, dict[str, int]]:
+    usage = token_usage_from_body(body)
     choices = body.get("choices") or []
     if not choices:
         raise RuntimeError("Batch response has no choices")
@@ -654,38 +789,91 @@ def extract_translation_from_response_body(body: dict) -> tuple[str, int]:
     translation = (args.get("translation") or "").strip()
     if not translation:
         raise RuntimeError("Empty translation result")
-    return translation, tokens_used
+    return translation, usage
 
 
-def fetch_requests(cur, request_limit: int | None):
+def extract_translation_from_responses_body(body: dict) -> tuple[str, dict[str, int]]:
+    usage = token_usage_from_body(body)
+    for item in body.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "function_call" or item.get("name") != "submit_translation":
+            continue
+        raw_args = item.get("arguments") or "{}"
+        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+        translation = (args.get("translation") or "").strip()
+        if translation:
+            return translation, usage
+    raise RuntimeError("Responses output has no submit_translation function call")
+
+
+def extract_translation_from_response_body(body: dict, *, api_mode: str = API_MODE_CHAT_COMPLETIONS) -> tuple[str, dict[str, int]]:
+    if normalize_api_mode(api_mode) == API_MODE_RESPONSES:
+        return extract_translation_from_responses_body(body)
+    return extract_translation_from_chat_completion_body(body)
+
+
+def fetch_requests(cur, request_limit: int | None, api_mode_filter: str = "all"):
     has_human_translation_expr = human_translation_exists_sql(cur)
+    has_approved_human_translation_expr = approved_human_translation_exists_sql(cur)
     kappa_headword_expr = "left(trim(COALESCE(a.lemma, '')), 1) IN ('Κ', 'κ')"
     uses_guidance_context_expr = prompt_version_guidance_expr(cur, alias="pv")
+    approved_human_only_expr = prompt_version_approved_only_expr(cur, alias="pv")
+    model_expr = "COALESCE(r.model, %s)"
+    temperature_expr = "r.temperature"
+    top_p_expr = "r.top_p"
+    api_mode_expr = "'chat_completions'"
+    reasoning_effort_expr = "NULL::text"
+    if column_exists(cur, "translation_prompt_profile_versions", "default_model"):
+        model_expr = "COALESCE(r.model, pv.default_model, %s)"
+    if column_exists(cur, "translation_prompt_profile_versions", "default_temperature"):
+        temperature_expr = "COALESCE(r.temperature, pv.default_temperature)"
+    if column_exists(cur, "translation_prompt_profile_versions", "default_top_p"):
+        top_p_expr = "COALESCE(r.top_p, pv.default_top_p)"
+    if column_exists(cur, "translation_run_requests", "api_mode"):
+        if column_exists(cur, "translation_prompt_profile_versions", "default_api_mode"):
+            api_mode_expr = "COALESCE(NULLIF(r.api_mode, ''), NULLIF(pv.default_api_mode, ''), 'chat_completions')"
+        else:
+            api_mode_expr = "COALESCE(NULLIF(r.api_mode, ''), 'chat_completions')"
+    elif column_exists(cur, "translation_prompt_profile_versions", "default_api_mode"):
+        api_mode_expr = "COALESCE(NULLIF(pv.default_api_mode, ''), 'chat_completions')"
+    if column_exists(cur, "translation_run_requests", "reasoning_effort"):
+        if column_exists(cur, "translation_prompt_profile_versions", "default_reasoning_effort"):
+            reasoning_effort_expr = "COALESCE(NULLIF(r.reasoning_effort, ''), NULLIF(pv.default_reasoning_effort, ''))"
+        else:
+            reasoning_effort_expr = "NULLIF(r.reasoning_effort, '')"
+    elif column_exists(cur, "translation_prompt_profile_versions", "default_reasoning_effort"):
+        reasoning_effort_expr = "NULLIF(pv.default_reasoning_effort, '')"
+
     if column_exists(cur, "translation_run_requests", "priority"):
-        order_by = "r.priority ASC, has_human_translation ASC, kappa_headword DESC, r.created_at, r.id"
+        order_by = "has_approved_human_translation DESC, r.priority ASC, kappa_headword DESC, r.created_at, r.id"
     else:
-        order_by = "has_human_translation ASC, kappa_headword DESC, r.created_at, r.id"
+        order_by = "has_approved_human_translation DESC, kappa_headword DESC, r.created_at, r.id"
     query = f"""
         SELECT
             r.id AS request_id,
             r.lemma_id,
             r.requested_runs,
             COALESCE(r.created_by, '') AS created_by,
-            COALESCE(r.model, %s) AS model_name,
-            COALESCE(r.temperature, 1.0) AS temperature,
-            COALESCE(r.top_p, 1.0) AS top_p,
+            {model_expr} AS model_name,
+            {temperature_expr} AS temperature,
+            {top_p_expr} AS top_p,
+            {api_mode_expr} AS api_mode,
+            {reasoning_effort_expr} AS reasoning_effort,
             p.id AS profile_id,
             p.name AS profile_name,
             pv.id AS profile_version_id,
             pv.version AS profile_version_number,
             pv.prompt_text,
             {uses_guidance_context_expr} AS uses_guidance_context,
+            {approved_human_only_expr} AS approved_human_only,
             stv.id AS source_text_version_id,
             stv.text_body AS source_text,
             stv.source_document,
             a.lemma,
             a.entry_number,
             {has_human_translation_expr} AS has_human_translation,
+            {has_approved_human_translation_expr} AS has_approved_human_translation,
             {kappa_headword_expr} AS kappa_headword
         FROM translation_run_requests r
         JOIN translation_prompt_profiles p ON p.id = r.profile_id
@@ -693,9 +881,12 @@ def fetch_requests(cur, request_limit: int | None):
         JOIN lemma_source_text_versions stv ON stv.id = r.source_text_version_id
         JOIN assembled_lemmas a ON a.id = r.lemma_id
         WHERE r.status IN ('pending', 'running')
-        ORDER BY {order_by}
     """
     params = [DEFAULT_TRANSLATION_MODEL]
+    if api_mode_filter != "all":
+        query += f" AND {api_mode_expr} = %s"
+        params.append(normalize_api_mode(api_mode_filter))
+    query += f" ORDER BY {order_by}"
     if request_limit is not None:
         query += f" LIMIT {int(request_limit)}"
     cur.execute(query, params)
@@ -783,46 +974,81 @@ def insert_run(
     source_text_version_id: int,
     run_index: int,
     model: str,
-    temperature: float,
-    top_p: float,
+    temperature: float | None,
+    top_p: float | None,
     translation_text: str,
     tokens_used: int,
     status: str,
+    api_mode: str = API_MODE_CHAT_COMPLETIONS,
+    reasoning_effort: str | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    reasoning_tokens: int = 0,
     public_eligible: bool = True,
     public_block_reason: str | None = None,
     error_message: str | None = None,
     request_payload: dict | None = None,
 ):
+    columns = [
+        "request_id",
+        "lemma_id",
+        "profile_id",
+        "profile_version_id",
+        "source_text_version_id",
+        "run_index",
+        "model",
+        "temperature",
+        "top_p",
+        "translation_text",
+        "tokens_used",
+        "status",
+        "public_eligible",
+        "public_block_reason",
+        "request_payload_json",
+        "error_message",
+    ]
+    values = [
+        request_id,
+        lemma_id,
+        profile_id,
+        profile_version_id,
+        source_text_version_id,
+        run_index,
+        model,
+        temperature,
+        top_p,
+        translation_text,
+        tokens_used,
+        status,
+        bool(public_eligible),
+        (public_block_reason or "").strip() or None,
+        Json(request_payload or {}),
+        error_message,
+    ]
+    placeholders = ["%s"] * len(values)
+    columns.extend(["created_at", "completed_at"])
+    placeholders.extend(["NOW()", "NOW()"])
+
+    if column_exists(cur, "translation_runs", "api_mode"):
+        columns.append("api_mode")
+        values.append(normalize_api_mode(api_mode))
+        placeholders.append("%s")
+    if column_exists(cur, "translation_runs", "reasoning_effort"):
+        columns.append("reasoning_effort")
+        values.append((reasoning_effort or "").strip() or None)
+        placeholders.append("%s")
+    if column_exists(cur, "translation_runs", "input_tokens"):
+        columns.extend(["input_tokens", "output_tokens", "reasoning_tokens"])
+        values.extend([int(input_tokens or 0), int(output_tokens or 0), int(reasoning_tokens or 0)])
+        placeholders.extend(["%s", "%s", "%s"])
+
     cur.execute(
-        """
-        INSERT INTO translation_runs (
-            request_id, lemma_id, profile_id, profile_version_id, source_text_version_id,
-            run_index, model, temperature, top_p,
-            translation_text, tokens_used, status,
-            public_eligible, public_block_reason, request_payload_json,
-            created_at, completed_at, error_message
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW(), %s)
+        f"""
+        INSERT INTO translation_runs ({", ".join(columns)})
+        VALUES ({", ".join(placeholders)})
         RETURNING id
         """,
-        (
-            request_id,
-            lemma_id,
-            profile_id,
-            profile_version_id,
-            source_text_version_id,
-            run_index,
-            model,
-            temperature,
-            top_p,
-            translation_text,
-            tokens_used,
-            status,
-            bool(public_eligible),
-            (public_block_reason or "").strip() or None,
-            Json(request_payload or {}),
-            error_message,
-        ),
+        values,
     )
     row = cur.fetchone()
     return int(row[0]) if row else 0
@@ -882,8 +1108,22 @@ def call_model(
     *,
     request_payload: dict,
 ):
-    response = client.chat.completions.create(**(request_payload.get("body") or {}))
-    return extract_translation_from_response_body(response.model_dump())
+    api_mode = normalize_api_mode(request_payload.get("api_mode"))
+    if api_mode == API_MODE_RESPONSES:
+        response = client.responses.create(**(request_payload.get("body") or {}))
+    else:
+        response = client.chat.completions.create(**(request_payload.get("body") or {}))
+    return extract_translation_from_response_body(response.model_dump(), api_mode=api_mode)
+
+
+def runtime_fields_from_batch_metadata(metadata: dict) -> dict:
+    return {
+        "model": metadata["model"],
+        "temperature": normalize_optional_float(metadata.get("temperature")),
+        "top_p": normalize_optional_float(metadata.get("top_p")),
+        "api_mode": normalize_api_mode(metadata.get("api_mode")),
+        "reasoning_effort": metadata.get("reasoning_effort"),
+    }
 
 
 def wait_for_openai_batch(client: OpenAI, cur, conn, *, job_id: int, poll_interval: float, timeout: float | None) -> str:
@@ -945,18 +1185,22 @@ def submit_translation_batch(
         model_name,
         temperature,
         top_p,
+        api_mode,
+        reasoning_effort,
         profile_id,
         profile_name,
         profile_version_id,
         profile_version_number,
         prompt_text,
         prompt_uses_guidance_context,
+        approved_human_only,
         source_text_version_id,
         source_text,
         source_document,
         lemma,
         entry_number,
         request_has_human_translation,
+        request_has_approved_human_translation,
         _kappa_headword,
     ) in requests:
         if args.run_limit is not None and total_runs >= args.run_limit:
@@ -964,6 +1208,21 @@ def submit_translation_batch(
         if tokens_today >= args.daily_token_limit:
             print("Daily token limit already reached; not submitting a translation batch.")
             break
+
+        if bool(approved_human_only) and not (
+            request_has_approved_human_translation
+            and args.allow_human_evaluation_translations
+            and is_human_evaluation_request(request_created_by)
+        ):
+            mark_request_done(
+                cur,
+                request_id,
+                "cancelled",
+                "Skipped because this prompt version is approved-human-only.",
+            )
+            conn.commit()
+            print(f"Request {request_id}: skipped {lemma} because the prompt version is approved-human-only.")
+            continue
 
         if (
             request_has_human_translation or has_human_translation(cur, lemma_id)
@@ -987,6 +1246,16 @@ def submit_translation_batch(
             source_document=source_document,
         ):
             conn.commit()
+            continue
+
+        if normalize_api_mode(api_mode) != API_MODE_CHAT_COMPLETIONS:
+            mark_request_pending(
+                cur,
+                request_id,
+                "Deferred because Responses API translation requests are processed by the sync worker, not Chat Completions batch.",
+            )
+            conn.commit()
+            print(f"Request {request_id}: deferred {lemma} because api_mode={api_mode} is not batch-compatible.")
             continue
 
         existing_count = completed_run_count(cur, request_id)
@@ -1072,6 +1341,8 @@ def submit_translation_batch(
                 model=model_name,
                 temperature=temperature,
                 top_p=top_p,
+                api_mode=api_mode,
+                reasoning_effort=reasoning_effort,
                 system_prompt=prompt_text,
                 lemma=lemma or "",
                 entry_number=entry_number,
@@ -1108,6 +1379,8 @@ def submit_translation_batch(
                     "model": model_name,
                     "temperature": temperature,
                     "top_p": top_p,
+                    "api_mode": normalize_api_mode(api_mode),
+                    "reasoning_effort": reasoning_effort,
                     "prompt_uses_guidance_context": bool(prompt_uses_guidance_context),
                     "guidance_context": guidance_context,
                     "source_passage_context": source_passage_context,
@@ -1202,9 +1475,7 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                     profile_version_id=int(metadata["profile_version_id"]),
                     source_text_version_id=int(metadata["source_text_version_id"]),
                     run_index=int(metadata["run_index"]),
-                    model=metadata["model"],
-                    temperature=float(metadata["temperature"]),
-                    top_p=float(metadata["top_p"]),
+                    **runtime_fields_from_batch_metadata(metadata),
                     translation_text="",
                     tokens_used=0,
                     status="failed",
@@ -1216,7 +1487,9 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                 continue
             body = response.get("body") or {}
             try:
-                translation, tokens_used = extract_translation_from_response_body(body)
+                api_mode = normalize_api_mode(metadata.get("api_mode"))
+                translation, usage = extract_translation_from_response_body(body, api_mode=api_mode)
+                tokens_used = int(usage.get("total_tokens", 0))
                 requested_runs = int(metadata["requested_runs"] or 0)
                 source_document = (metadata.get("source_document") or "").strip().lower()
                 public_eligible = True
@@ -1238,11 +1511,12 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                     profile_version_id=int(metadata["profile_version_id"]),
                     source_text_version_id=int(metadata["source_text_version_id"]),
                     run_index=int(metadata["run_index"]),
-                    model=metadata["model"],
-                    temperature=float(metadata["temperature"]),
-                    top_p=float(metadata["top_p"]),
+                    **runtime_fields_from_batch_metadata(metadata),
                     translation_text=translation,
                     tokens_used=tokens_used,
+                    input_tokens=int(usage.get("input_tokens", 0)),
+                    output_tokens=int(usage.get("output_tokens", 0)),
+                    reasoning_tokens=int(usage.get("reasoning_tokens", 0)),
                     status=run_status,
                     public_eligible=public_eligible,
                     public_block_reason=public_block_reason,
@@ -1285,9 +1559,7 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                     profile_version_id=int(metadata["profile_version_id"]),
                     source_text_version_id=int(metadata["source_text_version_id"]),
                     run_index=int(metadata["run_index"]),
-                    model=metadata["model"],
-                    temperature=float(metadata["temperature"]),
-                    top_p=float(metadata["top_p"]),
+                    **runtime_fields_from_batch_metadata(metadata),
                     translation_text="",
                     tokens_used=0,
                     status="failed",
@@ -1324,9 +1596,7 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                     profile_version_id=int(metadata["profile_version_id"]),
                     source_text_version_id=int(metadata["source_text_version_id"]),
                     run_index=int(metadata["run_index"]),
-                    model=metadata["model"],
-                    temperature=float(metadata["temperature"]),
-                    top_p=float(metadata["top_p"]),
+                    **runtime_fields_from_batch_metadata(metadata),
                     translation_text="",
                     tokens_used=0,
                     status="failed",
@@ -1372,9 +1642,7 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                 profile_version_id=int(metadata["profile_version_id"]),
                 source_text_version_id=int(metadata["source_text_version_id"]),
                 run_index=int(metadata["run_index"]),
-                model=metadata["model"],
-                temperature=float(metadata["temperature"]),
-                top_p=float(metadata["top_p"]),
+                **runtime_fields_from_batch_metadata(metadata),
                 translation_text="",
                 tokens_used=0,
                 status="failed",
@@ -1443,6 +1711,12 @@ def main():
     parser.add_argument("--run-limit", type=int, help="Max generated runs in this invocation")
     parser.add_argument("--daily-token-limit", type=int, default=DEFAULT_DAILY_TOKEN_LIMIT)
     parser.add_argument("--delay", type=float, default=1.0)
+    parser.add_argument(
+        "--api-mode",
+        default="all",
+        choices=("all", API_MODE_CHAT_COMPLETIONS, API_MODE_RESPONSES),
+        help="Restrict this worker invocation to one OpenAI API surface.",
+    )
     parser.add_argument("--batch", action="store_true", help="Submit translation requests through the OpenAI Batch API")
     parser.add_argument("--batch-wait", action="store_true", help="Poll the submitted batch and collect results before exiting")
     parser.add_argument("--batch-poll-interval", type=float, default=30.0)
@@ -1516,7 +1790,7 @@ def main():
         guidance_provenance_enabled = ensure_translation_run_guidance_matches(cur)
         conn.commit()
 
-    requests = fetch_requests(cur, args.request_limit)
+    requests = fetch_requests(cur, args.request_limit, api_mode_filter=args.api_mode)
     print(f"Queued requests: {len(requests)}")
     if not requests:
         conn.close()
@@ -1560,23 +1834,42 @@ def main():
         model_name,
         temperature,
         top_p,
+        api_mode,
+        reasoning_effort,
         profile_id,
         profile_name,
         profile_version_id,
         profile_version_number,
         prompt_text,
         prompt_uses_guidance_context,
+        approved_human_only,
         source_text_version_id,
         source_text,
         source_document,
         lemma,
         entry_number,
         request_has_human_translation,
+        request_has_approved_human_translation,
         _kappa_headword,
     ) in requests:
         if args.run_limit is not None and total_runs >= args.run_limit:
             print(f"Reached run limit ({args.run_limit}).")
             break
+
+        if bool(approved_human_only) and not (
+            request_has_approved_human_translation
+            and args.allow_human_evaluation_translations
+            and is_human_evaluation_request(request_created_by)
+        ):
+            mark_request_done(
+                cur,
+                request_id,
+                "cancelled",
+                "Skipped because this prompt version is approved-human-only.",
+            )
+            conn.commit()
+            print(f"Request {request_id}: skipped {lemma} because the prompt version is approved-human-only.")
+            continue
 
         if (
             request_has_human_translation or has_human_translation(cur, lemma_id)
@@ -1684,6 +1977,8 @@ def main():
                     model=model_name,
                     temperature=temperature,
                     top_p=top_p,
+                    api_mode=api_mode,
+                    reasoning_effort=reasoning_effort,
                     system_prompt=prompt_text,
                     lemma=lemma or "",
                     entry_number=entry_number,
@@ -1692,10 +1987,11 @@ def main():
                     source_passage_context=source_passage_context,
                     transport="sync",
                 )
-                translation, tokens_used = call_model(
+                translation, usage = call_model(
                     client,
                     request_payload=request_payload,
                 )
+                tokens_used = int(usage.get("total_tokens", 0))
                 if not translation:
                     raise RuntimeError("Empty translation result")
 
@@ -1724,6 +2020,11 @@ def main():
                     top_p=top_p,
                     translation_text=translation,
                     tokens_used=tokens_used,
+                    api_mode=api_mode,
+                    reasoning_effort=reasoning_effort,
+                    input_tokens=int(usage.get("input_tokens", 0)),
+                    output_tokens=int(usage.get("output_tokens", 0)),
+                    reasoning_tokens=int(usage.get("reasoning_tokens", 0)),
                     status=run_status,
                     public_eligible=public_eligible,
                     public_block_reason=public_block_reason,
@@ -1767,6 +2068,8 @@ def main():
                     top_p=top_p,
                     translation_text="",
                     tokens_used=0,
+                    api_mode=api_mode,
+                    reasoning_effort=reasoning_effort,
                     status="failed",
                     error_message=f"{type(exc).__name__}: {exc}",
                     request_payload=request_payload,
