@@ -50,79 +50,7 @@ RANDOM_STATE = 20260620
 
 METRIC_NAMES = ("BLEU-4", "chrF++", "METEOR", "ROUGE-L")
 GREEK_TOKEN_RE = re.compile(GREEK_TOKEN_PATTERN)
-
-GREEK_DESCRIPTOR_STOP_WORDS = frozenset(
-    {
-        # Generic geographic and settlement descriptors.
-        "πολις",
-        "πολιν",
-        "πολεως",
-        "πολει",
-        "πολεις",
-        "πολεων",
-        "πολεσι",
-        "πολεσιν",
-        "πολιχνιον",
-        "πολιτης",
-        "πολιτου",
-        "πολιτην",
-        "πολιται",
-        "κωμη",
-        "κωμης",
-        "κωμην",
-        "κωμαι",
-        "χωρα",
-        "χωρας",
-        "χωραν",
-        "χωραι",
-        "χωριον",
-        "χωριου",
-        "χωριω",
-        "τοπος",
-        "τοπου",
-        "τοπον",
-        "τοπω",
-        "τοποι",
-        "νησος",
-        "νησου",
-        "νησον",
-        "νησω",
-        "νησοι",
-        "νησων",
-        "ποταμος",
-        "ποταμου",
-        "ποταμον",
-        "λιμην",
-        "λιμενος",
-        "θαλασσα",
-        "θαλασσης",
-        "ορος",
-        "ορους",
-        "ορει",
-        "ορων",
-        "ακρα",
-        "ακραν",
-        "ακρας",
-        "χερρονησος",
-        "χερρονησου",
-        "μητροπολις",
-        # Ethnic/classification formula terms.
-        "εθνικον",
-        "εθνικου",
-        "εθνικω",
-        "εθνος",
-        "εθνους",
-        "εθνει",
-        "εθνη",
-        "οικητωρ",
-        "οικητορες",
-        "οικητορων",
-        "δημος",
-        "δημου",
-        "φυλον",
-        "φυλου",
-    }
-)
+PROPER_NOUN_STOP_WORD_EXCEPTIONS = frozenset({"κωμη"})
 
 
 @dataclass(frozen=True)
@@ -210,21 +138,24 @@ def table_exists(cur, table_name: str) -> bool:
 
 
 def fetch_vocabulary_stop_words(cur) -> set[str]:
-    stop_words = {normalize_greek_token(term) for term in GREEK_DESCRIPTOR_STOP_WORDS}
+    stop_words: set[str] = set()
     if not table_exists(cur, "effective_proper_nouns"):
         return {term for term in stop_words if term}
 
     cur.execute(
         """
-        SELECT proper_noun, lemma_form
+        SELECT proper_noun
         FROM effective_proper_nouns
         """
     )
     for row in cur.fetchall():
         stop_words.update(greek_stop_tokens_from_text(row.get("proper_noun")))
-        stop_words.update(greek_stop_tokens_from_text(row.get("lemma_form")))
 
-    return {term for term in stop_words if term}
+    return {
+        term
+        for term in stop_words
+        if term and term not in PROPER_NOUN_STOP_WORD_EXCEPTIONS
+    }
 
 
 def fetch_context_counts(cur) -> dict[str, int]:
@@ -893,7 +824,7 @@ def render_feature_table(title: str, feature_rows: list[dict[str, Any]], *, limi
 
     return (
         f"<h3>{esc(title)}</h3>"
-        '<p class="note">Positive coefficients predict worse translation scores for the selected target. Negative coefficients predict better scores. Vocabulary features exclude detected proper-noun tokens and generic geography/classification descriptors. These are exploratory ridge coefficients, not causal claims.</p>'
+        '<p class="note">Positive coefficients predict worse translation scores for the selected target. Negative coefficients predict better scores. Vocabulary features exclude detected proper-noun tokens. These are exploratory ridge coefficients, not causal claims.</p>'
         + table_part(positives, "Features associated with worse scores")
         + table_part(negatives, "Features associated with better scores")
     )
