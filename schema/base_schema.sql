@@ -2,10 +2,10 @@
 -- PostgreSQL database dump
 --
 
-\restrict j6o0nlMAQ0EWKSs7GA93JsG4eLKuF7WR50KH9zHtHNRBCdNoRp3xIS9r97F9jnT
+\restrict 4cXviuyI1yTdw7QKoW6uwVmE2isJRZsLfS1AHib70oC9cyzS8VjAooSzc00Cvxo
 
--- Dumped from database version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
--- Dumped by pg_dump version 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
+-- Dumped from database version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
+-- Dumped by pg_dump version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -1279,6 +1279,103 @@ CREATE TABLE public.lemma_images (
 
 
 --
+-- Name: lemma_sentence_sets; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_sentence_sets (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    text_kind text NOT NULL,
+    source_text_version_id integer,
+    human_translation_id integer,
+    translation_run_id integer,
+    segmentation_method text DEFAULT 'punctuation'::text NOT NULL,
+    segmentation_model text,
+    segmentation_version text DEFAULT 'v1'::text NOT NULL,
+    segmentation_status text DEFAULT 'completed'::text NOT NULL,
+    text_sha256 text NOT NULL,
+    sentence_count integer DEFAULT 0 NOT NULL,
+    input_tokens integer DEFAULT 0 NOT NULL,
+    output_tokens integer DEFAULT 0 NOT NULL,
+    response_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    notes text,
+    created_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT lemma_sentence_sets_counts_check CHECK (((sentence_count >= 0) AND (input_tokens >= 0) AND (output_tokens >= 0))),
+    CONSTRAINT lemma_sentence_sets_reference_check CHECK ((((text_kind = 'source_greek'::text) AND (source_text_version_id IS NOT NULL) AND (human_translation_id IS NULL) AND (translation_run_id IS NULL)) OR ((text_kind = 'human_translation'::text) AND (source_text_version_id IS NULL) AND (human_translation_id IS NOT NULL) AND (translation_run_id IS NULL)) OR ((text_kind = 'ai_translation'::text) AND (source_text_version_id IS NULL) AND (human_translation_id IS NULL) AND (translation_run_id IS NOT NULL)))),
+    CONSTRAINT lemma_sentence_sets_status_check CHECK ((segmentation_status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'manual'::text, 'blocked'::text]))),
+    CONSTRAINT lemma_sentence_sets_text_kind_check CHECK ((text_kind = ANY (ARRAY['source_greek'::text, 'human_translation'::text, 'ai_translation'::text])))
+);
+
+
+--
+-- Name: TABLE lemma_sentence_sets; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.lemma_sentence_sets IS 'Versioned sentence segmentation artifacts for Greek source text, approved human translations, and AI translation runs.';
+
+
+--
+-- Name: lemma_sentence_sets_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.lemma_sentence_sets_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: lemma_sentence_sets_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.lemma_sentence_sets_id_seq OWNED BY public.lemma_sentence_sets.id;
+
+
+--
+-- Name: lemma_sentences; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_sentences (
+    id integer NOT NULL,
+    sentence_set_id integer NOT NULL,
+    sentence_number integer NOT NULL,
+    text text NOT NULL,
+    char_start integer,
+    char_end integer,
+    token_count integer DEFAULT 0 NOT NULL,
+    text_sha256 text,
+    metadata_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT lemma_sentences_position_check CHECK (((sentence_number > 0) AND (token_count >= 0) AND ((char_start IS NULL) OR (char_start >= 0)) AND ((char_end IS NULL) OR (char_end >= 0)) AND ((char_start IS NULL) OR (char_end IS NULL) OR (char_end >= char_start))))
+);
+
+
+--
+-- Name: lemma_sentences_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.lemma_sentences_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: lemma_sentences_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.lemma_sentences_id_seq OWNED BY public.lemma_sentences.id;
+
+
+--
 -- Name: lemma_source_citation_mentions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1367,6 +1464,7 @@ CREATE TABLE public.lemma_source_text_versions (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     notes text,
     CONSTRAINT lemma_source_text_versions_created_by_type_check CHECK ((created_by_type = ANY (ARRAY['ocr'::text, 'human'::text, 'import'::text, 'system'::text]))),
+    CONSTRAINT lemma_source_text_versions_public_source_policy_check CHECK ((is_public_greek = (source_document = ANY (ARRAY['meineke'::text, 'kiesling'::text])))),
     CONSTRAINT lemma_source_text_versions_source_document_check CHECK ((source_document = ANY (ARRAY['billerbeck'::text, 'meineke'::text, 'kiesling'::text]))),
     CONSTRAINT lemma_source_text_versions_source_variant_check CHECK ((source_variant = ANY (ARRAY['ocr'::text, 'manual'::text, 'csv_fallback'::text])))
 );
@@ -1965,6 +2063,649 @@ ALTER SEQUENCE public.proper_nouns_id_seq OWNED BY public.proper_nouns.id;
 
 
 --
+-- Name: sentence_alignment_groups; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_alignment_groups (
+    id integer NOT NULL,
+    alignment_set_id integer NOT NULL,
+    group_number integer NOT NULL,
+    alignment_kind text DEFAULT 'aligned'::text NOT NULL,
+    confidence text DEFAULT 'medium'::text NOT NULL,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT sentence_alignment_groups_confidence_check CHECK ((confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'manual'::text, 'unknown'::text]))),
+    CONSTRAINT sentence_alignment_groups_kind_check CHECK ((alignment_kind = ANY (ARRAY['aligned'::text, 'reference_only'::text, 'candidate_only'::text, 'source_only'::text, 'omitted'::text, 'uncertain'::text]))),
+    CONSTRAINT sentence_alignment_groups_number_check CHECK ((group_number > 0))
+);
+
+
+--
+-- Name: sentence_alignment_groups_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_alignment_groups_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_alignment_groups_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_alignment_groups_id_seq OWNED BY public.sentence_alignment_groups.id;
+
+
+--
+-- Name: sentence_alignment_members; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_alignment_members (
+    id integer NOT NULL,
+    alignment_group_id integer NOT NULL,
+    sentence_id integer NOT NULL,
+    member_role text NOT NULL,
+    position_in_group integer DEFAULT 1 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT sentence_alignment_members_position_check CHECK ((position_in_group > 0)),
+    CONSTRAINT sentence_alignment_members_role_check CHECK ((member_role = ANY (ARRAY['source'::text, 'reference'::text, 'candidate'::text])))
+);
+
+
+--
+-- Name: sentence_alignment_members_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_alignment_members_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_alignment_members_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_alignment_members_id_seq OWNED BY public.sentence_alignment_members.id;
+
+
+--
+-- Name: sentence_alignment_sets; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_alignment_sets (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    source_sentence_set_id integer,
+    reference_sentence_set_id integer NOT NULL,
+    candidate_sentence_set_id integer NOT NULL,
+    alignment_method text DEFAULT 'ordinal'::text NOT NULL,
+    alignment_model text,
+    alignment_version text DEFAULT 'v1'::text NOT NULL,
+    alignment_status text DEFAULT 'completed'::text NOT NULL,
+    group_count integer DEFAULT 0 NOT NULL,
+    input_tokens integer DEFAULT 0 NOT NULL,
+    output_tokens integer DEFAULT 0 NOT NULL,
+    response_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    notes text,
+    created_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT sentence_alignment_sets_counts_check CHECK (((group_count >= 0) AND (input_tokens >= 0) AND (output_tokens >= 0))),
+    CONSTRAINT sentence_alignment_sets_status_check CHECK ((alignment_status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'manual'::text, 'blocked'::text])))
+);
+
+
+--
+-- Name: TABLE sentence_alignment_sets; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.sentence_alignment_sets IS 'Explicit sentence alignment artifacts between human reference translations and AI candidate translations, optionally anchored to Greek source sentences.';
+
+
+--
+-- Name: sentence_alignment_sets_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_alignment_sets_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_alignment_sets_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_alignment_sets_id_seq OWNED BY public.sentence_alignment_sets.id;
+
+
+--
+-- Name: sentence_grammar_analyses; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_analyses (
+    id integer NOT NULL,
+    sentence_id integer NOT NULL,
+    grammar_run_id integer NOT NULL,
+    status text DEFAULT 'completed'::text NOT NULL,
+    conllu text DEFAULT ''::text NOT NULL,
+    response_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    sentence_note text DEFAULT ''::text NOT NULL,
+    input_tokens integer DEFAULT 0 NOT NULL,
+    output_tokens integer DEFAULT 0 NOT NULL,
+    token_count integer DEFAULT 0 NOT NULL,
+    error_message text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    parent_analysis_id integer,
+    attempt_number integer DEFAULT 1 NOT NULL,
+    attempt_kind text DEFAULT 'initial'::text NOT NULL,
+    prompt_context_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    prompt_context_sha256 text,
+    acceptance_status text DEFAULT 'unreviewed'::text NOT NULL,
+    CONSTRAINT sentence_grammar_analyses_acceptance_status_check CHECK ((acceptance_status = ANY (ARRAY['unreviewed'::text, 'provisionally_accepted'::text, 'accepted'::text, 'rejected'::text, 'superseded'::text, 'needs_review'::text]))),
+    CONSTRAINT sentence_grammar_analyses_attempt_check CHECK (((attempt_number > 0) AND (attempt_kind = ANY (ARRAY['initial'::text, 'retry'::text, 'human_retry'::text, 'model_retry'::text, 'manual'::text])) AND ((parent_analysis_id IS NULL) OR (parent_analysis_id <> id)))),
+    CONSTRAINT sentence_grammar_analyses_counts_check CHECK (((input_tokens >= 0) AND (output_tokens >= 0) AND (token_count >= 0))),
+    CONSTRAINT sentence_grammar_analyses_status_check CHECK ((status = ANY (ARRAY['completed'::text, 'failed'::text, 'blocked'::text, 'manual'::text])))
+);
+
+
+--
+-- Name: sentence_grammar_analyses_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_grammar_analyses_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_grammar_analyses_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_grammar_analyses_id_seq OWNED BY public.sentence_grammar_analyses.id;
+
+
+--
+-- Name: sentence_grammar_analysis_feedback_context; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_analysis_feedback_context (
+    id integer NOT NULL,
+    analysis_id integer NOT NULL,
+    feedback_item_id integer,
+    correction_rule_id integer,
+    context_order integer DEFAULT 1 NOT NULL,
+    included_text text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT sentence_grammar_analysis_feedback_context_ref_check CHECK (((context_order > 0) AND (((feedback_item_id IS NOT NULL) AND (correction_rule_id IS NULL)) OR ((feedback_item_id IS NULL) AND (correction_rule_id IS NOT NULL)))))
+);
+
+
+--
+-- Name: sentence_grammar_analysis_feedback_context_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_grammar_analysis_feedback_context_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_grammar_analysis_feedback_context_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_grammar_analysis_feedback_context_id_seq OWNED BY public.sentence_grammar_analysis_feedback_context.id;
+
+
+--
+-- Name: sentence_grammar_best_analyses; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_best_analyses (
+    sentence_id integer NOT NULL,
+    analysis_id integer NOT NULL,
+    selected_by text DEFAULT 'system'::text NOT NULL,
+    selection_reason text DEFAULT ''::text NOT NULL,
+    selected_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE sentence_grammar_best_analyses; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.sentence_grammar_best_analyses IS 'Current selected parse per sentence; the selected analysis remains immutable.';
+
+
+--
+-- Name: sentence_grammar_correction_rules; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_correction_rules (
+    id integer NOT NULL,
+    rule_key text NOT NULL,
+    title text NOT NULL,
+    rule_scope text DEFAULT 'global'::text NOT NULL,
+    lemma_id integer,
+    source_feedback_id integer,
+    status text DEFAULT 'active'::text NOT NULL,
+    rule_text text NOT NULL,
+    applies_when_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    priority integer DEFAULT 100 NOT NULL,
+    created_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT sentence_grammar_correction_rules_scope_check CHECK ((rule_scope = ANY (ARRAY['global'::text, 'headword'::text, 'sentence'::text, 'lemma'::text, 'model'::text]))),
+    CONSTRAINT sentence_grammar_correction_rules_status_check CHECK ((status = ANY (ARRAY['active'::text, 'inactive'::text, 'superseded'::text])))
+);
+
+
+--
+-- Name: sentence_grammar_correction_rules_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_grammar_correction_rules_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_grammar_correction_rules_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_grammar_correction_rules_id_seq OWNED BY public.sentence_grammar_correction_rules.id;
+
+
+--
+-- Name: sentence_grammar_evaluation_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_evaluation_runs (
+    id integer NOT NULL,
+    run_id text NOT NULL,
+    evaluator_kind text DEFAULT 'llm'::text NOT NULL,
+    model text,
+    prompt_version text,
+    evaluation_version text DEFAULT 'sentence_grammar_eval_v1'::text NOT NULL,
+    status text DEFAULT 'running'::text NOT NULL,
+    input_tokens integer DEFAULT 0 NOT NULL,
+    output_tokens integer DEFAULT 0 NOT NULL,
+    processed_count integer DEFAULT 0 NOT NULL,
+    agreement_count integer DEFAULT 0 NOT NULL,
+    disagreement_count integer DEFAULT 0 NOT NULL,
+    failure_count integer DEFAULT 0 NOT NULL,
+    response_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    notes text,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT sentence_grammar_evaluation_runs_counts_check CHECK (((input_tokens >= 0) AND (output_tokens >= 0) AND (processed_count >= 0) AND (agreement_count >= 0) AND (disagreement_count >= 0) AND (failure_count >= 0))),
+    CONSTRAINT sentence_grammar_evaluation_runs_kind_check CHECK ((evaluator_kind = ANY (ARRAY['llm'::text, 'manual'::text, 'heuristic'::text, 'system'::text, 'other'::text]))),
+    CONSTRAINT sentence_grammar_evaluation_runs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text, 'dry_run'::text])))
+);
+
+
+--
+-- Name: sentence_grammar_evaluation_runs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_grammar_evaluation_runs_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_grammar_evaluation_runs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_grammar_evaluation_runs_id_seq OWNED BY public.sentence_grammar_evaluation_runs.id;
+
+
+--
+-- Name: sentence_grammar_evaluations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_evaluations (
+    id integer NOT NULL,
+    analysis_id integer NOT NULL,
+    evaluation_run_id integer NOT NULL,
+    evaluator_type text DEFAULT 'llm'::text NOT NULL,
+    evaluator_name text,
+    status text DEFAULT 'completed'::text NOT NULL,
+    verdict text DEFAULT 'uncertain'::text NOT NULL,
+    confidence text DEFAULT 'unknown'::text NOT NULL,
+    severity text DEFAULT 'unknown'::text NOT NULL,
+    score double precision,
+    response_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    summary text DEFAULT ''::text NOT NULL,
+    error_message text,
+    input_tokens integer DEFAULT 0 NOT NULL,
+    output_tokens integer DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT sentence_grammar_evaluations_confidence_check CHECK ((confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'manual'::text, 'unknown'::text]))),
+    CONSTRAINT sentence_grammar_evaluations_counts_check CHECK (((input_tokens >= 0) AND (output_tokens >= 0) AND ((score IS NULL) OR ((score >= (0)::double precision) AND (score <= (1)::double precision))))),
+    CONSTRAINT sentence_grammar_evaluations_severity_check CHECK ((severity = ANY (ARRAY['none'::text, 'minor'::text, 'major'::text, 'critical'::text, 'unknown'::text]))),
+    CONSTRAINT sentence_grammar_evaluations_status_check CHECK ((status = ANY (ARRAY['completed'::text, 'failed'::text, 'blocked'::text, 'manual'::text]))),
+    CONSTRAINT sentence_grammar_evaluations_verdict_check CHECK ((verdict = ANY (ARRAY['correct'::text, 'incorrect'::text, 'partially_correct'::text, 'uncertain'::text, 'not_evaluable'::text])))
+);
+
+
+--
+-- Name: TABLE sentence_grammar_evaluations; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.sentence_grammar_evaluations IS 'Verifier or human judgments over immutable sentence grammar parse attempts.';
+
+
+--
+-- Name: sentence_grammar_evaluations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_grammar_evaluations_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_grammar_evaluations_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_grammar_evaluations_id_seq OWNED BY public.sentence_grammar_evaluations.id;
+
+
+--
+-- Name: sentence_grammar_feedback_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_feedback_items (
+    id integer NOT NULL,
+    sentence_id integer NOT NULL,
+    analysis_id integer,
+    evaluation_id integer,
+    parent_feedback_id integer,
+    feedback_source text DEFAULT 'human'::text NOT NULL,
+    feedback_status text DEFAULT 'active'::text NOT NULL,
+    error_category text DEFAULT 'other'::text NOT NULL,
+    target_token_id text,
+    target_text text,
+    issue_text text NOT NULL,
+    correction_text text,
+    evidence_text text,
+    reusable boolean DEFAULT false NOT NULL,
+    severity text DEFAULT 'major'::text NOT NULL,
+    created_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT sentence_grammar_feedback_items_severity_check CHECK ((severity = ANY (ARRAY['minor'::text, 'major'::text, 'critical'::text, 'unknown'::text]))),
+    CONSTRAINT sentence_grammar_feedback_items_source_check CHECK ((feedback_source = ANY (ARRAY['human'::text, 'model'::text, 'system'::text, 'import'::text]))),
+    CONSTRAINT sentence_grammar_feedback_items_status_check CHECK ((feedback_status = ANY (ARRAY['active'::text, 'resolved'::text, 'superseded'::text, 'rejected'::text])))
+);
+
+
+--
+-- Name: TABLE sentence_grammar_feedback_items; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.sentence_grammar_feedback_items IS 'Actionable human, model, or system corrections that can be fed into a retry prompt.';
+
+
+--
+-- Name: sentence_grammar_feedback_items_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_grammar_feedback_items_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_grammar_feedback_items_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_grammar_feedback_items_id_seq OWNED BY public.sentence_grammar_feedback_items.id;
+
+
+--
+-- Name: sentence_grammar_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_runs (
+    id integer NOT NULL,
+    run_id text NOT NULL,
+    parser_kind text NOT NULL,
+    model text NOT NULL,
+    prompt_version text,
+    parser_version text,
+    annotation_scheme text,
+    status text DEFAULT 'running'::text NOT NULL,
+    input_tokens integer DEFAULT 0 NOT NULL,
+    output_tokens integer DEFAULT 0 NOT NULL,
+    processed_count integer DEFAULT 0 NOT NULL,
+    token_count integer DEFAULT 0 NOT NULL,
+    failure_count integer DEFAULT 0 NOT NULL,
+    response_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    notes text,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT sentence_grammar_runs_counts_check CHECK (((input_tokens >= 0) AND (output_tokens >= 0) AND (processed_count >= 0) AND (token_count >= 0) AND (failure_count >= 0))),
+    CONSTRAINT sentence_grammar_runs_parser_kind_check CHECK ((parser_kind = ANY (ARRAY['llm'::text, 'udpipe'::text, 'trankit'::text, 'manual'::text, 'other'::text]))),
+    CONSTRAINT sentence_grammar_runs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text, 'dry_run'::text])))
+);
+
+
+--
+-- Name: sentence_grammar_runs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_grammar_runs_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_grammar_runs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_grammar_runs_id_seq OWNED BY public.sentence_grammar_runs.id;
+
+
+--
+-- Name: sentence_grammar_tokens; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_tokens (
+    id integer NOT NULL,
+    analysis_id integer NOT NULL,
+    token_order integer NOT NULL,
+    token_id text NOT NULL,
+    form text NOT NULL,
+    lemma text,
+    upos text,
+    xpos text,
+    feats_raw text DEFAULT '_'::text NOT NULL,
+    feats jsonb DEFAULT '{}'::jsonb NOT NULL,
+    head_token_id text,
+    deprel text,
+    deps_raw text DEFAULT '_'::text NOT NULL,
+    deps jsonb DEFAULT '[]'::jsonb NOT NULL,
+    misc_raw text DEFAULT '_'::text NOT NULL,
+    misc jsonb DEFAULT '{}'::jsonb NOT NULL,
+    confidence text DEFAULT 'medium'::text NOT NULL,
+    note text DEFAULT ''::text NOT NULL,
+    char_start integer,
+    char_end integer,
+    is_multiword_token boolean DEFAULT false NOT NULL,
+    is_empty_node boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT sentence_grammar_tokens_confidence_check CHECK ((confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'manual'::text, 'unknown'::text]))),
+    CONSTRAINT sentence_grammar_tokens_position_check CHECK (((token_order > 0) AND ((char_start IS NULL) OR (char_start >= 0)) AND ((char_end IS NULL) OR (char_end >= 0)) AND ((char_start IS NULL) OR (char_end IS NULL) OR (char_end >= char_start))))
+);
+
+
+--
+-- Name: TABLE sentence_grammar_tokens; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.sentence_grammar_tokens IS 'Per-token grammar parses for segmented Stephanos sentences, normalized from LLM, UDPipe, Trankit, or manual analyses.';
+
+
+--
+-- Name: sentence_grammar_tokens_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_grammar_tokens_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_grammar_tokens_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_grammar_tokens_id_seq OWNED BY public.sentence_grammar_tokens.id;
+
+
+--
+-- Name: sentence_translation_metric_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_translation_metric_runs (
+    id integer NOT NULL,
+    run_id text NOT NULL,
+    metric_set text DEFAULT 'paper_metrics_v1'::text NOT NULL,
+    evaluator_version text DEFAULT 'generate_translation_prompt_evaluation.py'::text NOT NULL,
+    metric_names jsonb DEFAULT '[]'::jsonb NOT NULL,
+    status text DEFAULT 'running'::text NOT NULL,
+    use_gpu boolean DEFAULT false NOT NULL,
+    neural_metrics_python text,
+    metric_status_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    processed_count integer DEFAULT 0 NOT NULL,
+    failure_count integer DEFAULT 0 NOT NULL,
+    notes text,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT sentence_translation_metric_runs_counts_check CHECK (((processed_count >= 0) AND (failure_count >= 0))),
+    CONSTRAINT sentence_translation_metric_runs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text, 'dry_run'::text])))
+);
+
+
+--
+-- Name: sentence_translation_metric_runs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_translation_metric_runs_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_translation_metric_runs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_translation_metric_runs_id_seq OWNED BY public.sentence_translation_metric_runs.id;
+
+
+--
+-- Name: sentence_translation_metric_scores; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_translation_metric_scores (
+    id integer NOT NULL,
+    metric_run_id integer NOT NULL,
+    alignment_group_id integer NOT NULL,
+    metric_name text NOT NULL,
+    score double precision,
+    score_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    source_text text DEFAULT ''::text NOT NULL,
+    reference_text text DEFAULT ''::text NOT NULL,
+    candidate_text text DEFAULT ''::text NOT NULL,
+    source_text_sha256 text,
+    reference_text_sha256 text,
+    candidate_text_sha256 text,
+    source_sentence_count integer DEFAULT 0 NOT NULL,
+    reference_sentence_count integer DEFAULT 0 NOT NULL,
+    candidate_sentence_count integer DEFAULT 0 NOT NULL,
+    error_message text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT sentence_translation_metric_scores_counts_check CHECK (((source_sentence_count >= 0) AND (reference_sentence_count >= 0) AND (candidate_sentence_count >= 0)))
+);
+
+
+--
+-- Name: TABLE sentence_translation_metric_scores; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.sentence_translation_metric_scores IS 'Per-alignment-group translation metric scores, allowing one-to-many and many-to-one sentence alignments.';
+
+
+--
+-- Name: sentence_translation_metric_scores_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_translation_metric_scores_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_translation_metric_scores_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_translation_metric_scores_id_seq OWNED BY public.sentence_translation_metric_scores.id;
+
+
+--
 -- Name: source_citation_extraction_runs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2167,7 +2908,6 @@ CREATE TABLE public.topostext_intake_entries (
     entry_text text DEFAULT ''::text NOT NULL,
     text_sha256 text NOT NULL,
     imported_at timestamp with time zone DEFAULT now() NOT NULL,
-    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
     CONSTRAINT topostext_intake_entries_sequence_check CHECK ((entry_sequence > 0)),
     CONSTRAINT topostext_intake_entries_text_sha256_check CHECK ((text_sha256 ~ '^[0-9a-f]{64}$'::text))
 );
@@ -2190,6 +2930,79 @@ CREATE SEQUENCE public.topostext_intake_entries_id_seq
 --
 
 ALTER SEQUENCE public.topostext_intake_entries_id_seq OWNED BY public.topostext_intake_entries.id;
+
+
+--
+-- Name: topostext_intake_entry_latin_labels; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.topostext_intake_entry_latin_labels (
+    id bigint NOT NULL,
+    snapshot_id bigint NOT NULL,
+    entry_id bigint NOT NULL,
+    label_sequence integer NOT NULL,
+    label_text text NOT NULL,
+    normalized_label text NOT NULL,
+    context_before text DEFAULT ''::text NOT NULL,
+    context_after text DEFAULT ''::text NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT topostext_intake_entry_latin_labels_normalized_check CHECK ((btrim(normalized_label) <> ''::text)),
+    CONSTRAINT topostext_intake_entry_latin_labels_sequence_check CHECK ((label_sequence > 0)),
+    CONSTRAINT topostext_intake_entry_latin_labels_text_check CHECK ((btrim(label_text) <> ''::text))
+);
+
+
+--
+-- Name: topostext_intake_entry_latin_labels_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.topostext_intake_entry_latin_labels_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: topostext_intake_entry_latin_labels_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.topostext_intake_entry_latin_labels_id_seq OWNED BY public.topostext_intake_entry_latin_labels.id;
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.topostext_intake_mention_latin_label_hints (
+    id bigint NOT NULL,
+    snapshot_id bigint NOT NULL,
+    mention_id bigint NOT NULL,
+    latin_label_id bigint NOT NULL,
+    hint_source text DEFAULT 'context'::text NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT topostext_intake_mention_latin_label_hints_source_check CHECK ((hint_source = 'context'::text))
+);
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.topostext_intake_mention_latin_label_hints_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.topostext_intake_mention_latin_label_hints_id_seq OWNED BY public.topostext_intake_mention_latin_label_hints.id;
 
 
 --
@@ -2227,14 +3040,12 @@ CREATE TABLE public.topostext_intake_mentions (
     re_match_source text DEFAULT ''::text NOT NULL,
     mention_fingerprint text NOT NULL,
     imported_at timestamp with time zone DEFAULT now() NOT NULL,
-    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
     suggested_tag_name text DEFAULT ''::text NOT NULL,
     tag_review_reason text DEFAULT ''::text NOT NULL,
     place_type_term text DEFAULT ''::text NOT NULL,
     place_type_kind text DEFAULT ''::text NOT NULL,
     region_hint text DEFAULT ''::text NOT NULL,
     region_hint_source text DEFAULT ''::text NOT NULL,
-    re_candidate_ids jsonb DEFAULT '[]'::jsonb NOT NULL,
     re_candidate_count integer DEFAULT 0 NOT NULL,
     CONSTRAINT topostext_intake_mentions_entry_sequence_check CHECK ((entry_mention_sequence > 0)),
     CONSTRAINT topostext_intake_mentions_fingerprint_check CHECK ((mention_fingerprint ~ '^[0-9a-f]{64}$'::text)),
@@ -2260,6 +3071,47 @@ CREATE SEQUENCE public.topostext_intake_mentions_id_seq
 --
 
 ALTER SEQUENCE public.topostext_intake_mentions_id_seq OWNED BY public.topostext_intake_mentions.id;
+
+
+--
+-- Name: topostext_intake_re_candidates; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.topostext_intake_re_candidates (
+    id bigint NOT NULL,
+    snapshot_id bigint NOT NULL,
+    mention_id bigint NOT NULL,
+    candidate_rank integer NOT NULL,
+    re_id text NOT NULL,
+    label text DEFAULT ''::text NOT NULL,
+    match_kind text DEFAULT ''::text NOT NULL,
+    short_definition text DEFAULT ''::text NOT NULL,
+    article_item text DEFAULT ''::text NOT NULL,
+    subject_item text DEFAULT ''::text NOT NULL,
+    subject_label text DEFAULT ''::text NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT topostext_intake_re_candidates_rank_check CHECK ((candidate_rank > 0)),
+    CONSTRAINT topostext_intake_re_candidates_re_id_check CHECK ((btrim(re_id) <> ''::text))
+);
+
+
+--
+-- Name: topostext_intake_re_candidates_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.topostext_intake_re_candidates_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: topostext_intake_re_candidates_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.topostext_intake_re_candidates_id_seq OWNED BY public.topostext_intake_re_candidates.id;
 
 
 --
@@ -2320,6 +3172,75 @@ CREATE SEQUENCE public.translation_guidance_backlog_items_id_seq
 --
 
 ALTER SEQUENCE public.translation_guidance_backlog_items_id_seq OWNED BY public.translation_guidance_backlog_items.id;
+
+
+--
+-- Name: translation_guidance_freshness; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_guidance_freshness (
+    id integer NOT NULL,
+    run_id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    source_text_version_id integer NOT NULL,
+    detector_version text NOT NULL,
+    state text DEFAULT 'unavailable'::text NOT NULL,
+    required_rule_revision_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
+    missing_rule_revision_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
+    matched_rule_revision_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
+    uncertain_rule_revision_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
+    needs_review_rule_revision_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
+    unprompted_matched_rule_revision_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
+    required_count integer DEFAULT 0 NOT NULL,
+    completed_count integer DEFAULT 0 NOT NULL,
+    missing_count integer DEFAULT 0 NOT NULL,
+    matched_count integer DEFAULT 0 NOT NULL,
+    uncertain_count integer DEFAULT 0 NOT NULL,
+    needs_review_count integer DEFAULT 0 NOT NULL,
+    unprompted_matched_count integer DEFAULT 0 NOT NULL,
+    stale_since timestamp with time zone,
+    resolved_at timestamp with time zone,
+    last_checked_at timestamp with time zone DEFAULT now() NOT NULL,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT translation_guidance_freshness_counts_check CHECK (((required_count >= 0) AND (completed_count >= 0) AND (missing_count >= 0) AND (matched_count >= 0) AND (uncertain_count >= 0) AND (needs_review_count >= 0) AND (unprompted_matched_count >= 0))),
+    CONSTRAINT translation_guidance_freshness_state_check CHECK ((state = ANY (ARRAY['current'::text, 'potentially_outdated'::text, 'outdated'::text, 'needs_review'::text, 'unavailable'::text])))
+);
+
+
+--
+-- Name: TABLE translation_guidance_freshness; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.translation_guidance_freshness IS 'Reversible freshness state for AI translation runs relative to the current prompt-eligible translation-guidance rule set.';
+
+
+--
+-- Name: COLUMN translation_guidance_freshness.state; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_guidance_freshness.state IS 'current, potentially_outdated, outdated, needs_review, or unavailable for this AI run under detector_version.';
+
+
+--
+-- Name: translation_guidance_freshness_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_guidance_freshness_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_guidance_freshness_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_guidance_freshness_id_seq OWNED BY public.translation_guidance_freshness.id;
 
 
 --
@@ -2640,7 +3561,18 @@ CREATE TABLE public.translation_prompt_profile_versions (
     active boolean DEFAULT true NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     metadata_text text,
-    uses_guidance_context boolean DEFAULT false NOT NULL
+    uses_guidance_context boolean DEFAULT false NOT NULL,
+    approved_human_only boolean DEFAULT false NOT NULL,
+    default_model text,
+    default_temperature double precision,
+    default_top_p double precision,
+    default_api_mode text DEFAULT 'chat_completions'::text NOT NULL,
+    default_reasoning_effort text,
+    default_requested_runs integer DEFAULT 1 NOT NULL,
+    approved_human_queue_priority integer DEFAULT 5 NOT NULL,
+    CONSTRAINT translation_prompt_profile_versions_approved_human_priority_che CHECK ((approved_human_queue_priority >= 0)),
+    CONSTRAINT translation_prompt_profile_versions_default_api_mode_check CHECK ((default_api_mode = ANY (ARRAY['chat_completions'::text, 'responses'::text]))),
+    CONSTRAINT translation_prompt_profile_versions_default_requested_runs_chec CHECK ((default_requested_runs > 0))
 );
 
 
@@ -2649,6 +3581,34 @@ CREATE TABLE public.translation_prompt_profile_versions (
 --
 
 COMMENT ON COLUMN public.translation_prompt_profile_versions.uses_guidance_context IS 'Whether translation workers may add matched entry-specific translation guidance to prompts for this prompt-version.';
+
+
+--
+-- Name: COLUMN translation_prompt_profile_versions.approved_human_only; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_prompt_profile_versions.approved_human_only IS 'If true, this prompt version is intended only for approved-human ground-truth evaluation jobs.';
+
+
+--
+-- Name: COLUMN translation_prompt_profile_versions.default_model; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_prompt_profile_versions.default_model IS 'Default OpenAI model to use when queueing this prompt version.';
+
+
+--
+-- Name: COLUMN translation_prompt_profile_versions.default_api_mode; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_prompt_profile_versions.default_api_mode IS 'Translation API surface for this prompt version: chat_completions or responses.';
+
+
+--
+-- Name: COLUMN translation_prompt_profile_versions.default_reasoning_effort; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_prompt_profile_versions.default_reasoning_effort IS 'Responses API reasoning.effort value for this prompt version, when applicable.';
 
 
 --
@@ -2836,6 +3796,9 @@ CREATE TABLE public.translation_run_requests (
     error_message text,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     priority integer DEFAULT 100 NOT NULL,
+    api_mode text,
+    reasoning_effort text,
+    CONSTRAINT translation_run_requests_api_mode_check CHECK ((api_mode = ANY (ARRAY['chat_completions'::text, 'responses'::text]))),
     CONSTRAINT translation_run_requests_priority_check CHECK ((priority >= 0)),
     CONSTRAINT translation_run_requests_requested_runs_check CHECK ((requested_runs > 0)),
     CONSTRAINT translation_run_requests_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])))
@@ -2890,8 +3853,15 @@ CREATE TABLE public.translation_runs (
     completed_at timestamp with time zone,
     error_message text,
     request_payload_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    api_mode text,
+    reasoning_effort text,
+    input_tokens integer DEFAULT 0 NOT NULL,
+    output_tokens integer DEFAULT 0 NOT NULL,
+    reasoning_tokens integer DEFAULT 0 NOT NULL,
+    CONSTRAINT translation_runs_api_mode_check CHECK ((api_mode = ANY (ARRAY['chat_completions'::text, 'responses'::text]))),
     CONSTRAINT translation_runs_run_index_check CHECK ((run_index > 0)),
-    CONSTRAINT translation_runs_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'completed'::text, 'failed'::text, 'approved'::text, 'rejected'::text, 'hidden'::text, 'outdated'::text])))
+    CONSTRAINT translation_runs_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'completed'::text, 'failed'::text, 'approved'::text, 'rejected'::text, 'hidden'::text, 'outdated'::text]))),
+    CONSTRAINT translation_runs_token_split_check CHECK (((input_tokens >= 0) AND (output_tokens >= 0) AND (reasoning_tokens >= 0)))
 );
 
 
@@ -3042,6 +4012,20 @@ ALTER TABLE ONLY public.lemma_footnote_detection_runs ALTER COLUMN id SET DEFAUL
 
 
 --
+-- Name: lemma_sentence_sets id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_sentence_sets ALTER COLUMN id SET DEFAULT nextval('public.lemma_sentence_sets_id_seq'::regclass);
+
+
+--
+-- Name: lemma_sentences id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_sentences ALTER COLUMN id SET DEFAULT nextval('public.lemma_sentences_id_seq'::regclass);
+
+
+--
 -- Name: lemma_source_citation_mentions id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -3161,6 +4145,97 @@ ALTER TABLE ONLY public.proper_nouns ALTER COLUMN id SET DEFAULT nextval('public
 
 
 --
+-- Name: sentence_alignment_groups id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_alignment_groups ALTER COLUMN id SET DEFAULT nextval('public.sentence_alignment_groups_id_seq'::regclass);
+
+
+--
+-- Name: sentence_alignment_members id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_alignment_members ALTER COLUMN id SET DEFAULT nextval('public.sentence_alignment_members_id_seq'::regclass);
+
+
+--
+-- Name: sentence_alignment_sets id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_alignment_sets ALTER COLUMN id SET DEFAULT nextval('public.sentence_alignment_sets_id_seq'::regclass);
+
+
+--
+-- Name: sentence_grammar_analyses id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_analyses ALTER COLUMN id SET DEFAULT nextval('public.sentence_grammar_analyses_id_seq'::regclass);
+
+
+--
+-- Name: sentence_grammar_analysis_feedback_context id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_analysis_feedback_context ALTER COLUMN id SET DEFAULT nextval('public.sentence_grammar_analysis_feedback_context_id_seq'::regclass);
+
+
+--
+-- Name: sentence_grammar_correction_rules id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_correction_rules ALTER COLUMN id SET DEFAULT nextval('public.sentence_grammar_correction_rules_id_seq'::regclass);
+
+
+--
+-- Name: sentence_grammar_evaluation_runs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_evaluation_runs ALTER COLUMN id SET DEFAULT nextval('public.sentence_grammar_evaluation_runs_id_seq'::regclass);
+
+
+--
+-- Name: sentence_grammar_evaluations id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_evaluations ALTER COLUMN id SET DEFAULT nextval('public.sentence_grammar_evaluations_id_seq'::regclass);
+
+
+--
+-- Name: sentence_grammar_feedback_items id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_feedback_items ALTER COLUMN id SET DEFAULT nextval('public.sentence_grammar_feedback_items_id_seq'::regclass);
+
+
+--
+-- Name: sentence_grammar_runs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_runs ALTER COLUMN id SET DEFAULT nextval('public.sentence_grammar_runs_id_seq'::regclass);
+
+
+--
+-- Name: sentence_grammar_tokens id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_tokens ALTER COLUMN id SET DEFAULT nextval('public.sentence_grammar_tokens_id_seq'::regclass);
+
+
+--
+-- Name: sentence_translation_metric_runs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_translation_metric_runs ALTER COLUMN id SET DEFAULT nextval('public.sentence_translation_metric_runs_id_seq'::regclass);
+
+
+--
+-- Name: sentence_translation_metric_scores id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_translation_metric_scores ALTER COLUMN id SET DEFAULT nextval('public.sentence_translation_metric_scores_id_seq'::regclass);
+
+
+--
 -- Name: source_citation_extraction_runs id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -3196,6 +4271,20 @@ ALTER TABLE ONLY public.topostext_intake_entries ALTER COLUMN id SET DEFAULT nex
 
 
 --
+-- Name: topostext_intake_entry_latin_labels id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entry_latin_labels ALTER COLUMN id SET DEFAULT nextval('public.topostext_intake_entry_latin_labels_id_seq'::regclass);
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mention_latin_label_hints ALTER COLUMN id SET DEFAULT nextval('public.topostext_intake_mention_latin_label_hints_id_seq'::regclass);
+
+
+--
 -- Name: topostext_intake_mentions id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -3203,10 +4292,24 @@ ALTER TABLE ONLY public.topostext_intake_mentions ALTER COLUMN id SET DEFAULT ne
 
 
 --
+-- Name: topostext_intake_re_candidates id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_re_candidates ALTER COLUMN id SET DEFAULT nextval('public.topostext_intake_re_candidates_id_seq'::regclass);
+
+
+--
 -- Name: translation_guidance_backlog_items id; Type: DEFAULT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.translation_guidance_backlog_items ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_backlog_items_id_seq'::regclass);
+
+
+--
+-- Name: translation_guidance_freshness id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_freshness ALTER COLUMN id SET DEFAULT nextval('public.translation_guidance_freshness_id_seq'::regclass);
 
 
 --
@@ -3550,6 +4653,22 @@ ALTER TABLE ONLY public.lemma_images
 
 
 --
+-- Name: lemma_sentence_sets lemma_sentence_sets_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_sentence_sets
+    ADD CONSTRAINT lemma_sentence_sets_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: lemma_sentences lemma_sentences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_sentences
+    ADD CONSTRAINT lemma_sentences_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: lemma_source_citation_mentions lemma_source_citation_mentions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3758,6 +4877,150 @@ ALTER TABLE ONLY public.proper_nouns
 
 
 --
+-- Name: sentence_alignment_groups sentence_alignment_groups_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_alignment_groups
+    ADD CONSTRAINT sentence_alignment_groups_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_alignment_members sentence_alignment_members_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_alignment_members
+    ADD CONSTRAINT sentence_alignment_members_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_alignment_sets sentence_alignment_sets_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_alignment_sets
+    ADD CONSTRAINT sentence_alignment_sets_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_grammar_analyses sentence_grammar_analyses_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_analyses
+    ADD CONSTRAINT sentence_grammar_analyses_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_grammar_analysis_feedback_context sentence_grammar_analysis_feedback_context_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_analysis_feedback_context
+    ADD CONSTRAINT sentence_grammar_analysis_feedback_context_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_grammar_best_analyses sentence_grammar_best_analyses_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_best_analyses
+    ADD CONSTRAINT sentence_grammar_best_analyses_pkey PRIMARY KEY (sentence_id);
+
+
+--
+-- Name: sentence_grammar_correction_rules sentence_grammar_correction_rules_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_correction_rules
+    ADD CONSTRAINT sentence_grammar_correction_rules_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_grammar_correction_rules sentence_grammar_correction_rules_rule_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_correction_rules
+    ADD CONSTRAINT sentence_grammar_correction_rules_rule_key_key UNIQUE (rule_key);
+
+
+--
+-- Name: sentence_grammar_evaluation_runs sentence_grammar_evaluation_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_evaluation_runs
+    ADD CONSTRAINT sentence_grammar_evaluation_runs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_grammar_evaluation_runs sentence_grammar_evaluation_runs_run_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_evaluation_runs
+    ADD CONSTRAINT sentence_grammar_evaluation_runs_run_id_key UNIQUE (run_id);
+
+
+--
+-- Name: sentence_grammar_evaluations sentence_grammar_evaluations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_evaluations
+    ADD CONSTRAINT sentence_grammar_evaluations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_grammar_feedback_items sentence_grammar_feedback_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_feedback_items
+    ADD CONSTRAINT sentence_grammar_feedback_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_grammar_runs sentence_grammar_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_runs
+    ADD CONSTRAINT sentence_grammar_runs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_grammar_runs sentence_grammar_runs_run_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_runs
+    ADD CONSTRAINT sentence_grammar_runs_run_id_key UNIQUE (run_id);
+
+
+--
+-- Name: sentence_grammar_tokens sentence_grammar_tokens_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_tokens
+    ADD CONSTRAINT sentence_grammar_tokens_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_translation_metric_runs sentence_translation_metric_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_translation_metric_runs
+    ADD CONSTRAINT sentence_translation_metric_runs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_translation_metric_runs sentence_translation_metric_runs_run_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_translation_metric_runs
+    ADD CONSTRAINT sentence_translation_metric_runs_run_id_key UNIQUE (run_id);
+
+
+--
+-- Name: sentence_translation_metric_scores sentence_translation_metric_scores_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_translation_metric_scores
+    ADD CONSTRAINT sentence_translation_metric_scores_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: source_citation_extraction_runs source_citation_extraction_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3822,6 +5085,38 @@ ALTER TABLE ONLY public.topostext_intake_entries
 
 
 --
+-- Name: topostext_intake_entry_latin_labels topostext_intake_entry_latin_labels_entry_sequence_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entry_latin_labels
+    ADD CONSTRAINT topostext_intake_entry_latin_labels_entry_sequence_key UNIQUE (entry_id, label_sequence);
+
+
+--
+-- Name: topostext_intake_entry_latin_labels topostext_intake_entry_latin_labels_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entry_latin_labels
+    ADD CONSTRAINT topostext_intake_entry_latin_labels_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints topostext_intake_mention_latin_label_hints_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mention_latin_label_hints
+    ADD CONSTRAINT topostext_intake_mention_latin_label_hints_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints topostext_intake_mention_latin_label_hints_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mention_latin_label_hints
+    ADD CONSTRAINT topostext_intake_mention_latin_label_hints_unique UNIQUE (mention_id, latin_label_id, hint_source);
+
+
+--
 -- Name: topostext_intake_mentions topostext_intake_mentions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3838,6 +5133,22 @@ ALTER TABLE ONLY public.topostext_intake_mentions
 
 
 --
+-- Name: topostext_intake_re_candidates topostext_intake_re_candidates_mention_rank_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_re_candidates
+    ADD CONSTRAINT topostext_intake_re_candidates_mention_rank_key UNIQUE (mention_id, candidate_rank);
+
+
+--
+-- Name: topostext_intake_re_candidates topostext_intake_re_candidates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_re_candidates
+    ADD CONSTRAINT topostext_intake_re_candidates_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: translation_guidance_action_import_map translation_guidance_action_import_map_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3851,6 +5162,22 @@ ALTER TABLE ONLY public.translation_guidance_action_import_map
 
 ALTER TABLE ONLY public.translation_guidance_backlog_items
     ADD CONSTRAINT translation_guidance_backlog_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_freshness translation_guidance_freshness_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_freshness
+    ADD CONSTRAINT translation_guidance_freshness_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_guidance_freshness translation_guidance_freshness_run_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_freshness
+    ADD CONSTRAINT translation_guidance_freshness_run_id_key UNIQUE (run_id);
 
 
 --
@@ -4483,6 +5810,48 @@ CREATE INDEX lemma_headword_distances_b_idx ON public.lemma_headword_distances U
 
 
 --
+-- Name: lemma_sentence_sets_artifact_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX lemma_sentence_sets_artifact_idx ON public.lemma_sentence_sets USING btree (lemma_id, text_kind, COALESCE(source_text_version_id, 0), COALESCE(human_translation_id, 0), COALESCE(translation_run_id, 0), segmentation_method, COALESCE(segmentation_model, ''::text), segmentation_version, text_sha256);
+
+
+--
+-- Name: lemma_sentence_sets_human_translation_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_sentence_sets_human_translation_idx ON public.lemma_sentence_sets USING btree (human_translation_id) WHERE (human_translation_id IS NOT NULL);
+
+
+--
+-- Name: lemma_sentence_sets_lemma_kind_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_sentence_sets_lemma_kind_idx ON public.lemma_sentence_sets USING btree (lemma_id, text_kind, created_at DESC);
+
+
+--
+-- Name: lemma_sentence_sets_translation_run_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_sentence_sets_translation_run_idx ON public.lemma_sentence_sets USING btree (translation_run_id) WHERE (translation_run_id IS NOT NULL);
+
+
+--
+-- Name: lemma_sentences_set_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX lemma_sentences_set_idx ON public.lemma_sentences USING btree (sentence_set_id);
+
+
+--
+-- Name: lemma_sentences_set_number_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX lemma_sentences_set_number_idx ON public.lemma_sentences USING btree (sentence_set_id, sentence_number);
+
+
+--
 -- Name: lemma_source_citation_mentions_lemma_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4658,6 +6027,230 @@ CREATE INDEX oracle_references_visibility_idx ON public.oracle_references USING 
 
 
 --
+-- Name: sentence_alignment_groups_set_kind_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_alignment_groups_set_kind_idx ON public.sentence_alignment_groups USING btree (alignment_set_id, alignment_kind);
+
+
+--
+-- Name: sentence_alignment_groups_set_number_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX sentence_alignment_groups_set_number_idx ON public.sentence_alignment_groups USING btree (alignment_set_id, group_number);
+
+
+--
+-- Name: sentence_alignment_members_group_role_pos_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX sentence_alignment_members_group_role_pos_idx ON public.sentence_alignment_members USING btree (alignment_group_id, member_role, position_in_group);
+
+
+--
+-- Name: sentence_alignment_members_group_sentence_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX sentence_alignment_members_group_sentence_idx ON public.sentence_alignment_members USING btree (alignment_group_id, sentence_id);
+
+
+--
+-- Name: sentence_alignment_members_sentence_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_alignment_members_sentence_idx ON public.sentence_alignment_members USING btree (sentence_id);
+
+
+--
+-- Name: sentence_alignment_sets_artifact_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX sentence_alignment_sets_artifact_idx ON public.sentence_alignment_sets USING btree (lemma_id, COALESCE(source_sentence_set_id, 0), reference_sentence_set_id, candidate_sentence_set_id, alignment_method, COALESCE(alignment_model, ''::text), alignment_version);
+
+
+--
+-- Name: sentence_alignment_sets_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_alignment_sets_lemma_idx ON public.sentence_alignment_sets USING btree (lemma_id, created_at DESC);
+
+
+--
+-- Name: sentence_alignment_sets_reference_candidate_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_alignment_sets_reference_candidate_idx ON public.sentence_alignment_sets USING btree (reference_sentence_set_id, candidate_sentence_set_id);
+
+
+--
+-- Name: sentence_grammar_analyses_parent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_analyses_parent_idx ON public.sentence_grammar_analyses USING btree (parent_analysis_id) WHERE (parent_analysis_id IS NOT NULL);
+
+
+--
+-- Name: sentence_grammar_analyses_run_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_analyses_run_idx ON public.sentence_grammar_analyses USING btree (grammar_run_id, status);
+
+
+--
+-- Name: sentence_grammar_analyses_sentence_run_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX sentence_grammar_analyses_sentence_run_idx ON public.sentence_grammar_analyses USING btree (sentence_id, grammar_run_id);
+
+
+--
+-- Name: sentence_grammar_analyses_sentence_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_analyses_sentence_status_idx ON public.sentence_grammar_analyses USING btree (sentence_id, acceptance_status, created_at DESC);
+
+
+--
+-- Name: sentence_grammar_analysis_feedback_context_feedback_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX sentence_grammar_analysis_feedback_context_feedback_idx ON public.sentence_grammar_analysis_feedback_context USING btree (analysis_id, feedback_item_id) WHERE (feedback_item_id IS NOT NULL);
+
+
+--
+-- Name: sentence_grammar_analysis_feedback_context_rule_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX sentence_grammar_analysis_feedback_context_rule_idx ON public.sentence_grammar_analysis_feedback_context USING btree (analysis_id, correction_rule_id) WHERE (correction_rule_id IS NOT NULL);
+
+
+--
+-- Name: sentence_grammar_best_analyses_analysis_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_best_analyses_analysis_idx ON public.sentence_grammar_best_analyses USING btree (analysis_id);
+
+
+--
+-- Name: sentence_grammar_correction_rules_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_correction_rules_lemma_idx ON public.sentence_grammar_correction_rules USING btree (lemma_id) WHERE (lemma_id IS NOT NULL);
+
+
+--
+-- Name: sentence_grammar_correction_rules_scope_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_correction_rules_scope_idx ON public.sentence_grammar_correction_rules USING btree (rule_scope, status, priority);
+
+
+--
+-- Name: sentence_grammar_evaluation_runs_model_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_evaluation_runs_model_idx ON public.sentence_grammar_evaluation_runs USING btree (evaluator_kind, COALESCE(model, ''::text), started_at DESC);
+
+
+--
+-- Name: sentence_grammar_evaluations_analysis_run_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX sentence_grammar_evaluations_analysis_run_idx ON public.sentence_grammar_evaluations USING btree (analysis_id, evaluation_run_id);
+
+
+--
+-- Name: sentence_grammar_evaluations_verdict_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_evaluations_verdict_idx ON public.sentence_grammar_evaluations USING btree (verdict, confidence, created_at DESC);
+
+
+--
+-- Name: sentence_grammar_feedback_items_analysis_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_feedback_items_analysis_idx ON public.sentence_grammar_feedback_items USING btree (analysis_id) WHERE (analysis_id IS NOT NULL);
+
+
+--
+-- Name: sentence_grammar_feedback_items_reusable_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_feedback_items_reusable_idx ON public.sentence_grammar_feedback_items USING btree (reusable, feedback_status, error_category);
+
+
+--
+-- Name: sentence_grammar_feedback_items_sentence_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_feedback_items_sentence_idx ON public.sentence_grammar_feedback_items USING btree (sentence_id, feedback_status, created_at DESC);
+
+
+--
+-- Name: sentence_grammar_runs_kind_model_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_runs_kind_model_idx ON public.sentence_grammar_runs USING btree (parser_kind, model, COALESCE(prompt_version, ''::text), started_at DESC);
+
+
+--
+-- Name: sentence_grammar_tokens_analysis_order_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX sentence_grammar_tokens_analysis_order_idx ON public.sentence_grammar_tokens USING btree (analysis_id, token_order);
+
+
+--
+-- Name: sentence_grammar_tokens_deprel_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_tokens_deprel_idx ON public.sentence_grammar_tokens USING btree (deprel);
+
+
+--
+-- Name: sentence_grammar_tokens_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_tokens_lemma_idx ON public.sentence_grammar_tokens USING btree (lemma);
+
+
+--
+-- Name: sentence_grammar_tokens_upos_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_tokens_upos_idx ON public.sentence_grammar_tokens USING btree (upos);
+
+
+--
+-- Name: sentence_translation_metric_runs_set_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_translation_metric_runs_set_idx ON public.sentence_translation_metric_runs USING btree (metric_set, started_at DESC);
+
+
+--
+-- Name: sentence_translation_metric_scores_group_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_translation_metric_scores_group_idx ON public.sentence_translation_metric_scores USING btree (alignment_group_id);
+
+
+--
+-- Name: sentence_translation_metric_scores_metric_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX sentence_translation_metric_scores_metric_idx ON public.sentence_translation_metric_scores USING btree (metric_run_id, alignment_group_id, metric_name);
+
+
+--
+-- Name: sentence_translation_metric_scores_name_score_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_translation_metric_scores_name_score_idx ON public.sentence_translation_metric_scores USING btree (metric_name, score);
+
+
+--
 -- Name: source_citation_extraction_runs_lemma_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4735,6 +6328,20 @@ CREATE INDEX topostext_intake_entries_text_sha_idx ON public.topostext_intake_en
 
 
 --
+-- Name: topostext_intake_entry_latin_labels_snapshot_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_entry_latin_labels_snapshot_idx ON public.topostext_intake_entry_latin_labels USING btree (snapshot_id, normalized_label);
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints_snapshot_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_mention_latin_label_hints_snapshot_idx ON public.topostext_intake_mention_latin_label_hints USING btree (snapshot_id, mention_id);
+
+
+--
 -- Name: topostext_intake_mentions_action_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4798,6 +6405,20 @@ CREATE INDEX topostext_intake_mentions_suggested_tag_idx ON public.topostext_int
 
 
 --
+-- Name: topostext_intake_re_candidates_re_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_re_candidates_re_idx ON public.topostext_intake_re_candidates USING btree (re_id);
+
+
+--
+-- Name: topostext_intake_re_candidates_snapshot_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_re_candidates_snapshot_idx ON public.topostext_intake_re_candidates USING btree (snapshot_id, mention_id, candidate_rank);
+
+
+--
 -- Name: translation_guidance_backlog_items_active_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4809,6 +6430,27 @@ CREATE UNIQUE INDEX translation_guidance_backlog_items_active_idx ON public.tran
 --
 
 CREATE INDEX translation_guidance_backlog_items_status_idx ON public.translation_guidance_backlog_items USING btree (status, priority, created_at);
+
+
+--
+-- Name: translation_guidance_freshness_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_freshness_lemma_idx ON public.translation_guidance_freshness USING btree (lemma_id, state, run_id);
+
+
+--
+-- Name: translation_guidance_freshness_source_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_freshness_source_idx ON public.translation_guidance_freshness USING btree (source_text_version_id, state, run_id);
+
+
+--
+-- Name: translation_guidance_freshness_state_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_freshness_state_idx ON public.translation_guidance_freshness USING btree (state, updated_at DESC, run_id);
 
 
 --
@@ -4973,6 +6615,13 @@ CREATE INDEX translation_prompt_profile_versions_active_idx ON public.translatio
 
 
 --
+-- Name: translation_prompt_profile_versions_approved_only_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_prompt_profile_versions_approved_only_idx ON public.translation_prompt_profile_versions USING btree (approved_human_only, profile_id, version);
+
+
+--
 -- Name: translation_prompt_profile_versions_unique_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5015,6 +6664,13 @@ CREATE UNIQUE INDEX translation_run_guidance_matches_run_match_idx ON public.tra
 
 
 --
+-- Name: translation_run_requests_api_mode_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_run_requests_api_mode_status_idx ON public.translation_run_requests USING btree (api_mode, status, priority, created_at, id);
+
+
+--
 -- Name: translation_run_requests_status_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5033,6 +6689,13 @@ CREATE INDEX translation_run_requests_status_priority_idx ON public.translation_
 --
 
 CREATE INDEX translation_runs_lemma_status_idx ON public.translation_runs USING btree (lemma_id, status, created_at DESC);
+
+
+--
+-- Name: translation_runs_model_cost_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_runs_model_cost_idx ON public.translation_runs USING btree (model, completed_at) WHERE (tokens_used > 0);
 
 
 --
@@ -5347,6 +7010,46 @@ ALTER TABLE ONLY public.lemma_images
 
 
 --
+-- Name: lemma_sentence_sets lemma_sentence_sets_human_translation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_sentence_sets
+    ADD CONSTRAINT lemma_sentence_sets_human_translation_id_fkey FOREIGN KEY (human_translation_id) REFERENCES public.human_translations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: lemma_sentence_sets lemma_sentence_sets_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_sentence_sets
+    ADD CONSTRAINT lemma_sentence_sets_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: lemma_sentence_sets lemma_sentence_sets_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_sentence_sets
+    ADD CONSTRAINT lemma_sentence_sets_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: lemma_sentence_sets lemma_sentence_sets_translation_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_sentence_sets
+    ADD CONSTRAINT lemma_sentence_sets_translation_run_id_fkey FOREIGN KEY (translation_run_id) REFERENCES public.translation_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: lemma_sentences lemma_sentences_sentence_set_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.lemma_sentences
+    ADD CONSTRAINT lemma_sentences_sentence_set_id_fkey FOREIGN KEY (sentence_set_id) REFERENCES public.lemma_sentence_sets(id) ON DELETE CASCADE;
+
+
+--
 -- Name: lemma_source_citation_mentions lemma_source_citation_mentions_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5515,6 +7218,214 @@ ALTER TABLE ONLY public.proper_nouns
 
 
 --
+-- Name: sentence_alignment_groups sentence_alignment_groups_alignment_set_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_alignment_groups
+    ADD CONSTRAINT sentence_alignment_groups_alignment_set_id_fkey FOREIGN KEY (alignment_set_id) REFERENCES public.sentence_alignment_sets(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_alignment_members sentence_alignment_members_alignment_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_alignment_members
+    ADD CONSTRAINT sentence_alignment_members_alignment_group_id_fkey FOREIGN KEY (alignment_group_id) REFERENCES public.sentence_alignment_groups(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_alignment_members sentence_alignment_members_sentence_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_alignment_members
+    ADD CONSTRAINT sentence_alignment_members_sentence_id_fkey FOREIGN KEY (sentence_id) REFERENCES public.lemma_sentences(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_alignment_sets sentence_alignment_sets_candidate_sentence_set_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_alignment_sets
+    ADD CONSTRAINT sentence_alignment_sets_candidate_sentence_set_id_fkey FOREIGN KEY (candidate_sentence_set_id) REFERENCES public.lemma_sentence_sets(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_alignment_sets sentence_alignment_sets_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_alignment_sets
+    ADD CONSTRAINT sentence_alignment_sets_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_alignment_sets sentence_alignment_sets_reference_sentence_set_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_alignment_sets
+    ADD CONSTRAINT sentence_alignment_sets_reference_sentence_set_id_fkey FOREIGN KEY (reference_sentence_set_id) REFERENCES public.lemma_sentence_sets(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_alignment_sets sentence_alignment_sets_source_sentence_set_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_alignment_sets
+    ADD CONSTRAINT sentence_alignment_sets_source_sentence_set_id_fkey FOREIGN KEY (source_sentence_set_id) REFERENCES public.lemma_sentence_sets(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_analyses sentence_grammar_analyses_grammar_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_analyses
+    ADD CONSTRAINT sentence_grammar_analyses_grammar_run_id_fkey FOREIGN KEY (grammar_run_id) REFERENCES public.sentence_grammar_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_analyses sentence_grammar_analyses_parent_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_analyses
+    ADD CONSTRAINT sentence_grammar_analyses_parent_analysis_id_fkey FOREIGN KEY (parent_analysis_id) REFERENCES public.sentence_grammar_analyses(id) ON DELETE SET NULL;
+
+
+--
+-- Name: sentence_grammar_analyses sentence_grammar_analyses_sentence_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_analyses
+    ADD CONSTRAINT sentence_grammar_analyses_sentence_id_fkey FOREIGN KEY (sentence_id) REFERENCES public.lemma_sentences(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_analysis_feedback_context sentence_grammar_analysis_feedback_cont_correction_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_analysis_feedback_context
+    ADD CONSTRAINT sentence_grammar_analysis_feedback_cont_correction_rule_id_fkey FOREIGN KEY (correction_rule_id) REFERENCES public.sentence_grammar_correction_rules(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_analysis_feedback_context sentence_grammar_analysis_feedback_contex_feedback_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_analysis_feedback_context
+    ADD CONSTRAINT sentence_grammar_analysis_feedback_contex_feedback_item_id_fkey FOREIGN KEY (feedback_item_id) REFERENCES public.sentence_grammar_feedback_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_analysis_feedback_context sentence_grammar_analysis_feedback_context_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_analysis_feedback_context
+    ADD CONSTRAINT sentence_grammar_analysis_feedback_context_analysis_id_fkey FOREIGN KEY (analysis_id) REFERENCES public.sentence_grammar_analyses(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_best_analyses sentence_grammar_best_analyses_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_best_analyses
+    ADD CONSTRAINT sentence_grammar_best_analyses_analysis_id_fkey FOREIGN KEY (analysis_id) REFERENCES public.sentence_grammar_analyses(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_best_analyses sentence_grammar_best_analyses_sentence_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_best_analyses
+    ADD CONSTRAINT sentence_grammar_best_analyses_sentence_id_fkey FOREIGN KEY (sentence_id) REFERENCES public.lemma_sentences(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_correction_rules sentence_grammar_correction_rules_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_correction_rules
+    ADD CONSTRAINT sentence_grammar_correction_rules_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_correction_rules sentence_grammar_correction_rules_source_feedback_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_correction_rules
+    ADD CONSTRAINT sentence_grammar_correction_rules_source_feedback_id_fkey FOREIGN KEY (source_feedback_id) REFERENCES public.sentence_grammar_feedback_items(id) ON DELETE SET NULL;
+
+
+--
+-- Name: sentence_grammar_evaluations sentence_grammar_evaluations_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_evaluations
+    ADD CONSTRAINT sentence_grammar_evaluations_analysis_id_fkey FOREIGN KEY (analysis_id) REFERENCES public.sentence_grammar_analyses(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_evaluations sentence_grammar_evaluations_evaluation_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_evaluations
+    ADD CONSTRAINT sentence_grammar_evaluations_evaluation_run_id_fkey FOREIGN KEY (evaluation_run_id) REFERENCES public.sentence_grammar_evaluation_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_feedback_items sentence_grammar_feedback_items_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_feedback_items
+    ADD CONSTRAINT sentence_grammar_feedback_items_analysis_id_fkey FOREIGN KEY (analysis_id) REFERENCES public.sentence_grammar_analyses(id) ON DELETE SET NULL;
+
+
+--
+-- Name: sentence_grammar_feedback_items sentence_grammar_feedback_items_evaluation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_feedback_items
+    ADD CONSTRAINT sentence_grammar_feedback_items_evaluation_id_fkey FOREIGN KEY (evaluation_id) REFERENCES public.sentence_grammar_evaluations(id) ON DELETE SET NULL;
+
+
+--
+-- Name: sentence_grammar_feedback_items sentence_grammar_feedback_items_parent_feedback_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_feedback_items
+    ADD CONSTRAINT sentence_grammar_feedback_items_parent_feedback_id_fkey FOREIGN KEY (parent_feedback_id) REFERENCES public.sentence_grammar_feedback_items(id) ON DELETE SET NULL;
+
+
+--
+-- Name: sentence_grammar_feedback_items sentence_grammar_feedback_items_sentence_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_feedback_items
+    ADD CONSTRAINT sentence_grammar_feedback_items_sentence_id_fkey FOREIGN KEY (sentence_id) REFERENCES public.lemma_sentences(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_tokens sentence_grammar_tokens_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_tokens
+    ADD CONSTRAINT sentence_grammar_tokens_analysis_id_fkey FOREIGN KEY (analysis_id) REFERENCES public.sentence_grammar_analyses(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_translation_metric_scores sentence_translation_metric_scores_alignment_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_translation_metric_scores
+    ADD CONSTRAINT sentence_translation_metric_scores_alignment_group_id_fkey FOREIGN KEY (alignment_group_id) REFERENCES public.sentence_alignment_groups(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_translation_metric_scores sentence_translation_metric_scores_metric_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_translation_metric_scores
+    ADD CONSTRAINT sentence_translation_metric_scores_metric_run_id_fkey FOREIGN KEY (metric_run_id) REFERENCES public.sentence_translation_metric_runs(id) ON DELETE CASCADE;
+
+
+--
 -- Name: source_citation_extraction_runs source_citation_extraction_runs_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5587,6 +7498,46 @@ ALTER TABLE ONLY public.topostext_intake_entries
 
 
 --
+-- Name: topostext_intake_entry_latin_labels topostext_intake_entry_latin_labels_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entry_latin_labels
+    ADD CONSTRAINT topostext_intake_entry_latin_labels_entry_id_fkey FOREIGN KEY (entry_id) REFERENCES public.topostext_intake_entries(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_entry_latin_labels topostext_intake_entry_latin_labels_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_entry_latin_labels
+    ADD CONSTRAINT topostext_intake_entry_latin_labels_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.entity_source_snapshots(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints topostext_intake_mention_latin_label_hints_latin_label_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mention_latin_label_hints
+    ADD CONSTRAINT topostext_intake_mention_latin_label_hints_latin_label_id_fkey FOREIGN KEY (latin_label_id) REFERENCES public.topostext_intake_entry_latin_labels(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints topostext_intake_mention_latin_label_hints_mention_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mention_latin_label_hints
+    ADD CONSTRAINT topostext_intake_mention_latin_label_hints_mention_id_fkey FOREIGN KEY (mention_id) REFERENCES public.topostext_intake_mentions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_mention_latin_label_hints topostext_intake_mention_latin_label_hints_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_mention_latin_label_hints
+    ADD CONSTRAINT topostext_intake_mention_latin_label_hints_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.entity_source_snapshots(id) ON DELETE CASCADE;
+
+
+--
 -- Name: topostext_intake_mentions topostext_intake_mentions_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5600,6 +7551,22 @@ ALTER TABLE ONLY public.topostext_intake_mentions
 
 ALTER TABLE ONLY public.topostext_intake_mentions
     ADD CONSTRAINT topostext_intake_mentions_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.entity_source_snapshots(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_re_candidates topostext_intake_re_candidates_mention_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_re_candidates
+    ADD CONSTRAINT topostext_intake_re_candidates_mention_id_fkey FOREIGN KEY (mention_id) REFERENCES public.topostext_intake_mentions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: topostext_intake_re_candidates topostext_intake_re_candidates_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topostext_intake_re_candidates
+    ADD CONSTRAINT topostext_intake_re_candidates_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.entity_source_snapshots(id) ON DELETE CASCADE;
 
 
 --
@@ -5632,6 +7599,30 @@ ALTER TABLE ONLY public.translation_guidance_backlog_items
 
 ALTER TABLE ONLY public.translation_guidance_backlog_items
     ADD CONSTRAINT translation_guidance_backlog_items_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_freshness translation_guidance_freshness_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_freshness
+    ADD CONSTRAINT translation_guidance_freshness_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_freshness translation_guidance_freshness_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_freshness
+    ADD CONSTRAINT translation_guidance_freshness_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.translation_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: translation_guidance_freshness translation_guidance_freshness_source_text_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_guidance_freshness
+    ADD CONSTRAINT translation_guidance_freshness_source_text_version_id_fkey FOREIGN KEY (source_text_version_id) REFERENCES public.lemma_source_text_versions(id) ON DELETE CASCADE;
 
 
 --
@@ -5846,4 +7837,4 @@ ALTER TABLE ONLY public.translation_runs
 -- PostgreSQL database dump complete
 --
 
-\unrestrict j6o0nlMAQ0EWKSs7GA93JsG4eLKuF7WR50KH9zHtHNRBCdNoRp3xIS9r97F9jnT
+\unrestrict 4cXviuyI1yTdw7QKoW6uwVmE2isJRZsLfS1AHib70oC9cyzS8VjAooSzc00Cvxo
