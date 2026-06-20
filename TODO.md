@@ -5,6 +5,20 @@
 
 ## Future Development Tasks
 
+### From Greg/Greta Transcript, 2026-05-08
+- [ ] Let the Stephanus translation pipeline continue toward a whole-work
+      PDF/book, then assess whether the output quality is good enough for a
+      transparent published or print-on-demand version.
+- [ ] Add a mechanism in the translation overview portal for phrase-level
+      footnotes and whole-entry comments.
+- [ ] Add or design a `Footnote this` workflow: after AI or human translation,
+      generate candidate footnotes, then require human review and editing.
+- [ ] Ask Greta to mark up one Stephanus entry with examples of the minimal
+      commentary she has in mind.
+- [ ] Automate annotation candidates for wordplay/etymology, unique-source
+      places, geography problems, ambiguities, and other minimal-commentary
+      categories.
+
 ### Data Extraction
 - [ ] Scan the indexes in Billerbeck volume 5
 
