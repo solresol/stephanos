@@ -608,6 +608,10 @@ uv run generate_statistics_site.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 7a0a: Generating translation prompt evaluation..." | tee -a "$LOGFILE"
 uv run generate_translation_prompt_evaluation.py --approved-human-only 2>&1 | tee -a "$LOGFILE"
 
+# Step 7a0a1: Generate v3 translation quality predictor page
+echo "Step 7a0a1: Generating translation quality predictor page..." | tee -a "$LOGFILE"
+uv run generate_translation_quality_predictor_page.py 2>&1 | tee -a "$LOGFILE"
+
 # Step 7a1: Generate pipeline progress page
 echo "Step 7a1: Generating pipeline progress page..." | tee -a "$LOGFILE"
 uv run generate_pipeline_progress.py 2>&1 | tee -a "$LOGFILE"
