@@ -19,6 +19,11 @@ from translation_guidance_coverage import (
     enqueue_missing_guidance,
     guidance_coverage_counts,
 )
+from translation_run_utils import DEFAULT_TRANSLATION_MODEL
+
+
+API_MODE_CHAT_COMPLETIONS = "chat_completions"
+API_MODE_RESPONSES = "responses"
 
 
 GREEK_LETTER_BASES = {
@@ -155,6 +160,44 @@ def profile_version_uses_guidance_context(cur, profile_version_id: int) -> bool:
     )
     row = cur.fetchone()
     return bool(row[0]) if row else False
+
+
+def profile_version_settings(cur, profile_version_id: int) -> dict[str, object]:
+    fields = []
+    field_names = []
+    mapping = [
+        ("approved_human_only", "COALESCE(approved_human_only, FALSE)"),
+        ("default_model", "NULLIF(default_model, '')"),
+        ("default_temperature", "default_temperature"),
+        ("default_top_p", "default_top_p"),
+        ("default_api_mode", "COALESCE(NULLIF(default_api_mode, ''), 'chat_completions')"),
+        ("default_reasoning_effort", "NULLIF(default_reasoning_effort, '')"),
+        ("default_requested_runs", "GREATEST(COALESCE(default_requested_runs, 1), 1)"),
+    ]
+    for column_name, expression in mapping:
+        field_names.append(column_name)
+        if column_exists(cur, "translation_prompt_profile_versions", column_name):
+            fields.append(expression)
+        elif column_name == "approved_human_only":
+            fields.append("FALSE")
+        elif column_name == "default_api_mode":
+            fields.append("'chat_completions'")
+        elif column_name == "default_requested_runs":
+            fields.append("1")
+        else:
+            fields.append("NULL")
+    cur.execute(
+        f"""
+        SELECT {", ".join(fields)}
+        FROM translation_prompt_profile_versions
+        WHERE id = %s
+        """,
+        (int(profile_version_id),),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise RuntimeError(f"Profile version not found: {profile_version_id}")
+    return dict(zip(field_names, row))
 
 
 def resolve_profile(cur, profile_name: str):
@@ -387,57 +430,59 @@ def enqueue(
     model,
     temperature,
     top_p,
+    api_mode,
+    reasoning_effort,
     created_by,
     priority,
     has_priority_column,
+    has_api_mode_column,
+    has_reasoning_effort_column,
 ):
     inserted = 0
     for row in rows:
         lemma_id = int(row["lemma_id"])
         source_text_version_id = int(row["source_text_version_id"])
+        columns = [
+            "lemma_id",
+            "profile_id",
+            "profile_version_id",
+            "source_text_version_id",
+            "requested_runs",
+            "model",
+            "temperature",
+            "top_p",
+            "status",
+            "created_by",
+        ]
+        values = [
+            lemma_id,
+            profile_id,
+            profile_version_id,
+            source_text_version_id,
+            repeat,
+            model,
+            temperature,
+            top_p,
+            "pending",
+            created_by,
+        ]
         if has_priority_column:
-            cur.execute(
-                """
-                INSERT INTO translation_run_requests (
-                    lemma_id, profile_id, profile_version_id, source_text_version_id,
-                    requested_runs, model, temperature, top_p, status, created_by, priority
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s)
-                """,
-                (
-                    lemma_id,
-                    profile_id,
-                    profile_version_id,
-                    source_text_version_id,
-                    repeat,
-                    model,
-                    temperature,
-                    top_p,
-                    created_by,
-                    int(priority),
-                ),
-            )
-        else:
-            cur.execute(
-                """
-                INSERT INTO translation_run_requests (
-                    lemma_id, profile_id, profile_version_id, source_text_version_id,
-                    requested_runs, model, temperature, top_p, status, created_by
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s)
-                """,
-                (
-                    lemma_id,
-                    profile_id,
-                    profile_version_id,
-                    source_text_version_id,
-                    repeat,
-                    model,
-                    temperature,
-                    top_p,
-                    created_by,
-                ),
-            )
+            columns.append("priority")
+            values.append(int(priority))
+        if has_api_mode_column:
+            columns.append("api_mode")
+            values.append(api_mode)
+        if has_reasoning_effort_column:
+            columns.append("reasoning_effort")
+            values.append((reasoning_effort or "").strip() or None)
+        placeholders = ", ".join(["%s"] * len(values))
+        cur.execute(
+            f"""
+            INSERT INTO translation_run_requests ({", ".join(columns)})
+            VALUES ({placeholders})
+            """,
+            values,
+        )
         inserted += 1
     return inserted
 
@@ -470,16 +515,22 @@ def main():
         action="store_true",
         help="Queue only entries without final/reviewed human translation; this is the default safety filter",
     )
-    parser.add_argument("--repeat", type=int, default=1, help="Runs requested per lemma")
+    parser.add_argument("--repeat", type=int, help="Runs requested per lemma; defaults to the prompt version setting")
     parser.add_argument("--include-quarantined", action="store_true", help="Include quarantined lemmas in selection")
     parser.add_argument(
         "--include-translated",
         action="store_true",
         help="Also queue lemmas that already have an AI translation (default: queue untranslated/outdated only)",
     )
-    parser.add_argument("--model", default="gpt-5.5")
-    parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument("--model", help="Override the prompt version default model")
+    parser.add_argument("--temperature", type=float, help="Override the prompt version default temperature")
+    parser.add_argument("--top-p", type=float, help="Override the prompt version default top_p")
+    parser.add_argument(
+        "--api-mode",
+        choices=(API_MODE_CHAT_COMPLETIONS, API_MODE_RESPONSES),
+        help="Override the prompt version default OpenAI API mode",
+    )
+    parser.add_argument("--reasoning-effort", help="Override the prompt version default Responses reasoning effort")
     parser.add_argument("--created-by", default="enqueue_translation_runs.py")
     parser.add_argument(
         "--prepare-guidance-first",
@@ -504,6 +555,8 @@ def main():
         parser.error("Use either --lemma-id or --lemma-ids, not both")
     if args.priority < 0:
         parser.error("--priority must be non-negative")
+    if args.repeat is not None and args.repeat <= 0:
+        parser.error("--repeat must be positive")
 
     conn = get_connection()
     cur = conn.cursor()
@@ -532,9 +585,27 @@ def main():
     profile_id = resolve_profile(cur, args.profile)
     profile_version_id = resolve_profile_version(cur, profile_id, args.profile_version)
     uses_guidance_context = profile_version_uses_guidance_context(cur, profile_version_id)
+    settings = profile_version_settings(cur, profile_version_id)
+    if bool(settings.get("approved_human_only")):
+        raise RuntimeError(
+            "This prompt version is approved-human-only. "
+            "Use enqueue_human_evaluation_translations.py so it only targets the approved list."
+        )
+    model = args.model or settings.get("default_model") or DEFAULT_TRANSLATION_MODEL
+    temperature = args.temperature if args.temperature is not None else settings.get("default_temperature")
+    top_p = args.top_p if args.top_p is not None else settings.get("default_top_p")
+    api_mode = args.api_mode or settings.get("default_api_mode") or API_MODE_CHAT_COMPLETIONS
+    reasoning_effort = (
+        args.reasoning_effort
+        if args.reasoning_effort is not None
+        else settings.get("default_reasoning_effort")
+    )
+    repeat = int(args.repeat or settings.get("default_requested_runs") or 1)
     cur.execute("SELECT to_regclass('public.human_translations') IS NOT NULL")
     has_human_translations = bool(cur.fetchone()[0])
     has_priority_column = column_exists(cur, "translation_run_requests", "priority")
+    has_api_mode_column = column_exists(cur, "translation_run_requests", "api_mode")
+    has_reasoning_effort_column = column_exists(cur, "translation_run_requests", "reasoning_effort")
     if not has_priority_column and args.priority != 100:
         print("Warning: translation_run_requests.priority is missing; priority will not be stored. Run migrations.")
     candidates = find_candidates(
@@ -617,6 +688,11 @@ def main():
 
     if args.dry_run:
         print(f"Would queue translation requests: {len(candidates)}")
+        print(
+            "Runtime defaults: "
+            f"model={model} temperature={temperature} top_p={top_p} api_mode={api_mode} "
+            f"reasoning_effort={reasoning_effort or '-'} requested_runs={repeat}"
+        )
         if candidates:
             print_candidate_preview(candidates, max_rows=max(50, min(len(candidates), 100)))
         conn.rollback()
@@ -628,13 +704,17 @@ def main():
         candidates,
         profile_id=profile_id,
         profile_version_id=profile_version_id,
-        repeat=max(1, args.repeat),
-        model=args.model,
-        temperature=args.temperature,
-        top_p=args.top_p,
+        repeat=repeat,
+        model=model,
+        temperature=temperature,
+        top_p=top_p,
+        api_mode=api_mode,
+        reasoning_effort=reasoning_effort,
         created_by=args.created_by,
         priority=args.priority,
         has_priority_column=has_priority_column,
+        has_api_mode_column=has_api_mode_column,
+        has_reasoning_effort_column=has_reasoning_effort_column,
     )
     conn.commit()
     conn.close()

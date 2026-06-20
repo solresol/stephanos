@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from db import get_connection
+from translation_run_utils import DEFAULT_TRANSLATION_MODEL
 
 
 @dataclass(frozen=True)
@@ -360,6 +361,21 @@ PROFILES: list[PromptProfileSeed] = [
     ),
 ]
 
+STYLE_DEFAULT_TEMPERATURES = {
+    "lit_tech_cool": 0.2,
+    "lit_tech_warm": 0.8,
+    "readable_context_cool": 0.4,
+    "readable_context_warm": 1.0,
+    "risk_factors_5": 0.2,
+    "apparatus_variants": 0.2,
+    "entry_paraphrase": 0.8,
+    "year10_student": 0.7,
+    "poetic_rhyming_lines": 1.0,
+    "limerick": 1.1,
+    "etymology_focus": 0.6,
+    "glossary_terms": 0.3,
+}
+
 
 def ensure_tables(cur) -> bool:
     required = [
@@ -380,6 +396,20 @@ def ensure_tables(cur) -> bool:
     return True
 
 
+def column_exists(cur, table_name: str, column_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s
+          AND column_name = %s
+        """,
+        (table_name, column_name),
+    )
+    return cur.fetchone() is not None
+
+
 def upsert_profile(cur, profile: PromptProfileSeed) -> int:
     cur.execute(
         """
@@ -398,18 +428,37 @@ def upsert_profile(cur, profile: PromptProfileSeed) -> int:
 
 
 def upsert_version(cur, profile_id: int, profile: PromptProfileSeed) -> None:
+    columns = ["profile_id", "version", "prompt_text", "notes", "active"]
+    values = [profile_id, profile.version, profile.prompt_text, profile.notes, True]
+    updates = [
+        "prompt_text = EXCLUDED.prompt_text",
+        "notes = EXCLUDED.notes",
+        "active = TRUE",
+    ]
+    optional_values = {
+        "approved_human_only": True,
+        "default_model": DEFAULT_TRANSLATION_MODEL,
+        "default_temperature": STYLE_DEFAULT_TEMPERATURES.get(profile.name, 1.0),
+        "default_top_p": 1.0,
+        "default_api_mode": "chat_completions",
+        "default_reasoning_effort": None,
+        "default_requested_runs": 1,
+        "approved_human_queue_priority": 5,
+    }
+    for column_name, value in optional_values.items():
+        if column_exists(cur, "translation_prompt_profile_versions", column_name):
+            columns.append(column_name)
+            values.append(value)
+            updates.append(f"{column_name} = EXCLUDED.{column_name}")
+    placeholders = ", ".join(["%s"] * len(values))
     cur.execute(
-        """
-        INSERT INTO translation_prompt_profile_versions (
-            profile_id, version, prompt_text, notes, active
-        )
-        VALUES (%s, %s, %s, %s, TRUE)
+        f"""
+        INSERT INTO translation_prompt_profile_versions ({", ".join(columns)})
+        VALUES ({placeholders})
         ON CONFLICT (profile_id, version) DO UPDATE
-        SET prompt_text = EXCLUDED.prompt_text,
-            notes = EXCLUDED.notes,
-            active = TRUE
+        SET {", ".join(updates)}
         """,
-        (profile_id, profile.version, profile.prompt_text, profile.notes),
+        values,
     )
 
 
