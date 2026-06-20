@@ -52,7 +52,7 @@ This is a parking lot for ideas, not a commitment to pursue all of them. Readine
 | Later | Animal etymologies and local/barbaric ethnonyms | Gabe suggested a possible collocation worth testing. | Test statistically, then inspect passages qualitatively. |
 | Later | Pendant nominatives | Gabe has a specialist contact who may judge whether Stephanus' usage is normal or strange. | Extract examples from the notes spreadsheet and send a small sample. |
 | Later | Formula saturation curve | The rule-accretion graph may show when the review team stopped finding new recurring formulae. | Verify rule history and interpret as workflow evidence, not corpus fact. |
-| Later | Epitomizer fingerprints | Grammar or formula distributions may line up with hypothesized epitomizing layers. | Compare Kappa with Delta/Eta or known textual-history divisions. |
+| Later | Epitomizer fingerprints | Grammar or formula distributions may line up with hypothesized epitomizing layers. | Compare Kappa with Delta/Eta or known textual-history divisions. See `paper/notes/2026-06-19-stylometric-fingerprinting-options.md` for the literature scan, first recogniser-vector UMAP, and implementation plan. |
 | Later | Source/fragments extraction and linked data | Aligning citations/fragments with existing databases could produce a major digital resource. | Review existing work, especially Monica Berti-style fragment extraction. |
 
 ## Post-Classical Greek / Collaboration Ideas

@@ -67,6 +67,7 @@ MENU_SECTIONS: tuple[MenuSection, ...] = (
             MenuItem("prompt_eval", "Prompt Evaluation", "statistics/prompt_evaluation.html"),
             MenuItem("translation_quality_predictor", "Translation Quality Predictor", "statistics/translation_quality_predictor.html"),
             MenuItem("guidance_stats", "Guidance Rule Statistics", "statistics/guidance_rules.html"),
+            MenuItem("fingerprinting", "Stylometric Fingerprinting", "statistics/fingerprinting.html"),
             MenuItem("regression", "Stephanos vs Epitomizer", "statistics/regression.html"),
             MenuItem("categories", "Categories", "statistics/categories.html"),
             MenuItem("etymology", "Etymology", "statistics/etymology.html"),

@@ -1518,6 +1518,7 @@ def generate_navigation(current_page='index', in_subdirectory=False):
         'translation_length': 'Translation Length',
         'prompt_evaluation': 'Prompt Evaluation',
         'translation_quality_predictor': 'Translation Quality Predictor',
+        'fingerprinting': 'Stylometric Fingerprinting',
         'regression': 'Stephanos vs Epitomizer Emphasis',
         'categories': 'By Category',
         'category_authors': 'Authors',
@@ -1570,6 +1571,7 @@ def main_menu_item_for_stats_page(current_page: str) -> str:
         "translation_length": "translation_length",
         "prompt_evaluation": "prompt_eval",
         "translation_quality_predictor": "translation_quality_predictor",
+        "fingerprinting": "fingerprinting",
         "guidance_rules": "guidance_stats",
         "regression": "regression",
         "etymology": "etymology",
@@ -3347,6 +3349,12 @@ def generate_index_page():
         <h3><a href="statistics/guidance_rules.html">10. Guidance Rule Statistics</a></h3>
         <p>Daily statistics for translation-guidance rules: discovery estimates, Zipf-like rank frequency,
         and top-rule headword coverage.</p>
+    </div>
+
+    <div class="section-card">
+        <h3><a href="statistics/fingerprinting.html">11. Stylometric Fingerprinting</a></h3>
+        <p>Exploratory fingerprinting work for formula, gloss, and grammar recogniser feature vectors,
+        including UMAP clustering, Kappa/non-Kappa checks, and non-epitomised control coverage.</p>
     </div>
 """
 

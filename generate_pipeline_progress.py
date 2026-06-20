@@ -705,7 +705,117 @@ def get_progress_stats(conn) -> dict:
             ),
         }
 
-    # 14. Billerbeck German reference lane, kept internal and low priority
+    # 14. Stylometric fingerprinting feature coverage
+    if all(
+        pg_table_exists(cur, table_name)
+        for table_name in (
+            "assembled_lemmas",
+            "translation_guidance_rules",
+            "translation_guidance_matches",
+        )
+    ):
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM translation_guidance_rules
+            WHERE COALESCE(lifecycle_stage, 'guidance') <> 'inactive'
+              AND kind = 'formula'
+            """
+        )
+        formula_rule_count = int(cur.fetchone()[0] or 0)
+        formula_threshold = min(21, formula_rule_count) if formula_rule_count else 0
+        cur.execute(
+            """
+            WITH target_lemmas AS (
+                SELECT id, COALESCE(version, '') AS version, COALESCE(lemma, '') AS lemma
+                FROM assembled_lemmas
+                WHERE COALESCE(quarantined, FALSE) = FALSE
+                  AND COALESCE(corrected_greek_scan, human_greek_text, greek_text, '') <> ''
+            ),
+            formula_rules AS (
+                SELECT id
+                FROM translation_guidance_rules
+                WHERE COALESCE(lifecycle_stage, 'guidance') <> 'inactive'
+                  AND kind = 'formula'
+            ),
+            per_lemma AS (
+                SELECT
+                    tl.id,
+                    tl.version,
+                    tl.lemma,
+                    COUNT(DISTINCT m.rule_id) AS checked_formula
+                FROM target_lemmas tl
+                LEFT JOIN translation_guidance_matches m
+                  ON m.lemma_id = tl.id
+                 AND m.detector_version = %s
+                 AND m.rule_id IN (SELECT id FROM formula_rules)
+                GROUP BY tl.id, tl.version, tl.lemma
+            ),
+            recent_formula AS (
+                SELECT COUNT(DISTINCT m.lemma_id) AS recent_lemmas
+                FROM translation_guidance_matches m
+                JOIN formula_rules fr ON fr.id = m.rule_id
+                WHERE m.detector_version = %s
+                  AND m.updated_at > NOW() - INTERVAL '7 days'
+            )
+            SELECT
+                (SELECT COUNT(*) FROM target_lemmas) AS target_count,
+                COUNT(*) FILTER (WHERE checked_formula >= %s) AS broad_count,
+                COUNT(*) FILTER (WHERE checked_formula >= %s AND lemma LIKE 'Κ%%') AS broad_kappa_count,
+                COUNT(*) FILTER (WHERE checked_formula >= %s AND version = 'parisinus') AS broad_parisinus_count,
+                COUNT(*) FILTER (WHERE checked_formula >= %s) AS complete_count,
+                COUNT(*) FILTER (WHERE checked_formula >= %s AND version = 'parisinus') AS complete_parisinus_count,
+                (SELECT recent_lemmas FROM recent_formula) AS recent_lemmas
+            FROM per_lemma
+            """,
+            (
+                CURRENT_DETECTOR_VERSION,
+                CURRENT_DETECTOR_VERSION,
+                formula_threshold,
+                formula_threshold,
+                formula_threshold,
+                formula_rule_count,
+                formula_rule_count,
+            ),
+        )
+        row = cur.fetchone()
+        fingerprint_total = int(row[0] or 0)
+        broad_count = int(row[1] or 0)
+        broad_kappa_count = int(row[2] or 0)
+        broad_parisinus_count = int(row[3] or 0)
+        complete_count = int(row[4] or 0)
+        complete_parisinus_count = int(row[5] or 0)
+        recent_lemmas = int(row[6] or 0)
+        grammar_detail = ""
+        grammar_counts = []
+        for grammar_table in (
+            "sentence_grammar_runs",
+            "sentence_grammar_evaluations",
+            "sentence_grammar_tokens",
+        ):
+            if pg_table_exists(cur, grammar_table):
+                cur.execute(f"SELECT COUNT(*) FROM {grammar_table}")
+                grammar_counts.append(f"{grammar_table}={int(cur.fetchone()[0] or 0):,}")
+        if grammar_counts:
+            grammar_detail = "; sentence grammar rows: " + ", ".join(grammar_counts)
+        stats["stylometric_fingerprinting"] = {
+            "name": "Stylometric Fingerprinting",
+            "total": fingerprint_total,
+            "completed": min(broad_count, fingerprint_total),
+            "pending": max(fingerprint_total - broad_count, 0),
+            "unit": "entries with formula vectors",
+            "rate_7d": recent_lemmas,
+            "detail": (
+                f"Broad UMAP-ready formula vectors require {formula_threshold:,}/"
+                f"{formula_rule_count:,} active formula rules: {broad_count:,} entries "
+                f"({broad_kappa_count:,} Kappa, {broad_parisinus_count:,} Parisinus); "
+                f"complete formula coverage: {complete_count:,} entries "
+                f"({complete_parisinus_count:,} Parisinus); see statistics/fingerprinting.html"
+                f"{grammar_detail}"
+            ),
+        }
+
+    # 15. Billerbeck German reference lane, kept internal and low priority
     if pg_table_exists(cur, "images") and pg_table_exists(cur, "billerbeck_german_pages"):
         cur.execute("""
             WITH pending_candidates AS (
