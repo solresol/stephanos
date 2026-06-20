@@ -11,7 +11,9 @@ from datetime import datetime, timezone
 import html
 import math
 from pathlib import Path
+import re
 from typing import Any
+import unicodedata
 
 import numpy as np
 from scipy import sparse
@@ -47,6 +49,80 @@ DEFAULT_PROFILE_VERSION = 3
 RANDOM_STATE = 20260620
 
 METRIC_NAMES = ("BLEU-4", "chrF++", "METEOR", "ROUGE-L")
+GREEK_TOKEN_RE = re.compile(GREEK_TOKEN_PATTERN)
+
+GREEK_DESCRIPTOR_STOP_WORDS = frozenset(
+    {
+        # Generic geographic and settlement descriptors.
+        "πολις",
+        "πολιν",
+        "πολεως",
+        "πολει",
+        "πολεις",
+        "πολεων",
+        "πολεσι",
+        "πολεσιν",
+        "πολιχνιον",
+        "πολιτης",
+        "πολιτου",
+        "πολιτην",
+        "πολιται",
+        "κωμη",
+        "κωμης",
+        "κωμην",
+        "κωμαι",
+        "χωρα",
+        "χωρας",
+        "χωραν",
+        "χωραι",
+        "χωριον",
+        "χωριου",
+        "χωριω",
+        "τοπος",
+        "τοπου",
+        "τοπον",
+        "τοπω",
+        "τοποι",
+        "νησος",
+        "νησου",
+        "νησον",
+        "νησω",
+        "νησοι",
+        "νησων",
+        "ποταμος",
+        "ποταμου",
+        "ποταμον",
+        "λιμην",
+        "λιμενος",
+        "θαλασσα",
+        "θαλασσης",
+        "ορος",
+        "ορους",
+        "ορει",
+        "ορων",
+        "ακρα",
+        "ακραν",
+        "ακρας",
+        "χερρονησος",
+        "χερρονησου",
+        "μητροπολις",
+        # Ethnic/classification formula terms.
+        "εθνικον",
+        "εθνικου",
+        "εθνικω",
+        "εθνος",
+        "εθνους",
+        "εθνει",
+        "εθνη",
+        "οικητωρ",
+        "οικητορες",
+        "οικητορων",
+        "δημος",
+        "δημου",
+        "φυλον",
+        "φυλου",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -116,10 +192,39 @@ def score_to_badness(value: object) -> float:
     return float("nan") if numeric is None else 1.0 - numeric
 
 
+def normalize_greek_token(value: object) -> str:
+    decomposed = unicodedata.normalize("NFKD", str(value or ""))
+    stripped = "".join(char for char in decomposed if not unicodedata.combining(char))
+    return unicodedata.normalize("NFC", stripped).lower().strip()
+
+
+def greek_stop_tokens_from_text(value: object) -> set[str]:
+    normalized = normalize_greek_token(value)
+    return {token for token in GREEK_TOKEN_RE.findall(normalized) if token}
+
+
 def table_exists(cur, table_name: str) -> bool:
     cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table_name}",))
     row = cur.fetchone()
     return bool(next(iter(row.values())))
+
+
+def fetch_vocabulary_stop_words(cur) -> set[str]:
+    stop_words = {normalize_greek_token(term) for term in GREEK_DESCRIPTOR_STOP_WORDS}
+    if not table_exists(cur, "effective_proper_nouns"):
+        return {term for term in stop_words if term}
+
+    cur.execute(
+        """
+        SELECT proper_noun, lemma_form
+        FROM effective_proper_nouns
+        """
+    )
+    for row in cur.fetchall():
+        stop_words.update(greek_stop_tokens_from_text(row.get("proper_noun")))
+        stop_words.update(greek_stop_tokens_from_text(row.get("lemma_form")))
+
+    return {term for term in stop_words if term}
 
 
 def fetch_context_counts(cur) -> dict[str, int]:
@@ -317,12 +422,19 @@ def aggregate_passages(pair_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return aggregated
 
 
-def build_vocabulary_features(rows: list[dict[str, Any]], *, min_df: int, max_features: int):
+def build_vocabulary_features(
+    rows: list[dict[str, Any]],
+    *,
+    min_df: int,
+    max_features: int,
+    stop_words: set[str] | None = None,
+):
     texts = [str(row.get("source_text") or "") for row in rows]
     vectorizer = TfidfVectorizer(
         lowercase=True,
         strip_accents="unicode",
         token_pattern=GREEK_TOKEN_PATTERN,
+        stop_words=sorted(stop_words or []),
         ngram_range=(1, 2),
         min_df=min_df,
         max_features=max_features,
@@ -781,7 +893,7 @@ def render_feature_table(title: str, feature_rows: list[dict[str, Any]], *, limi
 
     return (
         f"<h3>{esc(title)}</h3>"
-        '<p class="note">Positive coefficients predict worse translation scores for the selected target. Negative coefficients predict better scores. These are exploratory ridge coefficients, not causal claims.</p>'
+        '<p class="note">Positive coefficients predict worse translation scores for the selected target. Negative coefficients predict better scores. Vocabulary features exclude detected proper-noun tokens and generic geography/classification descriptors. These are exploratory ridge coefficients, not causal claims.</p>'
         + table_part(positives, "Features associated with worse scores")
         + table_part(negatives, "Features associated with better scores")
     )
@@ -1125,10 +1237,12 @@ def generate(
     predictions_by_result: dict[tuple[str, str], dict[int, float]] = {}
 
     if rows:
+        vocabulary_stop_words = fetch_vocabulary_stop_words(cur)
         vocab_matrix, vocab_names, vocab_meta = build_vocabulary_features(
             rows,
             min_df=min_df,
             max_features=max_vocab_features,
+            stop_words=vocabulary_stop_words,
         )
         recogniser_matrix, recogniser_names, recogniser_meta = fetch_recogniser_features(cur, rows, min_df=min_df)
         combined_matrix = sparse.hstack([vocab_matrix, recogniser_matrix], format="csr")
