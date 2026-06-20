@@ -385,6 +385,41 @@ def build_vocabulary_features(
     return matrix, feature_names, feature_meta
 
 
+def build_translation_length_features(rows: list[dict[str, Any]]):
+    values = np.asarray(
+        [
+            numeric
+            if (numeric := finite_float(row.get("ai_word_count"))) is not None
+            else float("nan")
+            for row in rows
+        ],
+        dtype=float,
+    )
+    finite_mask = np.isfinite(values)
+    if np.any(finite_mask):
+        mean_value = float(np.mean(values[finite_mask]))
+        std_value = float(np.std(values[finite_mask]))
+    else:
+        mean_value = 0.0
+        std_value = 0.0
+    standardized = np.zeros_like(values, dtype=float)
+    if std_value > 0:
+        standardized[finite_mask] = (values[finite_mask] - mean_value) / std_value
+    matrix = sparse.csr_matrix(standardized.reshape(-1, 1))
+    return (
+        matrix,
+        ["length:mean_v3_translation_words"],
+        [
+            {
+                "feature_name": "length:mean_v3_translation_words",
+                "feature_type": "translation_length",
+                "label": "Mean v3 translation word count",
+                "detail": f"z-scored; mean {mean_value:.1f}, SD {std_value:.1f} words",
+            }
+        ],
+    )
+
+
 def fetch_recogniser_features(cur, rows: list[dict[str, Any]], *, min_df: int):
     lemma_ids = [int(row["lemma_id"]) for row in rows]
     lemma_index = {lemma_id: index for index, lemma_id in enumerate(lemma_ids)}
@@ -583,6 +618,32 @@ def feature_effect_rows(
     n_rows = int(y.size)
     rows = []
     for index, meta in enumerate(feature_meta):
+        if meta["feature_type"] == "translation_length":
+            values = np.asarray(matrix[:, index].toarray()).ravel()
+            if values.size == 0 or float(np.nanvar(values)) <= 0:
+                continue
+            high_cutoff = float(np.quantile(values, 0.75))
+            low_cutoff = float(np.quantile(values, 0.25))
+            high_mask = values >= high_cutoff
+            low_mask = values <= low_cutoff
+            rows.append(
+                {
+                    "family": family_key,
+                    "target": target.key,
+                    "target_label": target.label,
+                    "direction": "positive" if coef[index] >= 0 else "negative",
+                    "feature_name": meta["feature_name"],
+                    "feature_type": meta["feature_type"],
+                    "label": meta["label"],
+                    "detail": f"{meta['detail']}; present/high = top quartile, absent/low = bottom quartile",
+                    "coefficient": float(coef[index]),
+                    "document_count": int(values.size),
+                    "mean_badness_when_present": float(np.mean(y[high_mask])) if np.any(high_mask) else float("nan"),
+                    "mean_badness_when_absent": float(np.mean(y[low_mask])) if np.any(low_mask) else float("nan"),
+                }
+            )
+            continue
+
         count = int(doc_counts[index])
         if count <= 0:
             continue
@@ -608,7 +669,16 @@ def feature_effect_rows(
     rows.sort(key=lambda row: row["coefficient"], reverse=True)
     positive = rows[:limit]
     negative = list(reversed(rows[-limit:]))
-    return positive + negative
+    required = [row for row in rows if row["feature_type"] == "translation_length"]
+    selected = []
+    seen = set()
+    for row in positive + negative + required:
+        feature_name = row["feature_name"]
+        if feature_name in seen:
+            continue
+        selected.append(row)
+        seen.add(feature_name)
+    return selected
 
 
 def fit_family_target(
@@ -824,7 +894,7 @@ def render_feature_table(title: str, feature_rows: list[dict[str, Any]], *, limi
 
     return (
         f"<h3>{esc(title)}</h3>"
-        '<p class="note">Positive coefficients predict worse translation scores for the selected target. Negative coefficients predict better scores. Vocabulary features exclude detected proper-noun tokens. These are exploratory ridge coefficients, not causal claims.</p>'
+        '<p class="note">Positive coefficients predict worse translation scores for the selected target. Negative coefficients predict better scores. Translation length is z-scored; vocabulary features exclude detected proper-noun tokens. These are exploratory ridge coefficients, not causal claims.</p>'
         + table_part(positives, "Features associated with worse scores")
         + table_part(negatives, "Features associated with better scores")
     )
@@ -917,9 +987,22 @@ def render_page(
     )
     selected_feature_sections = []
     for title, selected in (
+        ("Translation Length", max((result for result in ok_results if result.get("family") == "length"), key=result_sort_key, default=None)),
         ("Vocabulary Terms", best_vocab),
+        (
+            "Vocabulary Terms + Translation Length",
+            max((result for result in ok_results if result.get("family") == "vocabulary_length"), key=result_sort_key, default=None),
+        ),
         ("Recogniser Rules", best_recogniser),
+        (
+            "Recogniser Rules + Translation Length",
+            max((result for result in ok_results if result.get("family") == "recogniser_length"), key=result_sort_key, default=None),
+        ),
         ("Combined Model Features", best_combined),
+        (
+            "Combined Model Features + Translation Length",
+            max((result for result in ok_results if result.get("family") == "combined_length"), key=result_sort_key, default=None),
+        ),
     ):
         if selected is None:
             selected_feature_sections.append(render_feature_table(title, []))
@@ -1008,7 +1091,7 @@ def render_page(
   <div class="wrap">
     {render_site_navigation("analysis", "translation_quality_predictor", depth=1)}
     <h1>Translation Quality Predictor</h1>
-    <p>This page tests whether current source vocabulary and translation-guidance recogniser matches can predict which approved-human passages are translated badly by ordinary <code>{esc(profile_name)}</code> v{profile_version}. It excludes reasoning profiles and the special-temperature v3 experiment lanes.</p>
+    <p>This page tests whether current source vocabulary, translation-guidance recogniser matches, and mean v3 translation length can predict which approved-human passages are translated badly by ordinary <code>{esc(profile_name)}</code> v{profile_version}. It excludes reasoning profiles and the special-temperature v3 experiment lanes.</p>
     <p class="note">{best_sentence}</p>
     <p class="note">{esc(sentence_note)}</p>
     <h2>Metric Engines</h2>
@@ -1176,12 +1259,28 @@ def generate(
             stop_words=vocabulary_stop_words,
         )
         recogniser_matrix, recogniser_names, recogniser_meta = fetch_recogniser_features(cur, rows, min_df=min_df)
+        length_matrix, length_names, length_meta = build_translation_length_features(rows)
         combined_matrix = sparse.hstack([vocab_matrix, recogniser_matrix], format="csr")
         combined_meta = vocab_meta + recogniser_meta
+        vocab_length_matrix = sparse.hstack([vocab_matrix, length_matrix], format="csr")
+        vocab_length_meta = vocab_meta + length_meta
+        recogniser_length_matrix = sparse.hstack([recogniser_matrix, length_matrix], format="csr")
+        recogniser_length_meta = recogniser_meta + length_meta
+        combined_length_matrix = sparse.hstack([vocab_matrix, recogniser_matrix, length_matrix], format="csr")
+        combined_length_meta = vocab_meta + recogniser_meta + length_meta
         families = [
+            ("length", "Translation length", length_matrix, length_meta),
             ("vocabulary", "Greek vocabulary", vocab_matrix, vocab_meta),
+            ("vocabulary_length", "Greek vocabulary + translation length", vocab_length_matrix, vocab_length_meta),
             ("recogniser", "Recogniser rules", recogniser_matrix, recogniser_meta),
+            ("recogniser_length", "Recogniser rules + translation length", recogniser_length_matrix, recogniser_length_meta),
             ("combined", "Vocabulary + recognisers", combined_matrix, combined_meta),
+            (
+                "combined_length",
+                "Vocabulary + recognisers + translation length",
+                combined_length_matrix,
+                combined_length_meta,
+            ),
         ]
         for family_key, family_label, matrix, meta in families:
             for target in TARGET_SPECS:
