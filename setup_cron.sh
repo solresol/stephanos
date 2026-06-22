@@ -7,6 +7,10 @@ STEPHANOS_DIR="$HOME/stephanos"
 cat > "$CRON_FILE" <<'EOF'
 # Stephanos Review System - Daily Pipeline
 # Runs at 1 AM daily
+#
+# Cron mail should land in the stephanos mailbox on merah, where .forward keeps
+# local delivery for automations and forwards a copy to gregb@ifost.org.au.
+MAILTO=stephanos@merah.cassia.ifost.org.au
 
 # 1. Export lemma data for review interface (1:00 AM)
 0 1 * * * cd ~/stephanos && uv run export_for_review.py && uv run export_guidance_scan_db.py && rsync review_data.sqlite guidance_scan_results.db stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ >> logs/export_for_review.log 2>&1

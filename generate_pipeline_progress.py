@@ -815,7 +815,7 @@ def get_progress_stats(conn) -> dict:
             ),
         }
 
-    # 15. Billerbeck German reference lane, kept internal and low priority
+    # 15. German reference lane, kept internal and low priority
     if pg_table_exists(cur, "images") and pg_table_exists(cur, "billerbeck_german_pages"):
         cur.execute("""
             WITH pending_candidates AS (
@@ -859,8 +859,8 @@ def get_progress_stats(conn) -> dict:
         not_german = int(row[5] or 0)
         other_status = int(row[6] or 0)
         german_tokens = int(row[7] or 0)
-        stats["billerbeck_german_page_ocr"] = {
-            "name": "Billerbeck German Page OCR",
+        stats["german_reference_page_ocr"] = {
+            "name": "German Reference Page OCR",
             "total": german_pending + german_processed,
             "completed": german_processed,
             "pending": german_pending,
@@ -905,8 +905,8 @@ def get_progress_stats(conn) -> dict:
         german_translation_rate = int(row[3] or 0)
         german_translation_tokens = int(row[4] or 0)
         german_translation_recent_tokens = int(row[5] or 0)
-        stats["billerbeck_german_translation"] = {
-            "name": "Billerbeck German Translation",
+        stats["german_reference_translation"] = {
+            "name": "German Reference Translation",
             "total": german_translation_total,
             "completed": german_translation_completed,
             "pending": max(german_translation_total - german_translation_completed, 0),
@@ -1145,7 +1145,7 @@ def generate_html(stats: dict) -> str:
         nightly rate is known. Proper-noun and etymology extraction
         are measured over translated lemmas, matching the nightly jobs. Wikidata stages count
         rows once they have a recorded outcome, including not-found, ambiguous, and
-        human-reviewed cases. Retired Greek Billerbeck OCR stages are intentionally omitted;
+        human-reviewed cases. Retired legacy Greek OCR stages are intentionally omitted;
         the active German-reference lane is internal and reported separately when present.
     </div>
 

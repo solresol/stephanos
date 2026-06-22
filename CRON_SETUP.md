@@ -17,17 +17,33 @@ To run the pipeline daily at 2:00 AM:
 crontab -e
 ```
 
-Add this line:
+Add `MAILTO` plus the pipeline line:
 
 ```cron
+MAILTO=stephanos@merah.cassia.ifost.org.au
 0 2 * * * cd /Users/gregb/Documents/devel/stephanos && ./run_daily_pipeline.sh
 ```
 
 Or to run every 6 hours:
 
 ```cron
+MAILTO=stephanos@merah.cassia.ifost.org.au
 0 */6 * * * cd /Users/gregb/Documents/devel/stephanos && ./run_daily_pipeline.sh
 ```
+
+On `merah`, `/home/stephanos/.forward` should preserve local delivery and
+forward a copy to Greg:
+
+```text
+gregb@ifost.org.au
+stephanos
+```
+
+Do not redirect the main pipeline cron output to `/dev/null`: cron mail is the
+operational evidence used by the Codex automation. The daily pipeline also writes
+a short status report near the end of a successful run, publishes
+`/ai-systems.xml` and `/ai-systems.json`, and emits the same short report if the
+pipeline fails before publishing.
 
 ## Token Limits
 
