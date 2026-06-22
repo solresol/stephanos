@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict LaiftxLsAXV3HkfCnvaOfb9jL7r2GpgPLo0KQeoWzy7g1cfYbYEINkjHTTC4OLR
+\restrict UGmvTrwBc0obP7y1nm5Qr6sHIPtSebPBtJsIfr9CyytZKxeEIDgX0b10Ow0BjHI
 
 -- Dumped from database version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
@@ -454,6 +454,24 @@ CREATE SEQUENCE public.canonical_entity_mentions_id_seq
 --
 
 ALTER SEQUENCE public.canonical_entity_mentions_id_seq OWNED BY public.canonical_entity_mentions.id;
+
+
+--
+-- Name: diorisis_lemma_frequencies; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.diorisis_lemma_frequencies (
+    normalized_lemma text NOT NULL,
+    display_lemma text NOT NULL,
+    token_count integer NOT NULL,
+    zipf_frequency double precision NOT NULL,
+    total_diorisis_tokens integer NOT NULL,
+    source_name text DEFAULT 'Diorisis Ancient Greek Corpus'::text NOT NULL,
+    source_doi text DEFAULT '10.6084/m9.figshare.6187256.v1'::text NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT diorisis_lemma_frequencies_token_count_check CHECK ((token_count > 0)),
+    CONSTRAINT diorisis_lemma_frequencies_total_diorisis_tokens_check CHECK ((total_diorisis_tokens > 0))
+);
 
 
 --
@@ -3699,6 +3717,122 @@ ALTER SEQUENCE public.translation_prompts_version_seq OWNED BY public.translatio
 
 
 --
+-- Name: translation_rarity_correlations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_rarity_correlations (
+    run_id integer NOT NULL,
+    level text NOT NULL,
+    predictor text NOT NULL,
+    outcome text NOT NULL,
+    n integer NOT NULL,
+    pearson_r double precision,
+    pearson_p double precision,
+    spearman_r double precision,
+    spearman_p double precision,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: translation_rarity_length_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_rarity_length_runs (
+    id integer NOT NULL,
+    run_key text NOT NULL,
+    script_version text NOT NULL,
+    profile_version_id integer NOT NULL,
+    metric_run_id integer NOT NULL,
+    rare_threshold integer NOT NULL,
+    diorisis_total_tokens integer NOT NULL,
+    passage_count integer NOT NULL,
+    sentence_count integer NOT NULL,
+    sentence_rarity_count integer NOT NULL,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: translation_rarity_length_runs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.translation_rarity_length_runs_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: translation_rarity_length_runs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.translation_rarity_length_runs_id_seq OWNED BY public.translation_rarity_length_runs.id;
+
+
+--
+-- Name: translation_rarity_passage_scores; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_rarity_passage_scores (
+    run_id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    headword text NOT NULL,
+    source_text_version_id integer,
+    lemma_count integer NOT NULL,
+    rare_lemma_count integer NOT NULL,
+    not_found_lemma_count integer NOT NULL,
+    rare_term_ratio double precision,
+    not_found_ratio double precision,
+    average_zipf double precision,
+    mean_chrf double precision,
+    mean_sentence_bleu double precision,
+    mean_rouge_l_f1 double precision,
+    mean_3gram_f1 double precision,
+    exact_sentence_ratio double precision,
+    mean_abs_word_count_delta double precision,
+    source_token_count integer,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: translation_rarity_sentence_scores; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_rarity_sentence_scores (
+    run_id integer NOT NULL,
+    alignment_group_id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    headword text NOT NULL,
+    source_text text,
+    reference_text text,
+    candidate_text text,
+    source_lemma_count integer NOT NULL,
+    rare_lemma_count integer NOT NULL,
+    not_found_lemma_count integer NOT NULL,
+    rare_term_ratio double precision,
+    not_found_ratio double precision,
+    average_zipf double precision,
+    source_token_count integer,
+    source_char_count integer,
+    reference_word_count integer,
+    candidate_word_count integer,
+    chrf double precision,
+    sentence_bleu double precision,
+    rouge_l_f1 double precision,
+    trigram_f1 double precision,
+    exact_normalized double precision,
+    abs_word_count_delta double precision,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: translation_risk_flags; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3883,6 +4017,227 @@ CREATE SEQUENCE public.translation_runs_id_seq
 --
 
 ALTER SEQUENCE public.translation_runs_id_seq OWNED BY public.translation_runs.id;
+
+
+--
+-- Name: vocabulary_signature_clusters; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.vocabulary_signature_clusters (
+    id bigint NOT NULL,
+    run_id integer NOT NULL,
+    segment_id integer NOT NULL,
+    method text NOT NULL,
+    segment_kind text NOT NULL,
+    cluster_count integer NOT NULL,
+    cluster_label text NOT NULL,
+    x double precision,
+    y double precision,
+    silhouette double precision,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: vocabulary_signature_clusters_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.vocabulary_signature_clusters_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: vocabulary_signature_clusters_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.vocabulary_signature_clusters_id_seq OWNED BY public.vocabulary_signature_clusters.id;
+
+
+--
+-- Name: vocabulary_signature_features; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.vocabulary_signature_features (
+    id bigint NOT NULL,
+    run_id integer NOT NULL,
+    segment_id integer NOT NULL,
+    feature_basis text NOT NULL,
+    feature_key text NOT NULL,
+    feature_label text NOT NULL,
+    token_count integer DEFAULT 0 NOT NULL,
+    document_count integer DEFAULT 0 NOT NULL,
+    rate_per_1000 double precision,
+    segment_rank integer,
+    global_rank integer,
+    is_core boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: vocabulary_signature_features_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.vocabulary_signature_features_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: vocabulary_signature_features_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.vocabulary_signature_features_id_seq OWNED BY public.vocabulary_signature_features.id;
+
+
+--
+-- Name: vocabulary_signature_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.vocabulary_signature_runs (
+    id integer NOT NULL,
+    analysis_version text NOT NULL,
+    run_key text NOT NULL,
+    feature_basis text NOT NULL,
+    source_document text NOT NULL,
+    window_size integer DEFAULT 100 NOT NULL,
+    status text DEFAULT 'running'::text NOT NULL,
+    is_current boolean DEFAULT false NOT NULL,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    completed_at timestamp with time zone,
+    lemma_count integer DEFAULT 0 NOT NULL,
+    indexed_lemma_count integer DEFAULT 0 NOT NULL,
+    token_count integer DEFAULT 0 NOT NULL,
+    segment_count integer DEFAULT 0 NOT NULL,
+    feature_count integer DEFAULT 0 NOT NULL,
+    test_count integer DEFAULT 0 NOT NULL,
+    cluster_count integer DEFAULT 0 NOT NULL,
+    notes text,
+    error_message text
+);
+
+
+--
+-- Name: vocabulary_signature_runs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.vocabulary_signature_runs_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: vocabulary_signature_runs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.vocabulary_signature_runs_id_seq OWNED BY public.vocabulary_signature_runs.id;
+
+
+--
+-- Name: vocabulary_signature_segments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.vocabulary_signature_segments (
+    id integer NOT NULL,
+    run_id integer NOT NULL,
+    segment_key text NOT NULL,
+    segment_label text NOT NULL,
+    segment_kind text NOT NULL,
+    sort_order integer NOT NULL,
+    volume_number integer,
+    letter_range text,
+    entry_start integer,
+    entry_end integer,
+    lemma_count integer DEFAULT 0 NOT NULL,
+    indexed_lemma_count integer DEFAULT 0 NOT NULL,
+    token_count integer DEFAULT 0 NOT NULL,
+    type_count integer DEFAULT 0 NOT NULL,
+    hapax_count integer DEFAULT 0 NOT NULL,
+    entropy double precision,
+    top_token_mass_10 double precision,
+    zipf_slope double precision,
+    zipf_intercept double precision,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: vocabulary_signature_segments_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.vocabulary_signature_segments_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: vocabulary_signature_segments_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.vocabulary_signature_segments_id_seq OWNED BY public.vocabulary_signature_segments.id;
+
+
+--
+-- Name: vocabulary_signature_tests; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.vocabulary_signature_tests (
+    id bigint NOT NULL,
+    run_id integer NOT NULL,
+    test_key text NOT NULL,
+    test_family text NOT NULL,
+    method text NOT NULL,
+    feature_basis text,
+    feature_key text,
+    feature_label text,
+    comparison_label text,
+    segment_a_key text,
+    segment_b_key text,
+    observed_a double precision,
+    total_a double precision,
+    observed_b double precision,
+    total_b double precision,
+    effect_size double precision,
+    statistic double precision,
+    p_value double precision,
+    adjusted_p_value double precision,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: vocabulary_signature_tests_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.vocabulary_signature_tests_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: vocabulary_signature_tests_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.vocabulary_signature_tests_id_seq OWNED BY public.vocabulary_signature_tests.id;
 
 
 --
@@ -4369,6 +4724,13 @@ ALTER TABLE ONLY public.translation_prompts ALTER COLUMN version SET DEFAULT nex
 
 
 --
+-- Name: translation_rarity_length_runs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_rarity_length_runs ALTER COLUMN id SET DEFAULT nextval('public.translation_rarity_length_runs_id_seq'::regclass);
+
+
+--
 -- Name: translation_risk_flags id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -4394,6 +4756,41 @@ ALTER TABLE ONLY public.translation_run_requests ALTER COLUMN id SET DEFAULT nex
 --
 
 ALTER TABLE ONLY public.translation_runs ALTER COLUMN id SET DEFAULT nextval('public.translation_runs_id_seq'::regclass);
+
+
+--
+-- Name: vocabulary_signature_clusters id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_clusters ALTER COLUMN id SET DEFAULT nextval('public.vocabulary_signature_clusters_id_seq'::regclass);
+
+
+--
+-- Name: vocabulary_signature_features id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_features ALTER COLUMN id SET DEFAULT nextval('public.vocabulary_signature_features_id_seq'::regclass);
+
+
+--
+-- Name: vocabulary_signature_runs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_runs ALTER COLUMN id SET DEFAULT nextval('public.vocabulary_signature_runs_id_seq'::regclass);
+
+
+--
+-- Name: vocabulary_signature_segments id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_segments ALTER COLUMN id SET DEFAULT nextval('public.vocabulary_signature_segments_id_seq'::regclass);
+
+
+--
+-- Name: vocabulary_signature_tests id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_tests ALTER COLUMN id SET DEFAULT nextval('public.vocabulary_signature_tests_id_seq'::regclass);
 
 
 --
@@ -4498,6 +4895,14 @@ ALTER TABLE ONLY public.canonical_entity_mentions
 
 ALTER TABLE ONLY public.canonical_entity_mentions
     ADD CONSTRAINT canonical_entity_mentions_source_key UNIQUE (source_table, source_id);
+
+
+--
+-- Name: diorisis_lemma_frequencies diorisis_lemma_frequencies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.diorisis_lemma_frequencies
+    ADD CONSTRAINT diorisis_lemma_frequencies_pkey PRIMARY KEY (normalized_lemma);
 
 
 --
@@ -5253,6 +5658,46 @@ ALTER TABLE ONLY public.translation_prompts
 
 
 --
+-- Name: translation_rarity_correlations translation_rarity_correlations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_rarity_correlations
+    ADD CONSTRAINT translation_rarity_correlations_pkey PRIMARY KEY (run_id, level, predictor, outcome);
+
+
+--
+-- Name: translation_rarity_length_runs translation_rarity_length_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_rarity_length_runs
+    ADD CONSTRAINT translation_rarity_length_runs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_rarity_length_runs translation_rarity_length_runs_run_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_rarity_length_runs
+    ADD CONSTRAINT translation_rarity_length_runs_run_key_key UNIQUE (run_key);
+
+
+--
+-- Name: translation_rarity_passage_scores translation_rarity_passage_scores_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_rarity_passage_scores
+    ADD CONSTRAINT translation_rarity_passage_scores_pkey PRIMARY KEY (run_id, lemma_id);
+
+
+--
+-- Name: translation_rarity_sentence_scores translation_rarity_sentence_scores_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_rarity_sentence_scores
+    ADD CONSTRAINT translation_rarity_sentence_scores_pkey PRIMARY KEY (run_id, alignment_group_id);
+
+
+--
 -- Name: translation_risk_flags translation_risk_flags_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5282,6 +5727,78 @@ ALTER TABLE ONLY public.translation_run_requests
 
 ALTER TABLE ONLY public.translation_runs
     ADD CONSTRAINT translation_runs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: vocabulary_signature_clusters vocabulary_signature_clusters_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_clusters
+    ADD CONSTRAINT vocabulary_signature_clusters_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: vocabulary_signature_clusters vocabulary_signature_clusters_run_id_segment_id_method_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_clusters
+    ADD CONSTRAINT vocabulary_signature_clusters_run_id_segment_id_method_key UNIQUE (run_id, segment_id, method);
+
+
+--
+-- Name: vocabulary_signature_features vocabulary_signature_features_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_features
+    ADD CONSTRAINT vocabulary_signature_features_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: vocabulary_signature_features vocabulary_signature_features_run_id_segment_id_feature_bas_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_features
+    ADD CONSTRAINT vocabulary_signature_features_run_id_segment_id_feature_bas_key UNIQUE (run_id, segment_id, feature_basis, feature_key);
+
+
+--
+-- Name: vocabulary_signature_runs vocabulary_signature_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_runs
+    ADD CONSTRAINT vocabulary_signature_runs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: vocabulary_signature_segments vocabulary_signature_segments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_segments
+    ADD CONSTRAINT vocabulary_signature_segments_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: vocabulary_signature_segments vocabulary_signature_segments_run_id_segment_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_segments
+    ADD CONSTRAINT vocabulary_signature_segments_run_id_segment_key_key UNIQUE (run_id, segment_key);
+
+
+--
+-- Name: vocabulary_signature_tests vocabulary_signature_tests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_tests
+    ADD CONSTRAINT vocabulary_signature_tests_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: vocabulary_signature_tests vocabulary_signature_tests_run_id_test_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_tests
+    ADD CONSTRAINT vocabulary_signature_tests_run_id_test_key_key UNIQUE (run_id, test_key);
 
 
 --
@@ -6706,6 +7223,55 @@ CREATE UNIQUE INDEX translation_runs_request_run_idx ON public.translation_runs 
 
 
 --
+-- Name: vocabulary_signature_clusters_run_kind_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX vocabulary_signature_clusters_run_kind_idx ON public.vocabulary_signature_clusters USING btree (run_id, segment_kind, cluster_count, cluster_label);
+
+
+--
+-- Name: vocabulary_signature_features_run_feature_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX vocabulary_signature_features_run_feature_idx ON public.vocabulary_signature_features USING btree (run_id, feature_key, segment_id);
+
+
+--
+-- Name: vocabulary_signature_features_segment_rank_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX vocabulary_signature_features_segment_rank_idx ON public.vocabulary_signature_features USING btree (segment_id, segment_rank);
+
+
+--
+-- Name: vocabulary_signature_runs_current_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX vocabulary_signature_runs_current_idx ON public.vocabulary_signature_runs USING btree (run_key) WHERE is_current;
+
+
+--
+-- Name: vocabulary_signature_runs_started_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX vocabulary_signature_runs_started_idx ON public.vocabulary_signature_runs USING btree (started_at DESC);
+
+
+--
+-- Name: vocabulary_signature_segments_run_kind_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX vocabulary_signature_segments_run_kind_idx ON public.vocabulary_signature_segments USING btree (run_id, segment_kind, sort_order);
+
+
+--
+-- Name: vocabulary_signature_tests_run_family_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX vocabulary_signature_tests_run_family_idx ON public.vocabulary_signature_tests USING btree (run_id, test_family, adjusted_p_value);
+
+
+--
 -- Name: assembled_lemmas assembled_lemmas_ocr_generation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7834,7 +8400,56 @@ ALTER TABLE ONLY public.translation_runs
 
 
 --
+-- Name: vocabulary_signature_clusters vocabulary_signature_clusters_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_clusters
+    ADD CONSTRAINT vocabulary_signature_clusters_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.vocabulary_signature_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: vocabulary_signature_clusters vocabulary_signature_clusters_segment_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_clusters
+    ADD CONSTRAINT vocabulary_signature_clusters_segment_id_fkey FOREIGN KEY (segment_id) REFERENCES public.vocabulary_signature_segments(id) ON DELETE CASCADE;
+
+
+--
+-- Name: vocabulary_signature_features vocabulary_signature_features_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_features
+    ADD CONSTRAINT vocabulary_signature_features_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.vocabulary_signature_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: vocabulary_signature_features vocabulary_signature_features_segment_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_features
+    ADD CONSTRAINT vocabulary_signature_features_segment_id_fkey FOREIGN KEY (segment_id) REFERENCES public.vocabulary_signature_segments(id) ON DELETE CASCADE;
+
+
+--
+-- Name: vocabulary_signature_segments vocabulary_signature_segments_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_segments
+    ADD CONSTRAINT vocabulary_signature_segments_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.vocabulary_signature_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: vocabulary_signature_tests vocabulary_signature_tests_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vocabulary_signature_tests
+    ADD CONSTRAINT vocabulary_signature_tests_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.vocabulary_signature_runs(id) ON DELETE CASCADE;
+
+
+--
 -- PostgreSQL database dump complete
 --
 
-\unrestrict LaiftxLsAXV3HkfCnvaOfb9jL7r2GpgPLo0KQeoWzy7g1cfYbYEINkjHTTC4OLR
+\unrestrict UGmvTrwBc0obP7y1nm5Qr6sHIPtSebPBtJsIfr9CyytZKxeEIDgX0b10Ow0BjHI
+

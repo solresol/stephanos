@@ -13,6 +13,36 @@ cd "$(dirname "$0")"
 # Log file
 LOGFILE="pipeline.log"
 DATE=$(date +%Y%m%d)
+STEPHANOS_SITE_URL="${STEPHANOS_SITE_URL:-https://stephanos.symmachus.org}"
+AI_SYSTEMS_FEED_PATH="${AI_SYSTEMS_FEED_PATH:-reference_site/ai-systems.xml}"
+AI_SYSTEMS_STATUS_PATH="${AI_SYSTEMS_STATUS_PATH:-reference_site/ai-systems.json}"
+AI_SYSTEMS_STATUS_EMITTED=0
+
+emit_ai_systems_status_report() {
+  local exit_status="$1"
+  local schema_report="${SCHEMA_REPORT_JSON:-tmp/schema_preflight/schema_drift_report.json}"
+
+  uv run generate_ai_systems_feed.py \
+    --output "$AI_SYSTEMS_FEED_PATH" \
+    --json-output "$AI_SYSTEMS_STATUS_PATH" \
+    --site-url "$STEPHANOS_SITE_URL" \
+    --schema-report-file "$schema_report" \
+    --pipeline-exit-status "$exit_status" \
+    --status-report
+}
+
+pipeline_exit_report() {
+  local exit_status="$?"
+  if [ "$exit_status" -ne 0 ] && [ "$AI_SYSTEMS_STATUS_EMITTED" -eq 0 ]; then
+    set +e
+    echo "Step final: Generating short AI systems status after failure..." | tee -a "$LOGFILE"
+    emit_ai_systems_status_report "$exit_status" 2>&1 | tee -a "$LOGFILE" || \
+      echo "  Warning: Failed to generate AI systems status report" | tee -a "$LOGFILE"
+  fi
+  exit "$exit_status"
+}
+
+trap pipeline_exit_report EXIT
 
 find_pg_dump() {
   if command -v pg_dump >/dev/null 2>&1; then
@@ -119,6 +149,10 @@ fi
 # Step 0a0: Ensure low-priority AI footnote schema before strict preflight
 echo "Step 0a0: Ensuring AI footnote schema..." | tee -a "$LOGFILE"
 uv run detect_footnotes.py --ensure-schema --limit 0 2>&1 | tee -a "$LOGFILE"
+
+# Step 0a0b: Ensure vocabulary signature schema before strict preflight
+echo "Step 0a0b: Ensuring vocabulary signature schema..." | tee -a "$LOGFILE"
+uv run analyze_vocabulary_signatures.py --ensure-schema-only 2>&1 | tee -a "$LOGFILE"
 
 	# Step 0a: Schema preflight gate (strict by default)
 	# Set SCHEMA_PREFLIGHT=0 to bypass in emergencies.
@@ -642,6 +676,23 @@ else
         2>&1 | tee -a "$LOGFILE"
 fi
 
+# Step 5g4: Refresh vocabulary signatures from the populated word/lemma index
+VOCABULARY_SIGNATURES_ENABLED="${VOCABULARY_SIGNATURES_ENABLED:-1}"
+VOCABULARY_SIGNATURE_WINDOW_SIZE="${VOCABULARY_SIGNATURE_WINDOW_SIZE:-100}"
+VOCABULARY_SIGNATURE_MAX_FEATURES="${VOCABULARY_SIGNATURE_MAX_FEATURES:-500}"
+VOCABULARY_SIGNATURE_MIN_FEATURE_COUNT="${VOCABULARY_SIGNATURE_MIN_FEATURE_COUNT:-5}"
+if [ "$VOCABULARY_SIGNATURES_ENABLED" != "0" ]; then
+    echo "Step 5g4: Refreshing vocabulary signatures..." | tee -a "$LOGFILE"
+    uv run analyze_vocabulary_signatures.py \
+        --source-document meineke \
+        --feature-basis lemma \
+        --window-size "$VOCABULARY_SIGNATURE_WINDOW_SIZE" \
+        --max-features "$VOCABULARY_SIGNATURE_MAX_FEATURES" \
+        --min-feature-count "$VOCABULARY_SIGNATURE_MIN_FEATURE_COUNT" \
+        --notes "run_daily_pipeline.sh word-lemma vocabulary signatures" \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: vocabulary signature analysis failed" | tee -a "$LOGFILE"
+fi
+
 # Step 5h: Sync translation risk flags (blocks likely translation-changing Billerbeck-dependent rows)
 echo "Step 5h: Syncing translation risk flags..." | tee -a "$LOGFILE"
 uv run sync_translation_risk_flags.py 2>&1 | tee -a "$LOGFILE"
@@ -685,6 +736,10 @@ uv run generate_translation_operations_page.py 2>&1 | tee -a "$LOGFILE"
 # Step 7a0c: Generate stylometric fingerprinting page
 echo "Step 7a0c: Generating stylometric fingerprinting page..." | tee -a "$LOGFILE"
 uv run generate_fingerprinting_page.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 7a0d: Generate vocabulary signature page
+echo "Step 7a0d: Generating vocabulary signature page..." | tee -a "$LOGFILE"
+uv run generate_vocabulary_signature_page.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 7a1: Generate pipeline progress page
 echo "Step 7a1: Generating pipeline progress page..." | tee -a "$LOGFILE"
@@ -756,6 +811,11 @@ uv run generate_pdf_book.py 2>&1 | tee -a "$LOGFILE"
 # Step 8a5: Generate downloads page
 echo "Step 8a5: Generating downloads page..." | tee -a "$LOGFILE"
 uv run generate_downloads_page.py 2>&1 | tee -a "$LOGFILE"
+
+# Step 8a6: Generate short AI systems status RSS/JSON and cron-mail report
+echo "Step 8a6: Generating AI systems status feed..." | tee -a "$LOGFILE"
+emit_ai_systems_status_report 0 2>&1 | tee -a "$LOGFILE"
+AI_SYSTEMS_STATUS_EMITTED=1
 
 # Step 8b: Export lemma data for review interface
 echo "Step 8b: Exporting lemma data for review interface..." | tee -a "$LOGFILE"
