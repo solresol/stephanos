@@ -12,6 +12,7 @@ stephanos.ini
 .claude/settings.local.json
 pdf_pages/
 pdf_pages_billerbeck_german/
+pdf_pages_meineke/
 exports/
 backups/
 logs/

@@ -4,3 +4,5 @@ guidance_status.cgi
 guidance_urgent_worker
 review.cgi
 save.cgi
+status.cgi
+status_openbsd.cgi
