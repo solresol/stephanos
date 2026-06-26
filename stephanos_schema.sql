@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict UGmvTrwBc0obP7y1nm5Qr6sHIPtSebPBtJsIfr9CyytZKxeEIDgX0b10Ow0BjHI
+\restrict fi142Bf4Z6Xj7alXd5X92DBHXJ1E8rhfeId3WYJZQAfcNK0pRVyLb9GehbY8BSE
 
 -- Dumped from database version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
@@ -1033,6 +1033,93 @@ CREATE SEQUENCE public.images_id_seq
 --
 
 ALTER SEQUENCE public.images_id_seq OWNED BY public.images.id;
+
+
+--
+-- Name: kappa_review_imports; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.kappa_review_imports (
+    id bigint NOT NULL,
+    source_name text DEFAULT 'final_kappa_translation_review'::text NOT NULL,
+    source_pdf_original_path text DEFAULT ''::text NOT NULL,
+    source_pdf_repo_path text DEFAULT ''::text NOT NULL,
+    source_pdf_sha256 text NOT NULL,
+    rows_jsonl_path text DEFAULT ''::text NOT NULL,
+    summary_json_path text DEFAULT ''::text NOT NULL,
+    pdfinfo jsonb DEFAULT '{}'::jsonb NOT NULL,
+    summary_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    CONSTRAINT kappa_review_imports_sha256_check CHECK ((source_pdf_sha256 ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: kappa_review_imports_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.kappa_review_imports_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: kappa_review_imports_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.kappa_review_imports_id_seq OWNED BY public.kappa_review_imports.id;
+
+
+--
+-- Name: kappa_review_rows; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.kappa_review_rows (
+    id bigint NOT NULL,
+    import_id bigint NOT NULL,
+    visual_order integer NOT NULL,
+    page_number integer NOT NULL,
+    source_row_id integer NOT NULL,
+    headword_column text DEFAULT ''::text NOT NULL,
+    headword_from_greek text DEFAULT ''::text NOT NULL,
+    greek_text text DEFAULT ''::text NOT NULL,
+    final_english_translation text DEFAULT ''::text NOT NULL,
+    ai_translation_notes text DEFAULT ''::text NOT NULL,
+    philological_textual_notes text DEFAULT ''::text NOT NULL,
+    search_text text DEFAULT ''::text NOT NULL,
+    warnings jsonb DEFAULT '[]'::jsonb NOT NULL,
+    extraction_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple'::regconfig, ((((((((((COALESCE(headword_column, ''::text) || ' '::text) || COALESCE(headword_from_greek, ''::text)) || ' '::text) || COALESCE(greek_text, ''::text)) || ' '::text) || COALESCE(final_english_translation, ''::text)) || ' '::text) || COALESCE(ai_translation_notes, ''::text)) || ' '::text) || COALESCE(philological_textual_notes, ''::text)))) STORED,
+    CONSTRAINT kappa_review_rows_extraction_object_check CHECK ((jsonb_typeof(extraction_json) = 'object'::text)),
+    CONSTRAINT kappa_review_rows_page_number_check CHECK ((page_number > 0)),
+    CONSTRAINT kappa_review_rows_source_row_id_check CHECK ((source_row_id > 0)),
+    CONSTRAINT kappa_review_rows_visual_order_check CHECK ((visual_order > 0)),
+    CONSTRAINT kappa_review_rows_warnings_array_check CHECK ((jsonb_typeof(warnings) = 'array'::text))
+);
+
+
+--
+-- Name: kappa_review_rows_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.kappa_review_rows_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: kappa_review_rows_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.kappa_review_rows_id_seq OWNED BY public.kappa_review_rows.id;
 
 
 --
@@ -3590,7 +3677,8 @@ CREATE TABLE public.translation_prompt_profile_versions (
     approved_human_queue_priority integer DEFAULT 5 NOT NULL,
     CONSTRAINT translation_prompt_profile_versions_approved_human_priority_che CHECK ((approved_human_queue_priority >= 0)),
     CONSTRAINT translation_prompt_profile_versions_default_api_mode_check CHECK ((default_api_mode = ANY (ARRAY['chat_completions'::text, 'responses'::text]))),
-    CONSTRAINT translation_prompt_profile_versions_default_requested_runs_chec CHECK ((default_requested_runs > 0))
+    CONSTRAINT translation_prompt_profile_versions_default_requested_runs_chec CHECK ((default_requested_runs > 0)),
+    CONSTRAINT translation_prompt_profile_versions_no_temperature_check CHECK ((default_temperature IS NULL))
 );
 
 
@@ -3613,6 +3701,13 @@ COMMENT ON COLUMN public.translation_prompt_profile_versions.approved_human_only
 --
 
 COMMENT ON COLUMN public.translation_prompt_profile_versions.default_model IS 'Default OpenAI model to use when queueing this prompt version.';
+
+
+--
+-- Name: COLUMN translation_prompt_profile_versions.default_temperature; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_prompt_profile_versions.default_temperature IS 'Deprecated. Translation variance experiments use repeated runs at model defaults, not configurable temperature.';
 
 
 --
@@ -3933,10 +4028,18 @@ CREATE TABLE public.translation_run_requests (
     api_mode text,
     reasoning_effort text,
     CONSTRAINT translation_run_requests_api_mode_check CHECK ((api_mode = ANY (ARRAY['chat_completions'::text, 'responses'::text]))),
+    CONSTRAINT translation_run_requests_no_temperature_check CHECK ((temperature IS NULL)),
     CONSTRAINT translation_run_requests_priority_check CHECK ((priority >= 0)),
     CONSTRAINT translation_run_requests_requested_runs_check CHECK ((requested_runs > 0)),
     CONSTRAINT translation_run_requests_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])))
 );
+
+
+--
+-- Name: COLUMN translation_run_requests.temperature; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_run_requests.temperature IS 'Deprecated. New translation requests must leave this NULL; repeatability is represented by requested_runs.';
 
 
 --
@@ -3993,10 +4096,18 @@ CREATE TABLE public.translation_runs (
     output_tokens integer DEFAULT 0 NOT NULL,
     reasoning_tokens integer DEFAULT 0 NOT NULL,
     CONSTRAINT translation_runs_api_mode_check CHECK ((api_mode = ANY (ARRAY['chat_completions'::text, 'responses'::text]))),
+    CONSTRAINT translation_runs_no_temperature_check CHECK ((temperature IS NULL)),
     CONSTRAINT translation_runs_run_index_check CHECK ((run_index > 0)),
     CONSTRAINT translation_runs_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'completed'::text, 'failed'::text, 'approved'::text, 'rejected'::text, 'hidden'::text, 'outdated'::text]))),
     CONSTRAINT translation_runs_token_split_check CHECK (((input_tokens >= 0) AND (output_tokens >= 0) AND (reasoning_tokens >= 0)))
 );
+
+
+--
+-- Name: COLUMN translation_runs.temperature; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.translation_runs.temperature IS 'Deprecated. Retained only for schema compatibility; new translation runs must leave this NULL.';
 
 
 --
@@ -4336,6 +4447,20 @@ ALTER TABLE ONLY public.human_translations ALTER COLUMN id SET DEFAULT nextval('
 --
 
 ALTER TABLE ONLY public.images ALTER COLUMN id SET DEFAULT nextval('public.images_id_seq'::regclass);
+
+
+--
+-- Name: kappa_review_imports id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_imports ALTER COLUMN id SET DEFAULT nextval('public.kappa_review_imports_id_seq'::regclass);
+
+
+--
+-- Name: kappa_review_rows id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_rows ALTER COLUMN id SET DEFAULT nextval('public.kappa_review_rows_id_seq'::regclass);
 
 
 --
@@ -4983,6 +5108,46 @@ ALTER TABLE ONLY public.images
 
 ALTER TABLE ONLY public.images
     ADD CONSTRAINT images_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: kappa_review_imports kappa_review_imports_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_imports
+    ADD CONSTRAINT kappa_review_imports_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: kappa_review_imports kappa_review_imports_source_sha_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_imports
+    ADD CONSTRAINT kappa_review_imports_source_sha_key UNIQUE (source_name, source_pdf_sha256);
+
+
+--
+-- Name: kappa_review_rows kappa_review_rows_import_source_row_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_rows
+    ADD CONSTRAINT kappa_review_rows_import_source_row_key UNIQUE (import_id, source_row_id);
+
+
+--
+-- Name: kappa_review_rows kappa_review_rows_import_visual_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_rows
+    ADD CONSTRAINT kappa_review_rows_import_visual_key UNIQUE (import_id, visual_order);
+
+
+--
+-- Name: kappa_review_rows kappa_review_rows_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_rows
+    ADD CONSTRAINT kappa_review_rows_pkey PRIMARY KEY (id);
 
 
 --
@@ -6198,6 +6363,41 @@ CREATE INDEX idx_text_pair_differences_lemma_id ON public.text_pair_differences 
 --
 
 CREATE INDEX idx_text_pair_differences_meineke_text_version_id ON public.text_pair_differences USING btree (meineke_text_version_id);
+
+
+--
+-- Name: kappa_review_imports_imported_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX kappa_review_imports_imported_at_idx ON public.kappa_review_imports USING btree (imported_at DESC, id DESC);
+
+
+--
+-- Name: kappa_review_rows_headword_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX kappa_review_rows_headword_idx ON public.kappa_review_rows USING btree (headword_from_greek);
+
+
+--
+-- Name: kappa_review_rows_import_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX kappa_review_rows_import_idx ON public.kappa_review_rows USING btree (import_id, visual_order);
+
+
+--
+-- Name: kappa_review_rows_search_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX kappa_review_rows_search_idx ON public.kappa_review_rows USING gin (search_vector);
+
+
+--
+-- Name: kappa_review_rows_source_row_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX kappa_review_rows_source_row_idx ON public.kappa_review_rows USING btree (source_row_id);
 
 
 --
@@ -7448,6 +7648,14 @@ ALTER TABLE ONLY public.images
 
 
 --
+-- Name: kappa_review_rows kappa_review_rows_import_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_rows
+    ADD CONSTRAINT kappa_review_rows_import_id_fkey FOREIGN KEY (import_id) REFERENCES public.kappa_review_imports(id) ON DELETE CASCADE;
+
+
+--
 -- Name: lemma_apparatus_entries lemma_apparatus_entries_line_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8451,5 +8659,5 @@ ALTER TABLE ONLY public.vocabulary_signature_tests
 -- PostgreSQL database dump complete
 --
 
-\unrestrict UGmvTrwBc0obP7y1nm5Qr6sHIPtSebPBtJsIfr9CyytZKxeEIDgX0b10Ow0BjHI
+\unrestrict fi142Bf4Z6Xj7alXd5X92DBHXJ1E8rhfeId3WYJZQAfcNK0pRVyLb9GehbY8BSE
 
