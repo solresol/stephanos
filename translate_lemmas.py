@@ -660,7 +660,6 @@ def build_chat_completion_body(
         "tools": [TRANSLATE_TOOL],
         "tool_choice": {"type": "function", "function": {"name": "submit_translation"}},
     }
-    body["temperature"] = 1.0 if temperature is None else float(temperature)
     body["top_p"] = 1.0 if top_p is None else float(top_p)
     return body
 
@@ -820,14 +819,12 @@ def fetch_requests(cur, request_limit: int | None, api_mode_filter: str = "all")
     uses_guidance_context_expr = prompt_version_guidance_expr(cur, alias="pv")
     approved_human_only_expr = prompt_version_approved_only_expr(cur, alias="pv")
     model_expr = "COALESCE(r.model, %s)"
-    temperature_expr = "r.temperature"
+    temperature_expr = "NULL::double precision"
     top_p_expr = "r.top_p"
     api_mode_expr = "'chat_completions'"
     reasoning_effort_expr = "NULL::text"
     if column_exists(cur, "translation_prompt_profile_versions", "default_model"):
         model_expr = "COALESCE(r.model, pv.default_model, %s)"
-    if column_exists(cur, "translation_prompt_profile_versions", "default_temperature"):
-        temperature_expr = "COALESCE(r.temperature, pv.default_temperature)"
     if column_exists(cur, "translation_prompt_profile_versions", "default_top_p"):
         top_p_expr = "COALESCE(r.top_p, pv.default_top_p)"
     if column_exists(cur, "translation_run_requests", "api_mode"):
