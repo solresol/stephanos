@@ -42,6 +42,7 @@ OUTPUT_PATH = OUTPUT_DIR / "translation_quality_predictor.html"
 MODEL_CSV = OUTPUT_DIR / "translation_quality_predictor_models.csv"
 FEATURE_CSV = OUTPUT_DIR / "translation_quality_predictor_features.csv"
 PREDICTION_CSV = OUTPUT_DIR / "translation_quality_predictor_predictions.csv"
+WORST_SENTENCE_CSV = OUTPUT_DIR / "translation_quality_predictor_worst_sentences.csv"
 
 DETECTOR_VERSION = "translation_guidance_scan_v4"
 DEFAULT_PROFILE_NAME = "legacy_scholarly"
@@ -238,7 +239,7 @@ def fetch_v3_rows(cur, *, profile_name: str, profile_version: int) -> list[dict[
             tr.lemma_id,
             tr.run_index,
             tr.model,
-            tr.temperature,
+            NULL::double precision AS temperature,
             tr.top_p,
             tr.status AS run_status,
             tr.public_eligible,
@@ -956,9 +957,205 @@ def render_risk_table(
 </div>"""
 
 
+def fetch_worst_sentence_rows(
+    cur,
+    *,
+    profile_name: str,
+    profile_version: int,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    cur.execute(
+        """
+        WITH profile AS (
+            SELECT pv.id AS profile_version_id
+            FROM translation_prompt_profiles p
+            JOIN translation_prompt_profile_versions pv ON pv.profile_id = p.id
+            WHERE p.name = %s
+              AND pv.version = %s
+            ORDER BY pv.id DESC
+            LIMIT 1
+        ),
+        latest_metric_run AS (
+            SELECT smr.id AS metric_run_id
+            FROM sentence_translation_metric_runs smr
+            WHERE smr.status = 'completed'
+              AND smr.metric_set LIKE 'sentence_lexical_v3_similarity_dp%%'
+            ORDER BY COALESCE(smr.completed_at, smr.started_at) DESC, smr.id DESC
+            LIMIT 1
+        ),
+        sentence_set_counts AS (
+            SELECT sentence_set_id, COUNT(*)::integer AS sentence_count
+            FROM lemma_sentences
+            GROUP BY sentence_set_id
+        ),
+        group_source_text AS (
+            SELECT
+                sam.alignment_group_id,
+                string_agg(ls.text, ' ' ORDER BY sam.position_in_group, ls.sentence_number) AS source_member_text
+            FROM sentence_alignment_members sam
+            JOIN lemma_sentences ls ON ls.id = sam.sentence_id
+            WHERE sam.member_role = 'source'
+            GROUP BY sam.alignment_group_id
+        ),
+        pivot AS (
+            SELECT
+                stms.alignment_group_id,
+                MAX(sas.lemma_id) AS lemma_id,
+                MAX(sas.source_sentence_set_id) AS source_sentence_set_id,
+                MAX(al.lemma) AS lemma,
+                MAX(sag.group_number) AS group_number,
+                NULLIF(MAX(stms.source_text), '') AS source_text_raw,
+                MAX(group_source_text.source_member_text) AS source_member_text,
+                MAX(stms.reference_text) AS reference_text,
+                MAX(stms.candidate_text) AS candidate_text,
+                MAX(ref_sentence.sentence_number) AS max_reference_sentence_number,
+                MAX(source_counts.sentence_count) AS source_sentence_count,
+                MAX(reference_counts.sentence_count) AS reference_sentence_count,
+                MAX(stms.score) FILTER (WHERE stms.metric_name = 'chrf') AS chrf,
+                MAX(stms.score) FILTER (WHERE stms.metric_name = 'sentence_bleu') AS sentence_bleu,
+                MAX(stms.score) FILTER (WHERE stms.metric_name = 'rouge_l_f1') AS rouge_l_f1,
+                MAX(stms.score) FILTER (WHERE stms.metric_name = '3gram_f1') AS trigram_f1,
+                MAX(stms.score) FILTER (WHERE stms.metric_name = '2gram_f1') AS bigram_f1,
+                MAX(stms.score) FILTER (WHERE stms.metric_name = 'abs_word_count_delta') AS abs_word_count_delta,
+                MAX(stms.score) FILTER (WHERE stms.metric_name = 'reference_word_count') AS reference_word_count,
+                MAX(stms.score) FILTER (WHERE stms.metric_name = 'candidate_word_count') AS candidate_word_count
+            FROM latest_metric_run
+            JOIN sentence_translation_metric_scores stms ON stms.metric_run_id = latest_metric_run.metric_run_id
+            JOIN sentence_alignment_groups sag ON sag.id = stms.alignment_group_id
+            JOIN sentence_alignment_sets sas ON sas.id = sag.alignment_set_id
+            JOIN profile ON (sas.response_json->>'profile_version_id')::integer = profile.profile_version_id
+            JOIN assembled_lemmas al ON al.id = sas.lemma_id
+            LEFT JOIN group_source_text ON group_source_text.alignment_group_id = sag.id
+            LEFT JOIN sentence_alignment_members ref_member
+              ON ref_member.alignment_group_id = sag.id
+             AND ref_member.member_role = 'reference'
+            LEFT JOIN lemma_sentences ref_sentence ON ref_sentence.id = ref_member.sentence_id
+            LEFT JOIN sentence_set_counts source_counts
+              ON source_counts.sentence_set_id = sas.source_sentence_set_id
+            LEFT JOIN sentence_set_counts reference_counts
+              ON reference_counts.sentence_set_id = sas.reference_sentence_set_id
+            WHERE sag.alignment_kind = 'aligned'
+            GROUP BY stms.alignment_group_id
+        ),
+        with_source AS (
+            SELECT
+                pivot.*,
+                COALESCE(pivot.source_text_raw, pivot.source_member_text, fallback_source.text, '') AS source_text
+            FROM pivot
+            LEFT JOIN LATERAL (
+                SELECT ls.text
+                FROM lemma_sentences ls
+                WHERE ls.sentence_set_id = pivot.source_sentence_set_id
+                ORDER BY ABS(
+                    ls.sentence_number - CASE
+                        WHEN pivot.max_reference_sentence_number IS NOT NULL
+                         AND pivot.source_sentence_count > 0
+                         AND pivot.reference_sentence_count > 0
+                        THEN GREATEST(
+                            1,
+                            LEAST(
+                                pivot.source_sentence_count,
+                                FLOOR(
+                                    (
+                                        pivot.max_reference_sentence_number::numeric
+                                        * pivot.source_sentence_count::numeric
+                                    ) / pivot.reference_sentence_count::numeric
+                                )::integer
+                            )
+                        )
+                        ELSE pivot.group_number
+                    END
+                ),
+                ls.sentence_number DESC
+                LIMIT 1
+            ) fallback_source ON TRUE
+        ),
+        scored AS (
+            SELECT *
+            FROM with_source
+            WHERE chrf IS NOT NULL
+              AND sentence_bleu IS NOT NULL
+              AND rouge_l_f1 IS NOT NULL
+              AND trigram_f1 IS NOT NULL
+              AND abs_word_count_delta IS NOT NULL
+        ),
+        ranked AS (
+            SELECT
+                *,
+                percent_rank() OVER (ORDER BY chrf DESC) AS chrf_bad_rank,
+                percent_rank() OVER (ORDER BY sentence_bleu DESC) AS bleu_bad_rank,
+                percent_rank() OVER (ORDER BY rouge_l_f1 DESC) AS rouge_bad_rank,
+                percent_rank() OVER (ORDER BY trigram_f1 DESC) AS trigram_bad_rank,
+                percent_rank() OVER (ORDER BY abs_word_count_delta ASC) AS length_bad_rank
+            FROM scored
+        )
+        SELECT
+            alignment_group_id,
+            lemma_id,
+            lemma,
+            group_number,
+            ((chrf_bad_rank + bleu_bad_rank + rouge_bad_rank + trigram_bad_rank + length_bad_rank) / 5.0) AS composite_badness,
+            chrf,
+            sentence_bleu,
+            rouge_l_f1,
+            trigram_f1,
+            bigram_f1,
+            abs_word_count_delta,
+            reference_word_count,
+            candidate_word_count,
+            source_text,
+            reference_text,
+            candidate_text
+        FROM ranked
+        ORDER BY composite_badness DESC, chrf ASC, sentence_bleu ASC
+        LIMIT %s
+        """,
+        (profile_name, profile_version, limit),
+    )
+    rows = [dict(row) for row in cur.fetchall()]
+    for index, row in enumerate(rows, 1):
+        row["rank"] = index
+    return rows
+
+
+def render_worst_sentence_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return '<p class="note">No sentence-level v3 metric rows are available for the worst-sentence table.</p>'
+
+    body_rows = []
+    for row in rows:
+        href = f"../{headword_page_filename(int(row['lemma_id']))}"
+        body_rows.append(
+            f"""<tr>
+  <td>{int(row['rank'])}</td>
+  <td><a href="{esc(href)}">{esc(row.get('lemma'))}</a></td>
+  <td>{esc(row.get('source_text'))}</td>
+  <td>{esc(row.get('candidate_text'))}</td>
+  <td>{esc(row.get('reference_text'))}</td>
+</tr>"""
+        )
+
+    return f"""<p class="note">Worst means high average percentile badness across chrF, sentence BLEU, ROUGE-L, 3-gram F1, and absolute word-count delta. This is a review queue, not a human error judgment.</p>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Rank</th>
+      <th>Headword</th>
+      <th>Greek sentence</th>
+      <th>v3 candidate</th>
+      <th>Human-approved translation</th>
+    </tr>
+  </thead>
+  <tbody>{''.join(body_rows)}</tbody>
+</table>
+</div>"""
+
+
 def render_page(
     *,
     rows: list[dict[str, Any]],
+    worst_sentence_rows: list[dict[str, Any]],
     results: list[dict[str, Any]],
     feature_rows: list[dict[str, Any]],
     best_result: dict[str, Any] | None,
@@ -1041,6 +1238,8 @@ def render_page(
 {render_risk_table(rows, target=best_target, predictions_by_lemma=best_predictions) if best_target else ''}
 <h2>Predictive Features</h2>
 {''.join(selected_feature_sections)}
+<h2>Worst v3 Translation Sentences</h2>
+{render_worst_sentence_table(worst_sentence_rows)}
 """
 
     sentence_note = (
@@ -1048,7 +1247,7 @@ def render_page(
         "no sentence alignment sets or sentence translation metric scores to train against."
         if context_counts.get("sentence_alignment_sets", 0) == 0
         or context_counts.get("sentence_metric_scores", 0) == 0
-        else "Sentence-level alignment and metric rows exist; passage-level modeling remains the current daily output."
+        else "Sentence-level alignment and metric rows exist; the worst-sentence review queue below uses the corrected v3 similarity-DP alignment."
     )
 
     best_sentence = ""
@@ -1091,7 +1290,7 @@ def render_page(
   <div class="wrap">
     {render_site_navigation("analysis", "translation_quality_predictor", depth=1)}
     <h1>Translation Quality Predictor</h1>
-    <p>This page tests whether current source vocabulary, translation-guidance recogniser matches, and mean v3 translation length can predict which approved-human passages are translated badly by ordinary <code>{esc(profile_name)}</code> v{profile_version}. It excludes reasoning profiles and the special-temperature v3 experiment lanes.</p>
+    <p>This page tests whether current source vocabulary, translation-guidance recogniser matches, and mean v3 translation length can predict which approved-human passages are translated badly by ordinary <code>{esc(profile_name)}</code> v{profile_version}. It excludes separate reasoning and repeatability experiment lanes.</p>
     <p class="note">{best_sentence}</p>
     <p class="note">{esc(sentence_note)}</p>
     <h2>Metric Engines</h2>
@@ -1105,6 +1304,7 @@ def render_page(
       <li><a href="translation_quality_predictor_models.csv">Model comparison CSV</a></li>
       <li><a href="translation_quality_predictor_features.csv">Top model feature CSV</a></li>
       <li><a href="translation_quality_predictor_predictions.csv">Best-model predictions CSV</a></li>
+      <li><a href="translation_quality_predictor_worst_sentences.csv">Worst sentence CSV</a></li>
     </ul>
     <p class="note">Generated: {esc(generated)}. Recogniser detector version: <code>{esc(DETECTOR_VERSION)}</code>.</p>
   </div>
@@ -1118,6 +1318,7 @@ def write_csvs(
     results: list[dict[str, Any]],
     feature_rows: list[dict[str, Any]],
     rows: list[dict[str, Any]],
+    worst_sentence_rows: list[dict[str, Any]],
     best_result: dict[str, Any] | None,
     best_predictions: dict[int, float],
 ) -> None:
@@ -1196,34 +1397,76 @@ def write_csvs(
     with PREDICTION_CSV.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=prediction_fields)
         writer.writeheader()
-        if best_result is None:
-            return
-        target_key = str(best_result["target"])
-        for row in rows:
-            lemma_id = int(row["lemma_id"])
+        if best_result is not None:
+            target_key = str(best_result["target"])
+            for row in rows:
+                lemma_id = int(row["lemma_id"])
+                writer.writerow(
+                    {
+                        "lemma_id": lemma_id,
+                        "lemma": row.get("lemma"),
+                        "run_count": row.get("run_count"),
+                        "run_ids": row.get("run_ids"),
+                        "source_word_count": row.get("source_word_count"),
+                        "human_word_count": row.get("human_word_count"),
+                        "ai_word_count": row.get("ai_word_count"),
+                        "prediction_family": best_result.get("family"),
+                        "prediction_target": target_key,
+                        "observed_badness": row.get(target_key),
+                        "predicted_badness": best_predictions.get(lemma_id, ""),
+                        "mean_bleu4": row.get("mean_bleu4"),
+                        "mean_chrfpp": row.get("mean_chrfpp"),
+                        "mean_meteor": row.get("mean_meteor"),
+                        "mean_rouge_l": row.get("mean_rouge_l"),
+                        "mean_3gram_f1": row.get("mean_3gram_f1"),
+                        "mean_3gram_jaccard": row.get("mean_3gram_jaccard"),
+                        "mean_abs_length_percent_error": row.get("mean_abs_length_percent_error"),
+                        "source_document": row.get("source_document"),
+                        "source_text_version_id": row.get("source_text_version_id"),
+                        "human_translation_id": row.get("human_translation_id"),
+                    }
+                )
+
+    worst_sentence_fields = [
+        "rank",
+        "alignment_group_id",
+        "lemma_id",
+        "headword",
+        "greek_sentence",
+        "v3_translation_sentence",
+        "human_approved_translation_sentence",
+        "composite_badness",
+        "chrf",
+        "sentence_bleu",
+        "rouge_l_f1",
+        "trigram_f1",
+        "bigram_f1",
+        "abs_word_count_delta",
+        "reference_word_count",
+        "candidate_word_count",
+    ]
+    with WORST_SENTENCE_CSV.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=worst_sentence_fields)
+        writer.writeheader()
+        for row in worst_sentence_rows:
             writer.writerow(
                 {
-                    "lemma_id": lemma_id,
-                    "lemma": row.get("lemma"),
-                    "run_count": row.get("run_count"),
-                    "run_ids": row.get("run_ids"),
-                    "source_word_count": row.get("source_word_count"),
-                    "human_word_count": row.get("human_word_count"),
-                    "ai_word_count": row.get("ai_word_count"),
-                    "prediction_family": best_result.get("family"),
-                    "prediction_target": target_key,
-                    "observed_badness": row.get(target_key),
-                    "predicted_badness": best_predictions.get(lemma_id, ""),
-                    "mean_bleu4": row.get("mean_bleu4"),
-                    "mean_chrfpp": row.get("mean_chrfpp"),
-                    "mean_meteor": row.get("mean_meteor"),
-                    "mean_rouge_l": row.get("mean_rouge_l"),
-                    "mean_3gram_f1": row.get("mean_3gram_f1"),
-                    "mean_3gram_jaccard": row.get("mean_3gram_jaccard"),
-                    "mean_abs_length_percent_error": row.get("mean_abs_length_percent_error"),
-                    "source_document": row.get("source_document"),
-                    "source_text_version_id": row.get("source_text_version_id"),
-                    "human_translation_id": row.get("human_translation_id"),
+                    "rank": row.get("rank", ""),
+                    "alignment_group_id": row.get("alignment_group_id", ""),
+                    "lemma_id": row.get("lemma_id", ""),
+                    "headword": row.get("lemma", ""),
+                    "greek_sentence": row.get("source_text", ""),
+                    "v3_translation_sentence": row.get("candidate_text", ""),
+                    "human_approved_translation_sentence": row.get("reference_text", ""),
+                    "composite_badness": row.get("composite_badness", ""),
+                    "chrf": row.get("chrf", ""),
+                    "sentence_bleu": row.get("sentence_bleu", ""),
+                    "rouge_l_f1": row.get("rouge_l_f1", ""),
+                    "trigram_f1": row.get("trigram_f1", ""),
+                    "bigram_f1": row.get("bigram_f1", ""),
+                    "abs_word_count_delta": row.get("abs_word_count_delta", ""),
+                    "reference_word_count": row.get("reference_word_count", ""),
+                    "candidate_word_count": row.get("candidate_word_count", ""),
                 }
             )
 
@@ -1241,6 +1484,11 @@ def generate(
     cur = conn.cursor()
     context_counts = fetch_context_counts(cur)
     db_rows = fetch_v3_rows(cur, profile_name=profile_name, profile_version=profile_version)
+    worst_sentence_rows = fetch_worst_sentence_rows(
+        cur,
+        profile_name=profile_name,
+        profile_version=profile_version,
+    )
 
     metric_evaluator = TranslationMetricEvaluator(METRIC_NAMES)
     pair_rows = build_pair_rows(db_rows, metric_evaluator=metric_evaluator)
@@ -1310,12 +1558,14 @@ def generate(
         results=results,
         feature_rows=feature_rows,
         rows=rows,
+        worst_sentence_rows=worst_sentence_rows,
         best_result=best_result,
         best_predictions=best_predictions,
     )
     OUTPUT_PATH.write_text(
         render_page(
             rows=rows,
+            worst_sentence_rows=worst_sentence_rows,
             results=results,
             feature_rows=feature_rows,
             best_result=best_result,
@@ -1355,6 +1605,7 @@ def main() -> None:
     print(f"Wrote {MODEL_CSV}")
     print(f"Wrote {FEATURE_CSV}")
     print(f"Wrote {PREDICTION_CSV}")
+    print(f"Wrote {WORST_SENTENCE_CSV}")
     if best:
         print(
             "Best model: "
