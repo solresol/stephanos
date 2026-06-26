@@ -1036,6 +1036,93 @@ ALTER SEQUENCE public.images_id_seq OWNED BY public.images.id;
 
 
 --
+-- Name: kappa_review_imports; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.kappa_review_imports (
+    id bigint NOT NULL,
+    source_name text DEFAULT 'final_kappa_translation_review'::text NOT NULL,
+    source_pdf_original_path text DEFAULT ''::text NOT NULL,
+    source_pdf_repo_path text DEFAULT ''::text NOT NULL,
+    source_pdf_sha256 text NOT NULL,
+    rows_jsonl_path text DEFAULT ''::text NOT NULL,
+    summary_json_path text DEFAULT ''::text NOT NULL,
+    pdfinfo jsonb DEFAULT '{}'::jsonb NOT NULL,
+    summary_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    CONSTRAINT kappa_review_imports_sha256_check CHECK ((source_pdf_sha256 ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: kappa_review_imports_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.kappa_review_imports_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: kappa_review_imports_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.kappa_review_imports_id_seq OWNED BY public.kappa_review_imports.id;
+
+
+--
+-- Name: kappa_review_rows; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.kappa_review_rows (
+    id bigint NOT NULL,
+    import_id bigint NOT NULL,
+    visual_order integer NOT NULL,
+    page_number integer NOT NULL,
+    source_row_id integer NOT NULL,
+    headword_column text DEFAULT ''::text NOT NULL,
+    headword_from_greek text DEFAULT ''::text NOT NULL,
+    greek_text text DEFAULT ''::text NOT NULL,
+    final_english_translation text DEFAULT ''::text NOT NULL,
+    ai_translation_notes text DEFAULT ''::text NOT NULL,
+    philological_textual_notes text DEFAULT ''::text NOT NULL,
+    search_text text DEFAULT ''::text NOT NULL,
+    warnings jsonb DEFAULT '[]'::jsonb NOT NULL,
+    extraction_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple'::regconfig, ((((((((((COALESCE(headword_column, ''::text) || ' '::text) || COALESCE(headword_from_greek, ''::text)) || ' '::text) || COALESCE(greek_text, ''::text)) || ' '::text) || COALESCE(final_english_translation, ''::text)) || ' '::text) || COALESCE(ai_translation_notes, ''::text)) || ' '::text) || COALESCE(philological_textual_notes, ''::text)))) STORED,
+    CONSTRAINT kappa_review_rows_extraction_object_check CHECK ((jsonb_typeof(extraction_json) = 'object'::text)),
+    CONSTRAINT kappa_review_rows_page_number_check CHECK ((page_number > 0)),
+    CONSTRAINT kappa_review_rows_source_row_id_check CHECK ((source_row_id > 0)),
+    CONSTRAINT kappa_review_rows_visual_order_check CHECK ((visual_order > 0)),
+    CONSTRAINT kappa_review_rows_warnings_array_check CHECK ((jsonb_typeof(warnings) = 'array'::text))
+);
+
+
+--
+-- Name: kappa_review_rows_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.kappa_review_rows_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: kappa_review_rows_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.kappa_review_rows_id_seq OWNED BY public.kappa_review_rows.id;
+
+
+--
 -- Name: lemma_apparatus_entries; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4339,6 +4426,20 @@ ALTER TABLE ONLY public.images ALTER COLUMN id SET DEFAULT nextval('public.image
 
 
 --
+-- Name: kappa_review_imports id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_imports ALTER COLUMN id SET DEFAULT nextval('public.kappa_review_imports_id_seq'::regclass);
+
+
+--
+-- Name: kappa_review_rows id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_rows ALTER COLUMN id SET DEFAULT nextval('public.kappa_review_rows_id_seq'::regclass);
+
+
+--
 -- Name: lemma_apparatus_entries id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -4983,6 +5084,46 @@ ALTER TABLE ONLY public.images
 
 ALTER TABLE ONLY public.images
     ADD CONSTRAINT images_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: kappa_review_imports kappa_review_imports_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_imports
+    ADD CONSTRAINT kappa_review_imports_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: kappa_review_imports kappa_review_imports_source_sha_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_imports
+    ADD CONSTRAINT kappa_review_imports_source_sha_key UNIQUE (source_name, source_pdf_sha256);
+
+
+--
+-- Name: kappa_review_rows kappa_review_rows_import_source_row_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_rows
+    ADD CONSTRAINT kappa_review_rows_import_source_row_key UNIQUE (import_id, source_row_id);
+
+
+--
+-- Name: kappa_review_rows kappa_review_rows_import_visual_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_rows
+    ADD CONSTRAINT kappa_review_rows_import_visual_key UNIQUE (import_id, visual_order);
+
+
+--
+-- Name: kappa_review_rows kappa_review_rows_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_rows
+    ADD CONSTRAINT kappa_review_rows_pkey PRIMARY KEY (id);
 
 
 --
@@ -6198,6 +6339,41 @@ CREATE INDEX idx_text_pair_differences_lemma_id ON public.text_pair_differences 
 --
 
 CREATE INDEX idx_text_pair_differences_meineke_text_version_id ON public.text_pair_differences USING btree (meineke_text_version_id);
+
+
+--
+-- Name: kappa_review_imports_imported_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX kappa_review_imports_imported_at_idx ON public.kappa_review_imports USING btree (imported_at DESC, id DESC);
+
+
+--
+-- Name: kappa_review_rows_headword_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX kappa_review_rows_headword_idx ON public.kappa_review_rows USING btree (headword_from_greek);
+
+
+--
+-- Name: kappa_review_rows_import_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX kappa_review_rows_import_idx ON public.kappa_review_rows USING btree (import_id, visual_order);
+
+
+--
+-- Name: kappa_review_rows_search_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX kappa_review_rows_search_idx ON public.kappa_review_rows USING gin (search_vector);
+
+
+--
+-- Name: kappa_review_rows_source_row_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX kappa_review_rows_source_row_idx ON public.kappa_review_rows USING btree (source_row_id);
 
 
 --
@@ -7445,6 +7621,14 @@ ALTER TABLE ONLY public.images
 
 ALTER TABLE ONLY public.images
     ADD CONSTRAINT images_pdf_file_id_fkey FOREIGN KEY (pdf_file_id) REFERENCES public.pdf_files(id) ON DELETE SET NULL;
+
+
+--
+-- Name: kappa_review_rows kappa_review_rows_import_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.kappa_review_rows
+    ADD CONSTRAINT kappa_review_rows_import_id_fkey FOREIGN KEY (import_id) REFERENCES public.kappa_review_imports(id) ON DELETE CASCADE;
 
 
 --
