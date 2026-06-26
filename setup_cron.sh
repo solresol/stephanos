@@ -22,7 +22,7 @@ MAILTO=stephanos@merah.cassia.ifost.org.au
 10 2 * * * cd ~/stephanos && uv run import_reviews.py >> logs/review_import.log 2>&1
 
 # 4. Regenerate websites with corrections (2:20 AM)
-20 2 * * * cd ~/stephanos && uv run generate_progress_site.py >> logs/progress_site.log 2>&1
+20 2 * * * cd ~/stephanos && uv run generate_pipeline_progress.py >> logs/pipeline_site.log 2>&1
 25 2 * * * cd ~/stephanos && uv run generate_reference_site.py >> logs/reference_site.log 2>&1
 
 # 5. Deploy websites to merah (2:30 AM)

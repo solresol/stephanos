@@ -12,11 +12,11 @@
 
 **Deployment:** Synced to htdocs/ root via `rsync -avz reference_site/`
 
-### 2. Progress Tracking Page
-**Generator:** `generate_progress_site.py`
-**Output File:** `progress.html` (root directory)
+### 2. Pipeline Status Page
+**Generator:** `generate_pipeline_progress.py`
+**Output File:** `reference_site/pipeline.html`
 **Content:** Processing status, token usage, completion rates
-**Deployment:** Synced to htdocs/ root
+**Deployment:** Included in `reference_site/` sync
 
 ### 3. Statistics Page
 **Generator:** `generate_statistics_site.py`
@@ -61,7 +61,7 @@ The `run_daily_pipeline.sh` script executes in this order:
    - Extract proper nouns with type classification
    - Extract etymologies with category classification
 8. **Generate sites**:
-   - Progress website (progress.html)
+   - Pipeline status website (reference_site/pipeline.html)
    - Reference website (reference_site/)
    - Statistics website (statistics.html + images)
    - People page (people.html)
@@ -76,7 +76,7 @@ All pages are accessible at https://stephanos.symmachus.org/
 
 - / - Main index page
 - /letter_alpha.html, /letter_beta.html, etc. - Letter pages
-- /progress.html - Progress tracking
+- /pipeline.html - Pipeline status
 - /statistics.html - Statistics and analytics
 - /people.html - People index
 - /protected/ - Protected area index
@@ -85,7 +85,7 @@ All pages are accessible at https://stephanos.symmachus.org/
 
 ## Notes
 
-- Generated HTML files (progress.html, statistics.html, people.html) are NOT committed to git
+- Generated HTML files under reference_site/ are NOT committed to git
 - The statistics_images/ directory is also regenerated on each run
 - Protected pages are regenerated on each run to reflect any OCR or lemma updates
 - The reference_site/ directory contains both public letter pages and the protected/ subdirectory

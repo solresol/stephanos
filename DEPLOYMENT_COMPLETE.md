@@ -72,7 +72,7 @@ The Stephanos Review System is now live, providing a web interface for human rev
 | 1:00 AM | Export lemma data, rsync to merah | `export_for_review.py` |
 | 2:00 AM | Pull review database from merah | `sync_review_db.sh` |
 | 2:10 AM | Import reviews to PostgreSQL | `import_reviews.py` |
-| 2:20 AM | Regenerate progress website | `generate_progress_site.py` |
+| 2:20 AM | Regenerate pipeline status website | `generate_pipeline_progress.py` |
 | 2:25 AM | Regenerate reference website | `generate_reference_site.py` |
 | 2:30 AM | Deploy websites to merah | rsync |
 | 3:00 AM | Backup PostgreSQL database | pg_dump |

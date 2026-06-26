@@ -14,7 +14,7 @@ All Python programs should be run with `uv run`:
 - `uv run extract_images_to_postgres.py <html_file>` - Extract image references from a single HTML file
 - `uv run batch_process.py` - Process unprocessed images with OpenAI vision
 - `uv run translate_lemmas.py` - Translate extracted Greek text to English
-- `uv run generate_progress_site.py` - Generate progress tracking website
+- `uv run generate_pipeline_progress.py` - Generate pipeline status website
 - `uv run generate_reference_site.py` - Generate reference website with lemmas
 - `uv run generate_csv_export.py --output exports/lemmas.csv` - Export lemmas to CSV
 - `uv run generate_pdf_book.py` - Generate PDF book with translations and indices
@@ -55,8 +55,8 @@ To add dependencies: `uv add <package>`
    - Priority order: (1) outdated prompt versions, (2) untranslated entries
    - Skips entries with human translations (they don't need AI retranslation)
 
-5. **Website Generation** (`generate_progress_site.py`, `generate_reference_site.py`)
-   - Generates static HTML showing processing progress and translated lemmas
+5. **Website Generation** (`generate_pipeline_progress.py`, `generate_reference_site.py`)
+   - Generates static HTML showing pipeline status and translated lemmas
 
 6. **PDF Book Generation** (`generate_pdf_book.py`)
    - Generates a LaTeX/XeLaTeX PDF with all translations

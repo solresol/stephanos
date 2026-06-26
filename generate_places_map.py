@@ -22,7 +22,7 @@ def get_geocoded_places(cur):
     """Get all places with coordinates."""
     cur.execute("""
         SELECT
-            id, lemma, billerbeck_id,
+            id, lemma,
             wikidata_place_qid, wikidata_place_label,
             latitude, longitude,
             pleiades_id,
@@ -42,7 +42,7 @@ def generate_map_html(places):
     # Build GeoJSON features
     features = []
     for place in places:
-        (lemma_id, lemma, billerbeck_id, qid, wd_label, lat, lon,
+        (lemma_id, lemma, qid, wd_label, lat, lon,
          pleiades_id, translation) = place
 
         # Truncate translation for popup
@@ -57,7 +57,6 @@ def generate_map_html(places):
             "properties": {
                 "id": lemma_id,
                 "lemma": lemma,
-                "billerbeck_id": billerbeck_id or "",
                 "wikidata_qid": qid,
                 "wikidata_label": wd_label or "",
                 "pleiades_id": pleiades_id or "",
@@ -205,10 +204,6 @@ def generate_map_html(places):
 
                 if (p.wikidata_label) {{
                     popupContent += `<div class="popup-label">${{p.wikidata_label}}</div>`;
-                }}
-
-                if (p.billerbeck_id) {{
-                    popupContent += `<div class="popup-label">Billerbeck: ${{p.billerbeck_id}}</div>`;
                 }}
 
                 if (p.translation) {{

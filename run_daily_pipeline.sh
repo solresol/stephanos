@@ -705,10 +705,6 @@ uv run refresh_legacy_canonical_fields.py 2>&1 | tee -a "$LOGFILE" || echo "  Wa
 echo "Step 5l: Syncing with nodegoat..." | tee -a "$LOGFILE"
 uv run sync_nodegoat.py --push --catch-up --limit 20 2>&1 | tee -a "$LOGFILE" || echo "  Warning: nodegoat sync failed" | tee -a "$LOGFILE"
 
-# Step 6: Generate progress website
-echo "Step 6: Generating progress website..." | tee -a "$LOGFILE"
-uv run generate_progress_site.py 2>&1 | tee -a "$LOGFILE"
-
 # Step 7: Generate reference website
 echo "Step 7: Generating reference website..." | tee -a "$LOGFILE"
 uv run generate_reference_site.py 2>&1 | tee -a "$LOGFILE"
@@ -873,8 +869,8 @@ fi
 echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
 # Deploy reference_site/ (contains statistics.html, statistics/, statistics_images/, people.html, and all lemma pages)
 rsync -az reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
-# Deploy progress.html (kept at root for backwards compatibility)
-rsync -az progress.html stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+# Remove retired duplicate root progress page if it exists.
+ssh stephanos@merah.cassia.ifost.org.au "rm -f /var/www/vhosts/stephanos.symmachus.org/htdocs/progress.html" 2>&1 | tee -a "$LOGFILE"
 # Deploy CSV exports
 rsync -az exports/lemmas.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
 rsync -az exports/proper_nouns.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
