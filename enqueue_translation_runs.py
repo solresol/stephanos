@@ -168,7 +168,6 @@ def profile_version_settings(cur, profile_version_id: int) -> dict[str, object]:
     mapping = [
         ("approved_human_only", "COALESCE(approved_human_only, FALSE)"),
         ("default_model", "NULLIF(default_model, '')"),
-        ("default_temperature", "default_temperature"),
         ("default_top_p", "default_top_p"),
         ("default_api_mode", "COALESCE(NULLIF(default_api_mode, ''), 'chat_completions')"),
         ("default_reasoning_effort", "NULLIF(default_reasoning_effort, '')"),
@@ -428,7 +427,6 @@ def enqueue(
     profile_version_id,
     repeat,
     model,
-    temperature,
     top_p,
     api_mode,
     reasoning_effort,
@@ -449,7 +447,6 @@ def enqueue(
             "source_text_version_id",
             "requested_runs",
             "model",
-            "temperature",
             "top_p",
             "status",
             "created_by",
@@ -461,7 +458,6 @@ def enqueue(
             source_text_version_id,
             repeat,
             model,
-            temperature,
             top_p,
             "pending",
             created_by,
@@ -523,7 +519,6 @@ def main():
         help="Also queue lemmas that already have an AI translation (default: queue untranslated/outdated only)",
     )
     parser.add_argument("--model", help="Override the prompt version default model")
-    parser.add_argument("--temperature", type=float, help="Override the prompt version default temperature")
     parser.add_argument("--top-p", type=float, help="Override the prompt version default top_p")
     parser.add_argument(
         "--api-mode",
@@ -592,7 +587,6 @@ def main():
             "Use enqueue_human_evaluation_translations.py so it only targets the approved list."
         )
     model = args.model or settings.get("default_model") or DEFAULT_TRANSLATION_MODEL
-    temperature = args.temperature if args.temperature is not None else settings.get("default_temperature")
     top_p = args.top_p if args.top_p is not None else settings.get("default_top_p")
     api_mode = args.api_mode or settings.get("default_api_mode") or API_MODE_CHAT_COMPLETIONS
     reasoning_effort = (
@@ -690,7 +684,7 @@ def main():
         print(f"Would queue translation requests: {len(candidates)}")
         print(
             "Runtime defaults: "
-            f"model={model} temperature={temperature} top_p={top_p} api_mode={api_mode} "
+            f"model={model} top_p={top_p} api_mode={api_mode} "
             f"reasoning_effort={reasoning_effort or '-'} requested_runs={repeat}"
         )
         if candidates:
@@ -706,7 +700,6 @@ def main():
         profile_version_id=profile_version_id,
         repeat=repeat,
         model=model,
-        temperature=temperature,
         top_p=top_p,
         api_mode=api_mode,
         reasoning_effort=reasoning_effort,

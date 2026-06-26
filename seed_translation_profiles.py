@@ -91,7 +91,7 @@ def main():
     if column_exists(cur, "translation_prompt_profile_versions", "default_model"):
         updates.append("default_model = COALESCE(NULLIF(default_model, ''), 'gpt-5.5')")
     if column_exists(cur, "translation_prompt_profile_versions", "default_temperature"):
-        updates.append("default_temperature = COALESCE(default_temperature, 1.0)")
+        updates.append("default_temperature = NULL")
     if column_exists(cur, "translation_prompt_profile_versions", "default_top_p"):
         updates.append("default_top_p = COALESCE(default_top_p, 1.0)")
     if column_exists(cur, "translation_prompt_profile_versions", "default_api_mode"):

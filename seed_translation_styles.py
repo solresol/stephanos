@@ -31,7 +31,7 @@ PROFILES: list[PromptProfileSeed] = [
     PromptProfileSeed(
         name="lit_tech_cool",
         style_kind="literal",
-        description="Literal/technical, preserve Stephanos concision (recommended temperature ~0.2)",
+        description="Literal/technical, preserve Stephanos concision",
         version=1,
         prompt_text=(
             "You are an expert classical philologist translating Stephanos of Byzantium (Ethnika).\n"
@@ -54,12 +54,12 @@ PROFILES: list[PromptProfileSeed] = [
             "- Put the English translation in the tool argument translation.\n"
             "- No preface, no commentary, no Markdown."
         ),
-        notes="Cool/lower-variance literal lane; pair with temperature≈0.2, top_p≈1.0",
+        notes="Restrained literal lane; variance comes from prompt wording and repeated runs, not temperature.",
     ),
     PromptProfileSeed(
         name="lit_tech_warm",
         style_kind="literal",
-        description="Literal/technical, preserve concision but allow small smoothing (recommended temperature ~0.8)",
+        description="Literal/technical, preserve concision but allow small smoothing",
         version=1,
         prompt_text=(
             "You are an expert classical philologist translating Stephanos of Byzantium (Ethnika).\n"
@@ -81,12 +81,12 @@ PROFILES: list[PromptProfileSeed] = [
             "- Put the English translation in the tool argument translation.\n"
             "- No preface, no commentary, no Markdown."
         ),
-        notes="Warm/higher-variance literal lane; pair with temperature≈0.8, top_p≈1.0",
+        notes="Slightly smoothed literal lane; variance comes from prompt wording and repeated runs, not temperature.",
     ),
     PromptProfileSeed(
         name="readable_context_cool",
         style_kind="readable",
-        description="Readable English with minimal clarifying expansions (recommended temperature ~0.4)",
+        description="Readable English with minimal clarifying expansions",
         version=1,
         prompt_text=(
             "You are an expert translator and commentator on Stephanos of Byzantium (Ethnika).\n"
@@ -111,12 +111,12 @@ PROFILES: list[PromptProfileSeed] = [
             "- Put the English translation (with any bracketed clarifications) in the tool argument translation.\n"
             "- No preface, no commentary, no Markdown."
         ),
-        notes="Cool readable lane; pair with temperature≈0.4, top_p≈1.0",
+        notes="Restrained readable lane; variance comes from prompt wording and repeated runs, not temperature.",
     ),
     PromptProfileSeed(
         name="readable_context_warm",
         style_kind="readable",
-        description="Readable English with fuller explanatory expansions (recommended temperature ~1.0)",
+        description="Readable English with fuller explanatory expansions",
         version=1,
         prompt_text=(
             "You are an expert translator and commentator on Stephanos of Byzantium (Ethnika).\n"
@@ -141,7 +141,7 @@ PROFILES: list[PromptProfileSeed] = [
             "- Put the English translation (with any bracketed clarifications) in the tool argument translation.\n"
             "- No preface, no commentary, no Markdown."
         ),
-        notes="Warm readable lane; pair with temperature≈1.0, top_p≈1.0",
+        notes="Fuller readable lane; variance comes from prompt wording and repeated runs, not temperature.",
     ),
     PromptProfileSeed(
         name="risk_factors_5",
@@ -168,7 +168,7 @@ PROFILES: list[PromptProfileSeed] = [
             "- Put the English risk report in the tool argument translation.\n"
             "- No preface, no commentary, no Markdown."
         ),
-        notes="Risk/ambiguity lane; generally pair with low temperature (≈0.2)",
+        notes="Risk/ambiguity lane; keep variance in the prompt text rather than request parameters.",
     ),
     PromptProfileSeed(
         name="apparatus_variants",
@@ -196,12 +196,12 @@ PROFILES: list[PromptProfileSeed] = [
             "- Put the English apparatus/variant report in the tool argument translation.\n"
             "- No preface, no commentary, no Markdown."
         ),
-        notes="Apparatus variants lane; generally pair with low temperature (≈0.2)",
+        notes="Apparatus variants lane; keep variance in the prompt text rather than request parameters.",
     ),
     PromptProfileSeed(
         name="entry_paraphrase",
         style_kind="paraphrase",
-        description="Message-style conceptual paraphrase in a third-person 'the entry...' voice (recommended temperature ~0.8)",
+        description="Message-style conceptual paraphrase in a third-person 'the entry...' voice",
         version=1,
         prompt_text=(
             "You are an expert classical philologist paraphrasing Stephanos of Byzantium (Ethnika) for a modern reader.\n"
@@ -222,12 +222,12 @@ PROFILES: list[PromptProfileSeed] = [
             "- Put the English paraphrase in the tool argument translation.\n"
             "- No preface, no commentary about your process, no Markdown."
         ),
-        notes="Paraphrase lane (not verbatim translation); pair with temperature≈0.8, top_p≈1.0",
+        notes="Paraphrase lane (not verbatim translation); keep variance in the prompt text rather than request parameters.",
     ),
     PromptProfileSeed(
         name="year10_student",
         style_kind="pedagogical",
-        description="Explain for a Year 10 student (clear, simple English; define terms) (recommended temperature ~0.7)",
+        description="Explain for a Year 10 student (clear, simple English; define terms)",
         version=1,
         prompt_text=(
             "You are an expert teacher explaining a Stephanos of Byzantium (Ethnika) entry to a Year 10 student (about age 15–16).\n"
@@ -247,12 +247,12 @@ PROFILES: list[PromptProfileSeed] = [
             "- Put the Year-10-friendly explanation in the tool argument translation.\n"
             "- No preface, no commentary about your process, no Markdown."
         ),
-        notes="Pedagogical lane; pair with temperature≈0.7, top_p≈1.0",
+        notes="Pedagogical lane; keep variance in the prompt text rather than request parameters.",
     ),
     PromptProfileSeed(
         name="poetic_rhyming_lines",
         style_kind="creative",
-        description="Creative re-expression as short rhyming lines (accuracy-first) (recommended temperature ~1.0)",
+        description="Creative re-expression as short rhyming lines (accuracy-first)",
         version=1,
         prompt_text=(
             "You are an expert classical philologist producing a creative, rhyming re-expression of a Stephanos of Byzantium (Ethnika) entry.\n"
@@ -272,12 +272,12 @@ PROFILES: list[PromptProfileSeed] = [
             "- Put the rhyming lines in the tool argument translation.\n"
             "- No preface, no commentary about your process, no Markdown."
         ),
-        notes="Creative rhyming lane; pair with temperature≈1.0, top_p≈1.0",
+        notes="Creative rhyming lane; keep variance in the prompt text rather than request parameters.",
     ),
     PromptProfileSeed(
         name="limerick",
         style_kind="creative",
-        description="Creative re-expression as a limerick (AABBA) (recommended temperature ~1.1)",
+        description="Creative re-expression as a limerick (AABBA)",
         version=1,
         prompt_text=(
             "You are an expert classical philologist producing a creative limerick based on a Stephanos of Byzantium (Ethnika) entry.\n"
@@ -297,12 +297,12 @@ PROFILES: list[PromptProfileSeed] = [
             "- Put the limerick in the tool argument translation.\n"
             "- No preface, no commentary about your process, no Markdown."
         ),
-        notes="Creative limerick lane; pair with temperature≈1.1, top_p≈1.0",
+        notes="Creative limerick lane; keep variance in the prompt text rather than request parameters.",
     ),
     PromptProfileSeed(
         name="etymology_focus",
         style_kind="readable",
-        description="Translation with explicit preservation of place-name etymologies/wordplay (recommended temperature ~0.6)",
+        description="Translation with explicit preservation of place-name etymologies/wordplay",
         version=1,
         prompt_text=(
             "You are an expert classical philologist translating Stephanos of Byzantium (Ethnika).\n"
@@ -325,12 +325,12 @@ PROFILES: list[PromptProfileSeed] = [
             "- Put the English translation (with any bracketed etymology glosses) in the tool argument translation.\n"
             "- No preface, no commentary about your process, no Markdown."
         ),
-        notes="Etymology/wordplay lane; pair with temperature≈0.6, top_p≈1.0",
+        notes="Etymology/wordplay lane; keep variance in the prompt text rather than request parameters.",
     ),
     PromptProfileSeed(
         name="glossary_terms",
         style_kind="analysis",
-        description="Extract a short glossary of technical/philological terms used in the entry (recommended temperature ~0.3)",
+        description="Extract a short glossary of technical/philological terms used in the entry",
         version=1,
         prompt_text=(
             "You are an expert classical philologist.\n"
@@ -357,24 +357,9 @@ PROFILES: list[PromptProfileSeed] = [
             "- Put the glossary in the tool argument translation.\n"
             "- No preface, no commentary about your process, no Markdown."
         ),
-        notes="Glossary lane; pair with low temperature≈0.3, top_p≈1.0",
+        notes="Glossary lane; keep variance in the prompt text rather than request parameters.",
     ),
 ]
-
-STYLE_DEFAULT_TEMPERATURES = {
-    "lit_tech_cool": 0.2,
-    "lit_tech_warm": 0.8,
-    "readable_context_cool": 0.4,
-    "readable_context_warm": 1.0,
-    "risk_factors_5": 0.2,
-    "apparatus_variants": 0.2,
-    "entry_paraphrase": 0.8,
-    "year10_student": 0.7,
-    "poetic_rhyming_lines": 1.0,
-    "limerick": 1.1,
-    "etymology_focus": 0.6,
-    "glossary_terms": 0.3,
-}
 
 
 def ensure_tables(cur) -> bool:
@@ -438,7 +423,7 @@ def upsert_version(cur, profile_id: int, profile: PromptProfileSeed) -> None:
     optional_values = {
         "approved_human_only": True,
         "default_model": DEFAULT_TRANSLATION_MODEL,
-        "default_temperature": STYLE_DEFAULT_TEMPERATURES.get(profile.name, 1.0),
+        "default_temperature": None,
         "default_top_p": 1.0,
         "default_api_mode": "chat_completions",
         "default_reasoning_effort": None,

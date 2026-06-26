@@ -73,20 +73,20 @@ def resolve_profile(cur, profile_name: str) -> int:
         SELECT id
         FROM translation_prompt_profiles
         WHERE name = %s
+          AND active = TRUE
         LIMIT 1
         """,
         (profile_name,),
     )
     row = cur.fetchone()
     if not row:
-        raise RuntimeError(f"Unknown prompt profile: {profile_name}")
+        raise RuntimeError(f"Unknown active prompt profile: {profile_name}")
     return int(row[0])
 
 
 def resolve_profile_versions(cur, profile_id: int, versions: list[int]) -> list[dict[str, object]]:
     optional_columns = [
         ("default_model", "NULLIF(default_model, '')", "NULL"),
-        ("default_temperature", "default_temperature", "NULL"),
         ("default_top_p", "default_top_p", "NULL"),
         ("default_api_mode", "COALESCE(NULLIF(default_api_mode, ''), 'chat_completions')", "'chat_completions'"),
         ("default_reasoning_effort", "NULLIF(default_reasoning_effort, '')", "NULL"),
@@ -101,12 +101,18 @@ def resolve_profile_versions(cur, profile_id: int, versions: list[int]) -> list[
             if column_exists(cur, "translation_prompt_profile_versions", column_name)
             else f"{fallback} AS {column_name}"
         )
+    active_filter = (
+        "AND COALESCE(active, TRUE) = TRUE"
+        if column_exists(cur, "translation_prompt_profile_versions", "active")
+        else ""
+    )
     cur.execute(
         f"""
         SELECT {", ".join(select_parts)}
         FROM translation_prompt_profile_versions
         WHERE profile_id = %s
           AND version = ANY(%s)
+          {active_filter}
         ORDER BY version
         """,
         (int(profile_id), [int(version) for version in versions]),
@@ -115,8 +121,10 @@ def resolve_profile_versions(cur, profile_id: int, versions: list[int]) -> list[
     rows = []
     for row in cur.fetchall():
         item = dict(zip(keys, row))
+        item["profile_id"] = int(profile_id)
         item["profile_version_id"] = int(item["profile_version_id"])
         item["version"] = int(item["version"])
+        item["profile_name"] = ""
         item["default_requested_runs"] = int(item.get("default_requested_runs") or 1)
         item["approved_human_queue_priority"] = int(item.get("approved_human_queue_priority") or 5)
         item["approved_human_only"] = bool(item.get("approved_human_only"))
@@ -124,7 +132,92 @@ def resolve_profile_versions(cur, profile_id: int, versions: list[int]) -> list[
     found = {row["version"] for row in rows}
     missing = [version for version in versions if version not in found]
     if missing:
-        raise RuntimeError(f"Missing prompt profile version(s): {', '.join(str(value) for value in missing)}")
+        raise RuntimeError(f"Missing active prompt profile version(s): {', '.join(str(value) for value in missing)}")
+    return rows
+
+
+def resolve_approved_human_profile_versions(
+    cur,
+    *,
+    max_priority: int | None,
+    profile_prefix: str | None,
+) -> list[dict[str, object]]:
+    optional_columns = [
+        ("default_model", "NULLIF(pv.default_model, '')", "NULL"),
+        ("default_top_p", "pv.default_top_p", "NULL"),
+        (
+            "default_api_mode",
+            "COALESCE(NULLIF(pv.default_api_mode, ''), 'chat_completions')",
+            "'chat_completions'",
+        ),
+        ("default_reasoning_effort", "NULLIF(pv.default_reasoning_effort, '')", "NULL"),
+        ("default_requested_runs", "GREATEST(COALESCE(pv.default_requested_runs, 1), 1)", "1"),
+        ("approved_human_queue_priority", "GREATEST(COALESCE(pv.approved_human_queue_priority, 5), 0)", "5"),
+        ("approved_human_only", "COALESCE(pv.approved_human_only, FALSE)", "FALSE"),
+    ]
+    approved_expr = (
+        "COALESCE(pv.approved_human_only, FALSE)"
+        if column_exists(cur, "translation_prompt_profile_versions", "approved_human_only")
+        else "FALSE"
+    )
+    priority_expr = (
+        "GREATEST(COALESCE(pv.approved_human_queue_priority, 5), 0)"
+        if column_exists(cur, "translation_prompt_profile_versions", "approved_human_queue_priority")
+        else "5"
+    )
+    active_expr = "COALESCE(pv.active, TRUE)"
+    select_parts = ["p.id AS profile_id", "COALESCE(p.name, '') AS profile_name", "pv.id", "pv.version"]
+    for column_name, expression, fallback in optional_columns:
+        select_parts.append(
+            f"{expression} AS {column_name}"
+            if column_exists(cur, "translation_prompt_profile_versions", column_name)
+            else f"{fallback} AS {column_name}"
+        )
+    params: list[object] = []
+    priority_filter = ""
+    if max_priority is not None:
+        priority_filter = f"AND {priority_expr} <= %s"
+        params.append(int(max_priority))
+    profile_prefix_filter = ""
+    if profile_prefix:
+        profile_prefix_filter = "AND p.name LIKE %s"
+        params.append(f"{profile_prefix}%")
+    cur.execute(
+        f"""
+        SELECT {", ".join(select_parts)}
+        FROM translation_prompt_profiles p
+        JOIN translation_prompt_profile_versions pv ON pv.profile_id = p.id
+        WHERE p.active = TRUE
+          AND {active_expr}
+          AND {approved_expr}
+          {priority_filter}
+          {profile_prefix_filter}
+        ORDER BY
+            {priority_expr},
+            p.name,
+            pv.version
+        """,
+        params,
+    )
+    keys = [
+        "profile_id",
+        "profile_name",
+        "profile_version_id",
+        "version",
+        *[column_name for column_name, _expr, _fallback in optional_columns],
+    ]
+    rows = []
+    for row in cur.fetchall():
+        item = dict(zip(keys, row))
+        item["profile_id"] = int(item["profile_id"])
+        item["profile_version_id"] = int(item["profile_version_id"])
+        item["version"] = int(item["version"])
+        item["default_requested_runs"] = int(item.get("default_requested_runs") or 1)
+        item["approved_human_queue_priority"] = int(item.get("approved_human_queue_priority") or 5)
+        item["approved_human_only"] = bool(item.get("approved_human_only"))
+        rows.append(item)
+    if not rows:
+        raise RuntimeError("No active approved-human-only prompt profile versions matched.")
     return rows
 
 
@@ -161,16 +254,22 @@ def source_join_sql(source_document: str) -> tuple[str, list[object]]:
 def fetch_missing_requests(
     cur,
     *,
-    profile_id: int,
-    profile_versions: list[dict[str, int]],
+    profile_versions: list[dict[str, object]],
     source_document: str,
     include_quarantined: bool,
     reuse_any_source_run: bool,
 ) -> list[dict[str, object]]:
-    values_sql = ", ".join(["(%s, %s, %s)"] * len(profile_versions))
+    values_sql = ", ".join(["(%s, %s, %s, %s)"] * len(profile_versions))
     params: list[object] = []
     for row in profile_versions:
-        params.extend([int(profile_id), int(row["profile_version_id"]), int(row["version"])])
+        params.extend(
+            [
+                int(row["profile_id"]),
+                int(row["profile_version_id"]),
+                int(row["version"]),
+                str(row.get("profile_name") or ""),
+            ]
+        )
 
     source_join, source_params = source_join_sql(source_document)
     params.extend(source_params)
@@ -179,7 +278,7 @@ def fetch_missing_requests(
     source_match_filter = "" if reuse_any_source_run else "AND tr.source_text_version_id = s.source_text_version_id"
 
     query = f"""
-        WITH versions(profile_id, profile_version_id, version) AS (
+        WITH versions(profile_id, profile_version_id, version, profile_name) AS (
             VALUES {values_sql}
         ),
         human AS (
@@ -211,7 +310,8 @@ def fetch_missing_requests(
                 s.entry_number,
                 v.profile_id,
                 v.profile_version_id,
-                v.version AS profile_version
+                v.version AS profile_version,
+                v.profile_name
             FROM source s
             CROSS JOIN versions v
             WHERE NOT EXISTS (
@@ -242,11 +342,13 @@ def fetch_missing_requests(
             entry_number,
             profile_id,
             profile_version_id,
-            profile_version
+            profile_version,
+            profile_name
         FROM missing
         ORDER BY
             COALESCE(entry_number, 100000000),
             lemma_id,
+            profile_name,
             profile_version
     """
     params.append(list(SUCCESSFUL_RUN_STATUSES))
@@ -265,8 +367,8 @@ def fetch_missing_requests(
             "profile_id": int(row[5]),
             "profile_version_id": int(row[6]),
             "profile_version": int(row[7]),
+            "profile_name": row[8] or "",
             "default_model": version_defaults[int(row[6])].get("default_model"),
-            "default_temperature": version_defaults[int(row[6])].get("default_temperature"),
             "default_top_p": version_defaults[int(row[6])].get("default_top_p"),
             "default_api_mode": version_defaults[int(row[6])].get("default_api_mode"),
             "default_reasoning_effort": version_defaults[int(row[6])].get("default_reasoning_effort"),
@@ -337,7 +439,6 @@ def enqueue_requests(
     *,
     requested_runs: int | None,
     model: str | None,
-    temperature: float | None,
     top_p: float | None,
     api_mode: str | None,
     reasoning_effort: str | None,
@@ -351,7 +452,6 @@ def enqueue_requests(
     for row in rows:
         effective_requested_runs = int(requested_runs or row.get("default_requested_runs") or 1)
         effective_model = model or row.get("default_model") or DEFAULT_TRANSLATION_MODEL
-        effective_temperature = temperature if temperature is not None else row.get("default_temperature")
         effective_top_p = top_p if top_p is not None else row.get("default_top_p")
         effective_api_mode = api_mode or row.get("default_api_mode") or API_MODE_CHAT_COMPLETIONS
         effective_reasoning_effort = (
@@ -367,7 +467,6 @@ def enqueue_requests(
             "source_text_version_id",
             "requested_runs",
             "model",
-            "temperature",
             "top_p",
             "status",
             "created_by",
@@ -379,7 +478,6 @@ def enqueue_requests(
             int(row["source_text_version_id"]),
             effective_requested_runs,
             effective_model,
-            effective_temperature,
             effective_top_p,
             "pending",
             created_by,
@@ -409,9 +507,10 @@ def print_preview(rows: list[dict[str, object]], *, max_rows: int = 30) -> None:
     for row in rows[:max_rows]:
         entry = row.get("entry_number")
         entry_text = f"entry={entry}" if entry is not None else "entry=?"
+        profile = row.get("profile_name") or row.get("profile_id")
         print(
             f"  lemma={row['lemma_id']} {entry_text} "
-            f"v{row['profile_version']} source={row['source_document']} {row['lemma']}"
+            f"profile={profile} v{row['profile_version']} source={row['source_document']} {row['lemma']}"
         )
     if len(rows) > max_rows:
         print(f"  ... {len(rows) - max_rows} more")
@@ -423,6 +522,20 @@ def main() -> None:
     )
     parser.add_argument("--profile", default=DEFAULT_PROFILE, help="Prompt profile name")
     parser.add_argument("--versions", type=parse_versions, default=list(DEFAULT_VERSIONS), help="Prompt versions, e.g. 1,2,3")
+    parser.add_argument(
+        "--all-approved-human-only",
+        action="store_true",
+        help="Target every active prompt profile version marked approved_human_only.",
+    )
+    parser.add_argument(
+        "--max-approved-priority",
+        type=int,
+        help="With --all-approved-human-only, only target profile versions at or below this approved-human queue priority.",
+    )
+    parser.add_argument(
+        "--profile-prefix",
+        help="With --all-approved-human-only, only target profile names beginning with this prefix.",
+    )
     parser.add_argument(
         "--source-document",
         default=PREFERRED_SOURCE_DOCUMENT,
@@ -438,7 +551,6 @@ def main() -> None:
     parser.add_argument("--priority", type=int, help="Lower values run earlier; defaults to the prompt version setting")
     parser.add_argument("--requested-runs", type=int, help="Override the prompt version requested-run count")
     parser.add_argument("--model", help="Override the prompt version default model")
-    parser.add_argument("--temperature", type=float, help="Override the prompt version default temperature")
     parser.add_argument("--top-p", type=float, help="Override the prompt version default top_p")
     parser.add_argument(
         "--api-mode",
@@ -497,8 +609,17 @@ def main() -> None:
 
     cur.execute("ALTER TABLE assembled_lemmas ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE")
 
-    profile_id = resolve_profile(cur, args.profile)
-    profile_versions = resolve_profile_versions(cur, profile_id, args.versions)
+    if args.all_approved_human_only:
+        profile_versions = resolve_approved_human_profile_versions(
+            cur,
+            max_priority=args.max_approved_priority,
+            profile_prefix=args.profile_prefix,
+        )
+    else:
+        profile_id = resolve_profile(cur, args.profile)
+        profile_versions = resolve_profile_versions(cur, profile_id, args.versions)
+        for row in profile_versions:
+            row["profile_name"] = args.profile
     open_requests = count_open_requests(cur, profile_versions)
     resolved_priority = (
         int(args.priority)
@@ -507,7 +628,6 @@ def main() -> None:
     )
     rows = fetch_missing_requests(
         cur,
-        profile_id=profile_id,
         profile_versions=profile_versions,
         source_document=args.source_document,
         include_quarantined=bool(args.include_quarantined),
@@ -552,7 +672,6 @@ def main() -> None:
             rows,
             requested_runs=args.requested_runs,
             model=args.model,
-            temperature=args.temperature,
             top_p=args.top_p,
             api_mode=args.api_mode,
             reasoning_effort=args.reasoning_effort,

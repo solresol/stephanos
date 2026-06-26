@@ -1156,7 +1156,7 @@ def fetch_comparison_rows(*, approved_human_only: bool) -> list[dict[str, object
             tr.lemma_id,
             tr.run_index,
             tr.model,
-            tr.temperature,
+            NULL::double precision AS temperature,
             tr.top_p,
             tr.status AS run_status,
             tr.public_eligible,

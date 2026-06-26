@@ -136,7 +136,6 @@ def fetch_queue_summary(cur) -> list[dict[str, object]]:
     model_expr = request_expr(cur, "model", "default_model", "'gpt-5.5'")
     api_mode_expr = request_expr(cur, "api_mode", "default_api_mode", "'chat_completions'")
     reasoning_expr = request_expr(cur, "reasoning_effort", "default_reasoning_effort", "''")
-    temperature_expr = numeric_request_expr(cur, "temperature", "default_temperature")
     top_p_expr = numeric_request_expr(cur, "top_p", "default_top_p")
     approved_expr = approved_human_expr(cur)
     cur.execute(
@@ -150,7 +149,6 @@ def fetch_queue_summary(cur) -> list[dict[str, object]]:
             {model_expr} AS model,
             {api_mode_expr} AS api_mode,
             {reasoning_expr} AS reasoning_effort,
-            {temperature_expr} AS temperature,
             {top_p_expr} AS top_p,
             COUNT(*) AS request_count,
             MIN(trr.created_at) AS oldest_request,
@@ -160,8 +158,8 @@ def fetch_queue_summary(cur) -> list[dict[str, object]]:
         JOIN translation_prompt_profile_versions pv ON pv.id = trr.profile_version_id
         JOIN assembled_lemmas a ON a.id = trr.lemma_id
         WHERE trr.status IN ('pending', 'running')
-        GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
-        ORDER BY 1 ASC, 3 ASC, 11 DESC, 4 ASC, 5 ASC
+        GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9
+        ORDER BY 1 ASC, 3 ASC, 10 DESC, 4 ASC, 5 ASC
         """,
     )
     keys = [
@@ -173,7 +171,6 @@ def fetch_queue_summary(cur) -> list[dict[str, object]]:
         "model",
         "api_mode",
         "reasoning_effort",
-        "temperature",
         "top_p",
         "request_count",
         "oldest_request",
@@ -194,11 +191,6 @@ def fetch_profile_controls(cur) -> list[dict[str, object]]:
         "pv.default_model"
         if column_exists(cur, "translation_prompt_profile_versions", "default_model")
         else "NULL::text"
-    )
-    temperature_col = (
-        "pv.default_temperature"
-        if column_exists(cur, "translation_prompt_profile_versions", "default_temperature")
-        else "NULL::double precision"
     )
     top_p_col = (
         "pv.default_top_p"
@@ -249,7 +241,6 @@ def fetch_profile_controls(cur) -> list[dict[str, object]]:
             pv.active,
             {approved_col} AS approved_human_only,
             {model_col} AS default_model,
-            {temperature_col} AS default_temperature,
             {top_p_col} AS default_top_p,
             {api_col} AS default_api_mode,
             {reasoning_col} AS default_reasoning_effort,
@@ -276,7 +267,6 @@ def fetch_profile_controls(cur) -> list[dict[str, object]]:
         "active",
         "approved_human_only",
         "default_model",
-        "default_temperature",
         "default_top_p",
         "default_api_mode",
         "default_reasoning_effort",
@@ -839,14 +829,13 @@ def render_queue_summary(rows: list[dict[str, object]]) -> str:
             f"<td>{text_cell(row['model'])}</td>"
             f"<td>{text_cell(row['api_mode'])}</td>"
             f"<td>{text_cell(row.get('reasoning_effort') or '-')}</td>"
-            f"<td>{number_cell(row.get('temperature'), 2)}</td>"
             f"<td>{number_cell(row.get('top_p'), 2)}</td>"
             f"<td>{int_cell(row['request_count'])}</td>"
             f"<td>{text_cell(short_datetime(row['oldest_request']))}</td>"
             "</tr>"
         )
     if not body:
-        body.append('<tr><td colspan="11">No pending or running translation requests.</td></tr>')
+        body.append('<tr><td colspan="10">No pending or running translation requests.</td></tr>')
     return f"""
     <section>
       <h2>Scheduled Translation Queue</h2>
@@ -854,7 +843,7 @@ def render_queue_summary(rows: list[dict[str, object]]) -> str:
         <thead>
           <tr>
             <th>Class</th><th>Status</th><th>Priority</th><th>Prompt</th><th>Model</th>
-            <th>API</th><th>Reasoning</th><th>Temp</th><th>Top p</th><th>Requests</th><th>Oldest</th>
+            <th>API</th><th>Reasoning</th><th>Top p</th><th>Requests</th><th>Oldest</th>
           </tr>
         </thead>
         <tbody>{''.join(body)}</tbody>
@@ -875,7 +864,6 @@ def render_profile_controls(rows: list[dict[str, object]]) -> str:
             f"<td>{text_cell(row.get('default_model') or '-')}</td>"
             f"<td>{text_cell(row.get('default_api_mode') or '-')}</td>"
             f"<td>{text_cell(row.get('default_reasoning_effort') or '-')}</td>"
-            f"<td>{number_cell(row.get('default_temperature'), 2)}</td>"
             f"<td>{number_cell(row.get('default_top_p'), 2)}</td>"
             f"<td>{int_cell(row.get('default_requested_runs'))}</td>"
             f"<td>{int_cell(row.get('approved_human_queue_priority'))}</td>"
@@ -891,7 +879,7 @@ def render_profile_controls(rows: list[dict[str, object]]) -> str:
         <thead>
           <tr>
             <th>Profile</th><th>v</th><th>Active</th><th>Approved only</th><th>Default model</th>
-            <th>API</th><th>Reasoning</th><th>Temp</th><th>Top p</th><th>Runs</th>
+            <th>API</th><th>Reasoning</th><th>Top p</th><th>Runs</th>
             <th>Approved priority</th><th>Queued</th><th>Completed</th><th>Avg tokens</th>
           </tr>
         </thead>
