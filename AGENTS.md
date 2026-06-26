@@ -1,8 +1,8 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Python scripts live at repo root: `extract_epub.py` ingests EPUBs, `extract_images_to_postgres.py` collects page images, `process_image.py` OCRs a single page, `batch_process.py` loops OCR with token limits, `translate_lemmas.py` adds English translations, `generate_progress_site.py` and `generate_reference_site.py` emit HTML, `run_daily_pipeline.sh` chains everything.
-- Database access is centralized in `db.py` and reads connection defaults from `config.py`. Primary data lives in PostgreSQL (local `stephanos` DB); SQLite exports land in `stephanos.db`; generated HTML lives in `progress.html` and `reference_site/`.
+- Python scripts live at repo root: `extract_epub.py` ingests EPUBs, `extract_images_to_postgres.py` collects page images, `process_image.py` OCRs a single page, `batch_process.py` loops OCR with token limits, `translate_lemmas.py` adds English translations, `generate_pipeline_progress.py` and `generate_reference_site.py` emit HTML, `run_daily_pipeline.sh` chains everything.
+- Database access is centralized in `db.py` and reads connection defaults from `config.py`. Primary data lives in PostgreSQL (local `stephanos` DB); SQLite exports land in `stephanos.db`; generated HTML lives in `reference_site/`.
 - Logs default to `pipeline.log`. Keep large assets and EPUBs outside the repo unless needed for debugging.
 
 ## Build, Test, and Development Commands
@@ -11,7 +11,7 @@
 - OCR one image: `uv run process_image.py --image-dir /path/to/images --image e978...jpg`; batch with limits: `uv run batch_process.py --delay 1 --daily-token-limit 100000 --limit 50`.
 - Translate queued lemmas: `uv run translate_lemmas.py --limit 20 --delay 1`.
 - Assemble lemmas across pages before translation: `uv run assemble_lemmas.py` (use `--rebuild` to clear/recreate).
-- Regenerate sites: `uv run generate_progress_site.py` and `uv run generate_reference_site.py`.
+- Regenerate sites: `uv run generate_pipeline_progress.py` and `uv run generate_reference_site.py`.
 - CSV export (headword, Greek, translation): `uv run generate_csv_export.py --output exports/lemmas.csv`.
 - PDF book and indices: `uv run generate_pdf_book.py`.
 - Map and Wikidata linking: `uv run generate_places_map.py`, `uv run link_wikidata_places.py`, `uv run link_wikidata.py`.

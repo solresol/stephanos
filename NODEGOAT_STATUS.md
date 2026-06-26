@@ -314,7 +314,7 @@ echo "Importing corrections from nodegoat..."
 uv run sync_from_nodegoat.py || echo "Warning: nodegoat import failed"
 
 # Generate websites (already includes corrected data via COALESCE)
-uv run generate_progress_site.py
+uv run generate_pipeline_progress.py
 uv run generate_reference_site.py
 
 # ... rest of pipeline ...

@@ -73,6 +73,20 @@ _SAFE_REF_RE = re.compile(r"[^0-9A-Za-z._-]+")
 
 OVERLAP_COLOR_CLASSES = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"]
 
+PUBLIC_SOURCE_SCRUB_PATTERNS = (
+    (re.compile(r"Braswell\s*/\s*Billerbeck"), "Braswell"),
+    (re.compile(r"Meineke\s*/\s*Billerbeck"), "source-text"),
+    (re.compile(r"Meineke/Billerbeck"), "source-text"),
+    (re.compile(r"Billerbeck German Page OCR"), "German Reference Page OCR"),
+    (re.compile(r"Billerbeck German Translation"), "German Reference Translation"),
+    (re.compile(r"Billerbeck German"), "German reference"),
+    (re.compile(r"Billerbeck OCR"), "legacy OCR"),
+    (re.compile(r"Billerbeck-sourced"), "legacy-source"),
+    (re.compile(r"Billerbeck-dependent"), "legacy-source-dependent"),
+    (re.compile(r"\s+Billerbeck\b"), ""),
+    (re.compile(r"\bBillerbeck\b"), "legacy source"),
+)
+
 GUIDANCE_KIND_LABELS = {
     "gloss": "Gloss",
     "formula": "Formula",
@@ -114,6 +128,36 @@ def normalize_whitespace(text: str) -> str:
     # Also normalize non-breaking spaces to regular spaces.
     text = text.replace("\u00a0", " ")
     return _WS_RE.sub(" ", text).strip()
+
+
+def scrub_public_source_mentions(text: str) -> str:
+    """Remove non-public edition-source labels from rendered public output."""
+    if not text:
+        return ""
+    scrubbed = str(text)
+    for pattern, replacement in PUBLIC_SOURCE_SCRUB_PATTERNS:
+        scrubbed = pattern.sub(replacement, scrubbed)
+    return scrubbed
+
+
+def scrub_public_reference_site_files(output_dir: Path) -> int:
+    """Scrub generated non-protected public HTML/JSON files before publishing."""
+    changed = 0
+    for path in output_dir.rglob("*"):
+        if path.suffix.lower() not in {".html", ".json"}:
+            continue
+        try:
+            rel_parts = path.relative_to(output_dir).parts
+        except ValueError:
+            rel_parts = path.parts
+        if "protected" in rel_parts or "cgi-bin" in rel_parts:
+            continue
+        original = path.read_text(encoding="utf-8")
+        scrubbed = scrub_public_source_mentions(original)
+        if scrubbed != original:
+            path.write_text(scrubbed, encoding="utf-8")
+            changed += 1
+    return changed
 
 
 def pg_table_exists(cur, table_name: str) -> bool:
@@ -1670,14 +1714,11 @@ def render_lemma_cards(lemmas):
             if lemma.get("greek_source_variant"):
                 greek_meta += f" · {lemma.get('greek_source_variant')}"
             detail_rows.append(("Greek text", html_module.escape(greek_meta)))
-        if lemma.get("meineke_id") or lemma.get("billerbeck_id"):
+        if lemma.get("meineke_id"):
             detail_rows.append(
                 (
-                    "Edition ids",
-                    (
-                        f"Meineke {html_module.escape(str(lemma.get('meineke_id') or '-'))}"
-                        f" · Billerbeck {html_module.escape(str(lemma.get('billerbeck_id') or '-'))}"
-                    ),
+                    "Source id",
+                    f"Meineke {html_module.escape(str(lemma.get('meineke_id')))}",
                 )
             )
         if lemma.get("ocr_generation_name") or lemma.get("ocr_processed_at"):
@@ -1722,7 +1763,8 @@ def render_lemma_cards(lemmas):
         ):
             detail_rows.append(("AI prompt", html_module.escape(f"v{lemma['translation_prompt_version']}")))
         if is_blocked:
-            block_reason = lemma.get("translation_block_reason") or "Likely translation-affecting Meineke/Billerbeck difference"
+            block_reason = lemma.get("translation_block_reason") or "Likely translation-affecting source-text difference"
+            block_reason = scrub_public_source_mentions(block_reason)
             detail_rows.append(("Translation status", html_module.escape(block_reason)))
         metadata_sections.append(render_key_value_metadata_table("Text Details", detail_rows))
 
@@ -3044,7 +3086,7 @@ def generate_prompt_detail_page(item: dict):
                 </td>
                 <td>{html_module.escape(str(headword.get('entry_number') or ''))}</td>
                 <td>{html_module.escape(headword.get('version') or '')}</td>
-                <td>{html_module.escape(headword.get('billerbeck_id') or '')}</td>
+                <td>{html_module.escape(headword.get('meineke_id') or '')}</td>
                 <td>{html_module.escape(headword.get('status') or '')}</td>
                 <td>{html_module.escape(headword.get('model') or '')}</td>
                 <td>{html_module.escape(format_site_timestamp(headword.get('sort_ts')))}</td>
@@ -3060,7 +3102,7 @@ def generate_prompt_detail_page(item: dict):
                     <th>Headword</th>
                     <th>Entry</th>
                     <th>Version</th>
-                    <th>Billerbeck</th>
+                    <th>Source ID</th>
                     <th>Status</th>
                     <th>Model</th>
                     <th>Latest Run</th>
@@ -3961,6 +4003,8 @@ def main():
         )
         (output_dir / headword_page_filename(lemma_id)).write_text(page_html, encoding='utf-8')
 
+    scrubbed_files = scrub_public_reference_site_files(output_dir)
+
     print(f"Reference website generated in {output_dir.absolute()}")
     print(f"  Total lemmas: {stats['total_lemmas']}")
     print(f"  Translated lemmas: {stats['translated_lemmas']}")
@@ -3970,6 +4014,7 @@ def main():
         print(f"  Herodian overlap run used: {overlap_run_id}")
     else:
         print("  Herodian overlap run used: unavailable")
+    print(f"  Public source-label scrubbed files: {scrubbed_files}")
 
 if __name__ == "__main__":
     main()

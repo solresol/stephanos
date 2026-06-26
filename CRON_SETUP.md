@@ -88,12 +88,12 @@ uv run translate_lemmas.py --limit 10
 
 ### Generate websites
 ```bash
-uv run generate_progress_site.py
+uv run generate_pipeline_progress.py
 uv run generate_reference_site.py
 ```
 
 ### Deploy
 ```bash
-rsync -avz progress.html stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
 rsync -avz reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
+ssh stephanos@merah.cassia.ifost.org.au "rm -f /var/www/vhosts/stephanos.symmachus.org/htdocs/progress.html"
 ```

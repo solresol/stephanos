@@ -84,7 +84,6 @@ var siteMenuSections = []siteMenuSection{
 		Label: "Operations",
 		Items: []siteMenuItem{
 			{Key: "pipeline", Label: "Pipeline Status", Href: "/pipeline.html"},
-			{Key: "progress", Label: "Processing Progress", Href: "/progress.html"},
 			{Key: "page_scans", Label: "Page Scans", Href: "/protected/", Protected: true},
 			{Key: "text_comparison", Label: "Greek Text Review", Href: "/protected/meineke_comparison.html", Protected: true},
 			{Key: "difference_analysis", Label: "Text Difference Analysis", Href: "/protected/meineke_difference_analysis.html", Protected: true},
