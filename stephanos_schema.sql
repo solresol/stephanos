@@ -7311,6 +7311,13 @@ CREATE INDEX translation_guidance_scan_queue_batch_idx ON public.translation_gui
 
 
 --
+-- Name: translation_guidance_scan_queue_export_lookup_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_guidance_scan_queue_export_lookup_idx ON public.translation_guidance_scan_queue USING btree (rule_revision_id, lemma_id, source_text_version_id, COALESCE(NULLIF(detector_kind, ''::text), 'guidance_scan'::text), finished_at DESC NULLS LAST, updated_at DESC, id DESC);
+
+
+--
 -- Name: translation_guidance_scan_queue_status_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8660,4 +8667,3 @@ ALTER TABLE ONLY public.vocabulary_signature_tests
 --
 
 \unrestrict fi142Bf4Z6Xj7alXd5X92DBHXJ1E8rhfeId3WYJZQAfcNK0pRVyLb9GehbY8BSE
-
