@@ -92,7 +92,7 @@ def fetch_backfill_candidates(cur, limit: int | None) -> list[dict]:
                 ELSE 0
              END = tr.run_index
         JOIN openai_batch_jobs j ON j.id = i.batch_job_id
-        WHERE COALESCE(tr.request_payload_json, '{{}}'::jsonb) = '{{}}'::jsonb
+        WHERE COALESCE(tr.request_payload_json, '{}'::jsonb) = '{}'::jsonb
           AND COALESCE(j.input_path, '') <> ''
         ORDER BY tr.id
     """
@@ -160,11 +160,11 @@ def fetch_reconstruct_candidates(cur, headwords: list[str]) -> list[dict]:
         JOIN translation_prompt_profile_versions pv ON pv.id = tr.profile_version_id
         JOIN lemma_source_text_versions stv ON stv.id = tr.source_text_version_id
         JOIN assembled_lemmas a ON a.id = tr.lemma_id
-        WHERE COALESCE(tr.request_payload_json, '{{}}'::jsonb) = '{{}}'::jsonb
+        WHERE COALESCE(tr.request_payload_json, %s::jsonb) = %s::jsonb
           AND a.lemma = ANY(%s)
         ORDER BY a.lemma, tr.created_at DESC, tr.id DESC
         """,
-        (headwords,),
+        ("{}", "{}", headwords),
     )
     return [
         {
