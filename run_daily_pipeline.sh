@@ -17,6 +17,29 @@ STEPHANOS_SITE_URL="${STEPHANOS_SITE_URL:-https://stephanos.symmachus.org}"
 AI_SYSTEMS_FEED_PATH="${AI_SYSTEMS_FEED_PATH:-reference_site/ai-systems.xml}"
 AI_SYSTEMS_STATUS_PATH="${AI_SYSTEMS_STATUS_PATH:-reference_site/ai-systems.json}"
 AI_SYSTEMS_STATUS_EMITTED=0
+RSYNC_IO_TIMEOUT="${RSYNC_IO_TIMEOUT:-60}"
+RSYNC_WALL_TIMEOUT="${RSYNC_WALL_TIMEOUT:-600}"
+
+run_rsync() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$RSYNC_WALL_TIMEOUT" rsync -az --timeout="$RSYNC_IO_TIMEOUT" "$@"
+  else
+    rsync -az --timeout="$RSYNC_IO_TIMEOUT" "$@"
+  fi
+}
+
+run_rsync_logged() {
+  run_rsync "$@" 2>&1 | tee -a "$LOGFILE"
+}
+
+run_optional_rsync_logged() {
+  local label="$1"
+  shift
+
+  if ! run_rsync "$@" 2>&1 | tee -a "$LOGFILE"; then
+    echo "  Warning: $label rsync failed or timed out; continuing with later deploy/backup steps" | tee -a "$LOGFILE"
+  fi
+}
 
 emit_ai_systems_status_report() {
   local exit_status="$1"
@@ -868,15 +891,15 @@ fi
 # Step 9: Deploy to merah
 echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
 # Deploy reference_site/ (contains statistics.html, statistics/, statistics_images/, people.html, and all lemma pages)
-rsync -az reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+run_optional_rsync_logged "reference_site" reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
 # Remove retired duplicate root progress page if it exists.
 ssh stephanos@merah.cassia.ifost.org.au "rm -f /var/www/vhosts/stephanos.symmachus.org/htdocs/progress.html" 2>&1 | tee -a "$LOGFILE"
 # Deploy CSV exports
-rsync -az exports/lemmas.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
-rsync -az exports/proper_nouns.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
-rsync -az exports/etymologies.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
-rsync -az exports/source_citation_units.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
-rsync -az exports/source_citation_mentions.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+run_rsync_logged exports/lemmas.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
+run_rsync_logged exports/proper_nouns.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
+run_rsync_logged exports/etymologies.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
+run_rsync_logged exports/source_citation_units.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
+run_rsync_logged exports/source_citation_mentions.csv stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
 # Deploy ToposText intake report outputs when generated
 for topostext_export in \
     exports/topostext_intake_report.html \
@@ -901,15 +924,15 @@ for topostext_export in \
     exports/topostext_recent_entity_changes.csv \
     exports/topostext_authority_status_summary.json; do
     if [ -f "$topostext_export" ]; then
-        rsync -az "$topostext_export" stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ 2>&1 | tee -a "$LOGFILE"
+        run_rsync_logged "$topostext_export" stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
     fi
 done
 # Deploy nodegoat exports
-rsync -az exports/nodegoat/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/nodegoat/ 2>&1 | tee -a "$LOGFILE"
+run_rsync_logged exports/nodegoat/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/nodegoat/
 # Deploy review data snapshot
-rsync -az review_data.sqlite stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ 2>&1 | tee -a "$LOGFILE"
+run_rsync_logged review_data.sqlite stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/
 # Deploy protected scan evidence database
-rsync -az guidance_scan_results.db stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/ 2>&1 | tee -a "$LOGFILE"
+run_rsync_logged guidance_scan_results.db stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/
 # Deploy review CGI binaries from current source
 ./review_cgi/deploy_review_cgi.sh 2>&1 | tee -a "$LOGFILE" || echo "  Warning: review CGI deploy failed" | tee -a "$LOGFILE"
 
@@ -931,7 +954,7 @@ echo "  Backing up PostgreSQL database..." | tee -a "$LOGFILE"
 mkdir -p backups
 dump_postgres_backup "backups/stephanos_${DATE}.sql.gz" 2>&1 | tee -a "$LOGFILE"
 # Upload PostgreSQL backup to merah
-rsync -az backups/stephanos_${DATE}.sql.gz ${BACKUP_DIR}/ 2>&1 | tee -a "$LOGFILE"
+run_rsync_logged backups/stephanos_${DATE}.sql.gz ${BACKUP_DIR}/
 
 # Backup review database on merah
 echo "  Backing up review database on merah..." | tee -a "$LOGFILE"
