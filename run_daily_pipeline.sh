@@ -19,6 +19,7 @@ AI_SYSTEMS_STATUS_PATH="${AI_SYSTEMS_STATUS_PATH:-reference_site/ai-systems.json
 AI_SYSTEMS_STATUS_EMITTED=0
 RSYNC_IO_TIMEOUT="${RSYNC_IO_TIMEOUT:-60}"
 RSYNC_WALL_TIMEOUT="${RSYNC_WALL_TIMEOUT:-600}"
+REVIEW_CGI_DEPLOY_TIMEOUT="${REVIEW_CGI_DEPLOY_TIMEOUT:-600}"
 
 run_rsync() {
   if command -v timeout >/dev/null 2>&1; then
@@ -38,6 +39,14 @@ run_optional_rsync_logged() {
 
   if ! run_rsync "$@" 2>&1 | tee -a "$LOGFILE"; then
     echo "  Warning: $label rsync failed or timed out; continuing with later deploy/backup steps" | tee -a "$LOGFILE"
+  fi
+}
+
+run_review_cgi_deploy_logged() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$REVIEW_CGI_DEPLOY_TIMEOUT" ./review_cgi/deploy_review_cgi.sh 2>&1 | tee -a "$LOGFILE"
+  else
+    ./review_cgi/deploy_review_cgi.sh 2>&1 | tee -a "$LOGFILE"
   fi
 }
 
@@ -934,7 +943,7 @@ run_rsync_logged review_data.sqlite stephanos@merah.cassia.ifost.org.au:/var/www
 # Deploy protected scan evidence database
 run_rsync_logged guidance_scan_results.db stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/
 # Deploy review CGI binaries from current source
-./review_cgi/deploy_review_cgi.sh 2>&1 | tee -a "$LOGFILE" || echo "  Warning: review CGI deploy failed" | tee -a "$LOGFILE"
+run_review_cgi_deploy_logged || echo "  Warning: review CGI deploy failed or timed out" | tee -a "$LOGFILE"
 
 # Step 10: Backup databases with rolling history
 echo "Step 10: Backing up databases..." | tee -a "$LOGFILE"
