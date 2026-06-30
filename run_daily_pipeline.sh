@@ -20,7 +20,6 @@ AI_SYSTEMS_STATUS_EMITTED=0
 RSYNC_IO_TIMEOUT="${RSYNC_IO_TIMEOUT:-60}"
 RSYNC_WALL_TIMEOUT="${RSYNC_WALL_TIMEOUT:-600}"
 REVIEW_CGI_DEPLOY_TIMEOUT="${REVIEW_CGI_DEPLOY_TIMEOUT:-600}"
-REMOTE_BACKUP_RETENTION_DAYS="${REMOTE_BACKUP_RETENTION_DAYS:-7}"
 
 run_rsync() {
   if command -v timeout >/dev/null 2>&1; then
@@ -49,11 +48,6 @@ run_review_cgi_deploy_logged() {
   else
     ./review_cgi/deploy_review_cgi.sh 2>&1 | tee -a "$LOGFILE"
   fi
-}
-
-cleanup_remote_backups() {
-  ssh stephanos@merah.cassia.ifost.org.au \
-    "find /var/www/vhosts/datadumps.ifost.org.au/htdocs/stephanos -maxdepth 1 \\( -name 'stephanos_*.db' -o -name 'stephanos_*.sql.gz' -o -name '.stephanos_*.sql.gz.*' \\) -mtime +${REMOTE_BACKUP_RETENTION_DAYS} -print -delete"
 }
 
 emit_ai_systems_status_report() {
@@ -953,27 +947,11 @@ run_review_cgi_deploy_logged || echo "  Warning: review CGI deploy failed or tim
 
 # Step 10: Backup databases with rolling history
 echo "Step 10: Backing up databases..." | tee -a "$LOGFILE"
-BACKUP_DIR="stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/datadumps.ifost.org.au/htdocs/stephanos"
-
-# Free retention-expired remote backup space before uploading the large PostgreSQL dump.
-echo "  Cleaning up old remote backups before upload (keeping last ${REMOTE_BACKUP_RETENTION_DAYS} days)..." | tee -a "$LOGFILE"
-cleanup_remote_backups 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to cleanup old remote backups before upload" | tee -a "$LOGFILE"
-
-# Backup SQLite database if it exists
-if [ -f "$HOME/stephanos.db" ]; then
-    echo "  Backing up SQLite database..." | tee -a "$LOGFILE"
-    DB_PATH="$HOME/stephanos.db"
-    BACKUP_NAME="stephanos_${DATE}.db"
-    scp "$DB_PATH" "${BACKUP_DIR}/${BACKUP_NAME}" 2>&1 | tee -a "$LOGFILE"
-    scp "$DB_PATH" "${BACKUP_DIR}/stephanos_latest.db" 2>&1 | tee -a "$LOGFILE"
-fi
 
 # Backup PostgreSQL database
 echo "  Backing up PostgreSQL database..." | tee -a "$LOGFILE"
 mkdir -p backups
 dump_postgres_backup "backups/stephanos_${DATE}.sql.gz" 2>&1 | tee -a "$LOGFILE"
-# Upload PostgreSQL backup to merah
-run_rsync_logged backups/stephanos_${DATE}.sql.gz ${BACKUP_DIR}/
 
 # Backup review database on merah
 echo "  Backing up review database on merah..." | tee -a "$LOGFILE"
@@ -982,10 +960,6 @@ ssh stephanos@merah.cassia.ifost.org.au "bash ~/stephanos/backup_review_db.sh" 2
 # Remove local backups older than 7 days
 echo "  Cleaning up old local backups (keeping last 7 days)..." | tee -a "$LOGFILE"
 find backups -name "stephanos_*.sql.gz" -mtime +7 -delete 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to cleanup old local backups" | tee -a "$LOGFILE"
-
-# Remove remote backups older than 7 days (keep rolling history)
-echo "  Cleaning up old remote backups (keeping last ${REMOTE_BACKUP_RETENTION_DAYS} days)..." | tee -a "$LOGFILE"
-cleanup_remote_backups 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to cleanup old remote backups" | tee -a "$LOGFILE"
 
 echo "Pipeline complete: $(date)" | tee -a "$LOGFILE"
 echo "" | tee -a "$LOGFILE"
