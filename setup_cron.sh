@@ -1,5 +1,15 @@
 #!/bin/bash
 # Setup cron jobs for Stephanos review system automation
+#
+# DEPRECATED (2026-07-05): superseded by run_daily_pipeline.sh (the single daily
+# orchestrator). This granular installer set up a divergent job set that never
+# calls run_daily_pipeline.sh, and it included a public database-dump upload and
+# an `rsync --delete` deploy that could wipe htdocs. It now refuses to run.
+# See docs/architecture/JOBS.md and docs/architecture/ANOMALIES.md (P-01/S-01/S-02).
+echo "setup_cron.sh is DEPRECATED and disabled." >&2
+echo "Use the daily orchestrator instead: run_daily_pipeline.sh" >&2
+echo "See docs/architecture/JOBS.md" >&2
+exit 1
 
 CRON_FILE="/tmp/stephanos_cron.txt"
 STEPHANOS_DIR="$HOME/stephanos"
@@ -26,7 +36,9 @@ MAILTO=stephanos@merah.cassia.ifost.org.au
 25 2 * * * cd ~/stephanos && uv run generate_reference_site.py >> logs/reference_site.log 2>&1
 
 # 5. Deploy websites to merah (2:30 AM)
-30 2 * * * rsync -avz --delete ~/stephanos/reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ >> logs/deploy_site.log 2>&1
+# NOTE: --delete removed — htdocs also holds CSVs, nodegoat/, the PDF, and
+# ToposText exports deployed by other steps, which --delete would wipe.
+30 2 * * * rsync -avz ~/stephanos/reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/ >> logs/deploy_site.log 2>&1
 
 # 6. Backup review database on merah (2:45 AM, keep 7 days)
 45 2 * * * ssh stephanos@merah.cassia.ifost.org.au "bash ~/stephanos/backup_review_db.sh"
@@ -34,8 +46,9 @@ MAILTO=stephanos@merah.cassia.ifost.org.au
 # 7. Backup PostgreSQL database (3:00 AM, keep 7 days)
 0 3 * * * pg_dump -U stephanos stephanos | gzip > ~/stephanos/backups/stephanos_$(date +\%Y\%m\%d).sql.gz && find ~/stephanos/backups -name "stephanos_*.sql.gz" -mtime +7 -delete
 
-# 8. Upload PostgreSQL backup to merah (3:10 AM)
-10 3 * * * rsync ~/stephanos/backups/stephanos_$(date +\%Y\%m\%d).sql.gz stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/datadumps.ifost.org.au/htdocs/stephanos/ >> logs/backup_upload.log 2>&1
+# 8. (REMOVED) Public PostgreSQL-dump upload — this rsynced the full database
+#    dump to a public web docroot (datadumps.ifost.org.au/htdocs). Deliberately
+#    deleted; backups stay local only. See ANOMALIES.md S-01.
 
 # 9. Hourly nodegoat sync (small batch to avoid rate limits)
 0 * * * * ~/stephanos/nodegoat_hourly_sync.sh >> logs/nodegoat_sync.log 2>&1
