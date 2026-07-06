@@ -5,6 +5,7 @@ reference_site/
 pipeline.log
 topostext_pipeline.log
 topostext_pipeline.lock
+daily_pipeline.lock
 __pycache__/
 *.pyc
 *~
