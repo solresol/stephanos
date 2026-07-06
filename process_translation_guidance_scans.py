@@ -960,6 +960,37 @@ def mark_ai_translations_outdated_for_guidance_match(
     return int(row[0] or 0), int(row[1] or 0)
 
 
+def lemma_has_protected_translation(cur, lemma_id: int) -> bool:
+    """True if the lemma already carries protected human/canonical work, mirroring
+    the guard in mark_ai_translations_outdated_for_guidance_match: a reviewed or
+    corrected English translation, or an approved/draft human_translations row.
+    Used to route a guidance match to review_translation vs rerun_translation."""
+    cur.execute(
+        """
+        SELECT 1 FROM assembled_lemmas
+        WHERE id = %s
+          AND (COALESCE(reviewed_english_translation, '') <> ''
+               OR COALESCE(corrected_english_translation, '') <> '')
+        """,
+        (lemma_id,),
+    )
+    if cur.fetchone() is not None:
+        return True
+    if table_exists(cur, "human_translations"):
+        cur.execute(
+            """
+            SELECT 1 FROM human_translations
+            WHERE lemma_id = %s
+              AND status IN ('draft', 'approved')
+              AND COALESCE(translation_text, '') <> ''
+            LIMIT 1
+            """,
+            (lemma_id,),
+        )
+        return cur.fetchone() is not None
+    return False
+
+
 def upsert_match(cur, job: tuple, result: dict[str, object]) -> None:
     (
         _queue_id,
@@ -1023,6 +1054,37 @@ def upsert_match(cur, job: tuple, result: dict[str, object]) -> None:
             rule_revision_id=int(rule_revision_id),
             lemma_id=int(lemma_id),
             source_text_version_id=int(source_text_version_id),
+        )
+        # D-01: record a follow-up backlog item for this match. review_translation
+        # if the lemma already has protected (reviewed/corrected/approved-human)
+        # work; otherwise rerun_translation (a safe machine rerun). Idempotent per
+        # (rule_revision, lemma, source_text, kind) via the active partial index.
+        backlog_kind = (
+            "review_translation"
+            if lemma_has_protected_translation(cur, int(lemma_id))
+            else "rerun_translation"
+        )
+        cur.execute(
+            """
+            INSERT INTO translation_guidance_backlog_items (
+                rule_id, rule_revision_id, lemma_id, source_text_version_id,
+                backlog_kind, status, priority, created_by
+            )
+            VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s)
+            ON CONFLICT (rule_revision_id, lemma_id, source_text_version_id, backlog_kind,
+                         COALESCE(translation_variant_kind, ''), COALESCE(translation_variant_id, ''))
+            WHERE status IN ('pending', 'in_progress')
+            DO NOTHING
+            """,
+            (
+                int(rule_id),
+                int(rule_revision_id),
+                int(lemma_id),
+                int(source_text_version_id),
+                backlog_kind,
+                30 if backlog_kind == "review_translation" else 100,
+                "process_translation_guidance_scans.py:match",
+            ),
         )
     refresh_translation_guidance_freshness(
         cur,
