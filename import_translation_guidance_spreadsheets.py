@@ -444,7 +444,7 @@ def insert_revision(
     change_summary: str,
     source_context: dict[str, object],
     snapshot: dict[str, object],
-) -> None:
+) -> int:
     cur.execute(
         """
         INSERT INTO translation_guidance_rule_revisions (
@@ -457,6 +457,7 @@ def insert_revision(
             snapshot_json
         )
         VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+        RETURNING id
         """,
         (
             rule_id,
@@ -468,6 +469,46 @@ def insert_revision(
             json.dumps(snapshot, ensure_ascii=False),
         ),
     )
+    return int(cur.fetchone()[0])
+
+
+def table_exists(cur, table_name: str) -> bool:
+    cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table_name}",))
+    return bool(cur.fetchone()[0])
+
+
+def create_scan_rule_backlog(cur, *, rule_id: int, new_revision_id: int, created_by: str, cap: int = 500) -> int:
+    """Record scan_rule backlog items for lemmas that matched a PRIOR revision of a
+    changed rule: those translations may now be stale under the new revision, so they
+    are owed a re-scan. Bounded by `cap` (most-cited matches first) and idempotent per
+    new revision via the active partial unique index. Returns rows inserted."""
+    if not table_exists(cur, "translation_guidance_backlog_items") or not table_exists(cur, "translation_guidance_matches"):
+        return 0
+    cur.execute(
+        """
+        INSERT INTO translation_guidance_backlog_items (
+            rule_id, rule_revision_id, lemma_id, source_text_version_id,
+            backlog_kind, status, priority, created_by
+        )
+        SELECT m.rule_id, %(rev)s, m.lemma_id, m.source_text_version_id,
+               'scan_rule', 'pending', 100, %(created_by)s
+        FROM (
+            SELECT DISTINCT ON (lemma_id, source_text_version_id)
+                   rule_id, lemma_id, source_text_version_id, occurrence_count
+            FROM translation_guidance_matches
+            WHERE rule_id = %(rule_id)s AND match_status = 'matched'
+            ORDER BY lemma_id, source_text_version_id, occurrence_count DESC
+        ) m
+        ORDER BY m.occurrence_count DESC
+        LIMIT %(cap)s
+        ON CONFLICT (rule_revision_id, lemma_id, source_text_version_id, backlog_kind,
+                     COALESCE(translation_variant_kind, ''), COALESCE(translation_variant_id, ''))
+        WHERE status IN ('pending', 'in_progress')
+        DO NOTHING
+        """,
+        {"rev": new_revision_id, "created_by": created_by, "rule_id": rule_id, "cap": cap},
+    )
+    return cur.rowcount if (cur.rowcount or 0) > 0 else 0
 
 
 def ensure_required_tables(cur) -> None:
@@ -628,7 +669,7 @@ def main() -> None:
             continue
 
         update_rule(cur, int(existing["id"]), rule, args.created_by)
-        insert_revision(
+        new_revision_id = insert_revision(
             cur,
             rule_id=int(existing["id"]),
             action="update",
@@ -636,6 +677,14 @@ def main() -> None:
             change_summary="Spreadsheet import updated current rule state",
             source_context=source_context,
             snapshot=snapshot,
+        )
+        # D-01: a changed rule may leave prior-matched lemmas stale; record
+        # scan_rule backlog items for them (bounded, idempotent per revision).
+        create_scan_rule_backlog(
+            cur,
+            rule_id=int(existing["id"]),
+            new_revision_id=new_revision_id,
+            created_by=args.created_by,
         )
         updated += 1
 

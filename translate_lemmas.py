@@ -903,6 +903,22 @@ def completed_run_count(cur, request_id: int):
     return cur.fetchone()[0]
 
 
+def max_run_index(cur, request_id: int) -> int:
+    """Highest run_index used for a request across ALL statuses (incl. failed).
+
+    run_index must be derived from this, not from completed_run_count (which
+    excludes 'failed'), because the UNIQUE (request_id, run_index) index counts
+    failed rows too. Deriving the index from the completed count reuses a failed
+    row's index and causes a unique-violation crash when a previously-failed
+    request is re-activated.
+    """
+    cur.execute(
+        "SELECT COALESCE(MAX(run_index), 0) FROM translation_runs WHERE request_id = %s",
+        (request_id,),
+    )
+    return int(cur.fetchone()[0] or 0)
+
+
 def mark_request_running(cur, request_id: int):
     cur.execute(
         """
@@ -981,7 +997,7 @@ def insert_run(
     input_tokens: int = 0,
     output_tokens: int = 0,
     reasoning_tokens: int = 0,
-    public_eligible: bool = True,
+    public_eligible: bool = False,
     public_block_reason: str | None = None,
     error_message: str | None = None,
     request_payload: dict | None = None,
@@ -1321,10 +1337,11 @@ def submit_translation_batch(
         mark_request_running(cur, request_id)
         conn.commit()
 
+        base_run_index = max_run_index(cur, request_id)
         for run_offset in range(1, remaining + 1):
             if args.run_limit is not None and total_runs >= args.run_limit:
                 break
-            run_index = existing_count + run_offset
+            run_index = base_run_index + run_offset
             guidance_context = []
             source_passage_context = []
             if request_uses_guidance_context:
@@ -1495,14 +1512,14 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                 tokens_used = int(usage.get("total_tokens", 0))
                 requested_runs = int(metadata["requested_runs"] or 0)
                 source_document = (metadata.get("source_document") or "").strip().lower()
-                public_eligible = True
-                public_block_reason = None
-                if requested_runs == 1:
-                    public_eligible, public_block_reason = lookup_public_block(
-                        cur,
-                        lemma_id=int(metadata["lemma_id"]),
-                        source_document=metadata.get("source_document"),
-                    )
+                # Run the public-licence check for every run count, not just
+                # requested_runs==1: a multi-run request over a non-public source
+                # must still store public_eligible=False (fail-closed).
+                public_eligible, public_block_reason = lookup_public_block(
+                    cur,
+                    lemma_id=int(metadata["lemma_id"]),
+                    source_document=metadata.get("source_document"),
+                )
                 run_status = "approved" if requested_runs == 1 else "completed"
                 if not is_public_greek_source_document(source_document):
                     run_status = "hidden"
@@ -1951,6 +1968,7 @@ def main():
         )
 
         failed = False
+        base_run_index = max_run_index(cur, request_id)
         for run_offset in range(1, remaining + 1):
             if args.run_limit is not None and total_runs >= args.run_limit:
                 break
@@ -1959,7 +1977,7 @@ def main():
                 print("Daily token limit reached during batch.")
                 break
 
-            run_index = existing_count + run_offset
+            run_index = base_run_index + run_offset
             request_payload = None
             try:
                 guidance_context = []
@@ -1998,14 +2016,14 @@ def main():
                 if not translation:
                     raise RuntimeError("Empty translation result")
 
-                public_eligible = True
-                public_block_reason = None
-                if int(requested_runs or 0) == 1:
-                    public_eligible, public_block_reason = lookup_public_block(
-                        cur,
-                        lemma_id=lemma_id,
-                        source_document=source_document,
-                    )
+                # Run the public-licence check for every run count, not just
+                # requested_runs==1: a multi-run request over a non-public source
+                # must still store public_eligible=False (fail-closed).
+                public_eligible, public_block_reason = lookup_public_block(
+                    cur,
+                    lemma_id=lemma_id,
+                    source_document=source_document,
+                )
                 run_status = "approved" if int(requested_runs or 0) == 1 else "completed"
                 if not is_public_greek_source_document(source_document):
                     run_status = "hidden"
@@ -2058,26 +2076,37 @@ def main():
 
             except Exception as exc:
                 failed = True
-                insert_run(
-                    cur,
-                    request_id=request_id,
-                    lemma_id=lemma_id,
-                    profile_id=profile_id,
-                    profile_version_id=profile_version_id,
-                    source_text_version_id=source_text_version_id,
-                    run_index=run_index,
-                    model=model_name,
-                    temperature=temperature,
-                    top_p=top_p,
-                    translation_text="",
-                    tokens_used=0,
-                    api_mode=api_mode,
-                    reasoning_effort=reasoning_effort,
-                    status="failed",
-                    error_message=f"{type(exc).__name__}: {exc}",
-                    request_payload=request_payload,
-                )
-                conn.commit()
+                # Clear any aborted-transaction state left by the failed run above so
+                # the failure record inserts on a clean transaction, and never let a
+                # failure to record the failure crash the whole worker.
+                conn.rollback()
+                try:
+                    insert_run(
+                        cur,
+                        request_id=request_id,
+                        lemma_id=lemma_id,
+                        profile_id=profile_id,
+                        profile_version_id=profile_version_id,
+                        source_text_version_id=source_text_version_id,
+                        run_index=run_index,
+                        model=model_name,
+                        temperature=temperature,
+                        top_p=top_p,
+                        translation_text="",
+                        tokens_used=0,
+                        api_mode=api_mode,
+                        reasoning_effort=reasoning_effort,
+                        status="failed",
+                        error_message=f"{type(exc).__name__}: {exc}",
+                        request_payload=request_payload,
+                    )
+                    conn.commit()
+                except Exception as record_exc:
+                    conn.rollback()
+                    print(
+                        f"  run {run_index}: failed, and recording the failure also failed "
+                        f"({type(record_exc).__name__}: {record_exc})"
+                    )
                 print(f"  run {run_index}: failed ({type(exc).__name__}: {exc})")
 
         final_completed = completed_run_count(cur, request_id)
