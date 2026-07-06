@@ -8,10 +8,10 @@ Uses translations in priority order:
 3. AI Translation (translation column)
 """
 
-import os
 import subprocess
 import tempfile
 import shutil
+import unicodedata
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,7 +21,6 @@ matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
 import numpy as np
 
-from db import get_connection
 from translation_rendering import render_inline_markup, split_translation_blocks
 
 OUTPUT_DIR = Path("reference_site")
@@ -73,6 +72,13 @@ PDF_SOURCE_INDEX_SUPPRESS = {
 }
 
 
+def get_pdf_db_connection():
+    """Import DB configuration only when the PDF generator needs the database."""
+    from db import get_connection
+
+    return get_connection()
+
+
 def get_greek_letter_name(letter_code):
     """Convert letter code to display name."""
     names = {
@@ -93,32 +99,43 @@ def get_letter_from_headword(headword):
     if not headword:
         return 'unknown'
 
-    first_char = headword[0].lower()
+    stripped = headword.strip()
+    if not stripped:
+        return 'unknown'
+
+    decomposed_first_char = unicodedata.normalize('NFD', stripped[0].lower())
+    first_char = next(
+        (
+            char for char in decomposed_first_char
+            if unicodedata.category(char).startswith('L')
+        ),
+        '',
+    )
     letter_map = {
-        'α': 'alpha', 'ά': 'alpha', 'ἀ': 'alpha', 'ἁ': 'alpha', 'ᾀ': 'alpha', 'ᾁ': 'alpha',
+        'α': 'alpha',
         'β': 'beta',
         'γ': 'gamma',
         'δ': 'delta',
-        'ε': 'epsilon', 'έ': 'epsilon', 'ἐ': 'epsilon', 'ἑ': 'epsilon',
+        'ε': 'epsilon',
         'ζ': 'zeta',
-        'η': 'eta', 'ή': 'eta', 'ἠ': 'eta', 'ἡ': 'eta', 'ᾐ': 'eta', 'ᾑ': 'eta',
+        'η': 'eta',
         'θ': 'theta',
-        'ι': 'iota', 'ί': 'iota', 'ἰ': 'iota', 'ἱ': 'iota',
+        'ι': 'iota',
         'κ': 'kappa',
         'λ': 'lambda',
         'μ': 'mu',
         'ν': 'nu',
         'ξ': 'xi',
-        'ο': 'omicron', 'ό': 'omicron', 'ὀ': 'omicron', 'ὁ': 'omicron',
+        'ο': 'omicron',
         'π': 'pi',
-        'ρ': 'rho', 'ῥ': 'rho',
+        'ρ': 'rho',
         'σ': 'sigma', 'ς': 'sigma',
         'τ': 'tau',
-        'υ': 'upsilon', 'ύ': 'upsilon', 'ὐ': 'upsilon', 'ὑ': 'upsilon',
+        'υ': 'upsilon',
         'φ': 'phi',
         'χ': 'chi',
         'ψ': 'psi',
-        'ω': 'omega', 'ώ': 'omega', 'ὠ': 'omega', 'ὡ': 'omega', 'ᾠ': 'omega', 'ᾡ': 'omega',
+        'ω': 'omega',
     }
     return letter_map.get(first_char, 'unknown')
 
@@ -154,7 +171,7 @@ def normalize_pdf_source_index_label(label: str) -> str | None:
 
 def fetch_lemmas():
     """Fetch all lemmas with translations from PostgreSQL."""
-    conn = get_connection()
+    conn = get_pdf_db_connection()
     cur = conn.cursor()
 
     cur.execute("""
@@ -326,7 +343,7 @@ def fetch_index_data(lemma_ids):
     if not lemma_ids:
         return {}, {}, {}, {}, {}
 
-    conn = get_connection()
+    conn = get_pdf_db_connection()
     cur = conn.cursor()
 
     # Fetch proper nouns grouped by type
@@ -393,7 +410,7 @@ def fetch_word_lemma_index_data(lemma_ids):
     if not lemma_ids:
         return {}, {}, {"processed_documents": 0, "word_terms": 0, "lemma_terms": 0}
 
-    conn = get_connection()
+    conn = get_pdf_db_connection()
     cur = conn.cursor()
     if not table_exists(cur, "meineke_word_lemma_documents") or not table_exists(cur, "meineke_word_lemma_occurrences"):
         conn.close()

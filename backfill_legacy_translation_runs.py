@@ -17,6 +17,9 @@ from source_documents import PREFERRED_GREEK_SOURCE_DOCUMENTS, is_public_greek_s
 from translation_run_utils import DEFAULT_TRANSLATION_MODEL, lookup_public_block
 
 
+PRESERVED_EXISTING_RUN_STATUSES = {"outdated"}
+
+
 def run_status_for_source(source_document: str) -> str:
     if not is_public_greek_source_document(source_document):
         return "hidden"
@@ -125,6 +128,27 @@ def find_matching_run(
         "public_block_reason": (row[4] or "").strip(),
         "model": (row[5] or "").strip(),
     }
+
+
+def should_preserve_existing_run(existing: dict) -> bool:
+    """Return true for rows the compatibility backfill must not resurrect."""
+    status = (existing.get("status") or "").strip()
+    return status in PRESERVED_EXISTING_RUN_STATUSES
+
+
+def existing_run_is_normalized(
+    existing: dict,
+    *,
+    public_eligible: bool,
+    public_block_reason: str,
+    status: str,
+) -> bool:
+    return (
+        existing["status"] == status
+        and existing["public_eligible"] == bool(public_eligible)
+        and existing["public_block_reason"] == (public_block_reason or "").strip()
+        and bool(existing["model"])
+    )
 
 
 def normalize_existing_run(
@@ -323,6 +347,7 @@ def main():
 
     normalized = 0
     inserted = 0
+    skipped_preserved = 0
     skipped_missing_version = 0
     skipped_existing = 0
 
@@ -349,13 +374,19 @@ def main():
             translation_text=translation_text,
         )
         if existing:
-            already_normalized = (
-                existing["status"] == run_status
-                and existing["public_eligible"] == bool(public_eligible)
-                and existing["public_block_reason"] == (public_block_reason or "").strip()
-                and bool(existing["model"])
-            )
-            if already_normalized:
+            if should_preserve_existing_run(existing):
+                skipped_preserved += 1
+                print(
+                    f"  lemma {lemma_id}: preserve run {existing['id']} "
+                    f"with status {existing['status']} (not resurrecting legacy AI)"
+                )
+                continue
+            if existing_run_is_normalized(
+                existing,
+                public_eligible=public_eligible,
+                public_block_reason=public_block_reason,
+                status=run_status,
+            ):
                 skipped_existing += 1
                 continue
             print(f"  lemma {lemma_id}: normalize run {existing['id']} as {run_status} authoritative AI")
@@ -400,6 +431,7 @@ def main():
     print("Backfill summary:")
     print(f"  normalized existing runs: {normalized}")
     print(f"  inserted new runs: {inserted}")
+    print(f"  preserved terminal runs: {skipped_preserved}")
     print(f"  skipped existing normalized runs: {skipped_existing}")
     print(f"  skipped missing profile versions: {skipped_missing_version}")
 

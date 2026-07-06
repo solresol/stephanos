@@ -30,6 +30,18 @@ PostgreSQL tables:
 - `kappa_review_rows`: one row per visible review row, with generated
   `search_vector` for indexed full-text search.
 
+Paper-corpus use:
+
+- The translation-workflow paper should use these 100 visible Kappa rows as the
+  frozen empirical corpus.
+- The live database may contain additional approved `human_translations` rows
+  outside this tracker. Do not use the broader approved-human count as the paper
+  sample size.
+- Current paper-facing code maps tracker rows to live lemmas by
+  `kappa_review_rows.source_row_id = assembled_lemmas.entry_number`, restricted
+  to Kappa epitome entries. In the live June 2026 database this maps all 100
+  tracker rows to approved human translations.
+
 Important caveats:
 
 - This is extracted from a PDF export, not from the source spreadsheet.

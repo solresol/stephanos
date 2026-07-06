@@ -28,6 +28,13 @@ from generate_translation_prompt_evaluation import (
     rouge_l_f1,
     sentence_bleu,
 )
+from paper_corpus import (
+    CORPUS_CHOICES,
+    CORPUS_PAPER_KAPPA_REVIEW,
+    DEFAULT_PAPER_CORPUS,
+    normalize_corpus,
+    paper_kappa_review_cte_body,
+)
 
 
 SCRIPT_VERSION = "run_sentence_translation_metrics.py:v1"
@@ -118,6 +125,7 @@ class ApprovedRow:
     lemma_id: int
     lemma: str
     entry_number: int | None
+    corpus_order: int | None
     human_translation_id: int
     source_text_version_id: int
     source_text: str
@@ -211,15 +219,32 @@ def split_text_sentences(
     return sentences
 
 
-def fetch_approved_rows(cur, limit: int | None) -> list[ApprovedRow]:
+def fetch_approved_rows(cur, limit: int | None, *, corpus: str) -> list[ApprovedRow]:
+    corpus = normalize_corpus(corpus)
     limit_sql = "LIMIT %s" if limit else ""
     params: list[Any] = [limit] if limit else []
-    cur.execute(
-        f"""
-        WITH approved AS (
+    if corpus == CORPUS_PAPER_KAPPA_REVIEW:
+        corpus_cte = paper_kappa_review_cte_body("paper_corpus") + ","
+        approved_cte = """
+        approved AS (
+            SELECT
+                pc.human_translation_id,
+                pc.lemma_id,
+                pc.corpus_order,
+                ht.source_text_version_id,
+                ht.translation_text
+            FROM paper_corpus pc
+            JOIN human_translations ht ON ht.id = pc.human_translation_id
+        )
+        """
+    else:
+        corpus_cte = ""
+        approved_cte = """
+        approved AS (
             SELECT DISTINCT ON (ht.lemma_id)
                 ht.id AS human_translation_id,
                 ht.lemma_id,
+                NULL::integer AS corpus_order,
                 ht.source_text_version_id,
                 ht.translation_text
             FROM human_translations ht
@@ -228,10 +253,16 @@ def fetch_approved_rows(cur, limit: int | None) -> list[ApprovedRow]:
               AND NULLIF(BTRIM(ht.translation_text), '') IS NOT NULL
             ORDER BY ht.lemma_id, (ht.stage = 'final') DESC, ht.updated_at DESC, ht.id DESC
         )
+        """
+    cur.execute(
+        f"""
+        WITH {corpus_cte}
+        {approved_cte}
         SELECT
             a.id AS lemma_id,
             a.lemma,
             a.entry_number,
+            ap.corpus_order,
             ap.human_translation_id,
             stv.id AS source_text_version_id,
             stv.text_body AS source_text,
@@ -250,7 +281,7 @@ def fetch_approved_rows(cur, limit: int | None) -> list[ApprovedRow]:
             LIMIT 1
         ) stv ON TRUE
         WHERE NULLIF(BTRIM(stv.text_body), '') IS NOT NULL
-        ORDER BY a.lemma, a.entry_number, a.id
+        ORDER BY COALESCE(ap.corpus_order, 100000000), a.lemma, a.entry_number, a.id
         {limit_sql}
         """,
         params,
@@ -260,6 +291,7 @@ def fetch_approved_rows(cur, limit: int | None) -> list[ApprovedRow]:
             lemma_id=int(row["lemma_id"]),
             lemma=str(row["lemma"] or ""),
             entry_number=row["entry_number"],
+            corpus_order=row["corpus_order"],
             human_translation_id=int(row["human_translation_id"]),
             source_text_version_id=int(row["source_text_version_id"]),
             source_text=str(row["source_text"] or ""),
@@ -275,7 +307,9 @@ def fetch_candidate_rows(
     approved_limit: int | None,
     profile_version_ids: list[int],
     include_all_runs: bool,
+    corpus: str,
 ) -> list[CandidateRow]:
+    corpus = normalize_corpus(corpus)
     limit_sql = "LIMIT %s" if approved_limit else ""
     profile_filter = ""
     params: list[Any] = []
@@ -285,13 +319,28 @@ def fetch_candidate_rows(
         profile_filter = "AND tr.profile_version_id = ANY(%s)"
         params.append(profile_version_ids)
     params.append(include_all_runs)
-
-    cur.execute(
-        f"""
-        WITH approved AS (
+    if corpus == CORPUS_PAPER_KAPPA_REVIEW:
+        corpus_cte = paper_kappa_review_cte_body("paper_corpus") + ","
+        approved_cte = """
+        approved AS (
+            SELECT
+                pc.human_translation_id,
+                pc.lemma_id,
+                pc.corpus_order,
+                ht.source_text_version_id,
+                ht.translation_text
+            FROM paper_corpus pc
+            JOIN human_translations ht ON ht.id = pc.human_translation_id
+        )
+        """
+    else:
+        corpus_cte = ""
+        approved_cte = """
+        approved AS (
             SELECT DISTINCT ON (ht.lemma_id)
                 ht.id AS human_translation_id,
                 ht.lemma_id,
+                NULL::integer AS corpus_order,
                 ht.source_text_version_id,
                 ht.translation_text
             FROM human_translations ht
@@ -299,11 +348,18 @@ def fetch_candidate_rows(
               AND ht.stage IN ('reviewed', 'final')
               AND NULLIF(BTRIM(ht.translation_text), '') IS NOT NULL
             ORDER BY ht.lemma_id, (ht.stage = 'final') DESC, ht.updated_at DESC, ht.id DESC
-        ), approved_limited AS (
+        )
+        """
+
+    cur.execute(
+        f"""
+        WITH {corpus_cte}
+        {approved_cte},
+        approved_limited AS (
             SELECT ap.*
             FROM approved ap
             JOIN assembled_lemmas a ON a.id = ap.lemma_id
-            ORDER BY a.lemma, a.entry_number, a.id
+            ORDER BY COALESCE(ap.corpus_order, 100000000), a.lemma, a.entry_number, a.id
             {limit_sql}
         ), ranked AS (
             SELECT
@@ -1260,6 +1316,12 @@ def main() -> int:
         description="Deterministically split approved translations, align human-vs-AI sentences, and compute lexical metrics."
     )
     parser.add_argument("--approved-limit", type=int, default=0, help="Limit approved human lemmas for a test run.")
+    parser.add_argument(
+        "--corpus",
+        default=DEFAULT_PAPER_CORPUS,
+        choices=CORPUS_CHOICES,
+        help="Ground-truth corpus: paper_kappa_review is the 100-row paper set; approved_human is the broader set.",
+    )
     parser.add_argument("--profile-version-ids", default="", help="Optional comma/space list of profile_version_id values.")
     parser.add_argument("--include-all-runs", action="store_true", help="Use all completed/approved AI runs, not one per lemma/profile version.")
     parser.add_argument("--metrics", default=DEFAULT_METRICS, help="Comma/space metric list for standard MT metrics.")
@@ -1274,18 +1336,20 @@ def main() -> int:
     args = parser.parse_args()
 
     approved_limit = args.approved_limit if args.approved_limit > 0 else None
+    corpus = normalize_corpus(args.corpus)
     profile_version_ids = profile_version_list(args.profile_version_ids)
     metric_names = parse_metric_names(args.metrics)
 
     conn = get_connection(dict_cursor=True)
     try:
         cur = conn.cursor()
-        approved_rows = fetch_approved_rows(cur, approved_limit)
+        approved_rows = fetch_approved_rows(cur, approved_limit, corpus=corpus)
         candidate_rows = fetch_candidate_rows(
             cur,
             approved_limit=approved_limit,
             profile_version_ids=profile_version_ids,
             include_all_runs=args.include_all_runs,
+            corpus=corpus,
         )
         if args.dry_run:
             dry_run_summary(approved_rows, candidate_rows)

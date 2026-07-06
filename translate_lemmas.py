@@ -1088,6 +1088,10 @@ def project_legacy_translation(
             translated = 0
             OR COALESCE(translation, '') = ''
             OR COALESCE(translation_prompt_version, 0) < %s
+            OR (
+                COALESCE(translation_prompt_version, 0) = %s
+                AND COALESCE(translation, '') <> %s
+            )
           )
         """,
         (
@@ -1096,6 +1100,8 @@ def project_legacy_translation(
             int(prompt_version or 0),
             lemma_id,
             int(prompt_version or 0),
+            int(prompt_version or 0),
+            translation_text.strip(),
         ),
     )
 
