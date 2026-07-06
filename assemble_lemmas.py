@@ -710,6 +710,21 @@ def upsert_assembled(cur, assembled_entries, *, verbose: bool = False):
                     )
                 continue
 
+            if isinstance(e, psycopg2.errors.UniqueViolation) and constraint == "assembled_lemmas_null_entry_dedup_idx":
+                # A NULL-entry_number row with real source images already exists for this
+                # (source_image_ids, version). The composite ON CONFLICT can't match a NULL
+                # entry_number, so without this branch the upsert would crash re-assembly
+                # for exactly the rows the dedup index targets. Skip the re-insert (the
+                # existing row stands), consistent with the billerbeck duplicate case.
+                skipped_duplicates += 1
+                src_ids = entry.get("source_image_ids") or []
+                duplicate_details.append(
+                    f"duplicate NULL-entry_number row for source_image_ids={src_ids} "
+                    f"(version={entry.get('version') or 'epitome'}); skipping "
+                    f"lemma='{entry.get('lemma')}'"
+                )
+                continue
+
             raise
         lemma_id = result[0] if result else None
 
@@ -829,6 +844,10 @@ def main():
                     print("Aborted; no rows deleted.")
                     conn.close()
                     return
+            # Commit the setup DDL (ALTER TABLE / ensure_table above) first: it holds
+            # table locks until commit, and pg_dump opens a second connection that would
+            # block on them, hanging the script before it ever reaches the DELETE.
+            conn.commit()
             backup_before_rebuild()  # fails closed: raises before any DELETE
         cur.execute("DELETE FROM assembled_lemmas")
         conn.commit()
