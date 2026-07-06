@@ -1047,6 +1047,19 @@ def upsert_match(cur, job: tuple, result: dict[str, object]) -> None:
     )
     row = cur.fetchone()
     match_id = int(row[0] or 0) if row else 0
+    # D-01: the scan this row represents has now run for (rule_revision, lemma,
+    # source_text), so any pending scan_rule "matching still needs to happen" backlog
+    # item is complete. Close it regardless of match_status so it does not linger or
+    # double-count alongside the rerun/review item added below.
+    cur.execute(
+        """
+        UPDATE translation_guidance_backlog_items
+        SET status = 'completed', finished_at = NOW(), updated_at = NOW()
+        WHERE rule_revision_id = %s AND lemma_id = %s AND source_text_version_id = %s
+          AND backlog_kind = 'scan_rule' AND status IN ('pending', 'in_progress')
+        """,
+        (int(rule_revision_id), int(lemma_id), int(source_text_version_id)),
+    )
     if result["match_status"] == "matched":
         mark_ai_translations_outdated_for_guidance_match(
             cur,
