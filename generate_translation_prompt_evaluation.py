@@ -38,6 +38,16 @@ except ImportError:  # pragma: no cover - sklearn is a project dependency.
     cross_val_score = None
 
 from db import get_connection
+from paper_corpus import (
+    CORPUS_CHOICES,
+    CORPUS_APPROVED_HUMAN,
+    CORPUS_PAPER_KAPPA_REVIEW,
+    DEFAULT_PAPER_CORPUS,
+    corpus_label,
+    normalize_corpus,
+    paper_kappa_review_cte_body,
+    required_tables_for_corpus,
+)
 from site_navigation import (
     render_site_breadcrumbs,
     render_site_navigation,
@@ -1131,12 +1141,35 @@ def summarize_prompt(rows: list[dict[str, object]]) -> dict[str, object]:
     return summary
 
 
-def fetch_comparison_rows(*, approved_human_only: bool) -> list[dict[str, object]]:
+def fetch_comparison_rows(*, approved_human_only: bool, corpus: str) -> list[dict[str, object]]:
+    corpus = normalize_corpus(corpus)
     human_status_clause = (
         "AND ht.status = 'approved' AND ht.stage IN ('reviewed', 'final')"
         if approved_human_only
         else ""
     )
+    if corpus == CORPUS_PAPER_KAPPA_REVIEW:
+        corpus_cte = paper_kappa_review_cte_body("paper_corpus") + ","
+        corpus_join = "JOIN paper_corpus pc ON pc.lemma_id = tr.lemma_id"
+        corpus_human_clause = "AND ht.id = pc.human_translation_id"
+        corpus_select = """
+            'paper_kappa_review'::text AS corpus,
+            pc.corpus_order,
+            pc.corpus_source_row_id,
+            pc.kappa_review_row_id,
+        """
+        corpus_order = "COALESCE(corpus_order, lemma_id)"
+    else:
+        corpus_cte = ""
+        corpus_join = ""
+        corpus_human_clause = ""
+        corpus_select = """
+            'approved_human'::text AS corpus,
+            NULL::integer AS corpus_order,
+            NULL::integer AS corpus_source_row_id,
+            NULL::bigint AS kappa_review_row_id,
+        """
+        corpus_order = "lemma_id"
     conn = get_connection(dict_cursor=True)
     cur = conn.cursor()
     for table_name in (
@@ -1144,14 +1177,17 @@ def fetch_comparison_rows(*, approved_human_only: bool) -> list[dict[str, object
         "human_translations",
         "translation_prompt_profiles",
         "translation_prompt_profile_versions",
+        *required_tables_for_corpus(corpus),
     ):
         cur.execute("SELECT to_regclass(%s) IS NOT NULL AS exists", (f"public.{table_name}",))
         if not bool(cur.fetchone()["exists"]):
             raise RuntimeError(f"Missing required table: {table_name}")
 
     query = f"""
-        WITH ranked AS (
+        WITH {corpus_cte}
+        ranked AS (
         SELECT
+            {corpus_select}
             tr.id AS run_id,
             tr.lemma_id,
             tr.run_index,
@@ -1212,12 +1248,14 @@ def fetch_comparison_rows(*, approved_human_only: bool) -> list[dict[str, object
         JOIN translation_prompt_profiles p ON p.id = tr.profile_id
         JOIN translation_prompt_profile_versions pv ON pv.id = tr.profile_version_id
         JOIN assembled_lemmas a ON a.id = tr.lemma_id
+        {corpus_join}
         JOIN LATERAL (
             SELECT ht.*
             FROM human_translations ht
             WHERE ht.lemma_id = tr.lemma_id
               AND COALESCE(ht.translation_text, '') <> ''
               {human_status_clause}
+              {corpus_human_clause}
             ORDER BY
               CASE
                 WHEN ht.stage = 'final' AND ht.status = 'approved' THEN 0
@@ -1244,7 +1282,7 @@ def fetch_comparison_rows(*, approved_human_only: bool) -> list[dict[str, object
         SELECT *
         FROM ranked
         WHERE run_rank = 1
-        ORDER BY profile_name, profile_version, lemma_id, run_id
+        ORDER BY profile_name, profile_version, {corpus_order}, lemma_id, run_id
     """
     cur.execute(query)
     rows = list(cur.fetchall())
@@ -2400,6 +2438,7 @@ def render_main_page(
     *,
     trend_charts: list[tuple[str, str]],
     approved_human_only: bool,
+    corpus: str,
     unevaluable: list[dict[str, object]],
     metric_status: dict[str, str],
     metric_length_regressions: list[dict[str, object]],
@@ -2410,11 +2449,7 @@ def render_main_page(
     html_parts.append(
         '<p>This page compares each AI translation prompt version against the best available human translation for the same lemma, using the automated MT metric set from Zainaldin et al. 2026: BLEU-4, chrF++, METEOR, ROUGE-L, BERTScore, COMET, and BLEURT. Length regression and residual tables remain as local diagnostics for translation-length drift.</p>'
     )
-    human_scope = (
-        "approved reviewed/final human translations only"
-        if approved_human_only
-        else "any non-empty human translation, regardless of status"
-    )
+    human_scope = corpus_label(corpus) if approved_human_only else "any non-empty human translation, regardless of status"
     html_parts.append(
         f'<p class="note">Inputs: one representative AI run per lemma and prompt version, preferring the current preferred source text, with status <code>completed</code> or <code>approved</code>, non-empty translation text, and {esc(human_scope)}. Full translation texts are used for metrics but are not printed on these pages.</p>'
     )
@@ -2516,6 +2551,10 @@ def write_csv_outputs(
         "profile_name",
         "profile_version",
         "profile_version_id",
+        "corpus",
+        "corpus_order",
+        "corpus_source_row_id",
+        "kappa_review_row_id",
         "run_id",
         "lemma_id",
         "lemma",
@@ -2635,6 +2674,7 @@ def write_csv_outputs(
 def generate_reports(
     *,
     approved_human_only: bool,
+    corpus: str,
     min_galton_samples: int,
     min_galton_df: int,
     metric_names: tuple[str, ...],
@@ -2643,6 +2683,7 @@ def generate_reports(
     comet_batch_size: int,
     neural_metrics_python: str | None,
 ) -> list[dict[str, object]]:
+    corpus = normalize_corpus(corpus)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     DETAIL_DIR.mkdir(parents=True, exist_ok=True)
     IMAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -2656,7 +2697,7 @@ def generate_reports(
         neural_metrics_python=neural_metrics_python,
     )
     prompt_metadata = fetch_prompt_run_metadata()
-    db_rows = fetch_comparison_rows(approved_human_only=approved_human_only)
+    db_rows = fetch_comparison_rows(approved_human_only=approved_human_only, corpus=corpus)
     grouped_db_rows: dict[tuple[str, int, int], list[dict[str, object]]] = defaultdict(list)
     for row in db_rows:
         key = (str(row["profile_name"]), int(row["profile_version"]), int(row["profile_version_id"]))
@@ -2688,7 +2729,7 @@ def generate_reports(
         grouped_pair_rows[key] = pair_rows
 
     evaluated_keys = set(grouped_pair_rows)
-    human_scope = "approved reviewed/final human translation" if approved_human_only else "non-empty human translation in any status"
+    human_scope = corpus_label(corpus) if approved_human_only else "non-empty human translation in any status"
     unevaluable = []
     for key, metadata in prompt_metadata.items():
         if key in evaluated_keys:
@@ -2721,6 +2762,7 @@ def generate_reports(
             summaries,
             trend_charts=trend_charts,
             approved_human_only=approved_human_only,
+            corpus=corpus,
             unevaluable=unevaluable,
             metric_status=metric_evaluator.status,
             metric_length_regressions=all_metric_length_regressions,
@@ -2743,6 +2785,16 @@ def main() -> None:
         "--include-draft-human",
         action="store_true",
         help="Include any non-empty human translation instead of only approved reviewed/final ground truth.",
+    )
+    parser.add_argument(
+        "--corpus",
+        default=DEFAULT_PAPER_CORPUS,
+        choices=CORPUS_CHOICES,
+        help=(
+            "Ground-truth corpus for paper-facing reports. paper_kappa_review is the "
+            "100-row Kappa paper corpus from Gabe's final review tracker; approved_human "
+            "uses all approved reviewed/final human translations."
+        ),
     )
     parser.add_argument(
         "--metrics",
@@ -2790,9 +2842,13 @@ def main() -> None:
     args = parser.parse_args()
     metric_names = parse_metric_names(args.metrics)
     approved_human_only = not args.include_draft_human
+    corpus = normalize_corpus(args.corpus)
+    if args.include_draft_human and corpus != CORPUS_APPROVED_HUMAN:
+        parser.error("--include-draft-human requires --corpus approved_human")
 
     summaries = generate_reports(
         approved_human_only=approved_human_only,
+        corpus=corpus,
         min_galton_samples=args.min_galton_samples,
         min_galton_df=args.min_galton_df,
         metric_names=metric_names,

@@ -33,6 +33,14 @@ from generate_translation_prompt_evaluation import (
     mean,
     regression_stats,
 )
+from paper_corpus import (
+    CORPUS_CHOICES,
+    CORPUS_PAPER_KAPPA_REVIEW,
+    DEFAULT_PAPER_CORPUS,
+    corpus_label,
+    normalize_corpus,
+    paper_kappa_review_cte_body,
+)
 from site_navigation import render_site_navigation, site_navigation_styles
 from source_documents import source_document_priority_sql
 
@@ -159,17 +167,27 @@ def fetch_vocabulary_stop_words(cur) -> set[str]:
     }
 
 
-def fetch_context_counts(cur) -> dict[str, int]:
+def fetch_context_counts(cur, *, corpus: str) -> dict[str, int]:
+    corpus = normalize_corpus(corpus)
     counts: dict[str, int] = {}
-    cur.execute(
-        """
-        SELECT COUNT(DISTINCT lemma_id) AS total
-        FROM human_translations
-        WHERE status = 'approved'
-          AND stage IN ('reviewed', 'final')
-          AND COALESCE(translation_text, '') <> ''
-        """
-    )
+    if corpus == CORPUS_PAPER_KAPPA_REVIEW:
+        cur.execute(
+            f"""
+            WITH {paper_kappa_review_cte_body("paper_corpus")}
+            SELECT COUNT(DISTINCT lemma_id) AS total
+            FROM paper_corpus
+            """
+        )
+    else:
+        cur.execute(
+            """
+            SELECT COUNT(DISTINCT lemma_id) AS total
+            FROM human_translations
+            WHERE status = 'approved'
+              AND stage IN ('reviewed', 'final')
+              AND COALESCE(translation_text, '') <> ''
+            """
+        )
     counts["approved_human_lemmas"] = int(cur.fetchone()["total"] or 0)
 
     for table_name, key in (
@@ -186,9 +204,42 @@ def fetch_context_counts(cur) -> dict[str, int]:
     return counts
 
 
-def fetch_v3_rows(cur, *, profile_name: str, profile_version: int) -> list[dict[str, Any]]:
+def fetch_v3_rows(cur, *, profile_name: str, profile_version: int, corpus: str) -> list[dict[str, Any]]:
+    corpus = normalize_corpus(corpus)
+    if corpus == CORPUS_PAPER_KAPPA_REVIEW:
+        corpus_cte = paper_kappa_review_cte_body("paper_corpus") + ","
+        approved_human_cte = """
+        approved_human AS (
+            SELECT ht.*, pc.corpus_order
+            FROM paper_corpus pc
+            JOIN human_translations ht ON ht.id = pc.human_translation_id
+        )
+        """
+    else:
+        corpus_cte = ""
+        approved_human_cte = """
+        approved_human AS (
+            SELECT DISTINCT ON (ht.lemma_id)
+                ht.*,
+                NULL::integer AS corpus_order
+            FROM human_translations ht
+            WHERE ht.status = 'approved'
+              AND ht.stage IN ('reviewed', 'final')
+              AND COALESCE(ht.translation_text, '') <> ''
+            ORDER BY
+                ht.lemma_id,
+                CASE
+                    WHEN ht.stage = 'final' THEN 0
+                    WHEN ht.stage = 'reviewed' THEN 1
+                    ELSE 2
+                END,
+                COALESCE(ht.reviewed_at, ht.updated_at, ht.created_at) DESC,
+                ht.id DESC
+        )
+        """
     query = f"""
-        WITH profile AS (
+        WITH {corpus_cte}
+        profile AS (
             SELECT
                 p.id AS profile_id,
                 p.name AS profile_name,
@@ -204,23 +255,7 @@ def fetch_v3_rows(cur, *, profile_name: str, profile_version: int) -> list[dict[
             ORDER BY pv.id DESC
             LIMIT 1
         ),
-        approved_human AS (
-            SELECT DISTINCT ON (ht.lemma_id)
-                ht.*
-            FROM human_translations ht
-            WHERE ht.status = 'approved'
-              AND ht.stage IN ('reviewed', 'final')
-              AND COALESCE(ht.translation_text, '') <> ''
-            ORDER BY
-                ht.lemma_id,
-                CASE
-                    WHEN ht.stage = 'final' THEN 0
-                    WHEN ht.stage = 'reviewed' THEN 1
-                    ELSE 2
-                END,
-                COALESCE(ht.reviewed_at, ht.updated_at, ht.created_at) DESC,
-                ht.id DESC
-        ),
+        {approved_human_cte},
         current_source AS (
             SELECT DISTINCT ON (stv.lemma_id)
                 stv.lemma_id,
@@ -263,6 +298,7 @@ def fetch_v3_rows(cur, *, profile_name: str, profile_version: int) -> list[dict[
             ht.reviewed_by AS human_reviewed_by,
             ht.reviewed_at AS human_reviewed_at,
             ht.updated_at AS human_updated_at,
+            ht.corpus_order,
             ht.translation_text AS human_translation_text,
             a.lemma,
             a.entry_number,
@@ -284,7 +320,7 @@ def fetch_v3_rows(cur, *, profile_name: str, profile_version: int) -> list[dict[
           AND COALESCE(tr.translation_text, '') <> ''
           AND COALESCE(tr.api_mode, 'chat_completions') = 'chat_completions'
           AND tr.reasoning_effort IS NULL
-        ORDER BY tr.lemma_id, tr.run_index, COALESCE(tr.completed_at, tr.created_at), tr.id
+        ORDER BY COALESCE(ht.corpus_order, 100000000), tr.lemma_id, tr.run_index, COALESCE(tr.completed_at, tr.created_at), tr.id
     """
     cur.execute(query, (profile_name, profile_version))
     return [dict(row) for row in cur.fetchall()]
@@ -962,11 +998,20 @@ def fetch_worst_sentence_rows(
     *,
     profile_name: str,
     profile_version: int,
+    corpus: str,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
+    corpus = normalize_corpus(corpus)
+    if corpus == CORPUS_PAPER_KAPPA_REVIEW:
+        corpus_cte = paper_kappa_review_cte_body("paper_corpus") + ","
+        corpus_join = "JOIN paper_corpus pc ON pc.lemma_id = sas.lemma_id"
+    else:
+        corpus_cte = ""
+        corpus_join = ""
     cur.execute(
-        """
-        WITH profile AS (
+        f"""
+        WITH {corpus_cte}
+        profile AS (
             SELECT pv.id AS profile_version_id
             FROM translation_prompt_profiles p
             JOIN translation_prompt_profile_versions pv ON pv.profile_id = p.id
@@ -1024,6 +1069,7 @@ def fetch_worst_sentence_rows(
             JOIN sentence_alignment_groups sag ON sag.id = stms.alignment_group_id
             JOIN sentence_alignment_sets sas ON sas.id = sag.alignment_set_id
             JOIN profile ON (sas.response_json->>'profile_version_id')::integer = profile.profile_version_id
+            {corpus_join}
             JOIN assembled_lemmas al ON al.id = sas.lemma_id
             LEFT JOIN group_source_text ON group_source_text.alignment_group_id = sag.id
             LEFT JOIN sentence_alignment_members ref_member
@@ -1164,6 +1210,7 @@ def render_page(
     metric_status: dict[str, str],
     profile_name: str,
     profile_version: int,
+    corpus: str,
 ) -> str:
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     ok_results = [result for result in results if result.get("status") == "ok"]
@@ -1223,11 +1270,11 @@ def render_page(
     )
 
     if not rows:
-        main_body = f"""<p class="warning">No scored approved-human passages currently have completed ordinary v3 runs for <code>{esc(profile_name)}</code> v{profile_version}.</p>"""
+        main_body = f"""<p class="warning">No scored passages in {esc(corpus_label(corpus))} currently have completed ordinary v3 runs for <code>{esc(profile_name)}</code> v{profile_version}.</p>"""
     else:
         main_body = f"""
 <div class="metric-grid">
-  <div class="metric"><span class="label">Approved human passages</span><span class="value">{context_counts.get('approved_human_lemmas', 0):,}</span></div>
+  <div class="metric"><span class="label">Ground-truth passages</span><span class="value">{context_counts.get('approved_human_lemmas', 0):,}</span></div>
   <div class="metric"><span class="label">Scored v3 passages</span><span class="value">{len(rows):,}</span></div>
   <div class="metric"><span class="label">Completed v3 runs</span><span class="value">{sum(int(row.get('run_count') or 0) for row in rows):,}</span></div>
   <div class="metric"><span class="label">Mean runs per passage</span><span class="value">{fmt_num(sum(int(row.get('run_count') or 0) for row in rows) / len(rows), 2)}</span></div>
@@ -1290,7 +1337,7 @@ def render_page(
   <div class="wrap">
     {render_site_navigation("analysis", "translation_quality_predictor", depth=1)}
     <h1>Translation Quality Predictor</h1>
-    <p>This page tests whether current source vocabulary, translation-guidance recogniser matches, and mean v3 translation length can predict which approved-human passages are translated badly by ordinary <code>{esc(profile_name)}</code> v{profile_version}. It excludes separate reasoning and repeatability experiment lanes.</p>
+    <p>This page tests whether current source vocabulary, translation-guidance recogniser matches, and mean v3 translation length can predict which passages in {esc(corpus_label(corpus))} are translated badly by ordinary <code>{esc(profile_name)}</code> v{profile_version}. It excludes separate reasoning and repeatability experiment lanes.</p>
     <p class="note">{best_sentence}</p>
     <p class="note">{esc(sentence_note)}</p>
     <h2>Metric Engines</h2>
@@ -1475,19 +1522,22 @@ def generate(
     *,
     profile_name: str,
     profile_version: int,
+    corpus: str,
     min_df: int,
     max_vocab_features: int,
     min_samples: int,
 ) -> list[dict[str, Any]]:
+    corpus = normalize_corpus(corpus)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     conn = get_connection(dict_cursor=True)
     cur = conn.cursor()
-    context_counts = fetch_context_counts(cur)
-    db_rows = fetch_v3_rows(cur, profile_name=profile_name, profile_version=profile_version)
+    context_counts = fetch_context_counts(cur, corpus=corpus)
+    db_rows = fetch_v3_rows(cur, profile_name=profile_name, profile_version=profile_version, corpus=corpus)
     worst_sentence_rows = fetch_worst_sentence_rows(
         cur,
         profile_name=profile_name,
         profile_version=profile_version,
+        corpus=corpus,
     )
 
     metric_evaluator = TranslationMetricEvaluator(METRIC_NAMES)
@@ -1574,6 +1624,7 @@ def generate(
             metric_status=metric_evaluator.status,
             profile_name=profile_name,
             profile_version=profile_version,
+            corpus=corpus,
         ),
         encoding="utf-8",
     )
@@ -1584,6 +1635,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", default=DEFAULT_PROFILE_NAME)
     parser.add_argument("--version", type=int, default=DEFAULT_PROFILE_VERSION)
+    parser.add_argument(
+        "--corpus",
+        default=DEFAULT_PAPER_CORPUS,
+        choices=CORPUS_CHOICES,
+        help="Ground-truth corpus: paper_kappa_review is the 100-row paper set; approved_human is the broader set.",
+    )
     parser.add_argument("--min-df", type=int, default=2)
     parser.add_argument("--max-vocab-features", type=int, default=1500)
     parser.add_argument("--min-samples", type=int, default=30)
@@ -1595,6 +1652,7 @@ def main() -> None:
     results = generate(
         profile_name=args.profile,
         profile_version=args.version,
+        corpus=args.corpus,
         min_df=args.min_df,
         max_vocab_features=args.max_vocab_features,
         min_samples=args.min_samples,

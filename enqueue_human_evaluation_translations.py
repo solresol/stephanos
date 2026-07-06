@@ -12,6 +12,15 @@ from __future__ import annotations
 import argparse
 
 from db import get_connection
+from paper_corpus import (
+    CORPUS_CHOICES,
+    CORPUS_PAPER_KAPPA_REVIEW,
+    DEFAULT_PAPER_CORPUS,
+    corpus_label,
+    normalize_corpus,
+    paper_kappa_review_cte_body,
+    required_tables_for_corpus,
+)
 from source_documents import (
     PREFERRED_GREEK_SOURCE_DOCUMENTS,
     PREFERRED_SOURCE_DOCUMENT,
@@ -258,7 +267,9 @@ def fetch_missing_requests(
     source_document: str,
     include_quarantined: bool,
     reuse_any_source_run: bool,
+    corpus: str,
 ) -> list[dict[str, object]]:
+    corpus = normalize_corpus(corpus)
     values_sql = ", ".join(["(%s, %s, %s, %s)"] * len(profile_versions))
     params: list[object] = []
     for row in profile_versions:
@@ -276,21 +287,49 @@ def fetch_missing_requests(
 
     quarantine_filter = "" if include_quarantined else "AND COALESCE(a.quarantined, FALSE) = FALSE"
     source_match_filter = "" if reuse_any_source_run else "AND tr.source_text_version_id = s.source_text_version_id"
-
-    query = f"""
-        WITH versions(profile_id, profile_version_id, version, profile_name) AS (
-            VALUES {values_sql}
-        ),
+    if corpus == CORPUS_PAPER_KAPPA_REVIEW:
+        corpus_cte = ",\n" + paper_kappa_review_cte_body("paper_corpus") + ","
+        human_cte = """
         human AS (
-            SELECT DISTINCT ht.lemma_id
+            SELECT
+                pc.lemma_id,
+                pc.human_translation_id,
+                pc.corpus_order,
+                pc.corpus_source_row_id,
+                pc.kappa_review_row_id
+            FROM paper_corpus pc
+        )
+        """
+    else:
+        corpus_cte = ","
+        human_cte = """
+        human AS (
+            SELECT DISTINCT
+                ht.lemma_id,
+                NULL::bigint AS human_translation_id,
+                NULL::integer AS corpus_order,
+                NULL::integer AS corpus_source_row_id,
+                NULL::bigint AS kappa_review_row_id
             FROM human_translations ht
             WHERE ht.status = 'approved'
               AND ht.stage IN ('reviewed', 'final')
               AND COALESCE(ht.translation_text, '') <> ''
-        ),
+        )
+        """
+
+    query = f"""
+        WITH versions(profile_id, profile_version_id, version, profile_name) AS (
+            VALUES {values_sql}
+        )
+        {corpus_cte}
+        {human_cte},
         source AS (
             SELECT
                 h.lemma_id,
+                h.human_translation_id,
+                h.corpus_order,
+                h.corpus_source_row_id,
+                h.kappa_review_row_id,
                 stv.id AS source_text_version_id,
                 stv.source_document,
                 COALESCE(a.lemma, '') AS lemma,
@@ -308,6 +347,10 @@ def fetch_missing_requests(
                 s.source_document,
                 s.lemma,
                 s.entry_number,
+                s.human_translation_id,
+                s.corpus_order,
+                s.corpus_source_row_id,
+                s.kappa_review_row_id,
                 v.profile_id,
                 v.profile_version_id,
                 v.version AS profile_version,
@@ -343,10 +386,14 @@ def fetch_missing_requests(
             profile_id,
             profile_version_id,
             profile_version,
-            profile_name
+            profile_name,
+            human_translation_id,
+            corpus_order,
+            corpus_source_row_id,
+            kappa_review_row_id
         FROM missing
         ORDER BY
-            COALESCE(entry_number, 100000000),
+            COALESCE(corpus_order, entry_number, 100000000),
             lemma_id,
             profile_name,
             profile_version
@@ -368,6 +415,10 @@ def fetch_missing_requests(
             "profile_version_id": int(row[6]),
             "profile_version": int(row[7]),
             "profile_name": row[8] or "",
+            "human_translation_id": int(row[9]) if row[9] is not None else None,
+            "corpus_order": int(row[10]) if row[10] is not None else None,
+            "corpus_source_row_id": int(row[11]) if row[11] is not None else None,
+            "kappa_review_row_id": int(row[12]) if row[12] is not None else None,
             "default_model": version_defaults[int(row[6])].get("default_model"),
             "default_top_p": version_defaults[int(row[6])].get("default_top_p"),
             "default_api_mode": version_defaults[int(row[6])].get("default_api_mode"),
@@ -507,9 +558,11 @@ def print_preview(rows: list[dict[str, object]], *, max_rows: int = 30) -> None:
     for row in rows[:max_rows]:
         entry = row.get("entry_number")
         entry_text = f"entry={entry}" if entry is not None else "entry=?"
+        corpus_order = row.get("corpus_order")
+        corpus_text = f"corpus_order={corpus_order} " if corpus_order is not None else ""
         profile = row.get("profile_name") or row.get("profile_id")
         print(
-            f"  lemma={row['lemma_id']} {entry_text} "
+            f"  {corpus_text}lemma={row['lemma_id']} {entry_text} "
             f"profile={profile} v{row['profile_version']} source={row['source_document']} {row['lemma']}"
         )
     if len(rows) > max_rows:
@@ -522,6 +575,15 @@ def main() -> None:
     )
     parser.add_argument("--profile", default=DEFAULT_PROFILE, help="Prompt profile name")
     parser.add_argument("--versions", type=parse_versions, default=list(DEFAULT_VERSIONS), help="Prompt versions, e.g. 1,2,3")
+    parser.add_argument(
+        "--corpus",
+        default=DEFAULT_PAPER_CORPUS,
+        choices=CORPUS_CHOICES,
+        help=(
+            "Ground-truth corpus to target. paper_kappa_review is the 100-row Kappa "
+            "paper corpus from Gabe's final review tracker; approved_human is the older broad set."
+        ),
+    )
     parser.add_argument(
         "--all-approved-human-only",
         action="store_true",
@@ -591,6 +653,10 @@ def main() -> None:
         parser.error("--priority must be non-negative")
     if args.requested_runs is not None and args.requested_runs <= 0:
         parser.error("--requested-runs must be positive")
+    try:
+        corpus = normalize_corpus(args.corpus)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     conn = get_connection()
     cur = conn.cursor()
@@ -602,6 +668,7 @@ def main() -> None:
         "translation_prompt_profile_versions",
         "translation_run_requests",
         "translation_runs",
+        *required_tables_for_corpus(corpus),
     ]
     missing_tables = [table for table in required_tables if not table_exists(cur, table)]
     if missing_tables:
@@ -632,6 +699,7 @@ def main() -> None:
         source_document=args.source_document,
         include_quarantined=bool(args.include_quarantined),
         reuse_any_source_run=bool(args.reuse_any_source_run),
+        corpus=corpus,
     )
     if args.limit is not None and not args.require_guidance_complete:
         rows = rows[: args.limit]
@@ -643,6 +711,7 @@ def main() -> None:
         )
         rows = []
 
+    print(f"Ground-truth corpus: {corpus} ({corpus_label(corpus)})")
     print(f"Missing approved-human evaluation translation requests: {len(rows)}")
     if rows:
         print_preview(rows)

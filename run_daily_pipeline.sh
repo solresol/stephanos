@@ -398,6 +398,7 @@ HUMAN_EVAL_TRANSLATION_ENABLED="${HUMAN_EVAL_TRANSLATION_ENABLED:-1}"
 HUMAN_EVAL_TRANSLATION_PROFILE="${HUMAN_EVAL_TRANSLATION_PROFILE:-legacy_scholarly}"
 HUMAN_EVAL_TRANSLATION_VERSIONS="${HUMAN_EVAL_TRANSLATION_VERSIONS:-3}"
 HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT="${HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT:-preferred}"
+HUMAN_EVAL_CORPUS="${HUMAN_EVAL_CORPUS:-paper_kappa_review}"
 HUMAN_EVAL_TRANSLATION_GUIDANCE_LIMIT="${HUMAN_EVAL_TRANSLATION_GUIDANCE_LIMIT:-300}"
 HUMAN_EVAL_TRANSLATION_ENQUEUE_LIMIT="${HUMAN_EVAL_TRANSLATION_ENQUEUE_LIMIT:-90}"
 HUMAN_EVAL_TRANSLATION_PRIORITY="${HUMAN_EVAL_TRANSLATION_PRIORITY:-5}"
@@ -407,6 +408,7 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_TRANSLATION_GU
     uv run enqueue_human_evaluation_translations.py \
         --profile "$HUMAN_EVAL_TRANSLATION_PROFILE" \
         --versions "$HUMAN_EVAL_TRANSLATION_VERSIONS" \
+        --corpus "$HUMAN_EVAL_CORPUS" \
         --source-document "$HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT" \
         --limit "$HUMAN_EVAL_TRANSLATION_GUIDANCE_LIMIT" \
         --priority "$HUMAN_EVAL_TRANSLATION_PRIORITY" \
@@ -431,6 +433,7 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_ENA
         uv run enqueue_human_evaluation_translations.py \
             --profile "$experiment_profile" \
             --versions 1 \
+            --corpus "$HUMAN_EVAL_CORPUS" \
             --source-document "$HUMAN_EVAL_EXPERIMENT_SOURCE_DOCUMENT" \
             --limit "$HUMAN_EVAL_EXPERIMENT_GUIDANCE_LIMIT" \
             --priority "$HUMAN_EVAL_EXPERIMENT_PRIORITY" \
@@ -487,6 +490,7 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_TRANSLATION_EN
     uv run enqueue_human_evaluation_translations.py \
         --profile "$HUMAN_EVAL_TRANSLATION_PROFILE" \
         --versions "$HUMAN_EVAL_TRANSLATION_VERSIONS" \
+        --corpus "$HUMAN_EVAL_CORPUS" \
         --source-document "$HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT" \
         --limit "$HUMAN_EVAL_TRANSLATION_ENQUEUE_LIMIT" \
         --priority "$HUMAN_EVAL_TRANSLATION_PRIORITY" \
@@ -502,6 +506,7 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_ENA
         uv run enqueue_human_evaluation_translations.py \
             --profile "$experiment_profile" \
             --versions 1 \
+            --corpus "$HUMAN_EVAL_CORPUS" \
             --source-document "$HUMAN_EVAL_EXPERIMENT_SOURCE_DOCUMENT" \
             --limit "$HUMAN_EVAL_EXPERIMENT_ENQUEUE_LIMIT" \
             --max-open-requests "$HUMAN_EVAL_EXPERIMENT_MAX_OPEN_REQUESTS" \
@@ -751,11 +756,11 @@ uv run generate_statistics_site.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 7a0a: Generate translation prompt evaluation pages
 echo "Step 7a0a: Generating translation prompt evaluation..." | tee -a "$LOGFILE"
-uv run generate_translation_prompt_evaluation.py --approved-human-only 2>&1 | tee -a "$LOGFILE"
+uv run generate_translation_prompt_evaluation.py --approved-human-only --corpus "$HUMAN_EVAL_CORPUS" 2>&1 | tee -a "$LOGFILE"
 
 # Step 7a0a1: Generate v3 translation quality predictor page
 echo "Step 7a0a1: Generating translation quality predictor page..." | tee -a "$LOGFILE"
-uv run generate_translation_quality_predictor_page.py 2>&1 | tee -a "$LOGFILE"
+uv run generate_translation_quality_predictor_page.py --corpus "$HUMAN_EVAL_CORPUS" 2>&1 | tee -a "$LOGFILE"
 
 # Step 7a0b: Generate translation operations/cost page
 echo "Step 7a0b: Generating translation operations page..." | tee -a "$LOGFILE"

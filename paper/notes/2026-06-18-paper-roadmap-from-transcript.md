@@ -29,7 +29,14 @@ What makes this worth publishing:
 
 ## Evidence Base
 
-Use the 100 final approved translations as the frozen reference set.
+Use the 100 visible Kappa review rows from Gabe's final review tracker export as
+the frozen reference set. Do not substitute the broader current
+`human_translations` approved count when writing or regenerating paper results:
+that table can include approved rows outside the Kappa tracker. The Kappa paper
+corpus is anchored by `data/kappa_review/final-kappa-translation-review.rows.jsonl`
+and the PostgreSQL `kappa_review_imports` / `kappa_review_rows` tables; code maps
+those rows to live translations through `kappa_review_rows.source_row_id =
+assembled_lemmas.entry_number` for Kappa epitome entries.
 
 For each entry or sentence, gather:
 
@@ -109,7 +116,7 @@ Named worked examples already chosen on screen (use as the Results-section case 
    - Formula/rule guidance.
 
 3. Evaluation design:
-   - Frozen 100-entry sample.
+   - Frozen 100-row Kappa sample from Gabe's final review tracker export.
    - Human-approved reference translations.
    - Metrics and why multiple metric families are needed.
    - Limitations of semantic metrics for editorial style.

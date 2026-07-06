@@ -15,7 +15,7 @@ This is a parking lot for ideas, not a commitment to pursue all of them. Readine
 
 | Readiness | Idea | Core question | Needed next step |
 | --- | --- | --- | --- |
-| Now | Prompt/rule iteration for Stephanus translation | How do prompt versions and formula rules move output from plausible gist to reviewable scholarly translation? | Freeze the 100-entry corpus and produce prompt-version metric tables. |
+| Now | Prompt/rule iteration for Stephanus translation | How do prompt versions and formula rules move output from plausible gist to reviewable scholarly translation? | Freeze the 100-row Kappa corpus from Gabe's final review tracker export and produce prompt-version metric tables. |
 | Now | Workflow improvement rather than simple quality improvement | Did V3 reduce human review burden even where semantic metrics barely changed? | Count no-change, near-change, and repeated style-guide corrections. |
 | Now | Error typology for AI translation of an epitomized reference text | What does the model get wrong when the Greek is compact, metalinguistic, or fact-dense? | Pull worst-scoring examples and classify failures. |
 | Now | Sentence-level translation analysis | Are catastrophic failures localized to particular sentences or structures? | Split entries into sentences and rerun metrics. |
