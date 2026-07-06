@@ -319,6 +319,20 @@ def comparable_state(rule: dict[str, object]) -> dict[str, object]:
     }
 
 
+# Provenance fields in comparable_state that change on a cosmetic re-import (reorder /
+# moved sheet) but do not affect matching or translation output.
+_PROVENANCE_FIELDS = ("source_workbook", "source_sheet", "source_row_number")
+
+
+def behavior_relevant_change(old: dict[str, object], new: dict[str, object]) -> bool:
+    """True if the rule changed in a way that can affect matching/translation output.
+    A provenance-only edit still records a revision (for audit) but must NOT enqueue
+    scan_rule backlog, or a reorder would flood the backlog with non-stale work."""
+    old_state = {k: v for k, v in comparable_state(old).items() if k not in _PROVENANCE_FIELDS}
+    new_state = {k: v for k, v in comparable_state(new).items() if k not in _PROVENANCE_FIELDS}
+    return old_state != new_state
+
+
 def insert_rule(cur, rule: dict[str, object], username: str) -> int:
     cur.execute(
         """
@@ -678,14 +692,17 @@ def main() -> None:
             source_context=source_context,
             snapshot=snapshot,
         )
-        # D-01: a changed rule may leave prior-matched lemmas stale; record
-        # scan_rule backlog items for them (bounded, idempotent per revision).
-        create_scan_rule_backlog(
-            cur,
-            rule_id=int(existing["id"]),
-            new_revision_id=new_revision_id,
-            created_by=args.created_by,
-        )
+        # D-01: a behavior-affecting rule change may leave prior-matched lemmas stale;
+        # record scan_rule backlog for them (bounded, idempotent per revision). Skip
+        # provenance-only edits (reorder / moved sheet) so cosmetic re-imports don't
+        # flood the backlog with work that isn't actually stale.
+        if behavior_relevant_change(existing, rule):
+            create_scan_rule_backlog(
+                cur,
+                rule_id=int(existing["id"]),
+                new_revision_id=new_revision_id,
+                created_by=args.created_by,
+            )
         updated += 1
 
     conn.commit()
