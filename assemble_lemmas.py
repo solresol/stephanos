@@ -98,6 +98,17 @@ def ensure_table(cur):
         WHERE billerbeck_id IS NOT NULL
         """
     )
+    # D-04: dedup NULL entry_number rows that carry real page images. Excludes
+    # empty source_image_ids ('[]'/''), because synthetic/no-image entries
+    # legitimately share those and are distinct lemmas (e.g. Κίκονες vs
+    # Κιναιδοκολπῖται), so they must be allowed to coexist.
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS assembled_lemmas_null_entry_dedup_idx
+        ON assembled_lemmas (source_image_ids, version)
+        WHERE entry_number IS NULL AND source_image_ids NOT IN ('[]', '')
+        """
+    )
 
 
 def strip_headword_brackets(headword: str) -> str:

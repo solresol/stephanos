@@ -5974,6 +5974,13 @@ CREATE UNIQUE INDEX assembled_lemmas_billerbeck_version_idx ON public.assembled_
 
 
 --
+-- Name: assembled_lemmas_null_entry_dedup_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX assembled_lemmas_null_entry_dedup_idx ON public.assembled_lemmas USING btree (source_image_ids, version) WHERE ((entry_number IS NULL) AND (source_image_ids <> ALL (ARRAY['[]'::text, ''::text])));
+
+
+--
 -- Name: authority_records_kind_idx; Type: INDEX; Schema: public; Owner: -
 --
 
