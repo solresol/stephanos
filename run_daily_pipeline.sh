@@ -12,6 +12,18 @@ cd "$(dirname "$0")"
 
 # Log file
 LOGFILE="pipeline.log"
+
+# Single-instance lock: exit early if another daily pipeline run holds the lock.
+# Guarded so manual runs on hosts without flock (e.g. macOS) still proceed.
+LOCKFILE="${PIPELINE_LOCKFILE:-daily_pipeline.lock}"
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCKFILE"
+    if ! flock -n 9; then
+        echo "Daily pipeline already running; exiting at $(date)" | tee -a "$LOGFILE"
+        exit 0
+    fi
+fi
+
 DATE=$(date +%Y%m%d)
 STEPHANOS_SITE_URL="${STEPHANOS_SITE_URL:-https://stephanos.symmachus.org}"
 AI_SYSTEMS_FEED_PATH="${AI_SYSTEMS_FEED_PATH:-reference_site/ai-systems.xml}"
@@ -70,6 +82,13 @@ pipeline_exit_report() {
     echo "Step final: Generating short AI systems status after failure..." | tee -a "$LOGFILE"
     emit_ai_systems_status_report "$exit_status" 2>&1 | tee -a "$LOGFILE" || \
       echo "  Warning: Failed to generate AI systems status report" | tee -a "$LOGFILE"
+  fi
+  if [ "${DAILY_BACKUP_DONE:-0}" -eq 0 ]; then
+    set +e
+    echo "Step final: ensuring PostgreSQL backup ran (pipeline exited before Step 10)..." | tee -a "$LOGFILE"
+    mkdir -p backups
+    dump_postgres_backup "backups/stephanos_${DATE}.sql.gz" 2>&1 | tee -a "$LOGFILE" \
+      || echo "  Warning: fallback PostgreSQL backup failed" | tee -a "$LOGFILE"
   fi
   exit "$exit_status"
 }
@@ -175,7 +194,11 @@ echo "Step 0: Pulling latest changes from git..." | tee -a "$LOGFILE"
 if git diff --quiet && git diff --cached --quiet; then
     git pull 2>&1 | tee -a "$LOGFILE" || echo "Git pull failed (continuing anyway)" | tee -a "$LOGFILE"
 else
-    echo "Git working tree has local changes; skipping git pull" | tee -a "$LOGFILE"
+    echo "WARNING: git working tree is DIRTY; skipping git pull — the pipeline is" \
+         "NOT self-updating. Commit or stash local changes to resume auto-update." \
+         | tee -a "$LOGFILE"
+    echo "  dirty paths:" | tee -a "$LOGFILE"
+    git status --short | tee -a "$LOGFILE"
 fi
 
 # Step 0a0: Ensure low-priority AI footnote schema before strict preflight
@@ -952,6 +975,7 @@ echo "Step 10: Backing up databases..." | tee -a "$LOGFILE"
 echo "  Backing up PostgreSQL database..." | tee -a "$LOGFILE"
 mkdir -p backups
 dump_postgres_backup "backups/stephanos_${DATE}.sql.gz" 2>&1 | tee -a "$LOGFILE"
+DAILY_BACKUP_DONE=1
 
 # Backup review database on merah
 echo "  Backing up review database on merah..." | tee -a "$LOGFILE"
