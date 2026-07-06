@@ -132,6 +132,9 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 		} else if strings.TrimSpace(selectedStatus) != "" && selectedStatus != "approved" {
 			translationBlocked = true
 			translationBlockReason = fmt.Sprintf("Selected canonical variant status is %s", selectedStatus)
+		} else if reason := variantWithholdReason(lemma, effectiveKind, effectiveID); reason != "" {
+			translationBlocked = true
+			translationBlockReason = reason
 		}
 
 		// Risk gating (legacy lane only in the review snapshot).
@@ -272,6 +275,36 @@ func resolveVariant(lemma *Lemma, kind string, id string) (bool, string, string,
 	}
 
 	return false, "", "", "", ""
+}
+
+// variantWithholdReason mirrors the stronger public gating in
+// public_cgi/canonical_translation.cgi (is_publishable_local) for translation_run
+// variants: guidance freshness, public_eligible, and public_block_reason. It
+// returns a non-empty reason when the variant must be withheld (fail-closed).
+// Other lanes (human_translation, legacy_assembled) are already covered by the
+// status / risk-gating checks at the call site.
+func variantWithholdReason(lemma *Lemma, kind string, id string) string {
+	if kind != "translation_run" {
+		return ""
+	}
+	for _, variant := range lemma.TranslationVariants {
+		if mapString(variant, "kind") != kind || mapString(variant, "id") != id {
+			continue
+		}
+		switch mapString(variant, "guidance_freshness_state") {
+		case "potentially_outdated", "needs_review", "outdated":
+			return fmt.Sprintf("translation_run guidance freshness is %s",
+				mapString(variant, "guidance_freshness_state"))
+		}
+		if mapString(variant, "public_eligible") == "false" {
+			return "translation_run is not public_eligible"
+		}
+		if reason := strings.TrimSpace(mapString(variant, "public_block_reason")); reason != "" {
+			return reason
+		}
+		return ""
+	}
+	return ""
 }
 
 func mapString(m map[string]interface{}, key string) string {

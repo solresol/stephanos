@@ -9,6 +9,8 @@ import argparse
 import difflib
 import json
 import re
+import subprocess
+import sys
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -739,6 +741,39 @@ def upsert_assembled(cur, assembled_entries, *, verbose: bool = False):
     return upserts
 
 
+def backup_before_rebuild():
+    """pg_dump the DB before a destructive --rebuild. Fails closed: raises if the
+    backup cannot be written, so the caller aborts before any DELETE. Uses the
+    same connection settings as get_connection() (credentials via ~/.pgpass)."""
+    from db import DB_HOST, DB_PORT, DB_NAME, DB_USER
+
+    backups = Path("backups")
+    backups.mkdir(exist_ok=True)
+    dest = backups / f"stephanos_pre_rebuild_{datetime.now():%Y%m%d_%H%M%S}.sql.gz"
+
+    cmd = ["pg_dump"]
+    if DB_HOST:
+        cmd += ["-h", DB_HOST]
+    if DB_PORT:
+        cmd += ["-p", str(DB_PORT)]
+    if DB_USER:
+        cmd += ["-U", DB_USER]
+    cmd.append(DB_NAME)
+
+    with open(dest, "wb") as fh:
+        dump = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+        gz = subprocess.Popen(["gzip"], stdin=dump.stdout, stdout=fh)
+        dump.stdout.close()
+        gz.communicate()
+        dump.wait()
+    if dump.returncode != 0 or gz.returncode != 0:
+        raise RuntimeError(
+            f"pg_dump failed (rc={dump.returncode}); aborting --rebuild. No rows deleted."
+        )
+    print(f"Wrote pre-rebuild backup: {dest}")
+    return dest
+
+
 def main():
     parser = argparse.ArgumentParser(description="Assemble lemmas across pages into a translation queue.")
     parser.add_argument("--rebuild", action="store_true", help="Clear existing assembled lemmas before rebuilding")
@@ -746,6 +781,12 @@ def main():
         "--verbose",
         action="store_true",
         help="Print per-image skip reasons (non-Greek/apparatus/continuations).",
+    )
+    parser.add_argument(
+        "--yes-i-really-mean-it",
+        dest="assume_yes",
+        action="store_true",
+        help="Skip the interactive --rebuild confirmation (scripted use only).",
     )
     args = parser.parse_args()
 
@@ -758,9 +799,29 @@ def main():
     headword_lookup = load_headword_lookup(cur)
 
     if args.rebuild:
+        cur.execute("SELECT count(*) FROM assembled_lemmas")
+        existing = cur.fetchone()[0]
+        if existing:
+            if not args.assume_yes:
+                print(
+                    f"WARNING: --rebuild will DELETE all {existing} rows in assembled_lemmas.\n"
+                    "  This CASCADE-deletes translation_runs, human_translations and every derived\n"
+                    "  table, and wipes human-authored columns (human_greek_text, corrected/reviewed\n"
+                    "  English translations, human_notes, geocoding, review status). New ids are\n"
+                    "  assigned on reinsert; this cannot be undone except from the backup below."
+                )
+                if not sys.stdin.isatty():
+                    print("Refusing non-interactive --rebuild without --yes-i-really-mean-it. No rows deleted.")
+                    conn.close()
+                    return
+                if input("Type 'rebuild' to proceed: ").strip() != "rebuild":
+                    print("Aborted; no rows deleted.")
+                    conn.close()
+                    return
+            backup_before_rebuild()  # fails closed: raises before any DELETE
         cur.execute("DELETE FROM assembled_lemmas")
         conn.commit()
-        print("Cleared existing assembled lemmas.")
+        print(f"Cleared {existing} existing assembled lemmas.")
 
     rows = load_processed_images(cur)
     print(f"Loaded {len(rows)} processed images.")
