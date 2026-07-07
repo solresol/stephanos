@@ -11,11 +11,13 @@ Usage:
 import json
 import html as html_module
 import hashlib
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import db
 from generate_spelling_variants import generate_variants
+from paper_corpus import paper_kappa_review_cte_body
 from source_documents import public_source_document_list_sql, source_document_priority_sql
 from site_navigation import render_site_navigation, site_navigation_styles
 from translation_guidance_coverage import (
@@ -27,6 +29,29 @@ from translation_guidance_coverage import (
 NIGHTLY_GUIDANCE_CHECK_LIMIT = 2000
 BILLERBECK_GERMAN_OCR_NIGHTLY_LIMIT = 3
 BILLERBECK_GERMAN_TRANSLATE_NIGHTLY_LIMIT = 5
+PAPER_MODEL_TARGET_ROWS = 100
+PAPER_MODEL_PROFILES = (
+    "legacy_scholarly",
+    "claude_sonnet_5",
+    "claude_opus_4_8",
+    "claude_fable_5",
+    "legacy_scholarly_v3_repeat",
+    "legacy_scholarly_v4_reasoning",
+    "legacy_scholarly_v4_reasoning_medium",
+    "legacy_scholarly_v4_reasoning_high",
+    "legacy_scholarly_v4_mini",
+    "legacy_scholarly_v4_mini_medium",
+    "legacy_scholarly_v4_mini_high",
+)
+RESPONSE_EXPERIMENT_PROFILES = {
+    "legacy_scholarly_v4_reasoning",
+    "legacy_scholarly_v4_reasoning_medium",
+    "legacy_scholarly_v4_reasoning_high",
+    "legacy_scholarly_v4_mini",
+    "legacy_scholarly_v4_mini_medium",
+    "legacy_scholarly_v4_mini_high",
+}
+REPEATABILITY_PROFILE_NAME = "legacy_scholarly_v3_repeat"
 
 
 def pg_table_exists(cur, table_name: str) -> bool:
@@ -48,6 +73,193 @@ def pg_column_exists(cur, table_name: str, column_name: str) -> bool:
         (table_name, column_name),
     )
     return bool(cur.fetchone()[0])
+
+
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+def format_pipeline_runs(days: int | float | None) -> str:
+    if days is None:
+        return "not scheduled"
+    if days <= 0:
+        return "complete"
+    if days < 1:
+        return "< 1 pipeline run"
+    if days < 7:
+        return f"about {days:.1f} pipeline runs"
+    if days < 30:
+        return f"about {days / 7:.1f} weeks at one daily run"
+    if days < 365:
+        return f"about {days / 30:.1f} months at one daily run"
+    return f"about {days / 365:.1f} years at one daily run"
+
+
+def translation_model_coverage(cur) -> dict[str, object] | None:
+    if not all(
+        pg_table_exists(cur, table_name)
+        for table_name in (
+            "translation_prompt_profiles",
+            "translation_prompt_profile_versions",
+            "translation_runs",
+            "translation_run_requests",
+        )
+    ):
+        return None
+    experiment_enqueue_limit = max(0, env_int("HUMAN_EVAL_EXPERIMENT_ENQUEUE_LIMIT", 1))
+    responses_run_limit = max(0, env_int("TRANSLATION_RESPONSES_RUN_LIMIT", 1))
+    paper_corpus_cte = paper_kappa_review_cte_body("paper_corpus")
+    cur.execute(
+        f"""
+        WITH {paper_corpus_cte},
+        run_counts AS (
+            SELECT
+                tr.profile_version_id,
+                COUNT(*) FILTER (
+                    WHERE tr.status IN ('completed', 'approved')
+                      AND COALESCE(tr.translation_text, '') <> ''
+                ) AS completed_runs,
+                COUNT(DISTINCT tr.lemma_id) FILTER (
+                    WHERE tr.status IN ('completed', 'approved')
+                      AND COALESCE(tr.translation_text, '') <> ''
+                ) AS completed_lemmas,
+                COUNT(DISTINCT tr.lemma_id) FILTER (
+                    WHERE tr.status IN ('completed', 'approved')
+                      AND COALESCE(tr.translation_text, '') <> ''
+                      AND COALESCE(tr.completed_at, tr.created_at) > NOW() - INTERVAL '7 days'
+                ) AS completed_lemmas_7d,
+                COUNT(*) FILTER (
+                    WHERE tr.status IN ('completed', 'approved')
+                      AND COALESCE(tr.translation_text, '') <> ''
+                      AND COALESCE(tr.completed_at, tr.created_at) > NOW() - INTERVAL '7 days'
+                ) AS completed_runs_7d,
+                MAX(COALESCE(tr.completed_at, tr.created_at)) FILTER (
+                    WHERE tr.status IN ('completed', 'approved')
+                      AND COALESCE(tr.translation_text, '') <> ''
+                ) AS latest_run_at
+            FROM translation_runs tr
+            JOIN paper_corpus pc ON pc.lemma_id = tr.lemma_id
+            GROUP BY tr.profile_version_id
+        ),
+        request_counts AS (
+            SELECT
+                trr.profile_version_id,
+                COUNT(*) AS request_count,
+                COUNT(*) FILTER (WHERE trr.status IN ('pending', 'running', 'queued', 'open')) AS open_request_count,
+                COUNT(*) FILTER (WHERE trr.status = 'failed') AS failed_request_count,
+                MAX(trr.created_at) AS latest_request_at
+            FROM translation_run_requests trr
+            JOIN paper_corpus pc ON pc.lemma_id = trr.lemma_id
+            GROUP BY trr.profile_version_id
+        )
+        SELECT
+            p.name AS profile_name,
+            pv.version AS profile_version,
+            pv.id AS profile_version_id,
+            COALESCE(pv.active, FALSE) AS active,
+            COALESCE(NULLIF(pv.default_api_mode, ''), 'chat_completions') AS api_mode,
+            NULLIF(pv.default_reasoning_effort, '') AS reasoning_effort,
+            COALESCE(pv.default_requested_runs, 1) AS requested_runs,
+            COALESCE(rc.completed_runs, 0) AS completed_runs,
+            COALESCE(rc.completed_lemmas, 0) AS completed_lemmas,
+            COALESCE(rc.completed_runs_7d, 0) AS completed_runs_7d,
+            COALESCE(rc.completed_lemmas_7d, 0) AS completed_lemmas_7d,
+            rc.latest_run_at,
+            COALESCE(q.request_count, 0) AS request_count,
+            COALESCE(q.open_request_count, 0) AS open_request_count,
+            COALESCE(q.failed_request_count, 0) AS failed_request_count,
+            q.latest_request_at
+        FROM translation_prompt_profile_versions pv
+        JOIN translation_prompt_profiles p ON p.id = pv.profile_id
+        LEFT JOIN run_counts rc ON rc.profile_version_id = pv.id
+        LEFT JOIN request_counts q ON q.profile_version_id = pv.id
+        WHERE p.name = ANY(%s)
+        ORDER BY p.name, pv.version, pv.id
+        """,
+        (list(PAPER_MODEL_PROFILES),),
+    )
+    rows = []
+    response_missing_runs = 0
+    for row in cur.fetchall():
+        item = {
+            "profile_name": row[0],
+            "profile_version": int(row[1]),
+            "profile_version_id": int(row[2]),
+            "active": bool(row[3]),
+            "api_mode": row[4],
+            "reasoning_effort": row[5],
+            "requested_runs": int(row[6] or 1),
+            "completed_runs": int(row[7] or 0),
+            "completed_lemmas": int(row[8] or 0),
+            "completed_runs_7d": int(row[9] or 0),
+            "completed_lemmas_7d": int(row[10] or 0),
+            "latest_run_at": row[11],
+            "request_count": int(row[12] or 0),
+            "open_request_count": int(row[13] or 0),
+            "failed_request_count": int(row[14] or 0),
+            "latest_request_at": row[15],
+        }
+        target_lemmas = PAPER_MODEL_TARGET_ROWS
+        item["target_lemmas"] = target_lemmas
+        item["target_runs"] = target_lemmas * item["requested_runs"]
+        item["missing_lemmas"] = max(target_lemmas - item["completed_lemmas"], 0)
+        item["missing_runs"] = max(item["target_runs"] - item["completed_runs"], 0)
+        if item["profile_name"] in RESPONSE_EXPERIMENT_PROFILES:
+            response_missing_runs += item["missing_runs"]
+        rows.append(item)
+
+    response_eta_days = (
+        response_missing_runs / responses_run_limit if response_missing_runs and responses_run_limit > 0 else None
+    )
+    completed_units = 0
+    total_units = 0
+    for item in rows:
+        total_units += int(item["target_runs"])
+        completed_units += min(int(item["completed_runs"]), int(item["target_runs"]))
+        name = str(item["profile_name"])
+        if name.startswith("claude_") and int(item["completed_lemmas"]) == 0:
+            projection = "external Claude import required; not scheduled in this pipeline"
+        elif item["missing_runs"] == 0:
+            projection = "complete"
+        elif name == REPEATABILITY_PROFILE_NAME:
+            if experiment_enqueue_limit > 0:
+                projection = format_pipeline_runs(item["missing_lemmas"] / experiment_enqueue_limit)
+            else:
+                projection = "stalled: experiment enqueue disabled"
+        elif name in RESPONSE_EXPERIMENT_PROFILES:
+            projection = (
+                f"shared Responses lane: {response_missing_runs:,} generated runs remain across "
+                f"{len(RESPONSE_EXPERIMENT_PROFILES)} profiles; {format_pipeline_runs(response_eta_days)} "
+                f"at TRANSLATION_RESPONSES_RUN_LIMIT={responses_run_limit}"
+            )
+        elif int(item["open_request_count"]) > 0:
+            projection = "queued; waiting for translation worker"
+        else:
+            projection = "no open request; waits for next enqueue pass"
+        item["projection"] = projection
+
+    pending_units = max(total_units - completed_units, 0)
+    detail = (
+        f"{len(rows):,} tracked paper/evaluation model variants; "
+        f"Responses worker limit {responses_run_limit:,} generated run(s) per pipeline run; "
+        f"experiment enqueue limit {experiment_enqueue_limit:,} new request(s) per profile per run"
+    )
+    return {
+        "summary": {
+            "name": "Paper Translation Model Coverage",
+            "total": total_units,
+            "completed": completed_units,
+            "pending": pending_units,
+            "unit": "target model-runs",
+            "rate_7d": sum(int(item["completed_runs_7d"]) for item in rows),
+            "eta_override": "see model table",
+            "detail": detail,
+        },
+        "rows": rows,
+    }
 
 
 def get_progress_stats(conn) -> dict:
@@ -962,6 +1174,11 @@ def get_progress_stats(conn) -> dict:
             ),
         }
 
+    coverage = translation_model_coverage(cur)
+    if coverage:
+        stats["translation_model_coverage"] = coverage["summary"]
+        stats["_translation_model_coverage_rows"] = coverage["rows"]
+
     # 15. nodegoat sync
     cur.execute("""
         SELECT
@@ -1011,12 +1228,63 @@ def estimate_completion(pending: int, rate_7d: int, planned_rate_per_day: int | 
         return f"{days/365:.1f} years"
 
 
+def render_translation_model_coverage(rows: list[dict[str, object]]) -> str:
+    if not rows:
+        return ""
+    body = []
+    for item in rows:
+        prompt = f"{item['profile_name']} v{item['profile_version']}"
+        api_detail = str(item.get("api_mode") or "chat_completions")
+        if item.get("reasoning_effort"):
+            api_detail += f" / {item['reasoning_effort']}"
+        latest = item.get("latest_run_at") or ""
+        if hasattr(latest, "strftime"):
+            latest = latest.strftime("%Y-%m-%d")
+        body.append(
+            f"""
+            <tr>
+                <td>{html_module.escape(prompt)}</td>
+                <td>{html_module.escape(api_detail)}</td>
+                <td style="text-align: right;">{int(item.get('completed_lemmas') or 0):,}/{int(item.get('target_lemmas') or 0):,}</td>
+                <td style="text-align: right;">{int(item.get('completed_runs') or 0):,}/{int(item.get('target_runs') or 0):,}</td>
+                <td style="text-align: right;">{int(item.get('open_request_count') or 0):,}</td>
+                <td style="text-align: right;">{int(item.get('completed_runs_7d') or 0):,}</td>
+                <td>{html_module.escape(str(latest or 'N/A'))}</td>
+                <td>{html_module.escape(str(item.get('projection') or 'N/A'))}</td>
+            </tr>
+            """
+        )
+    return f"""
+    <h2>Paper Translation Model Coverage</h2>
+    <p class="updated">This table uses the same 100-row Kappa paper corpus as the prompt-evaluation page. Claude rows are external imports; OpenAI rows are generated by the daily pipeline.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Model / prompt</th>
+                <th>API / reasoning</th>
+                <th style="text-align: right;">Kappa rows</th>
+                <th style="text-align: right;">Runs</th>
+                <th style="text-align: right;">Open</th>
+                <th style="text-align: right;">Runs 7d</th>
+                <th>Latest</th>
+                <th>Projection</th>
+            </tr>
+        </thead>
+        <tbody>
+            {''.join(body)}
+        </tbody>
+    </table>
+    """
+
+
 def generate_html(stats: dict) -> str:
     """Generate HTML progress page."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     rows = []
     for key, data in stats.items():
+        if str(key).startswith("_"):
+            continue
         total = data["total"]
         completed = data["completed"]
         pending = data["pending"]
@@ -1024,7 +1292,7 @@ def generate_html(stats: dict) -> str:
 
         pct = (completed / total * 100) if total > 0 else 0
         bar_pct = max(0, min(pct, 100))
-        eta = estimate_completion(pending, rate_7d, data.get("planned_rate_per_day"))
+        eta = data.get("eta_override") or estimate_completion(pending, rate_7d, data.get("planned_rate_per_day"))
 
         # Color based on progress
         if pct >= 100:
@@ -1058,6 +1326,8 @@ def generate_html(stats: dict) -> str:
             <td style="text-align: right;"><em>{eta}</em></td>
         </tr>
         """)
+
+    model_coverage_html = render_translation_model_coverage(stats.get("_translation_model_coverage_rows") or [])
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1139,6 +1409,8 @@ def generate_html(stats: dict) -> str:
         </tbody>
     </table>
 
+    {model_coverage_html}
+
     <div class="note">
         <strong>Note:</strong> ETA estimates use the faster of the observed 7-day rate and any configured
         nightly cron limit known to this page. "Stalled" means no observed progress and no configured
@@ -1180,8 +1452,14 @@ def main():
     print("\nPipeline Status:")
     print("-" * 60)
     for key, data in stats.items():
+        if str(key).startswith("_"):
+            continue
         pct = (data["completed"] / data["total"] * 100) if data["total"] > 0 else 0
-        eta = estimate_completion(data["pending"], data.get("rate_7d", 0), data.get("planned_rate_per_day"))
+        eta = data.get("eta_override") or estimate_completion(
+            data["pending"],
+            data.get("rate_7d", 0),
+            data.get("planned_rate_per_day"),
+        )
         print(f"  {data['name']:25} {pct:5.1f}%  ({eta})")
 
 
