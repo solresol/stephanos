@@ -634,8 +634,14 @@ class TranslationMetricEvaluator:
             self.status.setdefault(name, "not requested")
 
     def apply(self, rows: list[dict[str, object]]) -> None:
+        self.apply_lexical(rows)
+        self.apply_neural(rows)
+
+    def apply_lexical(self, rows: list[dict[str, object]]) -> None:
         for row in rows:
             self._apply_lexical_metrics(row)
+
+    def apply_neural(self, rows: list[dict[str, object]]) -> None:
         self._apply_bertscore(rows)
         self._apply_comet(rows)
         self._apply_bleurt(rows)
@@ -1156,7 +1162,7 @@ def build_pair_rows(
         for n in range(1, 5):
             pair.update(overlap_stats(ai_tokens, human_tokens, n))
         rows.append(pair)
-    metric_evaluator.apply(rows)
+    metric_evaluator.apply_lexical(rows)
     return rows
 
 
@@ -3566,6 +3572,17 @@ def generate_reports(
         pair_rows = build_pair_rows(rows_for_prompt, metric_evaluator=metric_evaluator)
         if not pair_rows:
             continue
+        grouped_pair_rows[key] = pair_rows
+
+    repeatability_rows = build_pair_rows(
+        fetch_repeatability_rows(approved_human_only=approved_human_only, corpus=corpus),
+        metric_evaluator=metric_evaluator,
+    )
+    all_scored_rows = [row for rows in grouped_pair_rows.values() for row in rows]
+    all_scored_rows.extend(repeatability_rows)
+    metric_evaluator.apply_neural(all_scored_rows)
+
+    for key, pair_rows in grouped_pair_rows.items():
         summary = summarize_prompt(pair_rows)
         summary.update(prompt_metadata.get(key, {}))
         scatter_filename = summary["detail_filename"].replace(".html", "-scatter.png")
@@ -3582,13 +3599,8 @@ def generate_reports(
         )
         (DETAIL_DIR / summary["detail_filename"]).write_text(detail_html, encoding="utf-8")
         summaries.append(summary)
-        grouped_pair_rows[key] = pair_rows
 
     add_guidance_link_counts(grouped_pair_rows, summaries)
-    repeatability_rows = build_pair_rows(
-        fetch_repeatability_rows(approved_human_only=approved_human_only, corpus=corpus),
-        metric_evaluator=metric_evaluator,
-    )
     evaluated_keys = set(grouped_pair_rows)
     human_scope = corpus_label(corpus) if approved_human_only else "non-empty human translation in any status"
     unevaluable = []
