@@ -1011,8 +1011,6 @@ def metric_length_regressions_for_prompt(
     regressions = []
     for metric_key, metric_label in METRIC_LENGTH_SPECS:
         regression = metric_length_regression(rows, metric_key=metric_key, metric_label=metric_label)
-        if int(regression.get("n") or 0) == 0:
-            continue
         regression.update(
             {
                 "profile_name": summary["profile_name"],
