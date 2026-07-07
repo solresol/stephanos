@@ -930,7 +930,7 @@ echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
 # Deploy reference_site/ (contains statistics.html, statistics/, statistics_images/, people.html, and all lemma pages)
 run_optional_rsync_logged "reference_site" reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
 # Remove stale prompt-evaluation detail artifacts for excluded experiment lanes.
-ssh stephanos@merah.cassia.ifost.org.au "\
+ssh stephanos@merah.cassia.ifost.org.au "sh -c '\
 rm -f /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompts/legacy-scholarly-v3-repeat*.html \
       /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompts/legacy-scholarly-v3-temp*.html \
       /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompts/parallage-*.html \
@@ -939,7 +939,7 @@ rm -f /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompts/legacy-s
       /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/parallage-* \
       /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/metric_length/legacy-scholarly-v3-repeat* \
       /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/metric_length/legacy-scholarly-v3-temp* \
-      /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/metric_length/parallage-*" \
+      /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/metric_length/parallage-*'" \
     2>&1 | tee -a "$LOGFILE"
 # Remove retired duplicate root progress page if it exists.
 ssh stephanos@merah.cassia.ifost.org.au "rm -f /var/www/vhosts/stephanos.symmachus.org/htdocs/progress.html" 2>&1 | tee -a "$LOGFILE"
