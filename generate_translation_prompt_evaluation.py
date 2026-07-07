@@ -7,6 +7,7 @@ import argparse
 from collections import Counter, defaultdict
 import csv
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 import html
 import json
 import math
@@ -68,6 +69,28 @@ SYNTHETIC_ZAINALDI_GALEN_CSV = OUTPUT_DIR / "prompt_evaluation_synthetic_zainald
 ZAINALDI_PAPER_METRICS_CSV = OUTPUT_DIR / "prompt_evaluation_zainaldi_paper_metrics.csv"
 NEURAL_METRICS_HELPER = Path(__file__).with_name("compute_neural_translation_metrics.py")
 DEFAULT_NEURAL_METRICS_PYTHON = Path("/home/stephanos/metric-envs/neural-metrics/bin/python")
+MAIN_PAPER_PROFILE = "legacy_scholarly"
+CLAUDE_PROFILE_NAMES = ("claude_sonnet_5", "claude_opus_4_8", "claude_fable_5")
+RETIRED_TEMPERATURE_PROFILE_NAMES = (
+    "legacy_scholarly_v3_temp0",
+    "legacy_scholarly_v3_temp04",
+    "legacy_scholarly_v3_temp07",
+)
+ACTIVE_EXPERIMENT_PROFILE_NAMES = (
+    "legacy_scholarly_v3_repeat",
+    "legacy_scholarly_v4_reasoning",
+    "legacy_scholarly_v4_reasoning_medium",
+    "legacy_scholarly_v4_reasoning_high",
+    "legacy_scholarly_v4_mini",
+    "legacy_scholarly_v4_mini_medium",
+    "legacy_scholarly_v4_mini_high",
+)
+TRACKED_STATUS_PROFILE_NAMES = (
+    MAIN_PAPER_PROFILE,
+    *CLAUDE_PROFILE_NAMES,
+    *RETIRED_TEMPERATURE_PROFILE_NAMES,
+    *ACTIVE_EXPERIMENT_PROFILE_NAMES,
+)
 
 ENGLISH_TOKEN_RE = re.compile(r"[A-Za-z]+(?:[''][A-Za-z]+)?|\d+")
 GREEK_TOKEN_PATTERN = r"(?u)[\u0370-\u03FF\u1F00-\u1FFF]{2,}"
@@ -264,6 +287,29 @@ def normalize_text(value: str) -> str:
     value = unicodedata.normalize("NFKC", value or "")
     value = value.replace("’", "'").replace("`", "'")
     return re.sub(r"\s+", " ", value).strip().lower()
+
+
+def bounded_edit_distance(left: str, right: str, limit: int = 2) -> int:
+    """Return edit distance up to limit, or limit + 1 once it is definitely higher."""
+    if abs(len(left) - len(right)) > limit:
+        return limit + 1
+    previous = list(range(len(right) + 1))
+    for row_index, left_char in enumerate(left, 1):
+        current = [row_index]
+        row_min = row_index
+        for column_index, right_char in enumerate(right, 1):
+            substitution_cost = 0 if left_char == right_char else 1
+            value = min(
+                previous[column_index] + 1,
+                current[column_index - 1] + 1,
+                previous[column_index - 1] + substitution_cost,
+            )
+            current.append(value)
+            row_min = min(row_min, value)
+        if row_min > limit:
+            return limit + 1
+        previous = current
+    return previous[-1]
 
 
 def english_tokens(value: str) -> list[str]:
@@ -1084,6 +1130,16 @@ def build_pair_rows(
         pair["source_word_count"] = len(source_tokens) if source_tokens else len(human_tokens)
         pair["passage_length_source"] = "source_text" if source_tokens else "human_translation_fallback"
         pair["raw_length_delta"] = len(ai_tokens) - len(human_tokens)
+        normalized_ai = normalize_text(str(db_row["ai_translation_text"] or ""))
+        normalized_human = normalize_text(str(db_row["human_translation_text"] or ""))
+        edit_distance_le2 = bounded_edit_distance(normalized_ai, normalized_human, limit=2)
+        pair["exact_normalized"] = normalized_ai == normalized_human
+        pair["normalized_edit_distance_le2"] = edit_distance_le2 if edit_distance_le2 <= 2 else None
+        pair["near_normalized_98"] = (
+            SequenceMatcher(None, normalized_ai, normalized_human).ratio() >= 0.98
+            if normalized_ai and normalized_human
+            else False
+        )
         for n in range(1, 5):
             pair.update(overlap_stats(ai_tokens, human_tokens, n))
         rows.append(pair)
@@ -1127,6 +1183,15 @@ def summarize_prompt(rows: list[dict[str, object]]) -> dict[str, object]:
         "mean_sentence_bleu": mean([row.get("sentence_bleu") for row in rows]),
         "mean_rouge_l_f1": mean([row.get("rouge_l_f1") for row in rows]),
         "mean_chrf": mean([row.get("chrf") for row in rows]),
+        "exact_normalized_count": sum(1 for row in rows if row.get("exact_normalized")),
+        "one_edit_count": sum(
+            1
+            for row in rows
+            if row.get("normalized_edit_distance_le2") is not None
+            and int(row["normalized_edit_distance_le2"]) <= 1
+        ),
+        "two_edit_count": sum(1 for row in rows if row.get("normalized_edit_distance_le2") is not None),
+        "near_normalized_98_count": sum(1 for row in rows if row.get("near_normalized_98")),
         **regression,
     }
     for summary_field, metric_name in SUMMARY_METRIC_FIELDS:
@@ -1332,6 +1397,110 @@ def fetch_prompt_run_metadata() -> dict[tuple[str, int, int], dict[str, object]]
         (str(row["profile_name"]), int(row["profile_version"]), int(row["profile_version_id"])): dict(row)
         for row in rows
     }
+
+
+def fetch_guidance_link_counts(run_ids: list[int]) -> dict[int, int]:
+    if not run_ids:
+        return {}
+    conn = get_connection(dict_cursor=True)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT run_id, COUNT(*) AS guidance_link_count
+        FROM translation_run_guidance_matches
+        WHERE run_id = ANY(%s)
+        GROUP BY run_id
+        """,
+        (run_ids,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return {int(row["run_id"]): int(row["guidance_link_count"] or 0) for row in rows}
+
+
+def add_guidance_link_counts(
+    grouped_pair_rows: dict[tuple[str, int, int], list[dict[str, object]]],
+    summaries: list[dict[str, object]],
+) -> None:
+    run_ids = sorted({int(row["run_id"]) for rows in grouped_pair_rows.values() for row in rows})
+    counts = fetch_guidance_link_counts(run_ids)
+    summary_by_key = {
+        (
+            str(summary["profile_name"]),
+            int(summary["profile_version"]),
+            int(summary["profile_version_id"]),
+        ): summary
+        for summary in summaries
+    }
+    for key, rows in grouped_pair_rows.items():
+        for row in rows:
+            row["guidance_link_count"] = counts.get(int(row["run_id"]), 0)
+        summary = summary_by_key.get(key)
+        if summary is None:
+            continue
+        summary["guidance_link_count"] = sum(int(row.get("guidance_link_count") or 0) for row in rows)
+        summary["runs_with_guidance_count"] = sum(1 for row in rows if int(row.get("guidance_link_count") or 0) > 0)
+
+
+def fetch_tracked_prompt_statuses() -> list[dict[str, object]]:
+    conn = get_connection(dict_cursor=True)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        WITH run_counts AS (
+            SELECT
+                profile_version_id,
+                COUNT(*) FILTER (
+                    WHERE status IN ('completed', 'approved')
+                      AND COALESCE(translation_text, '') <> ''
+                ) AS completed_run_count,
+                COUNT(DISTINCT lemma_id) FILTER (
+                    WHERE status IN ('completed', 'approved')
+                      AND COALESCE(translation_text, '') <> ''
+                ) AS completed_lemma_count,
+                MIN(COALESCE(completed_at, created_at)) FILTER (
+                    WHERE status IN ('completed', 'approved')
+                      AND COALESCE(translation_text, '') <> ''
+                ) AS first_translation_at
+            FROM translation_runs
+            GROUP BY profile_version_id
+        ),
+        request_counts AS (
+            SELECT
+                profile_version_id,
+                COUNT(*) AS request_count,
+                COUNT(*) FILTER (
+                    WHERE status IN ('pending', 'queued', 'running', 'open')
+                ) AS open_request_count
+            FROM translation_run_requests
+            GROUP BY profile_version_id
+        )
+        SELECT
+            p.name AS profile_name,
+            pv.version AS profile_version,
+            pv.id AS profile_version_id,
+            COALESCE(pv.active, FALSE) AS prompt_active,
+            COALESCE(pv.notes, '') AS prompt_notes,
+            COALESCE(NULLIF(pv.default_api_mode, ''), 'chat_completions') AS default_api_mode,
+            NULLIF(pv.default_reasoning_effort, '') AS default_reasoning_effort,
+            COALESCE(pv.default_requested_runs, 1) AS default_requested_runs,
+            COALESCE(rc.completed_run_count, 0) AS completed_run_count,
+            COALESCE(rc.completed_lemma_count, 0) AS completed_lemma_count,
+            rc.first_translation_at,
+            COALESCE(q.request_count, 0) AS request_count,
+            COALESCE(q.open_request_count, 0) AS open_request_count
+        FROM translation_prompt_profile_versions pv
+        JOIN translation_prompt_profiles p ON p.id = pv.profile_id
+        LEFT JOIN run_counts rc ON rc.profile_version_id = pv.id
+        LEFT JOIN request_counts q ON q.profile_version_id = pv.id
+        WHERE p.name = ANY(%s)
+        ORDER BY p.name, pv.version, pv.id
+        """,
+        (list(TRACKED_STATUS_PROFILE_NAMES),),
+    )
+    rows = list(cur.fetchall())
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def format_number(value: object, digits: int = 3) -> str:
@@ -2228,6 +2397,368 @@ def render_metric_status_table(metric_status: dict[str, str]) -> str:
 </table>"""
 
 
+def summary_lookup(summaries: list[dict[str, object]]) -> dict[tuple[str, int], dict[str, object]]:
+    return {
+        (str(summary["profile_name"]), int(summary["profile_version"])): summary
+        for summary in summaries
+    }
+
+
+def row_lookup_by_lemma(rows: list[dict[str, object]]) -> dict[int, dict[str, object]]:
+    return {int(row["lemma_id"]): row for row in rows}
+
+
+def prompt_key(summary: dict[str, object]) -> tuple[str, int, int]:
+    return (
+        str(summary["profile_name"]),
+        int(summary["profile_version"]),
+        int(summary["profile_version_id"]),
+    )
+
+
+def render_paper_metric_summary_table(summaries: list[dict[str, object]]) -> str:
+    rows = []
+    lookup = summary_lookup(summaries)
+    selected = [
+        lookup.get((MAIN_PAPER_PROFILE, 1)),
+        lookup.get((MAIN_PAPER_PROFILE, 2)),
+        lookup.get((MAIN_PAPER_PROFILE, 3)),
+    ]
+    claude_rows = [
+        summary
+        for summary in summaries
+        if str(summary["profile_name"]).startswith("claude_") and int(summary["pair_count"]) >= 100
+    ]
+    if claude_rows:
+        selected.append(
+            max(
+                claude_rows,
+                key=lambda item: (
+                    finite_float(item.get("mean_rouge_l")) or float("-inf"),
+                    finite_float(item.get("mean_bleu4")) or float("-inf"),
+                ),
+            )
+        )
+    for summary in [item for item in selected if item is not None]:
+        rows.append(
+            f"""<tr>
+  <td><a href="prompts/{esc(summary['detail_filename'])}">{esc(summary['profile_name'])} v{esc(summary['profile_version'])}</a></td>
+  <td>{int(summary['pair_count']):,}</td>
+  <td>{format_percent(summary['mean_bleu4'])}</td>
+  <td>{format_percent(summary['mean_chrfpp'])}</td>
+  <td>{format_percent(summary['mean_meteor'])}</td>
+  <td>{format_percent(summary['mean_rouge_l'])}</td>
+  <td>{format_percent(summary['corpus_bleu'])}</td>
+  <td>{format_percent(summary['corpus_3gram_f1'])}</td>
+  <td>{format_percent(summary['corpus_4gram_f1'])}</td>
+  <td>{int(summary.get('exact_normalized_count') or 0):,}</td>
+  <td>{int(summary.get('two_edit_count') or 0):,}</td>
+</tr>"""
+        )
+    return f"""<h3>Paper-Facing Prompt Metrics</h3>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Prompt</th>
+      <th>Pairs</th>
+      <th>BLEU-4</th>
+      <th>chrF++</th>
+      <th>METEOR</th>
+      <th>ROUGE-L</th>
+      <th>Corpus BLEU</th>
+      <th>3-gram F1</th>
+      <th>4-gram F1</th>
+      <th>Exact</th>
+      <th>&lt;=2 char edits</th>
+    </tr>
+  </thead>
+  <tbody>{''.join(rows)}</tbody>
+</table>
+</div>"""
+
+
+def paired_delta_rows(
+    grouped_pair_rows: dict[tuple[str, int, int], list[dict[str, object]]],
+    *,
+    profile_name: str = MAIN_PAPER_PROFILE,
+) -> list[dict[str, object]]:
+    groups_by_version = {
+        key[1]: rows
+        for key, rows in grouped_pair_rows.items()
+        if key[0] == profile_name
+    }
+    rows = []
+    for left_version, right_version in ((1, 2), (2, 3), (1, 3)):
+        left_rows = row_lookup_by_lemma(groups_by_version.get(left_version, []))
+        right_rows = row_lookup_by_lemma(groups_by_version.get(right_version, []))
+        lemma_ids = sorted(set(left_rows) & set(right_rows))
+        for metric_label, metric_key in (
+            ("BLEU-4", "bleu4"),
+            ("chrF++", "chrfpp"),
+            ("METEOR", "meteor"),
+            ("ROUGE-L", "rouge_l"),
+            ("3-gram F1", "3gram_f1"),
+            ("4-gram F1", "4gram_f1"),
+        ):
+            deltas = []
+            left_values = []
+            right_values = []
+            for lemma_id in lemma_ids:
+                left_value = finite_float(left_rows[lemma_id].get(metric_key))
+                right_value = finite_float(right_rows[lemma_id].get(metric_key))
+                if left_value is None or right_value is None:
+                    continue
+                left_values.append(left_value)
+                right_values.append(right_value)
+                deltas.append(right_value - left_value)
+            p_value = float("nan")
+            if scipy_stats is not None and len(deltas) > 1:
+                try:
+                    p_value = float(scipy_stats.ttest_rel(right_values, left_values).pvalue)
+                except Exception:
+                    p_value = float("nan")
+            rows.append(
+                {
+                    "comparison": f"v{left_version}->v{right_version}",
+                    "metric": metric_label,
+                    "n": len(deltas),
+                    "mean_delta": mean(deltas),
+                    "p_value": p_value,
+                    "wins": sum(1 for value in deltas if value > 1e-12),
+                    "losses": sum(1 for value in deltas if value < -1e-12),
+                    "ties": sum(1 for value in deltas if abs(value) <= 1e-12),
+                }
+            )
+    return rows
+
+
+def render_paired_delta_table(
+    grouped_pair_rows: dict[tuple[str, int, int], list[dict[str, object]]],
+) -> str:
+    rows = []
+    for item in paired_delta_rows(grouped_pair_rows):
+        rows.append(
+            f"""<tr>
+  <td>{esc(item['comparison'])}</td>
+  <td>{esc(item['metric'])}</td>
+  <td>{int(item['n']):,}</td>
+  <td>{format_percent(item['mean_delta'])}</td>
+  <td>{format_number(item['p_value'], 4)}</td>
+  <td>{int(item['wins']):,}</td>
+  <td>{int(item['losses']):,}</td>
+  <td>{int(item['ties']):,}</td>
+</tr>"""
+        )
+    return f"""<h3>Paired ChatGPT Prompt Deltas</h3>
+<p class="note">Each row compares the same Kappa lemmas under two prompt versions. Positive deltas mean the later prompt scored higher.</p>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Comparison</th>
+      <th>Metric</th>
+      <th>Pairs</th>
+      <th>Mean delta</th>
+      <th>Paired t p</th>
+      <th>Wins</th>
+      <th>Losses</th>
+      <th>Ties</th>
+    </tr>
+  </thead>
+  <tbody>{''.join(rows)}</tbody>
+</table>
+</div>"""
+
+
+def render_paper_highlights_section(
+    summaries: list[dict[str, object]],
+    grouped_pair_rows: dict[tuple[str, int, int], list[dict[str, object]]],
+    tracked_statuses: list[dict[str, object]],
+    corpus: str,
+) -> str:
+    if corpus != CORPUS_PAPER_KAPPA_REVIEW:
+        return ""
+    lookup = summary_lookup(summaries)
+    canonical_summary = lookup.get((MAIN_PAPER_PROFILE, 3)) or next(
+        (summary for summary in summaries if int(summary.get("pair_count") or 0) >= 100),
+        None,
+    )
+    if canonical_summary is None:
+        return ""
+    canonical_rows = grouped_pair_rows.get(prompt_key(canonical_summary), [])
+    source_tokens = sum(int(row.get("source_word_count") or 0) for row in canonical_rows)
+    human_words = sum(int(row.get("human_word_count") or 0) for row in canonical_rows)
+    claude_statuses = [item for item in tracked_statuses if str(item["profile_name"]).startswith("claude_")]
+    claude_full = sum(
+        1
+        for item in claude_statuses
+        if int(lookup.get((str(item["profile_name"]), int(item["profile_version"])), {}).get("pair_count") or 0) >= 100
+    )
+    claude_missing = [
+        f"{item['profile_name']} v{item['profile_version']}"
+        for item in claude_statuses
+        if int(lookup.get((str(item["profile_name"]), int(item["profile_version"])), {}).get("pair_count") or 0) == 0
+    ]
+    guidance_summary = lookup.get((MAIN_PAPER_PROFILE, 3), {})
+    cards = [
+        ("Ground-truth rows", f"{int(canonical_summary['pair_count']):,}"),
+        ("Greek source tokens", f"{source_tokens:,}"),
+        ("Human reference words", f"{human_words:,}"),
+        ("ChatGPT v3 exact", f"{int(guidance_summary.get('exact_normalized_count') or 0):,}"),
+        ("ChatGPT v3 <=2 edits", f"{int(guidance_summary.get('two_edit_count') or 0):,}"),
+        (
+            "ChatGPT v3 guidance",
+            f"{int(guidance_summary.get('runs_with_guidance_count') or 0):,}/{int(guidance_summary.get('pair_count') or 0):,}",
+        ),
+        ("Claude full variants", f"{claude_full}/{len(claude_statuses)}"),
+        ("Missing Claude variants", ", ".join(claude_missing) if claude_missing else "None"),
+    ]
+    card_html = '<div class="metric-grid">' + "".join(
+        f'<div class="metric"><span class="label">{esc(label)}</span><span class="value">{esc(value)}</span></div>'
+        for label, value in cards
+    ) + "</div>"
+    guidance_note = ""
+    if guidance_summary:
+        guidance_note = (
+            f"<p class=\"note\">For ordinary ChatGPT v3, {int(guidance_summary.get('runs_with_guidance_count') or 0):,} "
+            f"of {int(guidance_summary.get('pair_count') or 0):,} Kappa rows have at least one guidance match, "
+            f"with {int(guidance_summary.get('guidance_link_count') or 0):,} total run-guidance links.</p>"
+        )
+    return f"""<h2>Paper Corpus Summary</h2>
+<p>This is the paper-facing 100-row Kappa corpus from Gabe's final review tracker, not the broader approved-human translation pool.</p>
+{card_html}
+{guidance_note}
+{render_paper_metric_summary_table(summaries)}
+{render_paired_delta_table(grouped_pair_rows)}"""
+
+
+def tracked_status_note(item: dict[str, object], evaluated_pairs: int) -> str:
+    name = str(item["profile_name"])
+    if name in RETIRED_TEMPERATURE_PROFILE_NAMES:
+        return "Retired temperature lane; non-default temperature controls are no longer used."
+    if name == "legacy_scholarly_v3_repeat":
+        return "Active repeatability lane using requested_runs at model defaults."
+    if name.startswith("legacy_scholarly_v4_"):
+        return "Active Responses API experiment with reasoning effort set on the profile."
+    if name.startswith("claude_"):
+        if evaluated_pairs >= 100:
+            return "External Claude import complete for the Kappa corpus."
+        return "Tracked Claude variant has no complete imported Kappa comparison yet."
+    if name == MAIN_PAPER_PROFILE:
+        return "Main ChatGPT prompt series for the paper."
+    return "Tracked prompt profile."
+
+
+def render_experiment_coverage_section(
+    summaries: list[dict[str, object]],
+    tracked_statuses: list[dict[str, object]],
+) -> str:
+    lookup = summary_lookup(summaries)
+    tracked_rows = []
+    for item in tracked_statuses:
+        evaluated_pairs = int(
+            lookup.get((str(item["profile_name"]), int(item["profile_version"])), {}).get("pair_count") or 0
+        )
+        tracked_rows.append(
+            f"""<tr>
+  <td>{esc(item['profile_name'])} v{esc(item['profile_version'])}</td>
+  <td>{'yes' if item.get('prompt_active') else 'no'}</td>
+  <td>{esc(item.get('default_api_mode') or 'chat_completions')}</td>
+  <td>{esc(item.get('default_reasoning_effort') or '')}</td>
+  <td>{int(item.get('default_requested_runs') or 1):,}</td>
+  <td>{int(item.get('completed_run_count') or 0):,}</td>
+  <td>{int(item.get('completed_lemma_count') or 0):,}</td>
+  <td>{evaluated_pairs:,}</td>
+  <td>{int(item.get('open_request_count') or 0):,}</td>
+  <td>{esc(tracked_status_note(item, evaluated_pairs))}</td>
+</tr>"""
+        )
+
+    parallage = [summary for summary in summaries if str(summary["profile_name"]).startswith("parallage_")]
+    family_rows = [
+        (
+            "Main ChatGPT paper prompts",
+            sum(1 for summary in summaries if str(summary["profile_name"]) == MAIN_PAPER_PROFILE),
+            sum(int(summary["pair_count"]) for summary in summaries if str(summary["profile_name"]) == MAIN_PAPER_PROFILE),
+            "Core v1/v2/v3 comparison.",
+        ),
+        (
+            "External Claude variants",
+            sum(1 for item in tracked_statuses if str(item["profile_name"]).startswith("claude_")),
+            sum(
+                int(lookup.get((str(item["profile_name"]), int(item["profile_version"])), {}).get("pair_count") or 0)
+                for item in tracked_statuses
+                if str(item["profile_name"]).startswith("claude_")
+            ),
+            "Imported from external workspaces; rows stay non-public by default.",
+        ),
+        (
+            "Repeatability and v4 reasoning/mini experiments",
+            sum(1 for item in tracked_statuses if str(item["profile_name"]) in ACTIVE_EXPERIMENT_PROFILE_NAMES),
+            sum(
+                int(lookup.get((str(item["profile_name"]), int(item["profile_version"])), {}).get("pair_count") or 0)
+                for item in tracked_statuses
+                if str(item["profile_name"]) in ACTIVE_EXPERIMENT_PROFILE_NAMES
+            ),
+            "Active slow experiment lanes; several still have open requests.",
+        ),
+        (
+            "Retired temperature lanes",
+            sum(1 for item in tracked_statuses if str(item["profile_name"]) in RETIRED_TEMPERATURE_PROFILE_NAMES),
+            sum(
+                int(lookup.get((str(item["profile_name"]), int(item["profile_version"])), {}).get("pair_count") or 0)
+                for item in tracked_statuses
+                if str(item["profile_name"]) in RETIRED_TEMPERATURE_PROFILE_NAMES
+            ),
+            "Retained for history only; temperature controls were retired.",
+        ),
+        (
+            "Parallage prompt-spectrum experiments",
+            len(parallage),
+            sum(int(summary["pair_count"]) for summary in parallage),
+            "Twenty-row prompt-spectrum experiments, not the main paper comparison.",
+        ),
+    ]
+    family_html = "".join(
+        f"""<tr>
+  <td>{esc(name)}</td>
+  <td>{variant_count:,}</td>
+  <td>{pair_count:,}</td>
+  <td>{esc(note)}</td>
+</tr>"""
+        for name, variant_count, pair_count, note in family_rows
+    )
+    return f"""<h2>Experiment Coverage</h2>
+<p class="note">Temperature experiments are shown for historical completeness. The active variance/control path is repeat runs at model defaults plus separate Responses API reasoning/mini profiles.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Family</th><th>Variants</th><th>Evaluated pairs</th><th>Notes</th></tr></thead>
+  <tbody>{family_html}</tbody>
+</table>
+</div>
+<h3>Tracked Prompt Variant Status</h3>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Prompt</th>
+      <th>Active</th>
+      <th>API mode</th>
+      <th>Reasoning</th>
+      <th>Requested runs</th>
+      <th>Completed runs</th>
+      <th>Completed lemmas</th>
+      <th>Evaluated Kappa pairs</th>
+      <th>Open requests</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>{''.join(tracked_rows)}</tbody>
+</table>
+</div>"""
+
+
 def metric_length_sort_key(item: dict[str, object]) -> tuple[str, int, int, int]:
     return (
         str(item.get("profile_name") or "").casefold(),
@@ -2444,6 +2975,8 @@ def render_main_page(
     metric_length_regressions: list[dict[str, object]],
     synthetic_zainaldi_galen_rows: list[dict[str, object]],
     synthetic_zainaldi_chart_paths: list[tuple[str, str]],
+    grouped_pair_rows: dict[tuple[str, int, int], list[dict[str, object]]],
+    tracked_statuses: list[dict[str, object]],
 ) -> str:
     html_parts = [page_header("Translation Prompt Evaluation", depth=1)]
     html_parts.append(
@@ -2459,6 +2992,15 @@ def render_main_page(
         html_parts.append(render_unevaluable_table(unevaluable))
         html_parts.append(page_footer())
         return "\n".join(html_parts)
+    html_parts.append(
+        render_paper_highlights_section(
+            summaries,
+            grouped_pair_rows,
+            tracked_statuses,
+            corpus,
+        )
+    )
+    html_parts.append(render_experiment_coverage_section(summaries, tracked_statuses))
     if trend_charts:
         chart_figures = []
         for filename, label in trend_charts:
@@ -2535,6 +3077,12 @@ def write_csv_outputs(
         "corpus_4gram_f1",
         "mean_rouge_l_f1",
         "mean_chrf",
+        "exact_normalized_count",
+        "one_edit_count",
+        "two_edit_count",
+        "near_normalized_98_count",
+        "runs_with_guidance_count",
+        "guidance_link_count",
         "human_word_mean",
         "ai_word_mean",
         "mean_abs_length_residual",
@@ -2566,6 +3114,10 @@ def write_csv_outputs(
         "human_word_count",
         "ai_word_count",
         "raw_length_delta",
+        "exact_normalized",
+        "normalized_edit_distance_le2",
+        "near_normalized_98",
+        "guidance_link_count",
         "predicted_ai_word_count",
         "length_residual",
         "abs_length_residual",
@@ -2728,6 +3280,7 @@ def generate_reports(
         summaries.append(summary)
         grouped_pair_rows[key] = pair_rows
 
+    add_guidance_link_counts(grouped_pair_rows, summaries)
     evaluated_keys = set(grouped_pair_rows)
     human_scope = corpus_label(corpus) if approved_human_only else "non-empty human translation in any status"
     unevaluable = []
@@ -2756,6 +3309,7 @@ def generate_reports(
 
     synthetic_zainaldi_rows = synthetic_zainaldi_galen_rows(all_metric_length_regressions)
     synthetic_zainaldi_chart_paths = save_synthetic_zainaldi_charts(synthetic_zainaldi_rows, IMAGE_DIR)
+    tracked_statuses = fetch_tracked_prompt_statuses()
     write_csv_outputs(summaries, grouped_pair_rows, all_metric_length_regressions, synthetic_zainaldi_rows)
     MAIN_PAGE.write_text(
         render_main_page(
@@ -2768,6 +3322,8 @@ def generate_reports(
             metric_length_regressions=all_metric_length_regressions,
             synthetic_zainaldi_galen_rows=synthetic_zainaldi_rows,
             synthetic_zainaldi_chart_paths=synthetic_zainaldi_chart_paths,
+            grouped_pair_rows=grouped_pair_rows,
+            tracked_statuses=tracked_statuses,
         ),
         encoding="utf-8",
     )
