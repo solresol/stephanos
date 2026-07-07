@@ -64,6 +64,7 @@ METRIC_LENGTH_IMAGE_DIR = IMAGE_DIR / "metric_length"
 MAIN_PAGE = OUTPUT_DIR / "prompt_evaluation.html"
 SUMMARY_CSV = OUTPUT_DIR / "prompt_evaluation_metrics.csv"
 ROW_CSV = OUTPUT_DIR / "prompt_evaluation_rows.csv"
+REPEATABILITY_CSV = OUTPUT_DIR / "prompt_evaluation_repeatability.csv"
 METRIC_LENGTH_CSV = OUTPUT_DIR / "prompt_evaluation_metric_length_regressions.csv"
 SYNTHETIC_ZAINALDI_GALEN_CSV = OUTPUT_DIR / "prompt_evaluation_synthetic_zainaldi_galen.csv"
 ZAINALDI_PAPER_METRICS_CSV = OUTPUT_DIR / "prompt_evaluation_zainaldi_paper_metrics.csv"
@@ -71,13 +72,14 @@ NEURAL_METRICS_HELPER = Path(__file__).with_name("compute_neural_translation_met
 DEFAULT_NEURAL_METRICS_PYTHON = Path("/home/stephanos/metric-envs/neural-metrics/bin/python")
 MAIN_PAPER_PROFILE = "legacy_scholarly"
 CLAUDE_PROFILE_NAMES = ("claude_sonnet_5", "claude_opus_4_8", "claude_fable_5")
+REPEATABILITY_PROFILE_NAME = "legacy_scholarly_v3_repeat"
 RETIRED_TEMPERATURE_PROFILE_NAMES = (
     "legacy_scholarly_v3_temp0",
     "legacy_scholarly_v3_temp04",
     "legacy_scholarly_v3_temp07",
 )
 ACTIVE_EXPERIMENT_PROFILE_NAMES = (
-    "legacy_scholarly_v3_repeat",
+    REPEATABILITY_PROFILE_NAME,
     "legacy_scholarly_v4_reasoning",
     "legacy_scholarly_v4_reasoning_medium",
     "legacy_scholarly_v4_reasoning_high",
@@ -88,9 +90,13 @@ ACTIVE_EXPERIMENT_PROFILE_NAMES = (
 TRACKED_STATUS_PROFILE_NAMES = (
     MAIN_PAPER_PROFILE,
     *CLAUDE_PROFILE_NAMES,
-    *RETIRED_TEMPERATURE_PROFILE_NAMES,
     *ACTIVE_EXPERIMENT_PROFILE_NAMES,
 )
+EXCLUDED_MEASURED_PROFILE_PREFIXES = ("parallage_",)
+EXCLUDED_MEASURED_PROFILE_NAMES = {
+    REPEATABILITY_PROFILE_NAME,
+    *RETIRED_TEMPERATURE_PROFILE_NAMES,
+}
 
 ENGLISH_TOKEN_RE = re.compile(r"[A-Za-z]+(?:[''][A-Za-z]+)?|\d+")
 GREEK_TOKEN_PATTERN = r"(?u)[\u0370-\u03FF\u1F00-\u1FFF]{2,}"
@@ -287,6 +293,13 @@ def normalize_text(value: str) -> str:
     value = unicodedata.normalize("NFKC", value or "")
     value = value.replace("’", "'").replace("`", "'")
     return re.sub(r"\s+", " ", value).strip().lower()
+
+
+def should_measure_profile(profile_name: object) -> bool:
+    name = str(profile_name or "")
+    if name in EXCLUDED_MEASURED_PROFILE_NAMES:
+        return False
+    return not any(name.startswith(prefix) for prefix in EXCLUDED_MEASURED_PROFILE_PREFIXES)
 
 
 def bounded_edit_distance(left: str, right: str, limit: int = 2) -> int:
@@ -998,6 +1011,8 @@ def metric_length_regressions_for_prompt(
     regressions = []
     for metric_key, metric_label in METRIC_LENGTH_SPECS:
         regression = metric_length_regression(rows, metric_key=metric_key, metric_label=metric_label)
+        if int(regression.get("n") or 0) == 0:
+            continue
         regression.update(
             {
                 "profile_name": summary["profile_name"],
@@ -1353,6 +1368,144 @@ def fetch_comparison_rows(*, approved_human_only: bool, corpus: str) -> list[dic
     rows = list(cur.fetchall())
     conn.close()
     return rows
+
+
+def fetch_repeatability_rows(*, approved_human_only: bool, corpus: str) -> list[dict[str, object]]:
+    corpus = normalize_corpus(corpus)
+    human_status_clause = (
+        "AND ht.status = 'approved' AND ht.stage IN ('reviewed', 'final')"
+        if approved_human_only
+        else ""
+    )
+    if corpus == CORPUS_PAPER_KAPPA_REVIEW:
+        corpus_cte = paper_kappa_review_cte_body("paper_corpus") + ","
+        corpus_join = "JOIN paper_corpus pc ON pc.lemma_id = tr.lemma_id"
+        corpus_human_clause = "AND ht.id = pc.human_translation_id"
+        corpus_select = """
+            'paper_kappa_review'::text AS corpus,
+            pc.corpus_order,
+            pc.corpus_source_row_id,
+            pc.kappa_review_row_id,
+        """
+        corpus_order = "COALESCE(corpus_order, lemma_id)"
+    else:
+        corpus_cte = ""
+        corpus_join = ""
+        corpus_human_clause = ""
+        corpus_select = """
+            'approved_human'::text AS corpus,
+            NULL::integer AS corpus_order,
+            NULL::integer AS corpus_source_row_id,
+            NULL::bigint AS kappa_review_row_id,
+        """
+        corpus_order = "lemma_id"
+    conn = get_connection(dict_cursor=True)
+    cur = conn.cursor()
+    query = f"""
+        WITH {corpus_cte}
+        repeat_runs AS (
+        SELECT
+            {corpus_select}
+            tr.id AS run_id,
+            tr.lemma_id,
+            tr.run_index,
+            tr.model,
+            NULL::double precision AS temperature,
+            tr.top_p,
+            tr.status AS run_status,
+            tr.public_eligible,
+            COALESCE(tr.public_block_reason, '') AS public_block_reason,
+            tr.reviewed_at AS run_reviewed_at,
+            tr.completed_at AS run_completed_at,
+            tr.created_at AS run_created_at,
+            tr.translation_text AS ai_translation_text,
+            p.id AS profile_id,
+            p.name AS profile_name,
+            pv.id AS profile_version_id,
+            pv.version AS profile_version,
+            pv.prompt_text,
+            COALESCE(pv.notes, '') AS prompt_notes,
+            COALESCE(pv.active, FALSE) AS prompt_active,
+            pv.created_at AS prompt_created_at,
+            ht.id AS human_translation_id,
+            ht.stage AS human_stage,
+            ht.status AS human_status,
+            ht.created_by AS human_created_by,
+            ht.updated_by AS human_updated_by,
+            ht.reviewed_by AS human_reviewed_by,
+            ht.reviewed_at AS human_reviewed_at,
+            ht.updated_at AS human_updated_at,
+            ht.translation_text AS human_translation_text,
+            a.lemma,
+            a.entry_number,
+            a.version AS lemma_version,
+            COALESCE(
+                NULLIF(TRIM(stv.text_body), ''),
+                NULLIF(TRIM(a.human_greek_text), ''),
+                NULLIF(TRIM(a.greek_text), ''),
+                ''
+            ) AS source_text,
+            COALESCE(stv.source_document, '') AS source_document,
+            stv.id AS source_text_version_id
+        FROM translation_runs tr
+        JOIN translation_prompt_profiles p ON p.id = tr.profile_id
+        JOIN translation_prompt_profile_versions pv ON pv.id = tr.profile_version_id
+        JOIN assembled_lemmas a ON a.id = tr.lemma_id
+        {corpus_join}
+        JOIN LATERAL (
+            SELECT ht.*
+            FROM human_translations ht
+            WHERE ht.lemma_id = tr.lemma_id
+              AND COALESCE(ht.translation_text, '') <> ''
+              {human_status_clause}
+              {corpus_human_clause}
+            ORDER BY
+              CASE
+                WHEN ht.stage = 'final' AND ht.status = 'approved' THEN 0
+                WHEN ht.stage = 'reviewed' AND ht.status = 'approved' THEN 1
+                WHEN ht.stage = 'initial' AND ht.status = 'approved' THEN 2
+                WHEN ht.stage = 'initial' AND ht.status = 'draft' THEN 3
+                ELSE 4
+              END,
+              COALESCE(ht.reviewed_at, ht.updated_at, ht.created_at) DESC,
+              ht.id DESC
+            LIMIT 1
+        ) ht ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT stv.id, stv.source_document, stv.text_body
+            FROM lemma_source_text_versions stv
+            WHERE stv.lemma_id = tr.lemma_id
+              AND stv.is_current = TRUE
+            ORDER BY {source_document_priority_sql("stv.source_document")}, stv.id DESC
+            LIMIT 1
+        ) stv ON TRUE
+        WHERE p.name = %s
+          AND tr.status IN ('completed', 'approved')
+          AND COALESCE(tr.translation_text, '') <> ''
+        )
+        SELECT *
+        FROM repeat_runs
+        ORDER BY {corpus_order}, lemma_id, run_index, run_id
+    """
+    cur.execute(query, (REPEATABILITY_PROFILE_NAME,))
+    rows = list(cur.fetchall())
+    conn.close()
+    return rows
+
+
+def cleanup_excluded_prompt_artifacts() -> None:
+    patterns = (
+        "legacy-scholarly-v3-repeat*",
+        "legacy-scholarly-v3-temp*",
+        "parallage-*",
+    )
+    for directory in (DETAIL_DIR, IMAGE_DIR, METRIC_LENGTH_IMAGE_DIR):
+        if not directory.exists():
+            continue
+        for pattern in patterns:
+            for path in directory.glob(pattern):
+                if path.is_file():
+                    path.unlink()
 
 
 def fetch_prompt_run_metadata() -> dict[tuple[str, int, int], dict[str, object]]:
@@ -2657,6 +2810,8 @@ def render_experiment_coverage_section(
     lookup = summary_lookup(summaries)
     tracked_rows = []
     for item in tracked_statuses:
+        if str(item["profile_name"]) == REPEATABILITY_PROFILE_NAME:
+            continue
         evaluated_pairs = int(
             lookup.get((str(item["profile_name"]), int(item["profile_version"])), {}).get("pair_count") or 0
         )
@@ -2675,7 +2830,6 @@ def render_experiment_coverage_section(
 </tr>"""
         )
 
-    parallage = [summary for summary in summaries if str(summary["profile_name"]).startswith("parallage_")]
     family_rows = [
         (
             "Main ChatGPT paper prompts",
@@ -2694,30 +2848,20 @@ def render_experiment_coverage_section(
             "Imported from external workspaces; rows stay non-public by default.",
         ),
         (
-            "Repeatability and v4 reasoning/mini experiments",
-            sum(1 for item in tracked_statuses if str(item["profile_name"]) in ACTIVE_EXPERIMENT_PROFILE_NAMES),
+            "v4 reasoning/mini experiments",
+            sum(
+                1
+                for item in tracked_statuses
+                if str(item["profile_name"]) in ACTIVE_EXPERIMENT_PROFILE_NAMES
+                and str(item["profile_name"]) != REPEATABILITY_PROFILE_NAME
+            ),
             sum(
                 int(lookup.get((str(item["profile_name"]), int(item["profile_version"])), {}).get("pair_count") or 0)
                 for item in tracked_statuses
                 if str(item["profile_name"]) in ACTIVE_EXPERIMENT_PROFILE_NAMES
+                and str(item["profile_name"]) != REPEATABILITY_PROFILE_NAME
             ),
-            "Active slow experiment lanes; several still have open requests.",
-        ),
-        (
-            "Retired temperature lanes",
-            sum(1 for item in tracked_statuses if str(item["profile_name"]) in RETIRED_TEMPERATURE_PROFILE_NAMES),
-            sum(
-                int(lookup.get((str(item["profile_name"]), int(item["profile_version"])), {}).get("pair_count") or 0)
-                for item in tracked_statuses
-                if str(item["profile_name"]) in RETIRED_TEMPERATURE_PROFILE_NAMES
-            ),
-            "Retained for history only; temperature controls were retired.",
-        ),
-        (
-            "Parallage prompt-spectrum experiments",
-            len(parallage),
-            sum(int(summary["pair_count"]) for summary in parallage),
-            "Twenty-row prompt-spectrum experiments, not the main paper comparison.",
+            "Active slow experiment lanes; several still have open requests. Repeated runs are reported separately above.",
         ),
     ]
     family_html = "".join(
@@ -2730,7 +2874,7 @@ def render_experiment_coverage_section(
         for name, variant_count, pair_count, note in family_rows
     )
     return f"""<h2>Experiment Coverage</h2>
-<p class="note">Temperature experiments are shown for historical completeness. The active variance/control path is repeat runs at model defaults plus separate Responses API reasoning/mini profiles.</p>
+<p class="note">This table only covers active prompt-comparison experiments. Retired temperature attempts and Parallage prompt-spectrum translations are excluded from the measured website because they are not part of the paper-facing metric comparison.</p>
 <div class="table-wrap">
 <table>
   <thead><tr><th>Family</th><th>Variants</th><th>Evaluated pairs</th><th>Notes</th></tr></thead>
@@ -2755,6 +2899,131 @@ def render_experiment_coverage_section(
     </tr>
   </thead>
   <tbody>{''.join(tracked_rows)}</tbody>
+</table>
+</div>"""
+
+
+def stddev(values: list[object]) -> float:
+    finite = [float(value) for value in values if finite_float(value) is not None]
+    if not finite:
+        return float("nan")
+    return float(np.std(np.asarray(finite, dtype=float), ddof=0))
+
+
+def repeatability_groups(rows: list[dict[str, object]]) -> list[tuple[int, list[dict[str, object]]]]:
+    grouped: dict[int, list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        grouped[int(row["lemma_id"])].append(row)
+    return [
+        (lemma_id, sorted(group, key=lambda row: (int(row.get("run_index") or 0), int(row["run_id"]))))
+        for lemma_id, group in sorted(
+            grouped.items(),
+            key=lambda item: (
+                min(int(row.get("corpus_order") or row["lemma_id"]) for row in item[1]),
+                item[0],
+            ),
+        )
+    ]
+
+
+def finite_metric_values(rows: list[dict[str, object]], metric_key: str) -> list[float]:
+    values = []
+    for row in rows:
+        value = finite_float(row.get(metric_key))
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def metric_range(rows: list[dict[str, object]], metric_key: str) -> float:
+    values = finite_metric_values(rows, metric_key)
+    if not values:
+        return float("nan")
+    return max(values) - min(values)
+
+
+def format_repeat_values(rows: list[dict[str, object]], metric_key: str, *, percent: bool = True) -> str:
+    parts = []
+    for row in rows:
+        value = finite_float(row.get(metric_key))
+        if value is None:
+            continue
+        formatted = format_percent(value) if percent else format_number(value)
+        parts.append(f"{int(row.get('run_index') or 0)}: {formatted}")
+    return "; ".join(parts) if parts else "N/A"
+
+
+def render_repeatability_section(rows: list[dict[str, object]]) -> str:
+    if not rows:
+        return ""
+    groups = repeatability_groups(rows)
+    repeated_groups = [(lemma_id, group) for lemma_id, group in groups if len(group) >= 2]
+    if not repeated_groups:
+        return ""
+    bleu_ranges = [metric_range(group, "bleu4") for _, group in repeated_groups]
+    rouge_ranges = [metric_range(group, "rouge_l") for _, group in repeated_groups]
+    chrf_ranges = [metric_range(group, "chrfpp") for _, group in repeated_groups]
+    distinct_counts = [
+        len({normalize_text(str(row.get("ai_translation_text") or "")) for row in group})
+        for _, group in repeated_groups
+    ]
+    cards = [
+        ("Repeated lemmas", f"{len(repeated_groups):,}"),
+        ("Repeated runs", f"{sum(len(group) for _, group in repeated_groups):,}"),
+        ("Median BLEU range", format_percent(median(bleu_ranges))),
+        ("Max BLEU range", format_percent(max([value for value in bleu_ranges if finite_float(value) is not None], default=float("nan")))),
+        ("Median ROUGE range", format_percent(median(rouge_ranges))),
+        ("Max ROUGE range", format_percent(max([value for value in rouge_ranges if finite_float(value) is not None], default=float("nan")))),
+        ("Median chrF range", format_percent(median(chrf_ranges))),
+        ("Mean distinct outputs", format_number(mean(distinct_counts), 2)),
+    ]
+    card_html = '<div class="metric-grid">' + "".join(
+        f'<div class="metric"><span class="label">{esc(label)}</span><span class="value">{esc(value)}</span></div>'
+        for label, value in cards
+    ) + "</div>"
+    body = []
+    for lemma_id, group in repeated_groups:
+        lemma = str(group[0].get("lemma") or "")
+        distinct_translations = len({normalize_text(str(row.get("ai_translation_text") or "")) for row in group})
+        body.append(
+            f"""<tr>
+  <td>{int(group[0].get('corpus_order') or lemma_id):,}</td>
+  <td>{int(lemma_id):,}</td>
+  <td>{esc(lemma)}</td>
+  <td>{len(group):,}</td>
+  <td>{distinct_translations:,}</td>
+  <td>{format_percent(metric_range(group, 'bleu4'))}</td>
+  <td>{format_repeat_values(group, 'bleu4')}</td>
+  <td>{format_percent(metric_range(group, 'rouge_l'))}</td>
+  <td>{format_repeat_values(group, 'rouge_l')}</td>
+  <td>{format_percent(metric_range(group, 'chrfpp'))}</td>
+  <td>{format_repeat_values(group, 'chrfpp')}</td>
+  <td>{format_repeat_values(group, 'ai_word_count', percent=False)}</td>
+</tr>"""
+        )
+    return f"""<h2>Repeated-Run Variance</h2>
+<p class="note">This section uses every completed run from <code>{esc(REPEATABILITY_PROFILE_NAME)}</code>. It is separated from the main prompt-comparison table because the question is variance across repeated model samples, not mean performance of another prompt.</p>
+{card_html}
+<h3>Repeated-Run Values by Lemma</h3>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Corpus row</th>
+      <th>Lemma ID</th>
+      <th>Headword</th>
+      <th>Runs</th>
+      <th>Distinct outputs</th>
+      <th>BLEU range</th>
+      <th>BLEU values</th>
+      <th>ROUGE range</th>
+      <th>ROUGE values</th>
+      <th>chrF range</th>
+      <th>chrF values</th>
+      <th>AI words</th>
+    </tr>
+  </thead>
+  <tbody>{''.join(body)}</tbody>
 </table>
 </div>"""
 
@@ -2977,6 +3246,7 @@ def render_main_page(
     synthetic_zainaldi_chart_paths: list[tuple[str, str]],
     grouped_pair_rows: dict[tuple[str, int, int], list[dict[str, object]]],
     tracked_statuses: list[dict[str, object]],
+    repeatability_rows: list[dict[str, object]],
 ) -> str:
     html_parts = [page_header("Translation Prompt Evaluation", depth=1)]
     html_parts.append(
@@ -3000,6 +3270,7 @@ def render_main_page(
             corpus,
         )
     )
+    html_parts.append(render_repeatability_section(repeatability_rows))
     html_parts.append(render_experiment_coverage_section(summaries, tracked_statuses))
     if trend_charts:
         chart_figures = []
@@ -3026,6 +3297,7 @@ def render_main_page(
 <ul>
   <li><a href="prompt_evaluation_metrics.csv">Prompt metrics CSV</a></li>
   <li><a href="prompt_evaluation_rows.csv">Per-run comparison rows CSV</a></li>
+  <li><a href="prompt_evaluation_repeatability.csv">Repeated-run values CSV</a></li>
   <li><a href="prompt_evaluation_metric_length_regressions.csv">Metric vs passage length regression CSV</a></li>
   <li><a href="prompt_evaluation_synthetic_zainaldi_galen.csv">Synthetic Zainaldi Galen comparison CSV</a></li>
   <li><a href="prompt_evaluation_zainaldi_paper_metrics.csv">Zainaldi paper metrics CSV</a></li>
@@ -3038,6 +3310,7 @@ def render_main_page(
 def write_csv_outputs(
     summaries: list[dict[str, object]],
     grouped_rows: dict[tuple[str, int, int], list[dict[str, object]]],
+    repeatability_rows: list[dict[str, object]],
     metric_length_regressions: list[dict[str, object]],
     synthetic_zainaldi_galen_rows: list[dict[str, object]],
 ) -> None:
@@ -3152,6 +3425,36 @@ def write_csv_outputs(
             for row in rows:
                 writer.writerow({field: row.get(field, "") for field in row_fields})
 
+    repeatability_fields = [
+        "corpus",
+        "corpus_order",
+        "run_id",
+        "lemma_id",
+        "lemma",
+        "run_index",
+        "source_word_count",
+        "human_word_count",
+        "ai_word_count",
+        "bleu4",
+        "chrfpp",
+        "meteor",
+        "rouge_l",
+        "sentence_bleu",
+        "rouge_l_f1",
+        "chrf",
+        "1gram_f1",
+        "2gram_f1",
+        "3gram_f1",
+        "4gram_f1",
+        "model",
+        "run_completed_at",
+    ]
+    with REPEATABILITY_CSV.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=repeatability_fields)
+        writer.writeheader()
+        for row in repeatability_rows:
+            writer.writerow({field: row.get(field, "") for field in repeatability_fields})
+
     metric_length_fields = [
         "profile_name",
         "profile_version",
@@ -3240,6 +3543,7 @@ def generate_reports(
     DETAIL_DIR.mkdir(parents=True, exist_ok=True)
     IMAGE_DIR.mkdir(parents=True, exist_ok=True)
     METRIC_LENGTH_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    cleanup_excluded_prompt_artifacts()
 
     metric_evaluator = TranslationMetricEvaluator(
         metric_names,
@@ -3252,6 +3556,8 @@ def generate_reports(
     db_rows = fetch_comparison_rows(approved_human_only=approved_human_only, corpus=corpus)
     grouped_db_rows: dict[tuple[str, int, int], list[dict[str, object]]] = defaultdict(list)
     for row in db_rows:
+        if not should_measure_profile(row["profile_name"]):
+            continue
         key = (str(row["profile_name"]), int(row["profile_version"]), int(row["profile_version_id"]))
         grouped_db_rows[key].append(row)
 
@@ -3281,10 +3587,16 @@ def generate_reports(
         grouped_pair_rows[key] = pair_rows
 
     add_guidance_link_counts(grouped_pair_rows, summaries)
+    repeatability_rows = build_pair_rows(
+        fetch_repeatability_rows(approved_human_only=approved_human_only, corpus=corpus),
+        metric_evaluator=metric_evaluator,
+    )
     evaluated_keys = set(grouped_pair_rows)
     human_scope = corpus_label(corpus) if approved_human_only else "non-empty human translation in any status"
     unevaluable = []
     for key, metadata in prompt_metadata.items():
+        if not should_measure_profile(metadata["profile_name"]):
+            continue
         if key in evaluated_keys:
             continue
         item = dict(metadata)
@@ -3310,7 +3622,13 @@ def generate_reports(
     synthetic_zainaldi_rows = synthetic_zainaldi_galen_rows(all_metric_length_regressions)
     synthetic_zainaldi_chart_paths = save_synthetic_zainaldi_charts(synthetic_zainaldi_rows, IMAGE_DIR)
     tracked_statuses = fetch_tracked_prompt_statuses()
-    write_csv_outputs(summaries, grouped_pair_rows, all_metric_length_regressions, synthetic_zainaldi_rows)
+    write_csv_outputs(
+        summaries,
+        grouped_pair_rows,
+        repeatability_rows,
+        all_metric_length_regressions,
+        synthetic_zainaldi_rows,
+    )
     MAIN_PAGE.write_text(
         render_main_page(
             summaries,
@@ -3324,6 +3642,7 @@ def generate_reports(
             synthetic_zainaldi_chart_paths=synthetic_zainaldi_chart_paths,
             grouped_pair_rows=grouped_pair_rows,
             tracked_statuses=tracked_statuses,
+            repeatability_rows=repeatability_rows,
         ),
         encoding="utf-8",
     )
