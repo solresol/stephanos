@@ -62,40 +62,79 @@ DETAIL_DIR = OUTPUT_DIR / "prompts"
 IMAGE_DIR = OUTPUT_DIR / "prompt_images"
 METRIC_LENGTH_IMAGE_DIR = IMAGE_DIR / "metric_length"
 MAIN_PAGE = OUTPUT_DIR / "prompt_evaluation.html"
+METRIC_LENGTH_PAGE = OUTPUT_DIR / "prompt_evaluation_metric_length.html"
+MODEL_TIMELINE_PAGE = OUTPUT_DIR / "prompt_evaluation_model_timeline.html"
 SUMMARY_CSV = OUTPUT_DIR / "prompt_evaluation_metrics.csv"
 ROW_CSV = OUTPUT_DIR / "prompt_evaluation_rows.csv"
 REPEATABILITY_CSV = OUTPUT_DIR / "prompt_evaluation_repeatability.csv"
+MODEL_TIMELINE_CSV = OUTPUT_DIR / "prompt_evaluation_model_timeline.csv"
+MODEL_TIMELINE_FORECAST_CSV = OUTPUT_DIR / "prompt_evaluation_model_timeline_forecast.csv"
 METRIC_LENGTH_CSV = OUTPUT_DIR / "prompt_evaluation_metric_length_regressions.csv"
 SYNTHETIC_ZAINALDI_GALEN_CSV = OUTPUT_DIR / "prompt_evaluation_synthetic_zainaldi_galen.csv"
 ZAINALDI_PAPER_METRICS_CSV = OUTPUT_DIR / "prompt_evaluation_zainaldi_paper_metrics.csv"
 NEURAL_METRICS_HELPER = Path(__file__).with_name("compute_neural_translation_metrics.py")
 DEFAULT_NEURAL_METRICS_PYTHON = Path("/home/stephanos/metric-envs/neural-metrics/bin/python")
-MAIN_PAPER_PROFILE = "legacy_scholarly"
+MAIN_PAPER_PROFILE = "gpt-5.5"
+MODEL_TIMELINE_PROFILE_NAMES = ("gpt-5.4", "gpt-5.5", "gpt-5.6-sol")
+MODEL_TIMELINE_PROMPT_VERSIONS = (1, 2, 3)
+HUMAN_EQUIVALENT_MEAN_METRIC_TARGET = 0.90
+MODEL_TIMELINE_CHART_SPECS = [
+    (
+        "mean_core_metric",
+        "Mean automated metric",
+        HUMAN_EQUIVALENT_MEAN_METRIC_TARGET,
+        "model_timeline_mean_metric.png",
+    ),
+    (
+        "mean_rouge_l",
+        "ROUGE-L",
+        HUMAN_EQUIVALENT_MEAN_METRIC_TARGET,
+        "model_timeline_rouge_l.png",
+    ),
+    (
+        "synthetic_zainaldi_mean_core_metric",
+        "Same-length mean automated metric",
+        HUMAN_EQUIVALENT_MEAN_METRIC_TARGET,
+        "model_timeline_synthetic_zainaldi_mean_metric.png",
+    ),
+]
 CLAUDE_PROFILE_NAMES = ("claude_sonnet_5", "claude_opus_4_8", "claude_fable_5")
-REPEATABILITY_PROFILE_NAME = "legacy_scholarly_v3_repeat"
+PAPER_METRIC_SUMMARY_PROMPTS = (
+    (MAIN_PAPER_PROFILE, 1),
+    (MAIN_PAPER_PROFILE, 2),
+    (MAIN_PAPER_PROFILE, 3),
+    ("claude_fable_5", 1),
+    ("claude_fable_5", 2),
+    ("claude_fable_5", 3),
+)
+REPEATABILITY_PROFILE_NAME = "gpt-5.5_v3_repeat"
 RETIRED_TEMPERATURE_PROFILE_NAMES = (
-    "legacy_scholarly_v3_temp0",
-    "legacy_scholarly_v3_temp04",
-    "legacy_scholarly_v3_temp07",
+    "gpt-5.5_v3_temp0",
+    "gpt-5.5_v3_temp04",
+    "gpt-5.5_v3_temp07",
 )
 ACTIVE_EXPERIMENT_PROFILE_NAMES = (
     REPEATABILITY_PROFILE_NAME,
-    "legacy_scholarly_v4_reasoning",
-    "legacy_scholarly_v4_reasoning_medium",
-    "legacy_scholarly_v4_reasoning_high",
-    "legacy_scholarly_v4_mini",
-    "legacy_scholarly_v4_mini_medium",
-    "legacy_scholarly_v4_mini_high",
+    "gpt-5.5_v4_reasoning",
+    "gpt-5.5_v4_reasoning_medium",
+    "gpt-5.5_v4_reasoning_high",
+    "gpt-5.5_v4_mini",
+    "gpt-5.5_v4_mini_medium",
+    "gpt-5.5_v4_mini_high",
 )
 TRACKED_STATUS_PROFILE_NAMES = (
-    MAIN_PAPER_PROFILE,
+    *MODEL_TIMELINE_PROFILE_NAMES,
     *CLAUDE_PROFILE_NAMES,
     *ACTIVE_EXPERIMENT_PROFILE_NAMES,
 )
-EXCLUDED_MEASURED_PROFILE_PREFIXES = ("parallage_",)
+EXCLUDED_MEASURED_PROFILE_PREFIXES = ("parallage_", "legacy_scholarly_v4_")
 EXCLUDED_MEASURED_PROFILE_NAMES = {
     REPEATABILITY_PROFILE_NAME,
     *RETIRED_TEMPERATURE_PROFILE_NAMES,
+    "legacy_scholarly_v3_repeat",
+    "legacy_scholarly_v3_temp0",
+    "legacy_scholarly_v3_temp04",
+    "legacy_scholarly_v3_temp07",
 }
 
 ENGLISH_TOKEN_RE = re.compile(r"[A-Za-z]+(?:[''][A-Za-z]+)?|\d+")
@@ -164,7 +203,7 @@ ZAINALDI_PAPER_URL = "https://arxiv.org/abs/2602.24119"
 SYNTHETIC_ZAINALDI_CHART_SPECS = [
     (
         "synthetic_zainaldi_galen_aggregate_comparison.png",
-        "Synthetic prompt versions vs Zainaldin aggregate scores",
+        "Synthetic Stephanos prompt scores and Zainaldin aggregates",
     ),
     (
         "synthetic_zainaldi_galen_delta_heatmap.png",
@@ -1499,8 +1538,11 @@ def fetch_repeatability_rows(*, approved_human_only: bool, corpus: str) -> list[
 
 def cleanup_excluded_prompt_artifacts() -> None:
     patterns = (
+        "gpt-5-5-v3-repeat*",
+        "gpt-5-5-v3-temp*",
         "legacy-scholarly-v3-repeat*",
         "legacy-scholarly-v3-temp*",
+        "legacy-scholarly-v4-*",
         "parallage-*",
     )
     for directory in (DETAIL_DIR, IMAGE_DIR, METRIC_LENGTH_IMAGE_DIR):
@@ -1660,6 +1702,34 @@ def fetch_tracked_prompt_statuses() -> list[dict[str, object]]:
     return [dict(row) for row in rows]
 
 
+def fetch_model_release_map() -> dict[str, dict[str, object]]:
+    conn = get_connection(dict_cursor=True)
+    cur = conn.cursor()
+    cur.execute("SELECT to_regclass('public.llm_model_releases') IS NOT NULL AS exists")
+    if not bool(cur.fetchone()["exists"]):
+        conn.close()
+        return {}
+    cur.execute(
+        """
+        SELECT
+            provider,
+            model_slug,
+            display_name,
+            model_family,
+            release_date,
+            api_release_date,
+            source_url,
+            source_label,
+            notes
+        FROM llm_model_releases
+        WHERE provider = 'openai'
+        """
+    )
+    rows = {str(row["model_slug"]): dict(row) for row in cur.fetchall()}
+    conn.close()
+    return rows
+
+
 def format_number(value: object, digits: int = 3) -> str:
     try:
         numeric = float(value)
@@ -1682,12 +1752,316 @@ def format_percent(value: object, digits: int = 1) -> str:
     return f"{numeric * 100:.{digits}f}%"
 
 
+def format_delta_percent(value: object, digits: int = 1) -> str:
+    numeric = finite_float(value)
+    if numeric is None:
+        return "N/A"
+    return f"{numeric * 100:+.{digits}f} pp"
+
+
 def format_date(value: object) -> str:
     if value is None:
         return "N/A"
     if hasattr(value, "strftime"):
         return value.strftime("%Y-%m-%d")
     return str(value)
+
+
+def parse_release_date(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if hasattr(value, "strftime"):
+        return datetime.combine(value, datetime.min.time())
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text[:10], "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def model_count_label(rows: list[dict[str, object]]) -> str:
+    counts = Counter(str(row.get("model") or "").strip() or "unknown" for row in rows)
+    return "; ".join(f"{model}: {count}" for model, count in sorted(counts.items()))
+
+
+def summary_core_metric(summary: dict[str, object]) -> float:
+    return mean(
+        [
+            summary.get("mean_bleu4"),
+            summary.get("mean_chrfpp"),
+            summary.get("mean_meteor"),
+            summary.get("mean_rouge_l"),
+            summary.get("mean_bertscore"),
+            summary.get("mean_comet"),
+            summary.get("mean_bleurt"),
+        ]
+    )
+
+
+def aggregate_metric_delta(metric_values: dict[str, float], aggregate_metrics: dict[str, float]) -> float:
+    deltas = []
+    for metric_name, metric_value in metric_values.items():
+        aggregate_value = finite_float(aggregate_metrics.get(metric_name))
+        if aggregate_value is None:
+            continue
+        deltas.append(metric_value - aggregate_value)
+    return mean(deltas)
+
+
+def add_model_timeline_synthetic_metrics(
+    rows: list[dict[str, object]],
+    synthetic_rows: list[dict[str, object]],
+) -> None:
+    prompts = synthetic_scores_by_prompt(synthetic_rows)
+    by_profile_version = {
+        (str(prompt.get("profile_name") or ""), int(prompt.get("profile_version") or 0)): prompt
+        for prompt in prompts.values()
+    }
+    previous_by_version: dict[int, dict[str, object]] = {}
+    for row in rows:
+        row.update(
+            {
+                "synthetic_zainaldi_mean_core_metric": float("nan"),
+                "synthetic_zainaldi_delta_core_metric_prev": float("nan"),
+                "synthetic_zainaldi_delta_mix_aggregate": float("nan"),
+                "synthetic_zainaldi_delta_comp_aggregate": float("nan"),
+            }
+        )
+        prompt_key_tuple = (str(row.get("profile_name") or ""), int(row.get("prompt_version") or 0))
+        prompt = by_profile_version.get(prompt_key_tuple)
+        if not prompt:
+            continue
+        metric_values: dict[str, float] = {}
+        for metric_name in PAPER_METRICS:
+            metric_row = prompt.get("metrics", {}).get(metric_name)
+            value = finite_float(metric_row.get("predicted_score") if metric_row else None)
+            if value is not None:
+                metric_values[metric_name] = value
+        if not metric_values:
+            continue
+        row["synthetic_zainaldi_mean_core_metric"] = mean(list(metric_values.values()))
+        row["synthetic_zainaldi_delta_mix_aggregate"] = aggregate_metric_delta(
+            metric_values,
+            zainaldi_aggregate_metric_map("Mix."),
+        )
+        row["synthetic_zainaldi_delta_comp_aggregate"] = aggregate_metric_delta(
+            metric_values,
+            zainaldi_aggregate_metric_map("Comp."),
+        )
+        previous = previous_by_version.get(int(row.get("prompt_version") or 0))
+        if previous is not None:
+            current_value = finite_float(row.get("synthetic_zainaldi_mean_core_metric"))
+            previous_value = finite_float(previous.get("synthetic_zainaldi_mean_core_metric"))
+            if current_value is not None and previous_value is not None:
+                row["synthetic_zainaldi_delta_core_metric_prev"] = current_value - previous_value
+        previous_by_version[int(row.get("prompt_version") or 0)] = row
+
+
+def model_timeline_metric_points(
+    rows: list[dict[str, object]],
+    *,
+    prompt_version: int,
+    metric_key: str,
+) -> list[dict[str, object]]:
+    points = []
+    for row in rows:
+        if int(row.get("prompt_version") or 0) != prompt_version:
+            continue
+        value = finite_float(row.get(metric_key))
+        release_date = parse_release_date(row.get("release_date"))
+        if value is None or release_date is None:
+            continue
+        points.append({**row, "metric_value": value, "release_datetime": release_date})
+    return sorted(points, key=lambda item: item["release_datetime"])
+
+
+def steady_improvement_status(points: list[dict[str, object]]) -> str:
+    if len(points) < len(MODEL_TIMELINE_PROFILE_NAMES):
+        return f"needs {len(MODEL_TIMELINE_PROFILE_NAMES)} completed releases; currently {len(points)}"
+    deltas = [
+        float(right["metric_value"]) - float(left["metric_value"])
+        for left, right in zip(points, points[1:], strict=False)
+    ]
+    if all(delta > 0 for delta in deltas):
+        return "steady improvement"
+    if all(delta >= 0 for delta in deltas):
+        return "non-decreasing"
+    return "not steady"
+
+
+def project_human_equivalent_date(points: list[dict[str, object]], target: float) -> dict[str, object]:
+    result: dict[str, object] = {
+        "completed_release_count": len(points),
+        "latest_release_date": "",
+        "latest_score": float("nan"),
+        "annualized_slope": float("nan"),
+        "estimated_target_date": "",
+        "projection_status": "needs at least two completed releases",
+    }
+    if not points:
+        return result
+    latest = points[-1]
+    result["latest_release_date"] = latest["release_datetime"].strftime("%Y-%m-%d")
+    result["latest_score"] = latest["metric_value"]
+    if float(latest["metric_value"]) >= target:
+        result["estimated_target_date"] = result["latest_release_date"]
+        result["projection_status"] = "already at or above target"
+        return result
+    if len(points) < 2:
+        return result
+    x = np.asarray([item["release_datetime"].toordinal() for item in points], dtype=float)
+    y = np.asarray([item["metric_value"] for item in points], dtype=float)
+    if len(set(x)) < 2 or np.nanvar(y) <= 0:
+        result["projection_status"] = "no measurable positive trend"
+        return result
+    slope, intercept = np.polyfit(x, y, deg=1)
+    result["annualized_slope"] = float(slope * 365.25)
+    if slope <= 0:
+        result["projection_status"] = "trend is flat or declining"
+        return result
+    target_ordinal = float((target - intercept) / slope)
+    if target_ordinal <= x[-1]:
+        result["projection_status"] = "linear fit crosses target before latest point"
+        return result
+    max_ordinal = datetime.max.toordinal()
+    if target_ordinal > max_ordinal:
+        result["projection_status"] = "target date exceeds supported calendar range"
+        return result
+    result["estimated_target_date"] = datetime.fromordinal(int(math.ceil(target_ordinal))).strftime("%Y-%m-%d")
+    result["projection_status"] = "linear projection from completed releases"
+    return result
+
+
+def build_model_timeline_forecast_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    forecast_rows = []
+    for prompt_version in MODEL_TIMELINE_PROMPT_VERSIONS:
+        for metric_key, metric_label, target, _filename in MODEL_TIMELINE_CHART_SPECS:
+            points = model_timeline_metric_points(rows, prompt_version=prompt_version, metric_key=metric_key)
+            projection = project_human_equivalent_date(points, target)
+            forecast_rows.append(
+                {
+                    "prompt_version": prompt_version,
+                    "metric_key": metric_key,
+                    "metric_label": metric_label,
+                    "target": target,
+                    "completed_release_count": projection["completed_release_count"],
+                    "latest_release_date": projection["latest_release_date"],
+                    "latest_score": projection["latest_score"],
+                    "annualized_slope": projection["annualized_slope"],
+                    "annualized_slope_pp": (
+                        float(projection["annualized_slope"]) * 100
+                        if finite_float(projection["annualized_slope"]) is not None
+                        else float("nan")
+                    ),
+                    "estimated_target_date": projection["estimated_target_date"],
+                    "projection_status": projection["projection_status"],
+                    "steady_improvement_status": steady_improvement_status(points),
+                }
+            )
+    return forecast_rows
+
+
+def build_model_timeline_rows(
+    summaries: list[dict[str, object]],
+    grouped_pair_rows: dict[tuple[str, int, int], list[dict[str, object]]],
+    model_releases: dict[str, dict[str, object]],
+) -> list[dict[str, object]]:
+    by_profile_version = {
+        (str(summary["profile_name"]), int(summary["profile_version"])): summary
+        for summary in summaries
+    }
+    rows: list[dict[str, object]] = []
+    for version in MODEL_TIMELINE_PROMPT_VERSIONS:
+        previous_complete: dict[str, object] | None = None
+        for profile_name in MODEL_TIMELINE_PROFILE_NAMES:
+            summary = by_profile_version.get((profile_name, version))
+            release = model_releases.get(profile_name, {})
+            item: dict[str, object] = {
+                "prompt_version": version,
+                "profile_name": profile_name,
+                "model_slug": profile_name,
+                "model_display_name": release.get("display_name") or profile_name,
+                "release_date": release.get("release_date"),
+                "api_release_date": release.get("api_release_date"),
+                "source_url": release.get("source_url") or "",
+                "source_label": release.get("source_label") or "",
+                "profile_version_id": "",
+                "detail_filename": "",
+                "pair_count": 0,
+                "lemma_count": 0,
+                "actual_models": "",
+                "status": "missing",
+                "mean_core_metric": float("nan"),
+                "delta_core_metric_prev": float("nan"),
+                "delta_mean_rouge_l_prev": float("nan"),
+                "delta_mean_comet_prev": float("nan"),
+                "delta_mean_bleurt_prev": float("nan"),
+            }
+            for field in (
+                "mean_bleu4",
+                "mean_chrfpp",
+                "mean_meteor",
+                "mean_rouge_l",
+                "mean_bertscore",
+                "mean_comet",
+                "mean_bleurt",
+                "corpus_bleu",
+                "slope",
+                "slope_distance_from_1",
+                "exact_normalized_count",
+            ):
+                item[field] = float("nan")
+
+            if summary is not None:
+                key = prompt_key(summary)
+                pair_rows = grouped_pair_rows.get(key, [])
+                item.update(
+                    {
+                        "profile_version_id": summary.get("profile_version_id", ""),
+                        "detail_filename": summary.get("detail_filename", ""),
+                        "pair_count": int(summary.get("pair_count") or 0),
+                        "lemma_count": int(summary.get("lemma_count") or 0),
+                        "actual_models": model_count_label(pair_rows),
+                        "status": "complete" if int(summary.get("pair_count") or 0) >= 100 else "partial",
+                        "mean_core_metric": summary_core_metric(summary),
+                    }
+                )
+                for field in (
+                    "mean_bleu4",
+                    "mean_chrfpp",
+                    "mean_meteor",
+                    "mean_rouge_l",
+                    "mean_bertscore",
+                    "mean_comet",
+                    "mean_bleurt",
+                    "corpus_bleu",
+                    "slope",
+                    "slope_distance_from_1",
+                    "exact_normalized_count",
+                ):
+                    item[field] = summary.get(field, float("nan"))
+                if previous_complete is not None:
+                    current_core = finite_float(item.get("mean_core_metric"))
+                    previous_core = finite_float(previous_complete.get("mean_core_metric"))
+                    if current_core is not None and previous_core is not None:
+                        item["delta_core_metric_prev"] = current_core - previous_core
+                    for metric_field, delta_field in (
+                        ("mean_rouge_l", "delta_mean_rouge_l_prev"),
+                        ("mean_comet", "delta_mean_comet_prev"),
+                        ("mean_bleurt", "delta_mean_bleurt_prev"),
+                    ):
+                        left = finite_float(item.get(metric_field))
+                        right = finite_float(previous_complete.get(metric_field))
+                        if left is not None and right is not None:
+                            item[delta_field] = left - right
+                previous_complete = item
+            rows.append(item)
+    return rows
+
 
 
 def prompt_summary_sort_key(summary: dict[str, object]) -> tuple[str, int, int]:
@@ -1798,6 +2172,23 @@ def page_header(title: str, *, depth: int, current_item: str = "prompt_eval") ->
       font-size: 0.9rem;
       margin-top: 6px;
     }}
+    .chart-stack {{
+      display: grid;
+      gap: 22px;
+      margin: 18px 0;
+    }}
+    .chart-stack figure {{
+      margin: 0;
+    }}
+    .chart-stack img {{
+      margin: 0;
+      width: 100%;
+    }}
+    .chart-stack figcaption {{
+      color: #5c6b7f;
+      font-size: 0.9rem;
+      margin-top: 6px;
+    }}
     .table-wrap {{
       margin: 18px 0;
       overflow-x: auto;
@@ -1805,6 +2196,17 @@ def page_header(title: str, *, depth: int, current_item: str = "prompt_eval") ->
     .table-wrap table {{
       margin: 0;
       min-width: 1320px;
+    }}
+    .table-wrap table.metric-length-table {{
+      min-width: 980px;
+    }}
+    .metric-length-table .prompt-cell {{
+      background: #f8fafc;
+      font-weight: 650;
+      min-width: 190px;
+    }}
+    .metric-length-table .row-group-start td {{
+      border-top: 2px solid #cbd5e1;
     }}
     pre {{
       background: #fff;
@@ -2053,6 +2455,79 @@ def save_trend_charts(summaries: list[dict[str, object]], output_dir: Path) -> l
     return chart_paths
 
 
+def save_model_timeline_charts(rows: list[dict[str, object]], output_dir: Path) -> list[tuple[str, str]]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    chart_paths: list[tuple[str, str]] = []
+    prompt_colors = {
+        1: "#2f6fb2",
+        2: "#c47f16",
+        3: "#607744",
+    }
+    for metric_key, label, target, filename in MODEL_TIMELINE_CHART_SPECS:
+        by_prompt = {
+            prompt_version: model_timeline_metric_points(
+                rows,
+                prompt_version=prompt_version,
+                metric_key=metric_key,
+            )
+            for prompt_version in MODEL_TIMELINE_PROMPT_VERSIONS
+        }
+        if not any(by_prompt.values()):
+            continue
+        fig, ax = plt.subplots(figsize=(7.6, 4.2))
+        all_x: list[int] = []
+        for prompt_version, points in by_prompt.items():
+            if not points:
+                continue
+            x = np.asarray([item["release_datetime"].toordinal() for item in points], dtype=float)
+            y = np.asarray([item["metric_value"] for item in points], dtype=float)
+            all_x.extend(int(value) for value in x)
+            color = prompt_colors.get(prompt_version, "#2f6fb2")
+            ax.scatter(
+                x,
+                y * 100,
+                s=72,
+                color=color,
+                edgecolor="#1d2733",
+                linewidth=0.5,
+                label=f"v{prompt_version}",
+                zorder=3,
+            )
+            if len(points) >= 2:
+                ax.plot(x, y * 100, color=color, linewidth=2.0, alpha=0.88)
+        target_percent = target * 100
+        ax.axhline(
+            target_percent,
+            color="#7b8794",
+            linestyle="--",
+            linewidth=1.2,
+            label=f"provisional human-equivalent target ({target_percent:.0f}%)",
+        )
+        if all_x:
+            ticks = sorted(set(all_x))
+            ax.set_xticks(ticks)
+            ax.set_xticklabels(
+                [datetime.fromordinal(value).strftime("%Y-%m-%d") for value in ticks],
+                rotation=25,
+                ha="right",
+            )
+            if len(ticks) == 1:
+                ax.set_xlim(ticks[0] - 30, ticks[0] + 30)
+            else:
+                ax.set_xlim(min(ticks) - 10, max(ticks) + 10)
+        ax.set_ylim(0, 100)
+        ax.set_xlabel("OpenAI model release date")
+        ax.set_ylabel(f"{label} (%)")
+        ax.set_title(f"OpenAI model progression: {label}")
+        ax.grid(True, color="#d7dee9", linewidth=0.7)
+        ax.legend(loc="best")
+        fig.tight_layout()
+        fig.savefig(output_dir / filename, dpi=160)
+        plt.close(fig)
+        chart_paths.append((filename, label))
+    return chart_paths
+
+
 def save_metric_length_plot(rows: list[dict[str, object]], regression: dict[str, object], output_path: Path) -> None:
     points = metric_length_points(rows, str(regression["metric_key"]))
     x = np.asarray([point[0] for point in points], dtype=float)
@@ -2125,7 +2600,7 @@ def save_synthetic_zainaldi_charts(
     synthetic_series = []
     for key in sorted(prompts, key=lambda item: (item[0].casefold(), item[1], item[2])):
         prompt = prompts[key]
-        label = f"Synthetic v{prompt['profile_version']}"
+        label = f"{prompt['profile_name']} v{prompt['profile_version']}"
         values = [
             finite_float(prompt["metrics"].get(metric_name, {}).get("predicted_score"))
             for metric_name in metrics
@@ -2138,21 +2613,46 @@ def save_synthetic_zainaldi_charts(
     ]
 
     filename, label = SYNTHETIC_ZAINALDI_CHART_SPECS[0]
-    fig, ax = plt.subplots(figsize=(11.2, 5.25))
-    series = synthetic_series + aggregate_series
-    bar_width = min(0.14, 0.78 / max(1, len(series)))
-    offsets = (np.arange(len(series), dtype=float) - (len(series) - 1) / 2) * bar_width
-    for offset, (series_label, values) in zip(offsets, series, strict=True):
-        plotted = [value * 100 if value is not None else float("nan") for value in values]
-        ax.bar(x + offset, plotted, width=bar_width, label=series_label, alpha=0.88)
-    ax.axhline(0, color="#7b8794", linewidth=1.0)
+    comparison_series = synthetic_series + aggregate_series
+    comparison_labels = [series_label for series_label, _ in comparison_series]
+    comparison_array = np.asarray(
+        [
+            [value * 100 if value is not None else float("nan") for value in values]
+            for _, values in comparison_series
+        ],
+        dtype=float,
+    )
+    finite_values = comparison_array[np.isfinite(comparison_array)]
+    if finite_values.size:
+        vmin = min(0.0, float(np.min(finite_values)))
+        vmax = max(100.0, float(np.max(finite_values)))
+    else:
+        vmin = 0.0
+        vmax = 100.0
+    fig_height = max(7.0, 0.36 * len(comparison_labels) + 2.0)
+    fig, ax = plt.subplots(figsize=(13.2, fig_height), constrained_layout=True)
+    cmap = plt.get_cmap("RdYlGn").copy()
+    cmap.set_bad("#f3f4f6")
+    image = ax.imshow(
+        np.ma.masked_invalid(comparison_array),
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        aspect="auto",
+    )
     ax.set_xticks(x)
     ax.set_xticklabels(metrics, rotation=25, ha="right")
-    ax.set_ylabel("Metric score (%)")
-    ax.set_title("Synthetic Stephanos prompts vs Zainaldin et al. aggregate Galen metrics")
-    ax.grid(True, axis="y", color="#d7dee9", linewidth=0.7)
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3)
-    fig.tight_layout()
+    ax.set_yticks(np.arange(len(comparison_labels)))
+    ax.set_yticklabels(comparison_labels)
+    ax.tick_params(axis="y", labelsize=7.8)
+    ax.set_title("Synthetic Stephanos prompts and Zainaldin aggregate Galen metrics")
+    for row_index in range(comparison_array.shape[0]):
+        for col_index in range(comparison_array.shape[1]):
+            value = comparison_array[row_index, col_index]
+            text_value = "N/A" if math.isnan(value) else f"{value:.1f}"
+            ax.text(col_index, row_index, text_value, ha="center", va="center", fontsize=7.4)
+    cbar = fig.colorbar(image, ax=ax, fraction=0.025, pad=0.02)
+    cbar.set_label("Metric score (%)")
     fig.savefig(output_dir / filename, dpi=160)
     plt.close(fig)
     chart_paths.append((filename, label))
@@ -2170,18 +2670,20 @@ def save_synthetic_zainaldi_charts(
                 else:
                     deltas.append((synthetic_value - aggregate_value) * 100)
             delta_rows.append(deltas)
-            delta_labels.append(f"{synthetic_label} - {aggregate_text}")
+            delta_labels.append(f"{synthetic_label} vs Zainaldin {aggregate_text} aggregate")
     if delta_rows:
         filename, label = SYNTHETIC_ZAINALDI_CHART_SPECS[1]
         delta_array = np.asarray(delta_rows, dtype=float)
         finite_values = delta_array[np.isfinite(delta_array)]
         max_abs = max(5.0, float(np.max(np.abs(finite_values)))) if finite_values.size else 5.0
-        fig, ax = plt.subplots(figsize=(10.8, 4.75))
+        fig_height = max(8.0, 0.34 * len(delta_labels) + 2.0)
+        fig, ax = plt.subplots(figsize=(13.2, fig_height), constrained_layout=True)
         image = ax.imshow(delta_array, cmap="RdBu", vmin=-max_abs, vmax=max_abs, aspect="auto")
         ax.set_xticks(np.arange(len(metrics)))
         ax.set_xticklabels(metrics, rotation=25, ha="right")
         ax.set_yticks(np.arange(len(delta_labels)))
         ax.set_yticklabels(delta_labels)
+        ax.tick_params(axis="y", labelsize=7.4)
         ax.set_title("Synthetic Stephanos minus Zainaldin aggregate scores")
         for row_index in range(delta_array.shape[0]):
             for col_index in range(delta_array.shape[1]):
@@ -2193,7 +2695,6 @@ def save_synthetic_zainaldi_charts(
                 ax.text(col_index, row_index, text_value, ha="center", va="center", fontsize=8.2)
         cbar = fig.colorbar(image, ax=ax)
         cbar.set_label("Difference (percentage points)")
-        fig.tight_layout()
         fig.savefig(output_dir / filename, dpi=160)
         plt.close(fig)
         chart_paths.append((filename, label))
@@ -2576,26 +3077,14 @@ def prompt_key(summary: dict[str, object]) -> tuple[str, int, int]:
 def render_paper_metric_summary_table(summaries: list[dict[str, object]]) -> str:
     rows = []
     lookup = summary_lookup(summaries)
-    selected = [
-        lookup.get((MAIN_PAPER_PROFILE, 1)),
-        lookup.get((MAIN_PAPER_PROFILE, 2)),
-        lookup.get((MAIN_PAPER_PROFILE, 3)),
-    ]
-    claude_rows = [
-        summary
-        for summary in summaries
-        if str(summary["profile_name"]).startswith("claude_") and int(summary["pair_count"]) >= 100
-    ]
-    if claude_rows:
-        selected.append(
-            max(
-                claude_rows,
-                key=lambda item: (
-                    finite_float(item.get("mean_rouge_l")) or float("-inf"),
-                    finite_float(item.get("mean_bleu4")) or float("-inf"),
-                ),
-            )
-        )
+    selected = []
+    for profile_name, profile_version in PAPER_METRIC_SUMMARY_PROMPTS:
+        summary = lookup.get((profile_name, profile_version))
+        if summary is None:
+            continue
+        if profile_name.startswith("claude_") and int(summary["pair_count"]) < 100:
+            continue
+        selected.append(summary)
     for summary in [item for item in selected if item is not None]:
         rows.append(
             f"""<tr>
@@ -2794,9 +3283,9 @@ def tracked_status_note(item: dict[str, object], evaluated_pairs: int) -> str:
     name = str(item["profile_name"])
     if name in RETIRED_TEMPERATURE_PROFILE_NAMES:
         return "Retired temperature lane; non-default temperature controls are no longer used."
-    if name == "legacy_scholarly_v3_repeat":
+    if name == REPEATABILITY_PROFILE_NAME:
         return "Active repeatability lane using requested_runs at model defaults."
-    if name.startswith("legacy_scholarly_v4_"):
+    if name.startswith("gpt-5.5_v4_"):
         return "Active Responses API experiment with reasoning effort set on the profile."
     if name.startswith("claude_"):
         if evaluated_pairs >= 100:
@@ -3066,16 +3555,30 @@ def render_metric_length_regression_table(
     include_prompt: bool,
 ) -> str:
     rows = []
-    for item in sorted(regressions, key=metric_length_sort_key):
-        prompt_cell = ""
-        if include_prompt:
-            detail_href = f"prompts/{item['detail_filename']}"
-            prompt_cell = (
-                f'<td><a href="{esc(detail_href)}">{esc(item["profile_name"])} '
-                f'v{esc(item["profile_version"])}</a></td>'
-            )
-        rows.append(
-            f"""<tr>
+    sorted_regressions = sorted(regressions, key=metric_length_sort_key)
+    if include_prompt:
+        grouped: dict[tuple[str, int, int], list[dict[str, object]]] = defaultdict(list)
+        for item in sorted_regressions:
+            grouped[
+                (
+                    str(item.get("profile_name") or ""),
+                    int(item.get("profile_version") or 0),
+                    int(item.get("profile_version_id") or 0),
+                )
+            ].append(item)
+        for _, group in grouped.items():
+            for row_index, item in enumerate(group):
+                prompt_cell = ""
+                row_class = ' class="row-group-start"' if row_index == 0 else ""
+                if row_index == 0:
+                    detail_href = f"prompts/{item['detail_filename']}"
+                    prompt_cell = (
+                        f'<td class="prompt-cell" rowspan="{len(group)}">'
+                        f'<a href="{esc(detail_href)}">{esc(item["profile_name"])} '
+                        f'v{esc(item["profile_version"])}</a></td>'
+                    )
+                rows.append(
+                    f"""<tr{row_class}>
   {prompt_cell}
   <td>{esc(item['metric_label'])}</td>
   <td>{int(item['n']):,}</td>
@@ -3086,10 +3589,24 @@ def render_metric_length_regression_table(
   <td>{format_number(item['slope'], 5)}</td>
   <td>{esc(item['status'])}</td>
 </tr>"""
-        )
+                )
+    else:
+        for item in sorted_regressions:
+            rows.append(
+                f"""<tr>
+  <td>{esc(item['metric_label'])}</td>
+  <td>{int(item['n']):,}</td>
+  <td>{esc(item['pattern'])}</td>
+  <td>{format_number(item['r'])}</td>
+  <td>{format_number(item['r2'])}</td>
+  <td>{format_number(item['p_value'], 4)}</td>
+  <td>{format_number(item['slope'], 5)}</td>
+  <td>{esc(item['status'])}</td>
+</tr>"""
+            )
     prompt_header = "<th>Prompt</th>" if include_prompt else ""
     return f"""<div class="table-wrap">
-<table>
+<table class="metric-length-table">
   <thead>
     <tr>
       {prompt_header}
@@ -3108,10 +3625,21 @@ def render_metric_length_regression_table(
 </div>"""
 
 
-def render_metric_length_pattern_section(regressions: list[dict[str, object]]) -> str:
+def render_metric_length_pattern_section(
+    regressions: list[dict[str, object]],
+    *,
+    include_table: bool = True,
+    detail_href: str | None = None,
+) -> str:
     if not regressions:
         return ""
     counts = metric_length_pattern_counts(regressions)
+    detail_link = (
+        f'<p><a href="{esc(detail_href)}">Open the full metric vs passage length page.</a></p>'
+        if detail_href
+        else ""
+    )
+    table_html = render_metric_length_regression_table(regressions, include_prompt=True) if include_table else ""
     return f"""<h2>Metric vs Passage Length Patterns</h2>
 <p class="note">Passage length is measured as the source Greek token count when source text is available, falling back to human translation word count only when a source passage has no Greek tokens. Each row regresses one metric against passage length for one prompt version.</p>
 <div class="metric-grid">
@@ -3122,7 +3650,8 @@ def render_metric_length_pattern_section(regressions: list[dict[str, object]]) -
   <div class="metric"><span class="label">Significant negative</span><span class="value">{counts['significant_negative']:,}</span></div>
 </div>
 <p>{esc(metric_length_pattern_sentence(regressions))}</p>
-{render_metric_length_regression_table(regressions, include_prompt=True)}"""
+{detail_link}
+{table_html}"""
 
 
 def render_metric_length_detail_section(regressions: list[dict[str, object]]) -> str:
@@ -3215,7 +3744,7 @@ def render_synthetic_zainaldi_galen_section(
   <figcaption>{esc(label)}.</figcaption>
 </figure>"""
         )
-    charts = '<div class="chart-grid">' + "".join(chart_figures) + "</div>" if chart_figures else ""
+    charts = '<div class="chart-stack">' + "".join(chart_figures) + "</div>" if chart_figures else ""
     return f"""<h2>{esc(SYNTHETIC_ZAINALDI_GALEN_TITLE)}</h2>
 <p class="note">Zainaldi et al.'s Galen translation is represented here by its reported mean passage length of {format_number(ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH, 1)} words. The Stephanos values below are raw ordinary-least-squares predictions from the metric-vs-passage-length regressions above; they are not clamped to metric bounds.</p>
 {charts}
@@ -3237,6 +3766,206 @@ def render_synthetic_zainaldi_galen_section(
 {render_zainaldi_paper_metrics_table()}"""
 
 
+def render_metric_length_page(regressions: list[dict[str, object]]) -> str:
+    html_parts = [page_header("Metric vs Passage Length", depth=1)]
+    html_parts.append('<p><a href="prompt_evaluation.html">Back to translation prompt evaluation.</a></p>')
+    html_parts.append(render_metric_length_pattern_section(regressions, include_table=True))
+    html_parts.append(
+        """<h2>Downloadable Table</h2>
+<ul>
+  <li><a href="prompt_evaluation_metric_length_regressions.csv">Metric vs passage length regression CSV</a></li>
+</ul>"""
+    )
+    html_parts.append(page_footer())
+    return "\n".join(html_parts)
+
+
+def render_model_timeline_table(rows: list[dict[str, object]], *, full: bool) -> str:
+    if not rows:
+        return '<p class="warning">No model-timeline rows are available.</p>'
+    body = []
+    for item in rows:
+        detail = item.get("detail_filename")
+        label = f"{item.get('model_display_name')} / v{item.get('prompt_version')}"
+        if detail:
+            model_cell = f'<a href="prompts/{esc(detail)}">{esc(label)}</a>'
+        else:
+            model_cell = esc(label)
+        source_url = str(item.get("source_url") or "")
+        source_label = str(item.get("source_label") or "source")
+        source_cell = (
+            f'<a href="{esc(source_url)}">{esc(source_label)}</a>'
+            if source_url
+            else esc(source_label)
+        )
+        full_cells = ""
+        if full:
+            full_cells = f"""
+  <td>{format_percent(item.get('mean_bleu4'))}</td>
+  <td>{format_percent(item.get('mean_chrfpp'))}</td>
+  <td>{format_percent(item.get('mean_meteor'))}</td>
+  <td>{format_percent(item.get('mean_bertscore'))}</td>
+  <td>{format_percent(item.get('mean_comet'))}</td>
+  <td>{format_percent(item.get('mean_bleurt'))}</td>
+  <td>{format_percent(item.get('synthetic_zainaldi_mean_core_metric'))}</td>
+  <td>{format_delta_percent(item.get('synthetic_zainaldi_delta_core_metric_prev'))}</td>
+  <td>{format_delta_percent(item.get('synthetic_zainaldi_delta_mix_aggregate'))}</td>
+  <td>{format_delta_percent(item.get('synthetic_zainaldi_delta_comp_aggregate'))}</td>
+  <td>{format_number(item.get('slope'))}</td>
+  <td>{esc(item.get('actual_models'))}</td>
+  <td>{source_cell}</td>"""
+        body.append(
+            f"""<tr>
+  <td>{int(item.get('prompt_version') or 0)}</td>
+  <td>{model_cell}</td>
+  <td>{format_date(item.get('release_date'))}</td>
+  <td>{format_date(item.get('api_release_date'))}</td>
+  <td>{int(item.get('pair_count') or 0):,}</td>
+  <td>{format_percent(item.get('mean_core_metric'))}</td>
+  <td>{format_delta_percent(item.get('delta_core_metric_prev'))}</td>
+  <td>{format_percent(item.get('mean_rouge_l'))}</td>
+  <td>{format_delta_percent(item.get('delta_mean_rouge_l_prev'))}</td>
+  <td>{esc(item.get('status'))}</td>
+  {full_cells}
+</tr>"""
+        )
+    full_headers = ""
+    if full:
+        full_headers = """
+      <th>BLEU-4</th>
+      <th>chrF++</th>
+      <th>METEOR</th>
+      <th>BERTScore</th>
+      <th>COMET</th>
+      <th>BLEURT</th>
+      <th>Same-length mean</th>
+      <th>Same-length delta</th>
+      <th>Same-length vs Mix.</th>
+      <th>Same-length vs Comp.</th>
+      <th>Length slope</th>
+      <th>Actual run models</th>
+      <th>Source</th>"""
+    return f"""<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Prompt v.</th>
+      <th>Model</th>
+      <th>Release</th>
+      <th>API date</th>
+      <th>Pairs</th>
+      <th>Mean metric</th>
+      <th>Delta vs prior</th>
+      <th>ROUGE-L</th>
+      <th>ROUGE-L delta</th>
+      <th>Status</th>
+      {full_headers}
+    </tr>
+  </thead>
+  <tbody>{''.join(body)}</tbody>
+</table>
+</div>"""
+
+
+def render_model_timeline_chart_stack(chart_paths: list[tuple[str, str]]) -> str:
+    if not chart_paths:
+        return '<p class="warning">No model-timeline charts are available yet.</p>'
+    figures = []
+    for filename, label in chart_paths:
+        figures.append(
+            f"""<figure>
+  <img src="prompt_images/{esc(filename)}" alt="{esc(label)}">
+  <figcaption>{esc(label)}.</figcaption>
+</figure>"""
+        )
+    return '<div class="chart-stack">' + "".join(figures) + "</div>"
+
+
+def render_model_timeline_forecast_table(rows: list[dict[str, object]]) -> str:
+    if not rows:
+        return '<p class="warning">No model-timeline forecast rows are available.</p>'
+    body = []
+    for item in rows:
+        body.append(
+            f"""<tr>
+  <td>{int(item.get('prompt_version') or 0)}</td>
+  <td>{esc(item.get('metric_label'))}</td>
+  <td>{format_percent(item.get('target'))}</td>
+  <td>{int(item.get('completed_release_count') or 0)}</td>
+  <td>{esc(item.get('latest_release_date') or 'N/A')}</td>
+  <td>{format_percent(item.get('latest_score'))}</td>
+  <td>{format_delta_percent(item.get('annualized_slope'))}</td>
+  <td>{esc(item.get('estimated_target_date') or 'N/A')}</td>
+  <td>{esc(item.get('steady_improvement_status'))}</td>
+  <td>{esc(item.get('projection_status'))}</td>
+</tr>"""
+        )
+    return f"""<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Prompt v.</th>
+      <th>Metric</th>
+      <th>Target</th>
+      <th>Completed releases</th>
+      <th>Latest release</th>
+      <th>Latest score</th>
+      <th>Annualized slope</th>
+      <th>Projected target date</th>
+      <th>Steady check</th>
+      <th>Projection status</th>
+    </tr>
+  </thead>
+  <tbody>{''.join(body)}</tbody>
+</table>
+</div>"""
+
+
+def render_model_timeline_section(
+    rows: list[dict[str, object]],
+    *,
+    chart_paths: list[tuple[str, str]] | None = None,
+) -> str:
+    if not rows:
+        return ""
+    charts = render_model_timeline_chart_stack(chart_paths or [])
+    return f"""<h2>OpenAI Model Timeline</h2>
+<p class="note">This section compares the Stephanos v1/v2/v3 prompt texts across GPT-5.4, GPT-5.5, and GPT-5.6 Sol on the same 100-row Kappa paper corpus. Deltas are percentage-point changes from the previous available model in release order within the same prompt version.</p>
+{charts}
+{render_model_timeline_table(rows, full=False)}
+<p><a href="prompt_evaluation_model_timeline.html">Open the full model-timeline page.</a></p>"""
+
+
+def render_model_timeline_page(
+    rows: list[dict[str, object]],
+    *,
+    chart_paths: list[tuple[str, str]] | None = None,
+    forecast_rows: list[dict[str, object]] | None = None,
+) -> str:
+    html_parts = [page_header("OpenAI Model Translation Timeline", depth=1)]
+    html_parts.append('<p><a href="prompt_evaluation.html">Back to translation prompt evaluation.</a></p>')
+    html_parts.append(
+        '<p>This page tracks automated translation metrics over OpenAI model releases while keeping the Stephanos prompt version fixed. The GPT-5.4 and GPT-5.6 Sol rows are approved-human-only evaluation profiles; GPT-5.5 rows use the existing baseline prompt profile.</p>'
+    )
+    html_parts.append(
+        f'<p class="note">Human-equivalent dates below use a provisional automated-score target of {format_percent(HUMAN_EQUIVALENT_MEAN_METRIC_TARGET)}. Replace this target with a second-human baseline when the project has one; until then, the projection is a planning proxy, not a claim about human adequacy.</p>'
+    )
+    html_parts.append(render_model_timeline_chart_stack(chart_paths or []))
+    html_parts.append("<h2>Human-Equivalent Projection</h2>")
+    html_parts.append(render_model_timeline_forecast_table(forecast_rows or []))
+    html_parts.append("<h2>Model Timeline Table</h2>")
+    html_parts.append(render_model_timeline_table(rows, full=True))
+    html_parts.append(
+        """<h2>Downloadable Table</h2>
+<ul>
+  <li><a href="prompt_evaluation_model_timeline.csv">Model timeline CSV</a></li>
+  <li><a href="prompt_evaluation_model_timeline_forecast.csv">Model timeline forecast CSV</a></li>
+</ul>"""
+    )
+    html_parts.append(page_footer())
+    return "\n".join(html_parts)
+
+
 def render_main_page(
     summaries: list[dict[str, object]],
     *,
@@ -3251,6 +3980,8 @@ def render_main_page(
     grouped_pair_rows: dict[tuple[str, int, int], list[dict[str, object]]],
     tracked_statuses: list[dict[str, object]],
     repeatability_rows: list[dict[str, object]],
+    model_timeline_rows: list[dict[str, object]],
+    model_timeline_chart_paths: list[tuple[str, str]],
 ) -> str:
     html_parts = [page_header("Translation Prompt Evaluation", depth=1)]
     html_parts.append(
@@ -3276,6 +4007,7 @@ def render_main_page(
     )
     html_parts.append(render_repeatability_section(repeatability_rows))
     html_parts.append(render_experiment_coverage_section(summaries, tracked_statuses))
+    html_parts.append(render_model_timeline_section(model_timeline_rows, chart_paths=model_timeline_chart_paths))
     if trend_charts:
         chart_figures = []
         for filename, label in trend_charts:
@@ -3286,7 +4018,13 @@ def render_main_page(
 </figure>"""
             )
         html_parts.append('<div class="chart-grid">' + "".join(chart_figures) + "</div>")
-    html_parts.append(render_metric_length_pattern_section(metric_length_regressions))
+    html_parts.append(
+        render_metric_length_pattern_section(
+            metric_length_regressions,
+            include_table=False,
+            detail_href="prompt_evaluation_metric_length.html",
+        )
+    )
     html_parts.append(
         render_synthetic_zainaldi_galen_section(
             synthetic_zainaldi_galen_rows,
@@ -3302,6 +4040,10 @@ def render_main_page(
   <li><a href="prompt_evaluation_metrics.csv">Prompt metrics CSV</a></li>
   <li><a href="prompt_evaluation_rows.csv">Per-run comparison rows CSV</a></li>
   <li><a href="prompt_evaluation_repeatability.csv">Repeated-run values CSV</a></li>
+  <li><a href="prompt_evaluation_model_timeline.html">OpenAI model timeline page</a></li>
+  <li><a href="prompt_evaluation_model_timeline.csv">OpenAI model timeline CSV</a></li>
+  <li><a href="prompt_evaluation_model_timeline_forecast.csv">OpenAI model timeline forecast CSV</a></li>
+  <li><a href="prompt_evaluation_metric_length.html">Metric vs passage length page</a></li>
   <li><a href="prompt_evaluation_metric_length_regressions.csv">Metric vs passage length regression CSV</a></li>
   <li><a href="prompt_evaluation_synthetic_zainaldi_galen.csv">Synthetic Zainaldi Galen comparison CSV</a></li>
   <li><a href="prompt_evaluation_zainaldi_paper_metrics.csv">Zainaldi paper metrics CSV</a></li>
@@ -3315,6 +4057,8 @@ def write_csv_outputs(
     summaries: list[dict[str, object]],
     grouped_rows: dict[tuple[str, int, int], list[dict[str, object]]],
     repeatability_rows: list[dict[str, object]],
+    model_timeline_rows: list[dict[str, object]],
+    model_timeline_forecast_rows: list[dict[str, object]],
     metric_length_regressions: list[dict[str, object]],
     synthetic_zainaldi_galen_rows: list[dict[str, object]],
 ) -> None:
@@ -3459,6 +4203,68 @@ def write_csv_outputs(
         for row in repeatability_rows:
             writer.writerow({field: row.get(field, "") for field in repeatability_fields})
 
+    model_timeline_fields = [
+        "prompt_version",
+        "profile_name",
+        "profile_version_id",
+        "model_slug",
+        "model_display_name",
+        "release_date",
+        "api_release_date",
+        "pair_count",
+        "lemma_count",
+        "actual_models",
+        "status",
+        "mean_core_metric",
+        "delta_core_metric_prev",
+        "mean_bleu4",
+        "mean_chrfpp",
+        "mean_meteor",
+        "mean_rouge_l",
+        "delta_mean_rouge_l_prev",
+        "mean_bertscore",
+        "mean_comet",
+        "delta_mean_comet_prev",
+        "mean_bleurt",
+        "delta_mean_bleurt_prev",
+        "synthetic_zainaldi_mean_core_metric",
+        "synthetic_zainaldi_delta_core_metric_prev",
+        "synthetic_zainaldi_delta_mix_aggregate",
+        "synthetic_zainaldi_delta_comp_aggregate",
+        "corpus_bleu",
+        "slope",
+        "slope_distance_from_1",
+        "exact_normalized_count",
+        "detail_filename",
+        "source_url",
+        "source_label",
+    ]
+    with MODEL_TIMELINE_CSV.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=model_timeline_fields)
+        writer.writeheader()
+        for row in model_timeline_rows:
+            writer.writerow({field: row.get(field, "") for field in model_timeline_fields})
+
+    model_timeline_forecast_fields = [
+        "prompt_version",
+        "metric_key",
+        "metric_label",
+        "target",
+        "completed_release_count",
+        "latest_release_date",
+        "latest_score",
+        "annualized_slope",
+        "annualized_slope_pp",
+        "estimated_target_date",
+        "projection_status",
+        "steady_improvement_status",
+    ]
+    with MODEL_TIMELINE_FORECAST_CSV.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=model_timeline_forecast_fields)
+        writer.writeheader()
+        for row in model_timeline_forecast_rows:
+            writer.writerow({field: row.get(field, "") for field in model_timeline_forecast_fields})
+
     metric_length_fields = [
         "profile_name",
         "profile_version",
@@ -3601,6 +4407,11 @@ def generate_reports(
         summaries.append(summary)
 
     add_guidance_link_counts(grouped_pair_rows, summaries)
+    model_timeline_rows = build_model_timeline_rows(
+        summaries,
+        grouped_pair_rows,
+        fetch_model_release_map(),
+    )
     evaluated_keys = set(grouped_pair_rows)
     human_scope = corpus_label(corpus) if approved_human_only else "non-empty human translation in any status"
     unevaluable = []
@@ -3631,13 +4442,30 @@ def generate_reports(
 
     synthetic_zainaldi_rows = synthetic_zainaldi_galen_rows(all_metric_length_regressions)
     synthetic_zainaldi_chart_paths = save_synthetic_zainaldi_charts(synthetic_zainaldi_rows, IMAGE_DIR)
+    add_model_timeline_synthetic_metrics(model_timeline_rows, synthetic_zainaldi_rows)
+    model_timeline_forecast_rows = build_model_timeline_forecast_rows(model_timeline_rows)
+    model_timeline_chart_paths = save_model_timeline_charts(model_timeline_rows, IMAGE_DIR)
     tracked_statuses = fetch_tracked_prompt_statuses()
     write_csv_outputs(
         summaries,
         grouped_pair_rows,
         repeatability_rows,
+        model_timeline_rows,
+        model_timeline_forecast_rows,
         all_metric_length_regressions,
         synthetic_zainaldi_rows,
+    )
+    MODEL_TIMELINE_PAGE.write_text(
+        render_model_timeline_page(
+            model_timeline_rows,
+            chart_paths=model_timeline_chart_paths,
+            forecast_rows=model_timeline_forecast_rows,
+        ),
+        encoding="utf-8",
+    )
+    METRIC_LENGTH_PAGE.write_text(
+        render_metric_length_page(all_metric_length_regressions),
+        encoding="utf-8",
     )
     MAIN_PAGE.write_text(
         render_main_page(
@@ -3653,6 +4481,8 @@ def generate_reports(
             grouped_pair_rows=grouped_pair_rows,
             tracked_statuses=tracked_statuses,
             repeatability_rows=repeatability_rows,
+            model_timeline_rows=model_timeline_rows,
+            model_timeline_chart_paths=model_timeline_chart_paths,
         ),
         encoding="utf-8",
     )

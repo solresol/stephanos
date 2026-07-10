@@ -32,7 +32,7 @@ from translation_guidance_coverage import enqueue_missing_guidance, guidance_cov
 from translation_run_utils import DEFAULT_TRANSLATION_MODEL
 
 
-DEFAULT_PROFILE = "legacy_scholarly"
+DEFAULT_PROFILE = "gpt-5.5"
 DEFAULT_VERSIONS = (1, 2, 3)
 SUCCESSFUL_RUN_STATUSES = ("completed", "approved")
 API_MODE_CHAT_COMPLETIONS = "chat_completions"
@@ -102,6 +102,7 @@ def resolve_profile_versions(cur, profile_id: int, versions: list[int]) -> list[
         ("default_requested_runs", "GREATEST(COALESCE(default_requested_runs, 1), 1)", "1"),
         ("approved_human_queue_priority", "GREATEST(COALESCE(approved_human_queue_priority, 5), 0)", "5"),
         ("approved_human_only", "COALESCE(approved_human_only, FALSE)", "FALSE"),
+        ("uses_guidance_context", "COALESCE(uses_guidance_context, FALSE)", "FALSE"),
     ]
     select_parts = ["id", "version"]
     for column_name, expression, fallback in optional_columns:
@@ -163,6 +164,7 @@ def resolve_approved_human_profile_versions(
         ("default_requested_runs", "GREATEST(COALESCE(pv.default_requested_runs, 1), 1)", "1"),
         ("approved_human_queue_priority", "GREATEST(COALESCE(pv.approved_human_queue_priority, 5), 0)", "5"),
         ("approved_human_only", "COALESCE(pv.approved_human_only, FALSE)", "FALSE"),
+        ("uses_guidance_context", "COALESCE(pv.uses_guidance_context, FALSE)", "FALSE"),
     ]
     approved_expr = (
         "COALESCE(pv.approved_human_only, FALSE)"
@@ -425,6 +427,7 @@ def fetch_missing_requests(
             "default_reasoning_effort": version_defaults[int(row[6])].get("default_reasoning_effort"),
             "default_requested_runs": version_defaults[int(row[6])].get("default_requested_runs"),
             "approved_human_queue_priority": version_defaults[int(row[6])].get("approved_human_queue_priority"),
+            "uses_guidance_context": bool(version_defaults[int(row[6])].get("uses_guidance_context")),
         }
         for row in cur.fetchall()
     ]
@@ -436,6 +439,9 @@ def queue_guidance(cur, rows: list[dict[str, object]], *, created_by: str, prior
     inserted = 0
     seen: set[tuple[int, int]] = set()
     for row in rows:
+        if not bool(row.get("uses_guidance_context")):
+            ready_source_ids.add(int(row["source_text_version_id"]))
+            continue
         lemma_id = int(row["lemma_id"])
         source_text_version_id = int(row["source_text_version_id"])
         key = (lemma_id, source_text_version_id)

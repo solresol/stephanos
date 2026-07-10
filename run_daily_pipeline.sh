@@ -350,6 +350,10 @@ uv run seed_translation_styles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: s
 echo "Step 4d2a: Seeding translation experiment profiles..." | tee -a "$LOGFILE"
 uv run seed_translation_experiment_profiles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: experiment profile seed failed" | tee -a "$LOGFILE"
 
+# Step 4d2b: Seed model-timeline release rows and v1/v2/v3 profiles (idempotent)
+echo "Step 4d2b: Seeding translation model timeline profiles..." | tee -a "$LOGFILE"
+uv run seed_translation_model_timeline_profiles.py 2>&1 | tee -a "$LOGFILE" || echo "  Warning: model timeline profile seed failed" | tee -a "$LOGFILE"
+
 # Step 4d3: Backfill authoritative translation runs from compatibility columns
 echo "Step 4d3: Backfilling authoritative translation runs..." | tee -a "$LOGFILE"
 uv run backfill_legacy_translation_runs.py --source-document meineke 2>&1 | tee -a "$LOGFILE" || echo "  Warning: translation backfill failed" | tee -a "$LOGFILE"
@@ -418,7 +422,7 @@ fi
 
 # Step 4d7a: Queue guidance needed for approved-human translation evaluation backfill
 HUMAN_EVAL_TRANSLATION_ENABLED="${HUMAN_EVAL_TRANSLATION_ENABLED:-1}"
-HUMAN_EVAL_TRANSLATION_PROFILE="${HUMAN_EVAL_TRANSLATION_PROFILE:-legacy_scholarly}"
+HUMAN_EVAL_TRANSLATION_PROFILE="${HUMAN_EVAL_TRANSLATION_PROFILE:-gpt-5.5}"
 HUMAN_EVAL_TRANSLATION_VERSIONS="${HUMAN_EVAL_TRANSLATION_VERSIONS:-3}"
 HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT="${HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT:-preferred}"
 HUMAN_EVAL_CORPUS="${HUMAN_EVAL_CORPUS:-paper_kappa_review}"
@@ -443,11 +447,11 @@ fi
 
 # Step 4d7b: Queue guidance for approved-human translation experiments
 HUMAN_EVAL_EXPERIMENT_ENABLED="${HUMAN_EVAL_EXPERIMENT_ENABLED:-1}"
-HUMAN_EVAL_EXPERIMENT_PROFILES="${HUMAN_EVAL_EXPERIMENT_PROFILES:-legacy_scholarly_v3_repeat legacy_scholarly_v4_reasoning legacy_scholarly_v4_reasoning_medium legacy_scholarly_v4_reasoning_high legacy_scholarly_v4_mini legacy_scholarly_v4_mini_medium legacy_scholarly_v4_mini_high}"
+HUMAN_EVAL_EXPERIMENT_PROFILES="${HUMAN_EVAL_EXPERIMENT_PROFILES:-gpt-5.5_v4_reasoning gpt-5.5_v4_reasoning_medium gpt-5.5_v4_reasoning_high}"
 HUMAN_EVAL_EXPERIMENT_SOURCE_DOCUMENT="${HUMAN_EVAL_EXPERIMENT_SOURCE_DOCUMENT:-$HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT}"
-HUMAN_EVAL_EXPERIMENT_GUIDANCE_LIMIT="${HUMAN_EVAL_EXPERIMENT_GUIDANCE_LIMIT:-30}"
-HUMAN_EVAL_EXPERIMENT_ENQUEUE_LIMIT="${HUMAN_EVAL_EXPERIMENT_ENQUEUE_LIMIT:-1}"
-HUMAN_EVAL_EXPERIMENT_MAX_OPEN_REQUESTS="${HUMAN_EVAL_EXPERIMENT_MAX_OPEN_REQUESTS:-1}"
+HUMAN_EVAL_EXPERIMENT_GUIDANCE_LIMIT="${HUMAN_EVAL_EXPERIMENT_GUIDANCE_LIMIT:-100}"
+HUMAN_EVAL_EXPERIMENT_ENQUEUE_LIMIT="${HUMAN_EVAL_EXPERIMENT_ENQUEUE_LIMIT:-10}"
+HUMAN_EVAL_EXPERIMENT_MAX_OPEN_REQUESTS="${HUMAN_EVAL_EXPERIMENT_MAX_OPEN_REQUESTS:-10}"
 HUMAN_EVAL_EXPERIMENT_PRIORITY="${HUMAN_EVAL_EXPERIMENT_PRIORITY:-4}"
 HUMAN_EVAL_EXPERIMENT_CREATED_BY="${HUMAN_EVAL_EXPERIMENT_CREATED_BY:-run_daily_pipeline.sh:human-eval-experiment}"
 if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_GUIDANCE_LIMIT" -gt 0 ]; then
@@ -464,6 +468,33 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_ENA
             --prepare-guidance-first \
             --guidance-only \
             2>&1 | tee -a "$LOGFILE" || echo "  Warning: approved-human experiment guidance queue failed for ${experiment_profile}" | tee -a "$LOGFILE"
+    done
+fi
+
+# Step 4d7c: Queue guidance for GPT-5.4/GPT-5.6 model-timeline evaluations
+HUMAN_EVAL_MODEL_TIMELINE_ENABLED="${HUMAN_EVAL_MODEL_TIMELINE_ENABLED:-1}"
+HUMAN_EVAL_MODEL_TIMELINE_PROFILES="${HUMAN_EVAL_MODEL_TIMELINE_PROFILES:-gpt-5.4 gpt-5.6-sol}"
+HUMAN_EVAL_MODEL_TIMELINE_VERSIONS="${HUMAN_EVAL_MODEL_TIMELINE_VERSIONS:-1,2,3}"
+HUMAN_EVAL_MODEL_TIMELINE_SOURCE_DOCUMENT="${HUMAN_EVAL_MODEL_TIMELINE_SOURCE_DOCUMENT:-$HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT}"
+HUMAN_EVAL_MODEL_TIMELINE_GUIDANCE_LIMIT="${HUMAN_EVAL_MODEL_TIMELINE_GUIDANCE_LIMIT:-120}"
+HUMAN_EVAL_MODEL_TIMELINE_ENQUEUE_LIMIT="${HUMAN_EVAL_MODEL_TIMELINE_ENQUEUE_LIMIT:-30}"
+HUMAN_EVAL_MODEL_TIMELINE_MAX_OPEN_REQUESTS="${HUMAN_EVAL_MODEL_TIMELINE_MAX_OPEN_REQUESTS:-30}"
+HUMAN_EVAL_MODEL_TIMELINE_PRIORITY="${HUMAN_EVAL_MODEL_TIMELINE_PRIORITY:-4}"
+HUMAN_EVAL_MODEL_TIMELINE_CREATED_BY="${HUMAN_EVAL_MODEL_TIMELINE_CREATED_BY:-run_daily_pipeline.sh:model-timeline}"
+if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_MODEL_TIMELINE_ENABLED" != "0" ] && [ "$HUMAN_EVAL_MODEL_TIMELINE_GUIDANCE_LIMIT" -gt 0 ]; then
+    echo "Step 4d7c: Queueing guidance for model-timeline evaluations..." | tee -a "$LOGFILE"
+    for timeline_profile in $HUMAN_EVAL_MODEL_TIMELINE_PROFILES; do
+        uv run enqueue_human_evaluation_translations.py \
+            --profile "$timeline_profile" \
+            --versions "$HUMAN_EVAL_MODEL_TIMELINE_VERSIONS" \
+            --corpus "$HUMAN_EVAL_CORPUS" \
+            --source-document "$HUMAN_EVAL_MODEL_TIMELINE_SOURCE_DOCUMENT" \
+            --limit "$HUMAN_EVAL_MODEL_TIMELINE_GUIDANCE_LIMIT" \
+            --priority "$HUMAN_EVAL_MODEL_TIMELINE_PRIORITY" \
+            --created-by "$HUMAN_EVAL_MODEL_TIMELINE_CREATED_BY" \
+            --prepare-guidance-first \
+            --guidance-only \
+            2>&1 | tee -a "$LOGFILE" || echo "  Warning: model-timeline guidance queue failed for ${timeline_profile}" | tee -a "$LOGFILE"
     done
 fi
 
@@ -540,19 +571,37 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_ENA
     done
 fi
 
-# Step 4e: Enqueue preferred-source translation run requests (set TRANSLATION_ENQUEUE_LIMIT=0 to disable)
-TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-20}"
+# Step 4d8c: Queue GPT-5.4/GPT-5.6 model-timeline evaluation requests
+if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_MODEL_TIMELINE_ENABLED" != "0" ] && [ "$HUMAN_EVAL_MODEL_TIMELINE_ENQUEUE_LIMIT" -gt 0 ]; then
+    echo "Step 4d8c: Enqueuing model-timeline evaluation translations..." | tee -a "$LOGFILE"
+    for timeline_profile in $HUMAN_EVAL_MODEL_TIMELINE_PROFILES; do
+        uv run enqueue_human_evaluation_translations.py \
+            --profile "$timeline_profile" \
+            --versions "$HUMAN_EVAL_MODEL_TIMELINE_VERSIONS" \
+            --corpus "$HUMAN_EVAL_CORPUS" \
+            --source-document "$HUMAN_EVAL_MODEL_TIMELINE_SOURCE_DOCUMENT" \
+            --limit "$HUMAN_EVAL_MODEL_TIMELINE_ENQUEUE_LIMIT" \
+            --max-open-requests "$HUMAN_EVAL_MODEL_TIMELINE_MAX_OPEN_REQUESTS" \
+            --priority "$HUMAN_EVAL_MODEL_TIMELINE_PRIORITY" \
+            --created-by "$HUMAN_EVAL_MODEL_TIMELINE_CREATED_BY" \
+            --require-guidance-complete \
+            2>&1 | tee -a "$LOGFILE" || echo "  Warning: model-timeline enqueue failed for ${timeline_profile}" | tee -a "$LOGFILE"
+    done
+fi
+
+# Step 4e: Enqueue preferred-source publication requests after the paper-facing
+# approved-human reasoning lane. Re-enable this to resume canonical publication
+# order; without a letter filter, that resumes with Alpha.
+TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-0}"
 TRANSLATION_ENQUEUE_ORDER="${TRANSLATION_ENQUEUE_ORDER:-canonical}"
-# Kappa review is the current editorial priority; give these requests enough
-# queue priority to run ahead of older mixed-letter v3 requests.
 TRANSLATION_ENQUEUE_PRIORITY="${TRANSLATION_ENQUEUE_PRIORITY:-20}"
-TRANSLATION_ENQUEUE_LETTER="${TRANSLATION_ENQUEUE_LETTER:-kappa}"
+TRANSLATION_ENQUEUE_LETTER="${TRANSLATION_ENQUEUE_LETTER:-}"
 TRANSLATION_ENQUEUE_HEADWORD_PREFIX="${TRANSLATION_ENQUEUE_HEADWORD_PREFIX:-}"
 if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
     echo "Step 4e: Enqueuing translation run requests..." | tee -a "$LOGFILE"
     translation_enqueue_args=(
         uv run enqueue_translation_runs.py
-        --profile legacy_scholarly
+        --profile gpt-5.5
         --source-document preferred
         --limit "$TRANSLATION_ENQUEUE_LIMIT"
         --missing-final
@@ -572,11 +621,12 @@ if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
 fi
 
 # Step 5r: Translate Responses API/reasoning requests slowly before the batch lane
-TRANSLATION_RESPONSES_RUN_LIMIT="${TRANSLATION_RESPONSES_RUN_LIMIT:-1}"
-TRANSLATION_RESPONSES_REQUEST_LIMIT="${TRANSLATION_RESPONSES_REQUEST_LIMIT:-10}"
-TRANSLATION_RESPONSES_DAILY_TOKEN_LIMIT="${TRANSLATION_RESPONSES_DAILY_TOKEN_LIMIT:-50000}"
+TRANSLATION_RESPONSES_RUN_LIMIT="${TRANSLATION_RESPONSES_RUN_LIMIT:-10}"
+TRANSLATION_RESPONSES_REQUEST_LIMIT="${TRANSLATION_RESPONSES_REQUEST_LIMIT:-60}"
+TRANSLATION_RESPONSES_DAILY_TOKEN_LIMIT="${TRANSLATION_RESPONSES_DAILY_TOKEN_LIMIT:-250000}"
+TRANSLATION_RESPONSES_PROFILE_PREFIX="${TRANSLATION_RESPONSES_PROFILE_PREFIX:-gpt-5.5_v4_reasoning}"
 if [ "$TRANSLATION_RESPONSES_RUN_LIMIT" -gt 0 ]; then
-    echo "Step 5r: Translating Responses API requests slowly..." | tee -a "$LOGFILE"
+    echo "Step 5r: Translating Responses API reasoning requests..." | tee -a "$LOGFILE"
     response_translation_args=(
         uv run translate_lemmas.py
         --api-mode responses
@@ -585,6 +635,9 @@ if [ "$TRANSLATION_RESPONSES_RUN_LIMIT" -gt 0 ]; then
         --daily-token-limit "$TRANSLATION_RESPONSES_DAILY_TOKEN_LIMIT"
         --delay 1
     )
+    if [ -n "$TRANSLATION_RESPONSES_PROFILE_PREFIX" ]; then
+        response_translation_args+=(--profile-prefix "$TRANSLATION_RESPONSES_PROFILE_PREFIX")
+    fi
     if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ]; then
         response_translation_args+=(--allow-human-evaluation-translations)
     fi
@@ -931,14 +984,23 @@ echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
 run_optional_rsync_logged "reference_site" reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
 # Remove stale prompt-evaluation detail artifacts for excluded experiment lanes.
 ssh stephanos@merah.cassia.ifost.org.au "sh -c '\
-rm -f /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompts/legacy-scholarly-v3-repeat*.html \
+rm -f /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompts/gpt-5-5-v3-repeat*.html \
+      /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompts/gpt-5-5-v3-temp*.html \
+      /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompts/legacy-scholarly-v3-repeat*.html \
       /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompts/legacy-scholarly-v3-temp*.html \
+      /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompts/legacy-scholarly-v4-*.html \
       /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompts/parallage-*.html \
+      /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/gpt-5-5-v3-repeat* \
+      /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/gpt-5-5-v3-temp* \
       /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/legacy-scholarly-v3-repeat* \
       /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/legacy-scholarly-v3-temp* \
+      /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/legacy-scholarly-v4-* \
       /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/parallage-* \
+      /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/metric_length/gpt-5-5-v3-repeat* \
+      /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/metric_length/gpt-5-5-v3-temp* \
       /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/metric_length/legacy-scholarly-v3-repeat* \
       /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/metric_length/legacy-scholarly-v3-temp* \
+      /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/metric_length/legacy-scholarly-v4-* \
       /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompt_images/metric_length/parallage-*'" \
     2>&1 | tee -a "$LOGFILE"
 # Remove retired duplicate root progress page if it exists.
