@@ -1596,6 +1596,67 @@ ALTER SEQUENCE public.lemma_source_text_versions_id_seq OWNED BY public.lemma_so
 
 
 --
+-- Name: llm_model_releases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.llm_model_releases (
+    id integer NOT NULL,
+    provider text NOT NULL,
+    model_slug text NOT NULL,
+    display_name text NOT NULL,
+    model_family text DEFAULT ''::text NOT NULL,
+    release_date date,
+    api_release_date date,
+    source_url text DEFAULT ''::text NOT NULL,
+    source_label text DEFAULT ''::text NOT NULL,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE llm_model_releases; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.llm_model_releases IS 'Model release and API availability dates used for translation-quality timeline reporting.';
+
+
+--
+-- Name: COLUMN llm_model_releases.release_date; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.llm_model_releases.release_date IS 'Public/model snapshot release date when distinguishable from API availability.';
+
+
+--
+-- Name: COLUMN llm_model_releases.api_release_date; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.llm_model_releases.api_release_date IS 'Date the model was listed as available through the API surface used by Stephanos.';
+
+
+--
+-- Name: llm_model_releases_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.llm_model_releases_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: llm_model_releases_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.llm_model_releases_id_seq OWNED BY public.llm_model_releases.id;
+
+
+--
 -- Name: meineke_headwords; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4527,6 +4588,13 @@ ALTER TABLE ONLY public.lemma_source_text_versions ALTER COLUMN id SET DEFAULT n
 
 
 --
+-- Name: llm_model_releases id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.llm_model_releases ALTER COLUMN id SET DEFAULT nextval('public.llm_model_releases_id_seq'::regclass);
+
+
+--
 -- Name: meineke_headwords id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -5260,6 +5328,14 @@ ALTER TABLE ONLY public.lemma_source_lines
 
 ALTER TABLE ONLY public.lemma_source_text_versions
     ADD CONSTRAINT lemma_source_text_versions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: llm_model_releases llm_model_releases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.llm_model_releases
+    ADD CONSTRAINT llm_model_releases_pkey PRIMARY KEY (id);
 
 
 --
@@ -6629,6 +6705,13 @@ CREATE INDEX lemma_source_text_versions_doc_current_idx ON public.lemma_source_t
 --
 
 CREATE INDEX lemma_source_text_versions_lemma_idx ON public.lemma_source_text_versions USING btree (lemma_id);
+
+
+--
+-- Name: llm_model_releases_provider_slug_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX llm_model_releases_provider_slug_idx ON public.llm_model_releases USING btree (provider, model_slug);
 
 
 --

@@ -31,27 +31,29 @@ BILLERBECK_GERMAN_OCR_NIGHTLY_LIMIT = 3
 BILLERBECK_GERMAN_TRANSLATE_NIGHTLY_LIMIT = 5
 PAPER_MODEL_TARGET_ROWS = 100
 PAPER_MODEL_PROFILES = (
-    "legacy_scholarly",
+    "gpt-5.4",
+    "gpt-5.5",
+    "gpt-5.6-sol",
     "claude_sonnet_5",
     "claude_opus_4_8",
     "claude_fable_5",
-    "legacy_scholarly_v3_repeat",
-    "legacy_scholarly_v4_reasoning",
-    "legacy_scholarly_v4_reasoning_medium",
-    "legacy_scholarly_v4_reasoning_high",
-    "legacy_scholarly_v4_mini",
-    "legacy_scholarly_v4_mini_medium",
-    "legacy_scholarly_v4_mini_high",
+    "gpt-5.5_v3_repeat",
+    "gpt-5.5_v4_reasoning",
+    "gpt-5.5_v4_reasoning_medium",
+    "gpt-5.5_v4_reasoning_high",
+    "gpt-5.5_v4_mini",
+    "gpt-5.5_v4_mini_medium",
+    "gpt-5.5_v4_mini_high",
 )
 RESPONSE_EXPERIMENT_PROFILES = {
-    "legacy_scholarly_v4_reasoning",
-    "legacy_scholarly_v4_reasoning_medium",
-    "legacy_scholarly_v4_reasoning_high",
-    "legacy_scholarly_v4_mini",
-    "legacy_scholarly_v4_mini_medium",
-    "legacy_scholarly_v4_mini_high",
+    "gpt-5.5_v4_reasoning",
+    "gpt-5.5_v4_reasoning_medium",
+    "gpt-5.5_v4_reasoning_high",
+    "gpt-5.5_v4_mini",
+    "gpt-5.5_v4_mini_medium",
+    "gpt-5.5_v4_mini_high",
 }
-REPEATABILITY_PROFILE_NAME = "legacy_scholarly_v3_repeat"
+REPEATABILITY_PROFILE_NAME = "gpt-5.5_v3_repeat"
 
 
 def pg_table_exists(cur, table_name: str) -> bool:
