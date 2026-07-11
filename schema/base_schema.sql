@@ -6169,6 +6169,13 @@ CREATE INDEX canonical_entity_authority_links_source_idx ON public.canonical_ent
 
 
 --
+-- Name: canonical_entity_authority_links_current_source_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX canonical_entity_authority_links_current_source_idx ON public.canonical_entity_authority_links USING btree (source_table, source_snapshot_id) WHERE is_current;
+
+
+--
 -- Name: canonical_entity_mentions_action_idx; Type: INDEX; Schema: public; Owner: -
 --
 

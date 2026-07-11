@@ -59,18 +59,40 @@ RE_CANDIDATE_STATUSES = {
 def fetch_namespace_rows(cur) -> list[dict]:
     cur.execute(
         """
+        WITH authority_counts AS (
+            SELECT namespace, COUNT(*) AS authority_records
+            FROM authority_records
+            GROUP BY namespace
+        ),
+        link_counts AS (
+            SELECT
+                ar.namespace,
+                COUNT(DISTINCT l.canonical_entity_id) AS linked_entities
+            FROM canonical_entity_authority_links l
+            JOIN authority_records ar
+              ON ar.id = l.authority_record_id
+            WHERE l.is_current
+            GROUP BY ar.namespace
+        ),
+        mention_counts AS (
+            SELECT
+                ar.namespace,
+                COUNT(DISTINCT m.id) AS current_mentions
+            FROM canonical_entity_mentions m
+            JOIN authority_records ar
+              ON ar.id = m.authority_record_id
+            WHERE m.is_current
+            GROUP BY ar.namespace
+        )
         SELECT
-            ar.namespace,
-            COUNT(DISTINCT ar.id) AS authority_records,
-            COUNT(DISTINCT l.canonical_entity_id) FILTER (WHERE l.is_current) AS linked_entities,
-            COUNT(DISTINCT m.id) FILTER (WHERE m.is_current) AS current_mentions
-        FROM authority_records ar
-        LEFT JOIN canonical_entity_authority_links l
-          ON l.authority_record_id = ar.id
-        LEFT JOIN canonical_entity_mentions m
-          ON m.authority_record_id = ar.id
-        GROUP BY ar.namespace
-        ORDER BY COUNT(DISTINCT ar.id) DESC, ar.namespace
+            a.namespace,
+            a.authority_records,
+            COALESCE(l.linked_entities, 0) AS linked_entities,
+            COALESCE(m.current_mentions, 0) AS current_mentions
+        FROM authority_counts a
+        LEFT JOIN link_counts l USING (namespace)
+        LEFT JOIN mention_counts m USING (namespace)
+        ORDER BY a.authority_records DESC, a.namespace
         """
     )
     return [dict(row) for row in cur.fetchall()]

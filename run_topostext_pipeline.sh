@@ -38,21 +38,34 @@ else
 fi
 
 echo "Step 1: Fetching Brady's Dropbox ToposText HTML snapshot..." | tee -a "$LOGFILE"
-uv run fetch_topostext_html.py --output-dir data/topostext_snapshots \
-    2>&1 | tee -a "$LOGFILE"
+fetch_output="$(uv run fetch_topostext_html.py --output-dir data/topostext_snapshots 2>&1)"
+printf '%s\n' "$fetch_output" | tee -a "$LOGFILE"
+fetch_status="$(printf '%s\n' "$fetch_output" | awk -F= '$1 == "status" { print $2; exit }')"
+if [ -z "$fetch_status" ]; then
+    echo "Could not determine ToposText fetch status; aborting" | tee -a "$LOGFILE" >&2
+    exit 1
+fi
 
 echo "Step 2: Importing ToposText intake staging rows..." | tee -a "$LOGFILE"
-topostext_import_args=(uv run import_topostext_intake.py)
-if [ -f "$TOPOSTEXT_PAULY_WORKBOOK" ]; then
-    topostext_import_args+=(--pauly-workbook "$TOPOSTEXT_PAULY_WORKBOOK")
+if [ "$fetch_status" = "unchanged" ]; then
+    echo "  Source content is unchanged; retaining the existing materialized intake rows" | tee -a "$LOGFILE"
 else
-    echo "  Warning: PaulyHeadwords workbook not found at $TOPOSTEXT_PAULY_WORKBOOK; importing without RE enrichment" | tee -a "$LOGFILE"
+    topostext_import_args=(uv run import_topostext_intake.py)
+    if [ -f "$TOPOSTEXT_PAULY_WORKBOOK" ]; then
+        topostext_import_args+=(--pauly-workbook "$TOPOSTEXT_PAULY_WORKBOOK")
+    else
+        echo "  Warning: PaulyHeadwords workbook not found at $TOPOSTEXT_PAULY_WORKBOOK; importing without RE enrichment" | tee -a "$LOGFILE"
+    fi
+    "${topostext_import_args[@]}" 2>&1 | tee -a "$LOGFILE"
 fi
-"${topostext_import_args[@]}" 2>&1 | tee -a "$LOGFILE"
 
 echo "Step 3: Refreshing canonical authority layer..." | tee -a "$LOGFILE"
-uv run refresh_canonical_authority_layer.py \
-    2>&1 | tee -a "$LOGFILE"
+if [ "$fetch_status" = "unchanged" ]; then
+    echo "  Source content is unchanged; retaining the existing canonical projection" | tee -a "$LOGFILE"
+else
+    uv run refresh_canonical_authority_layer.py --prune-history \
+        2>&1 | tee -a "$LOGFILE"
+fi
 
 echo "Step 4: Generating ToposText intake report..." | tee -a "$LOGFILE"
 topostext_report_args=(

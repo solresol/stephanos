@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Refresh the additive canonical authority layer from current entity sources.
+Refresh the current canonical authority projection from entity sources.
 
 This does not replace the source-specific review tables. It copies their current
 effective IDs into a shared authority/entity surface so we can answer questions
@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import time
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ REAL_AUTHORITY_NAMESPACES = {
     "topostext_pending",
     "topostext_new",
 }
+MAX_INLINE_PRUNE_ROWS = 100_000
 
 
 @dataclass(frozen=True)
@@ -373,6 +375,93 @@ def authority_entity_key(namespace: str, authority_id: str) -> str:
     return f"{namespace}:{authority_id}"
 
 
+def deactivate_current_source_rows(
+    cur,
+    *,
+    link_source_table: str,
+    mention_source_table: str | None = None,
+) -> Counter[str]:
+    """Deactivate only rows that can transition from current to historical."""
+    stats: Counter[str] = Counter()
+    cur.execute(
+        """
+        UPDATE canonical_entity_authority_links
+        SET is_current = false, updated_at = now()
+        WHERE source_table = %s
+          AND is_current
+        """,
+        (link_source_table,),
+    )
+    stats["deactivated_authority_links"] += max(cur.rowcount, 0)
+    if mention_source_table:
+        cur.execute(
+            """
+            UPDATE canonical_entity_mentions
+            SET is_current = false, updated_at = now()
+            WHERE source_table = %s
+              AND is_current
+            """,
+            (mention_source_table,),
+        )
+        stats["deactivated_canonical_mentions"] += max(cur.rowcount, 0)
+    return stats
+
+
+def prune_inactive_source_rows(
+    cur,
+    *,
+    link_source_table: str,
+    mention_source_table: str | None = None,
+) -> Counter[str]:
+    """Remove inactive projection rows after their current replacements exist."""
+    stats: Counter[str] = Counter()
+    counts = []
+    for table_name, source_table in (
+        ("canonical_entity_authority_links", link_source_table),
+        ("canonical_entity_mentions", mention_source_table),
+    ):
+        if not source_table:
+            continue
+        cur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM {table_name}
+            WHERE source_table = %s
+              AND NOT is_current
+            """,
+            (source_table,),
+        )
+        counts.append((table_name, int(cur.fetchone()["count"])))
+    oversized = [(table_name, count) for table_name, count in counts if count > MAX_INLINE_PRUNE_ROWS]
+    if oversized:
+        details = ", ".join(f"{table_name}={count}" for table_name, count in oversized)
+        raise RuntimeError(
+            f"Inline canonical-history prune is too large ({details}); "
+            "run prune_canonical_authority_history.py first"
+        )
+
+    cur.execute(
+        """
+        DELETE FROM canonical_entity_authority_links
+        WHERE source_table = %s
+          AND NOT is_current
+        """,
+        (link_source_table,),
+    )
+    stats["pruned_authority_links"] += max(cur.rowcount, 0)
+    if mention_source_table:
+        cur.execute(
+            """
+            DELETE FROM canonical_entity_mentions
+            WHERE source_table = %s
+              AND NOT is_current
+            """,
+            (mention_source_table,),
+        )
+        stats["pruned_canonical_mentions"] += max(cur.rowcount, 0)
+    return stats
+
+
 def refresh_topostext_mentions(cur, source_name: str, snapshot_id: int | None) -> Counter[str]:
     if snapshot_id is None:
         snapshot_id = latest_topostext_snapshot_id(cur, source_name)
@@ -380,14 +469,12 @@ def refresh_topostext_mentions(cur, source_name: str, snapshot_id: int | None) -
     if snapshot_id is None:
         return stats
 
-    cur.execute(
-        """
-        UPDATE canonical_entity_mentions
-        SET is_current = false, updated_at = now()
-        WHERE source_table = 'topostext_intake_mentions'
-          AND COALESCE(source_snapshot_id, 0) <> %s
-        """,
-        (snapshot_id,),
+    stats.update(
+        deactivate_current_source_rows(
+            cur,
+            link_source_table="topostext_intake_mentions",
+            mention_source_table="topostext_intake_mentions",
+        )
     )
     cur.execute(
         """
@@ -405,6 +492,7 @@ def refresh_topostext_mentions(cur, source_name: str, snapshot_id: int | None) -
             m.action_status,
             m.mention_text,
             m.context,
+            m.mention_fingerprint,
             m.re_short_definition,
             m.place_type_kind,
             e.title AS entry_title
@@ -455,10 +543,13 @@ def refresh_topostext_mentions(cur, source_name: str, snapshot_id: int | None) -
                 link_status=canonical_status(row.get("action_status") or "", True),
                 confidence="",
                 source_table="topostext_intake_mentions",
-                source_id=str(row["id"]),
+                source_id=str(row["mention_fingerprint"]),
                 source_snapshot_id=snapshot_id,
                 evidence_text=row.get("context") or "",
-                metadata={"tag_name": row.get("tag_name") or ""},
+                metadata={
+                    "tag_name": row.get("tag_name") or "",
+                    "source_mention_id": row["id"],
+                },
             )
             stats["authority_links"] += 1
         upsert_mention(
@@ -466,7 +557,7 @@ def refresh_topostext_mentions(cur, source_name: str, snapshot_id: int | None) -
             canonical_entity_id=canonical_entity_id,
             authority_record_id=authority_record_id,
             source_table="topostext_intake_mentions",
-            source_id=str(row["id"]),
+            source_id=str(row["mention_fingerprint"]),
             source_snapshot_id=snapshot_id,
             work=row.get("work") or "",
             paragraph_id=row.get("paragraph_id") or "",
@@ -476,7 +567,10 @@ def refresh_topostext_mentions(cur, source_name: str, snapshot_id: int | None) -
             mention_text=row.get("mention_text") or "",
             context=row.get("context") or "",
             action_status=row.get("action_status") or "",
-            metadata={"entry_title": row.get("entry_title") or ""},
+            metadata={
+                "entry_title": row.get("entry_title") or "",
+                "source_mention_id": row["id"],
+            },
         )
         stats["canonical_mentions"] += 1
     return stats
@@ -667,7 +761,14 @@ def write_summary_event(cur, stats: Counter[str], *, snapshot_id: int | None) ->
     )
 
 
-def refresh_authority_layer(*, source_name: str, snapshot_id: int | None, dry_run: bool = False) -> Counter[str]:
+def refresh_authority_layer(
+    *,
+    source_name: str,
+    snapshot_id: int | None,
+    dry_run: bool = False,
+    skip_topostext: bool = False,
+    prune_history: bool = False,
+) -> Counter[str]:
     from db import get_connection
 
     conn = get_connection(dict_cursor=True)
@@ -684,9 +785,29 @@ def refresh_authority_layer(*, source_name: str, snapshot_id: int | None, dry_ru
                 raise RuntimeError(f"Required table public.{table_name} does not exist; apply migrations first")
         resolved_snapshot_id = snapshot_id if snapshot_id is not None else latest_topostext_snapshot_id(cur, source_name)
         stats = Counter()
-        stats.update(refresh_topostext_mentions(cur, source_name, resolved_snapshot_id))
+        if skip_topostext:
+            stats["topostext_skipped"] = 1
+        else:
+            started_at = time.monotonic()
+            stats.update(refresh_topostext_mentions(cur, source_name, resolved_snapshot_id))
+            stats["topostext_refresh_milliseconds"] = round((time.monotonic() - started_at) * 1000)
+            if prune_history:
+                started_at = time.monotonic()
+                stats.update(
+                    prune_inactive_source_rows(
+                        cur,
+                        link_source_table="topostext_intake_mentions",
+                        mention_source_table="topostext_intake_mentions",
+                    )
+                )
+                stats["topostext_prune_milliseconds"] = round((time.monotonic() - started_at) * 1000)
+
+        started_at = time.monotonic()
         stats.update(refresh_place_clusters(cur))
+        stats["place_cluster_refresh_milliseconds"] = round((time.monotonic() - started_at) * 1000)
+        started_at = time.monotonic()
         stats.update(refresh_proper_nouns(cur))
+        stats["proper_noun_refresh_milliseconds"] = round((time.monotonic() - started_at) * 1000)
         write_summary_event(cur, stats, snapshot_id=resolved_snapshot_id)
         if dry_run:
             conn.rollback()
@@ -704,6 +825,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Refresh canonical authority tables from current source-specific entity rows.")
     parser.add_argument("--source-name", default=DEFAULT_SOURCE_NAME)
     parser.add_argument("--snapshot-id", type=int, help="ToposText snapshot id to treat as current")
+    parser.add_argument("--skip-topostext", action="store_true", help="Refresh place/proper-noun sources only")
+    parser.add_argument(
+        "--prune-history",
+        action="store_true",
+        help="Delete inactive ToposText canonical mentions and authority links after refresh",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
 
@@ -714,6 +841,8 @@ def main(argv: list[str] | None = None) -> int:
         source_name=args.source_name,
         snapshot_id=args.snapshot_id,
         dry_run=args.dry_run,
+        skip_topostext=args.skip_topostext,
+        prune_history=args.prune_history,
     )
     for key, value in sorted(stats.items()):
         print(f"{key}={value}")
