@@ -812,7 +812,13 @@ def extract_translation_from_response_body(body: dict, *, api_mode: str = API_MO
     return extract_translation_from_chat_completion_body(body)
 
 
-def fetch_requests(cur, request_limit: int | None, api_mode_filter: str = "all"):
+def fetch_requests(
+    cur,
+    request_limit: int | None,
+    api_mode_filter: str = "all",
+    model_filter: str | None = None,
+    profile_prefix: str | None = None,
+):
     has_human_translation_expr = human_translation_exists_sql(cur)
     has_approved_human_translation_expr = approved_human_translation_exists_sql(cur)
     kappa_headword_expr = "left(trim(COALESCE(a.lemma, '')), 1) IN ('Κ', 'κ')"
@@ -883,6 +889,12 @@ def fetch_requests(cur, request_limit: int | None, api_mode_filter: str = "all")
     if api_mode_filter != "all":
         query += f" AND {api_mode_expr} = %s"
         params.append(normalize_api_mode(api_mode_filter))
+    if model_filter:
+        query += f" AND {model_expr} = %s"
+        params.extend([DEFAULT_TRANSLATION_MODEL, model_filter])
+    if profile_prefix:
+        query += " AND p.name LIKE %s"
+        params.append(f"{profile_prefix}%")
     query += f" ORDER BY {order_by}"
     if request_limit is not None:
         query += f" LIMIT {int(request_limit)}"
@@ -1737,6 +1749,11 @@ def main():
         choices=("all", API_MODE_CHAT_COMPLETIONS, API_MODE_RESPONSES),
         help="Restrict this worker invocation to one OpenAI API surface.",
     )
+    parser.add_argument("--model", help="Restrict this worker invocation to one resolved model name.")
+    parser.add_argument(
+        "--profile-prefix",
+        help="Restrict this worker invocation to queued requests whose prompt profile starts with this prefix.",
+    )
     parser.add_argument("--batch", action="store_true", help="Submit translation requests through the OpenAI Batch API")
     parser.add_argument("--batch-wait", action="store_true", help="Poll the submitted batch and collect results before exiting")
     parser.add_argument("--batch-poll-interval", type=float, default=30.0)
@@ -1810,7 +1827,13 @@ def main():
         guidance_provenance_enabled = ensure_translation_run_guidance_matches(cur)
         conn.commit()
 
-    requests = fetch_requests(cur, args.request_limit, api_mode_filter=args.api_mode)
+    requests = fetch_requests(
+        cur,
+        args.request_limit,
+        api_mode_filter=args.api_mode,
+        model_filter=args.model,
+        profile_prefix=args.profile_prefix,
+    )
     print(f"Queued requests: {len(requests)}")
     if not requests:
         conn.close()
