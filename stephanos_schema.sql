@@ -6155,6 +6155,20 @@ CREATE INDEX canonical_entity_authority_links_authority_idx ON public.canonical_
 
 
 --
+-- Name: canonical_entity_authority_links_current_source_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX canonical_entity_authority_links_current_source_idx ON public.canonical_entity_authority_links USING btree (source_table, source_snapshot_id) WHERE is_current;
+
+
+--
+-- Name: INDEX canonical_entity_authority_links_current_source_idx; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.canonical_entity_authority_links_current_source_idx IS 'Supports deactivating current source-projection links without scanning retained history.';
+
+
+--
 -- Name: canonical_entity_authority_links_entity_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6166,13 +6180,6 @@ CREATE INDEX canonical_entity_authority_links_entity_idx ON public.canonical_ent
 --
 
 CREATE INDEX canonical_entity_authority_links_source_idx ON public.canonical_entity_authority_links USING btree (source_table, source_id) WHERE ((source_table <> ''::text) AND (source_id <> ''::text));
-
-
---
--- Name: canonical_entity_authority_links_current_source_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX canonical_entity_authority_links_current_source_idx ON public.canonical_entity_authority_links USING btree (source_table, source_snapshot_id) WHERE is_current;
 
 
 --
@@ -7174,6 +7181,13 @@ CREATE INDEX topostext_intake_mentions_authority_idx ON public.topostext_intake_
 --
 
 CREATE INDEX topostext_intake_mentions_entry_id_idx ON public.topostext_intake_mentions USING btree (entry_id);
+
+
+--
+-- Name: INDEX topostext_intake_mentions_entry_id_idx; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.topostext_intake_mentions_entry_id_idx IS 'Supports the topostext_intake_mentions.entry_id foreign key and snapshot cleanup cascades.';
 
 
 --
