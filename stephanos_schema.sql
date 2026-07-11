@@ -7170,6 +7170,13 @@ CREATE INDEX topostext_intake_mentions_authority_idx ON public.topostext_intake_
 
 
 --
+-- Name: topostext_intake_mentions_entry_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX topostext_intake_mentions_entry_id_idx ON public.topostext_intake_mentions USING btree (entry_id);
+
+
+--
 -- Name: topostext_intake_mentions_fingerprint_idx; Type: INDEX; Schema: public; Owner: -
 --
 
