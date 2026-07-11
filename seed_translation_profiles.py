@@ -38,7 +38,7 @@ def main():
     cur.execute(
         """
         INSERT INTO translation_prompt_profiles (name, style_kind, description, active)
-        VALUES ('legacy_scholarly', 'literal', 'Seeded from legacy translation_prompts table', TRUE)
+        VALUES ('gpt-5.5', 'literal', 'Seeded from legacy translation_prompts table', TRUE)
         ON CONFLICT (name) DO UPDATE
         SET active = TRUE,
             updated_at = NOW()

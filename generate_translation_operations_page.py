@@ -470,7 +470,7 @@ def fetch_token_sample_stats(cur) -> dict[str, object]:
         JOIN translation_prompt_profile_versions pv ON pv.id = tr.profile_version_id
         WHERE tr.status = ANY(%s)
           AND COALESCE(tr.translation_text, '') <> ''
-          AND p.name = 'legacy_scholarly'
+          AND p.name = 'gpt-5.5'
           AND pv.version = 3
         """,
         (status_list,),
@@ -509,7 +509,7 @@ def choose_token_stat(
 
     legacy_v3_stat = sample_stats.get("legacy_v3")
     if legacy_v3_stat and legacy_v3_stat.get("avg_total"):
-        return legacy_v3_stat, "legacy_scholarly v3 average"
+        return legacy_v3_stat, "gpt-5.5 v3 average"
 
     global_stat = sample_stats.get("global")
     if global_stat and global_stat.get("avg_total"):
@@ -613,7 +613,7 @@ def fetch_approved_human_projection(cur, sample_stats: dict[str, object]) -> lis
             FROM translation_prompt_profiles p
             JOIN translation_prompt_profile_versions pv ON pv.profile_id = p.id
             WHERE ({approved_col} AND {priority_col} <= 4)
-               OR (p.name = 'legacy_scholarly' AND pv.version IN (1, 2, 3))
+               OR (p.name = 'gpt-5.5' AND pv.version IN (1, 2, 3))
         ),
         approved_sources AS (
             SELECT
@@ -717,7 +717,7 @@ def fetch_v3_whole_projection(cur, sample_stats: dict[str, object]) -> dict[str,
         SELECT p.id, pv.id, COALESCE(NULLIF(pv.default_model, ''), 'gpt-5.5')
         FROM translation_prompt_profiles p
         JOIN translation_prompt_profile_versions pv ON pv.profile_id = p.id
-        WHERE p.name = 'legacy_scholarly'
+        WHERE p.name = 'gpt-5.5'
           AND pv.version = 3
         LIMIT 1
         """
@@ -1000,7 +1000,7 @@ def render_approved_human_projection(rows: list[dict[str, object]]) -> str:
         <div class="metric"><span class="metric-label">Expected output tokens</span><span class="metric-value">{token_cell(expected_output)}</span></div>
         <div class="metric"><span class="metric-label">Expected cost</span><span class="metric-value">{money(expected_cost)}</span></div>
       </div>
-      <p class="note">This estimates the work to complete approved-human evaluation targets for the baseline legacy_scholarly v1/v2/v3 set plus approved-human-only prompt versions with queue priority 4 or better. Estimates use same-prompt averages when available, then same model/API/reasoning, same model, legacy_scholarly v3, or all translation runs as a fallback.{escape(note)}</p>
+      <p class="note">This estimates the work to complete approved-human evaluation targets for the baseline gpt-5.5 v1/v2/v3 set plus approved-human-only prompt versions with queue priority 4 or better. Estimates use same-prompt averages when available, then same model/API/reasoning, same model, gpt-5.5 v3, or all translation runs as a fallback.{escape(note)}</p>
       <table>
         <thead>
           <tr>
@@ -1020,7 +1020,7 @@ def render_v3_whole_projection(projection: dict[str, object] | None) -> str:
         return """
         <section>
           <h2>Whole-Stephanos v3 Estimate</h2>
-          <p class="note">legacy_scholarly v3 was not found, so no projection could be generated.</p>
+          <p class="note">gpt-5.5 v3 was not found, so no projection could be generated.</p>
         </section>
         """
     return f"""

@@ -283,7 +283,7 @@ def insert_backfill_run(
 
 def main():
     parser = argparse.ArgumentParser(description="Backfill authoritative translation runs from legacy AI text.")
-    parser.add_argument("--profile", default="legacy_scholarly", help="Prompt profile name to attach")
+    parser.add_argument("--profile", default="gpt-5.5", help="Prompt profile name to attach")
     parser.add_argument(
         "--source-document",
         default="meineke",

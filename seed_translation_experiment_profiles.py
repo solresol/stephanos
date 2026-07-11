@@ -2,7 +2,7 @@
 """
 Seed approved-human-only translation experiment profiles.
 
-These profiles reuse the legacy_scholarly v3 prompt text but keep experiment
+These profiles reuse the gpt-5.5 v3 prompt text but keep experiment
 runtime lanes separate from the publication profile.
 """
 
@@ -15,13 +15,13 @@ from pathlib import Path
 from db import get_connection
 
 
-LEGACY_PROFILE = "legacy_scholarly"
+LEGACY_PROFILE = "gpt-5.5"
 LEGACY_VERSION = 3
 PROMPT_FILE = Path(__file__).with_name("TRANSLATION_PROMPT_LEGACY_SCHOLARLY_V3_REVISED.md")
 RETIRED_TEMPERATURE_PROFILES = (
-    "legacy_scholarly_v3_temp0",
-    "legacy_scholarly_v3_temp04",
-    "legacy_scholarly_v3_temp07",
+    "gpt-5.5_v3_temp0",
+    "gpt-5.5_v3_temp04",
+    "gpt-5.5_v3_temp07",
 )
 
 
@@ -42,8 +42,8 @@ class ExperimentProfile:
 
 EXPERIMENTS = (
     ExperimentProfile(
-        name="legacy_scholarly_v3_repeat",
-        description="legacy_scholarly v3 prompt repeated at default settings for approved-human evaluation",
+        name="gpt-5.5_v3_repeat",
+        description="gpt-5.5 v3 prompt repeated at default settings for approved-human evaluation",
         notes=(
             "Approved-human-only v3 repeatability experiment: same prompt, model, "
             "and default decoding settings; multiple runs estimate metric spread."
@@ -54,8 +54,8 @@ EXPERIMENTS = (
         requested_runs=5,
     ),
     ExperimentProfile(
-        name="legacy_scholarly_v4_reasoning",
-        description="legacy_scholarly v3 prompt through Responses reasoning for approved-human evaluation",
+        name="gpt-5.5_v4_reasoning",
+        description="gpt-5.5 v3 prompt through Responses reasoning for approved-human evaluation",
         notes="Approved-human-only v4 reasoning trial using Responses API reasoning.effort=low.",
         model="gpt-5.5",
         top_p=None,
@@ -63,8 +63,8 @@ EXPERIMENTS = (
         reasoning_effort="low",
     ),
     ExperimentProfile(
-        name="legacy_scholarly_v4_reasoning_medium",
-        description="legacy_scholarly v3 prompt through medium Responses reasoning for approved-human evaluation",
+        name="gpt-5.5_v4_reasoning_medium",
+        description="gpt-5.5 v3 prompt through medium Responses reasoning for approved-human evaluation",
         notes="Approved-human-only v4 reasoning trial using Responses API reasoning.effort=medium.",
         model="gpt-5.5",
         top_p=None,
@@ -72,8 +72,8 @@ EXPERIMENTS = (
         reasoning_effort="medium",
     ),
     ExperimentProfile(
-        name="legacy_scholarly_v4_reasoning_high",
-        description="legacy_scholarly v3 prompt through high Responses reasoning for approved-human evaluation",
+        name="gpt-5.5_v4_reasoning_high",
+        description="gpt-5.5 v3 prompt through high Responses reasoning for approved-human evaluation",
         notes="Approved-human-only v4 reasoning trial using Responses API reasoning.effort=high.",
         model="gpt-5.5",
         top_p=None,
@@ -81,8 +81,8 @@ EXPERIMENTS = (
         reasoning_effort="high",
     ),
     ExperimentProfile(
-        name="legacy_scholarly_v4_mini",
-        description="legacy_scholarly v3 prompt through gpt-5.4-mini reasoning for approved-human evaluation",
+        name="gpt-5.5_v4_mini",
+        description="gpt-5.5 v3 prompt through gpt-5.4-mini reasoning for approved-human evaluation",
         notes="Approved-human-only v4 mini reasoning trial using gpt-5.4-mini and Responses API reasoning.effort=low.",
         model="gpt-5.4-mini",
         top_p=None,
@@ -90,8 +90,8 @@ EXPERIMENTS = (
         reasoning_effort="low",
     ),
     ExperimentProfile(
-        name="legacy_scholarly_v4_mini_medium",
-        description="legacy_scholarly v3 prompt through gpt-5.4-mini medium reasoning for approved-human evaluation",
+        name="gpt-5.5_v4_mini_medium",
+        description="gpt-5.5 v3 prompt through gpt-5.4-mini medium reasoning for approved-human evaluation",
         notes="Approved-human-only v4 mini reasoning trial using gpt-5.4-mini and Responses API reasoning.effort=medium.",
         model="gpt-5.4-mini",
         top_p=None,
@@ -99,8 +99,8 @@ EXPERIMENTS = (
         reasoning_effort="medium",
     ),
     ExperimentProfile(
-        name="legacy_scholarly_v4_mini_high",
-        description="legacy_scholarly v3 prompt through gpt-5.4-mini high reasoning for approved-human evaluation",
+        name="gpt-5.5_v4_mini_high",
+        description="gpt-5.5 v3 prompt through gpt-5.4-mini high reasoning for approved-human evaluation",
         notes="Approved-human-only v4 mini reasoning trial using gpt-5.4-mini and Responses API reasoning.effort=high.",
         model="gpt-5.4-mini",
         top_p=None,

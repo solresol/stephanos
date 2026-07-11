@@ -25,7 +25,7 @@ flowchart TD
   EPUB --> OCR[OCR: Gemini 3 Flash / gpt-5.x-mini]
   MEIN --> OCR
   OCR --> ASM[assemble_lemmas.py -> assembled_lemmas]
-  ASM --> TR[Translation: gpt-5.x legacy_scholarly + Claude-variant tooling]
+  ASM --> TR[Translation: gpt-5.x gpt-5.5 + Claude-variant tooling]
   TR --> ENR[Enrichment: proper nouns, etymologies, places, Wikidata linking]
   ASM --> ENR
   ENR --> SITE[Site generation: reference / statistics / analysis pages + PDF book]

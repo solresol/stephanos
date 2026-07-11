@@ -2810,7 +2810,7 @@ def export_lemmas():
             "status": "blocked" if risk_by_lemma.get(lemma_id, {}).get("translation_blocked", False) else "approved",
             "source_document": "billerbeck",
             "source_text_version_id": "",
-            "profile_name": "legacy_scholarly" if int(legacy_translation_prompt_version or 0) > 0 else "",
+            "profile_name": "gpt-5.5" if int(legacy_translation_prompt_version or 0) > 0 else "",
             "profile_version": int(legacy_translation_prompt_version) if int(legacy_translation_prompt_version or 0) > 0 else None,
             "model": LEGACY_TRANSLATION_MODEL,
             "created_at": str(legacy_translated_at) if legacy_translated_at else "",

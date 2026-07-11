@@ -30,7 +30,7 @@ lemma, with a hard "MUST choose from the allowed list" instruction and no
 
 ## Stage C — Translation
 Two lanes: the queue-driven `translation_runs` pipeline (used by both the
-gpt-5.x `legacy_scholarly` path and the external Claude variants), and a separate
+gpt-5.x `gpt-5.5` path and the external Claude variants), and a separate
 German lane.
 
 - **Prompt profiles**: `translation_prompt_profiles` / `_profile_versions` (+ legacy

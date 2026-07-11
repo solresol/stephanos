@@ -53,7 +53,7 @@ PREDICTION_CSV = OUTPUT_DIR / "translation_quality_predictor_predictions.csv"
 WORST_SENTENCE_CSV = OUTPUT_DIR / "translation_quality_predictor_worst_sentences.csv"
 
 DETECTOR_VERSION = "translation_guidance_scan_v4"
-DEFAULT_PROFILE_NAME = "legacy_scholarly"
+DEFAULT_PROFILE_NAME = "gpt-5.5"
 DEFAULT_PROFILE_VERSION = 3
 RANDOM_STATE = 20260620
 
