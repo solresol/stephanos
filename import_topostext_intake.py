@@ -562,6 +562,11 @@ def parse_snapshot(
     return snapshot_path, parsed
 
 
+def should_materialize_snapshot(metadata: SnapshotMetadata) -> bool:
+    """Materialize each unique fetched document once, not each observation."""
+    return metadata.status != "unchanged"
+
+
 def import_snapshot(
     metadata: SnapshotMetadata,
     parsed: ParsedToposText,
@@ -950,6 +955,12 @@ def main(argv: list[str] | None = None) -> int:
 
     imported_total = defaultdict(int)
     for metadata in snapshots:
+        if not should_materialize_snapshot(metadata):
+            print(f"snapshot_id={metadata.snapshot_id}")
+            print("skipped_unchanged=1")
+            if metadata.unchanged_from_snapshot_id is not None:
+                print(f"unchanged_from_snapshot_id={metadata.unchanged_from_snapshot_id}")
+            continue
         try:
             snapshot_path, parsed = parse_snapshot(
                 metadata,

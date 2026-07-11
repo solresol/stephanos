@@ -175,17 +175,27 @@ The intake report exposes paragraph counts, inline entity tag counts, `YY`/`JJ`/
 
 The history page is the read-only change browser. It shows the imported snapshot timeline, adjacent snapshot change sets, paired mention transitions such as `prn zzz -> place 337435RMes`, and entry-level history across snapshots. It is generated from the same staging tables rather than from git diffs of the raw HTML.
 
-The authority/status page summarizes the additive canonical authority layer and publishes the concrete worklists Brady can review: possible RE matches for unmatched tags, likely `<ethnic>` suggestions, fresh ToposText ID rows, and recent entity-tag changes detected from the latest Dropbox snapshot.
+The authority/status page summarizes the current canonical authority projection and publishes the concrete worklists Brady can review: possible RE matches for unmatched tags, likely `<ethnic>` suggestions, fresh ToposText ID rows, and recent entity-tag changes detected from the latest materialized Dropbox document.
 
 On `raksasa`, keep this separated from the main daily Stephanos pipeline. The main pipeline should run with `TOPOSTEXT_HTML_FETCH=0 TOPOSTEXT_INTAKE_IMPORT=0 TOPOSTEXT_INTAKE_REPORT=0`. Ignore daylight-saving drift for this workflow and schedule `run_topostext_pipeline.sh` at 10:00 Australia/Sydney, which is between 03:00 and 04:00 in Greece for Brady's current work pattern.
 
-Refresh the additive canonical authority/entity tables from the latest ToposText intake rows, effective place clusters, and effective proper nouns:
+Refresh the current canonical authority/entity projection from the latest ToposText intake rows, effective place clusters, and effective proper nouns:
 ```bash
 DB_HOST=raksasa DB_USER=stephanos \
 uv run refresh_canonical_authority_layer.py
 ```
 
-This populates `authority_records`, `canonical_entities`, `canonical_entity_authority_links`, `canonical_entity_mentions`, and `entity_change_events`. It gives us the current master surface for known Wikidata, ToposText, Pleiades, RE, MANTO, and local/pending IDs while leaving the source-specific review tables intact.
+This populates `authority_records`, `canonical_entities`, `canonical_entity_authority_links`, `canonical_entity_mentions`, and `entity_change_events`. ToposText mentions and links use the stable mention fingerprint as their source key; historical source rows remain in the intake tables rather than being copied into the canonical projection. An unchanged fetch is recorded in `entity_source_snapshots` but is not materialized again in the intake tables.
+
+After upgrading an existing database, seed the fingerprint-keyed projection without inline pruning, then remove the old inactive canonical copies in committed batches:
+
+```bash
+DB_HOST=raksasa DB_USER=stephanos uv run prune_canonical_authority_history.py --prepare-current-snapshot
+DB_HOST=raksasa DB_USER=stephanos uv run refresh_canonical_authority_layer.py
+DB_HOST=raksasa DB_USER=stephanos uv run prune_canonical_authority_history.py --vacuum-analyze
+```
+
+Once that one-time cleanup is complete, `run_topostext_pipeline.sh` uses `--prune-history` to remove only the small number of rows displaced by later source changes.
 
 For the daily `raksasa` pipeline, keep the PaulyHeadwords workbook outside git at `data/pauly/PaulyHeadwordstoWikidata from Margherita scrape.xlsx` or set `TOPOSTEXT_PAULY_WORKBOOK=/path/to/workbook.xlsx`.
 

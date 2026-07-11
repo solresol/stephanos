@@ -54,8 +54,10 @@ aborts the whole run), **G** = guarded (`|| echo`, failure swallowed).
 
 ### ToposText lane (`run_topostext_pipeline.sh`)
 `flock -n` single-instance. `git pull --ff-only` (skip if dirty) → fetch → import
-intake → refresh canonical authority → generate 4 topostext pages → rsync to
-merah → optional email. Sets `DB_HOST=raksasa`.
+intake → refresh the current canonical authority projection → generate 4
+topostext pages → rsync to merah → optional email. An unchanged fetch records
+observation metadata but skips intake materialization and canonical refresh.
+Sets `DB_HOST=raksasa`.
 
 ### Hourly nodegoat (`nodegoat_hourly_sync.sh`)
 `sync_nodegoat.py --push --catch-up --limit 50 --batch-size 50`. **No lock.**

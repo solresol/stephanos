@@ -3,6 +3,7 @@ import unittest
 
 from generate_topostext_intake_report import (
     ReEnrichment,
+    SnapshotMetadata,
     authority_url,
     classify_authority_id,
     parse_topostext_html,
@@ -30,11 +31,13 @@ from import_topostext_intake import (
     re_candidate_index,
     re_search_terms,
     placeholder_code,
+    should_materialize_snapshot,
     stable_mention_fingerprints,
 )
 from refresh_canonical_authority_layer import (
     authority_uri as canonical_authority_uri,
     canonical_status,
+    deactivate_current_source_rows,
     is_real_authority,
     normalize_authority,
 )
@@ -139,6 +142,59 @@ class ToposTextIntakeReportTests(unittest.TestCase):
         self.assertEqual(len(parsed.mentions), 2)
         self.assertNotEqual(fingerprints[1], fingerprints[2])
         self.assertEqual(fingerprints[1], stable_mention_fingerprints(parsed.mentions)[1])
+
+    def test_unchanged_snapshot_is_not_materialized_again(self):
+        metadata = SnapshotMetadata(
+            snapshot_id=12,
+            source_name="topostext_stephanus_html",
+            source_kind="html",
+            status="unchanged",
+            local_path="snapshot.html",
+            expected_name="E411StephanusByzGreek.html",
+            byte_count=100,
+            sha256="a" * 64,
+            fetched_at="2026-07-11T10:00:00+10:00",
+            unchanged_from_snapshot_id=11,
+        )
+
+        self.assertFalse(should_materialize_snapshot(metadata))
+
+    def test_fetched_snapshot_is_materialized(self):
+        metadata = SnapshotMetadata(
+            snapshot_id=12,
+            source_name="topostext_stephanus_html",
+            source_kind="html",
+            status="fetched",
+            local_path="snapshot.html",
+            expected_name="E411StephanusByzGreek.html",
+            byte_count=100,
+            sha256="a" * 64,
+            fetched_at="2026-07-11T10:00:00+10:00",
+        )
+
+        self.assertTrue(should_materialize_snapshot(metadata))
+
+    def test_deactivation_only_updates_current_projection_rows(self):
+        class FakeCursor:
+            def __init__(self):
+                self.calls = []
+                self.rowcount = 0
+
+            def execute(self, query, params):
+                self.calls.append((query, params))
+                self.rowcount = 3 if "authority_links" in query else 4
+
+        cursor = FakeCursor()
+        stats = deactivate_current_source_rows(
+            cursor,
+            link_source_table="topostext_intake_mentions",
+            mention_source_table="topostext_intake_mentions",
+        )
+
+        self.assertEqual(stats["deactivated_authority_links"], 3)
+        self.assertEqual(stats["deactivated_canonical_mentions"], 4)
+        self.assertEqual(len(cursor.calls), 2)
+        self.assertTrue(all("AND is_current" in query for query, _ in cursor.calls))
 
     def test_review_groups_collect_actionable_rows(self):
         rows = [
@@ -460,8 +516,11 @@ class ToposTextIntakeReportTests(unittest.TestCase):
 
     def test_authority_namespace_rows_do_not_require_topostext_snapshot_id(self):
         class FakeCursor:
-            def execute(self, *_args, **_kwargs):
-                return None
+            def __init__(self):
+                self.query = ""
+
+            def execute(self, query, *_args, **_kwargs):
+                self.query = query
 
             def fetchall(self):
                 return [
@@ -473,9 +532,13 @@ class ToposTextIntakeReportTests(unittest.TestCase):
                     }
                 ]
 
-        rows = fetch_namespace_rows(FakeCursor())
+        cursor = FakeCursor()
+        rows = fetch_namespace_rows(cursor)
 
         self.assertEqual(rows[0]["namespace"], "wikidata")
+        self.assertIn("WITH authority_counts AS", cursor.query)
+        self.assertIn("WHERE l.is_current", cursor.query)
+        self.assertIn("WHERE m.is_current", cursor.query)
 
     def test_authority_status_rows_do_not_require_topostext_snapshot_id(self):
         class FakeCursor:
