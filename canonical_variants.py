@@ -302,7 +302,7 @@ def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -
         "source_document": "billerbeck",
         "source_text_version_id": "",
         "model": "",
-        "profile_name": "legacy_scholarly" if translation_text else "",
+        "profile_name": "gpt-5.5" if translation_text else "",
         "profile_version": None,
     }
 
@@ -378,7 +378,7 @@ def resolve_fallback_variant(cur, *, lemma_id: int) -> dict[str, Any] | None:
               AND COALESCE(public_block_reason, '') = ''
               AND COALESCE(translation_text, '') != ''
             ORDER BY
-              CASE WHEN COALESCE(p.name, '') = 'legacy_scholarly' THEN 0 ELSE 1 END,
+              CASE WHEN COALESCE(p.name, '') = 'gpt-5.5' THEN 0 ELSE 1 END,
               COALESCE(pv.version, 0) DESC,
               COALESCE(tr.reviewed_at, tr.completed_at, tr.created_at) DESC,
               tr.id DESC

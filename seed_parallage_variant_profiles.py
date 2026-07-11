@@ -3,7 +3,7 @@
 Seed approved-human-only Parallage prompt profiles from ../variantum.
 
 The generated profiles are intentionally separate from the publication
-legacy_scholarly lane. They are for producing a broad translation pack over the
+gpt-5.5 lane. They are for producing a broad translation pack over the
 approved human reference passages.
 """
 

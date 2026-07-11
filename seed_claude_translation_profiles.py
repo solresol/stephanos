@@ -169,7 +169,7 @@ def upsert_version(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models", default="all", help="Comma/space model list: sonnet-5, opus-4-8, fable-5, or all.")
-    parser.add_argument("--versions", default="1,2,3", help="Comma/space prompt versions to copy from legacy_scholarly.")
+    parser.add_argument("--versions", default="1,2,3", help="Comma/space prompt versions to copy from gpt-5.5.")
     parser.add_argument("--legacy-profile", default=LEGACY_PROMPT_PROFILE)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

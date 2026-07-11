@@ -16,7 +16,7 @@ def main() -> None:
         description="Mark Billerbeck-sourced AI translation runs hidden/non-public."
     )
     parser.add_argument("--prompt-version", type=int, help="Restrict to one prompt profile version number")
-    parser.add_argument("--profile", default="legacy_scholarly", help="Prompt profile name to restrict")
+    parser.add_argument("--profile", default="gpt-5.5", help="Prompt profile name to restrict")
     parser.add_argument("--dry-run", action="store_true", help="Report affected rows without writing")
     args = parser.parse_args()
 

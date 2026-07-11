@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Insert and optionally activate the revised legacy_scholarly v3 prompt."""
+"""Insert and optionally activate the revised gpt-5.5 v3 prompt."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from db import get_connection
 
 
 PROMPT_VERSION = 3
-PROFILE_NAME = "legacy_scholarly"
+PROFILE_NAME = "gpt-5.5"
 PROMPT_FILE = Path(__file__).with_name("TRANSLATION_PROMPT_LEGACY_SCHOLARLY_V3_REVISED.md")
 
 
@@ -46,7 +46,7 @@ def load_prompt_artifact(path: Path) -> tuple[str, str, str]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Seed legacy_scholarly prompt v3 from the checked-in draft.")
+    parser = argparse.ArgumentParser(description="Seed gpt-5.5 prompt v3 from the checked-in draft.")
     parser.add_argument("--prompt-file", type=Path, default=PROMPT_FILE)
     parser.add_argument("--no-activate", action="store_true", help="Insert/update v3 but leave the active prompt unchanged")
     parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing")

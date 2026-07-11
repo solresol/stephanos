@@ -6,7 +6,7 @@ Assembled 2026-05-01 from:
 - Gabe's 2026-04-30 email feedback exported as `/Users/gregb/Downloads/Updated translation prompt  any thoughts.pdf`
 - April 30 meeting excerpts in `/Users/gregb/Documents/devel/papers/stephanos/2026-04-30-meeting/new-translation-prompt-excerpts.md`
 
-This is a prompt-profile draft for the DB-backed `legacy_scholarly` profile/version workflow. It is not active in the database until inserted into `translation_prompt_profile_versions` and activated there.
+This is a prompt-profile draft for the DB-backed `gpt-5.5` profile/version workflow. It is not active in the database until inserted into `translation_prompt_profile_versions` and activated there.
 
 ## Assembly Decisions
 

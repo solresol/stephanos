@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-LEGACY_PROMPT_PROFILE = "legacy_scholarly"
+LEGACY_PROMPT_PROFILE = "gpt-5.5"
 DEFAULT_PROMPT_VERSIONS = (1, 2, 3)
 
 
