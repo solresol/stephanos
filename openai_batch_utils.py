@@ -11,8 +11,21 @@ from openai import OpenAI
 from psycopg2.extras import Json
 
 
-BATCH_ENDPOINT = "/v1/chat/completions"
+CHAT_COMPLETIONS_BATCH_ENDPOINT = "/v1/chat/completions"
+RESPONSES_BATCH_ENDPOINT = "/v1/responses"
+BATCH_ENDPOINT = CHAT_COMPLETIONS_BATCH_ENDPOINT
+BATCH_ENDPOINTS = {
+    CHAT_COMPLETIONS_BATCH_ENDPOINT,
+    RESPONSES_BATCH_ENDPOINT,
+}
 BATCH_DIR = Path("tmp/openai_batches")
+
+
+def normalize_batch_endpoint(endpoint: str | None) -> str:
+    value = (endpoint or BATCH_ENDPOINT).strip()
+    if value not in BATCH_ENDPOINTS:
+        raise ValueError(f"Unsupported OpenAI Batch endpoint: {value}")
+    return value
 
 
 def ensure_openai_batch_tables(cur) -> None:
@@ -97,15 +110,17 @@ def create_batch_job(
     *,
     purpose: str,
     model: str | None,
+    endpoint: str = BATCH_ENDPOINT,
     metadata: dict | None = None,
 ) -> int:
+    endpoint = normalize_batch_endpoint(endpoint)
     cur.execute(
         """
         INSERT INTO openai_batch_jobs (purpose, endpoint, model, metadata, updated_at)
         VALUES (%s, %s, %s, %s::jsonb, NOW())
         RETURNING id
         """,
-        (purpose, BATCH_ENDPOINT, model, Json(metadata or {})),
+        (purpose, endpoint, model, Json(metadata or {})),
     )
     return int(cur.fetchone()[0])
 
@@ -151,13 +166,21 @@ def submit_batch(
     *,
     job_id: int,
     records: list[dict],
+    endpoint: str = BATCH_ENDPOINT,
 ) -> str:
+    endpoint = normalize_batch_endpoint(endpoint)
+    record_endpoints = {str(record.get("url") or "").strip() for record in records}
+    if record_endpoints != {endpoint}:
+        raise ValueError(
+            "Every OpenAI Batch record must target the job endpoint "
+            f"{endpoint}; found {sorted(record_endpoints)}"
+        )
     input_path = write_batch_input(job_id, records)
     with input_path.open("rb") as fh:
         input_file = client.files.create(file=fh, purpose="batch")
     batch = client.batches.create(
         input_file_id=input_file.id,
-        endpoint=BATCH_ENDPOINT,
+        endpoint=endpoint,
         completion_window="24h",
         metadata={"stephanos_batch_job_id": str(job_id)},
     )
