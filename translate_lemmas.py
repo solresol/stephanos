@@ -1801,6 +1801,14 @@ def main():
         help="Restrict this worker invocation to queued requests whose prompt profile starts with this prefix.",
     )
     parser.add_argument("--batch", action="store_true", help="Submit translation requests through the OpenAI Batch API")
+    parser.add_argument(
+        "--allow-parallel-batches",
+        action="store_true",
+        help=(
+            "Permit another non-overlapping translation batch while a matching batch is active; "
+            "running requests remain excluded from selection"
+        ),
+    )
     parser.add_argument("--batch-wait", action="store_true", help="Poll the submitted batch and collect results before exiting")
     parser.add_argument("--batch-poll-interval", type=float, default=30.0)
     parser.add_argument(
@@ -1856,10 +1864,15 @@ def main():
         conn.commit()
         client = OpenAI(api_key=load_api_key())
         active_batches = recover_translation_batches(conn, cur, client, args=args)
-        if active_batches > 0:
+        if active_batches > 0 and not args.allow_parallel_batches:
             print(f"{active_batches} translation Batch API job(s) still active; not submitting duplicates.")
             conn.close()
             return
+        if active_batches > 0:
+            print(
+                f"{active_batches} matching translation Batch API job(s) still active; "
+                "parallel submission explicitly enabled."
+            )
 
     tokens_today = get_tokens_today(cur)
     print(f"Tokens used today: {tokens_today:,} / {args.daily_token_limit:,}")
