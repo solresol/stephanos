@@ -1,6 +1,7 @@
 import unittest
 
 from enqueue_human_evaluation_translations import evaluation_created_by
+from seed_translation_model_timeline_profiles import TIMELINE_PROFILES, timeline_profile_runtime
 from translate_lemmas import build_translation_request_artifact, is_human_evaluation_request
 
 
@@ -36,6 +37,16 @@ class HumanEvaluationRequestLabelTests(unittest.TestCase):
 
         self.assertEqual(artifact["body"]["reasoning_effort"], "none")
         self.assertEqual(artifact["body"]["tools"][0]["type"], "function")
+
+    def test_gpt_5_6_timeline_uses_gpt_5_5_compatible_reasoning(self):
+        profile = next(row for row in TIMELINE_PROFILES if row.profile_name == "gpt-5.6-sol")
+
+        self.assertEqual(timeline_profile_runtime(profile), ("responses", "medium"))
+
+    def test_gpt_5_4_timeline_keeps_chat_completions_without_explicit_reasoning(self):
+        profile = next(row for row in TIMELINE_PROFILES if row.profile_name == "gpt-5.4")
+
+        self.assertEqual(timeline_profile_runtime(profile), ("chat_completions", None))
 
 
 if __name__ == "__main__":
