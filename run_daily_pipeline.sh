@@ -645,20 +645,37 @@ if [ "$TRANSLATION_RESPONSES_RUN_LIMIT" -gt 0 ]; then
 fi
 
 # Step 5r2: Run GPT-5.6 at the GPT-5.5-compatible medium reasoning baseline.
-TRANSLATION_MODEL_TIMELINE_RESPONSES_RUN_LIMIT="${TRANSLATION_MODEL_TIMELINE_RESPONSES_RUN_LIMIT:-10}"
-TRANSLATION_MODEL_TIMELINE_RESPONSES_REQUEST_LIMIT="${TRANSLATION_MODEL_TIMELINE_RESPONSES_REQUEST_LIMIT:-30}"
+TRANSLATION_MODEL_TIMELINE_RESPONSES_RUN_LIMIT="${TRANSLATION_MODEL_TIMELINE_RESPONSES_RUN_LIMIT:-30}"
+TRANSLATION_MODEL_TIMELINE_RESPONSES_REQUEST_LIMIT="${TRANSLATION_MODEL_TIMELINE_RESPONSES_REQUEST_LIMIT:-60}"
 TRANSLATION_MODEL_TIMELINE_RESPONSES_DAILY_TOKEN_LIMIT="${TRANSLATION_MODEL_TIMELINE_RESPONSES_DAILY_TOKEN_LIMIT:-250000}"
+TRANSLATION_MODEL_TIMELINE_RESPONSES_USE_BATCH="${TRANSLATION_MODEL_TIMELINE_RESPONSES_USE_BATCH:-1}"
+TRANSLATION_MODEL_TIMELINE_RESPONSES_BATCH_WAIT="${TRANSLATION_MODEL_TIMELINE_RESPONSES_BATCH_WAIT:-1}"
+TRANSLATION_MODEL_TIMELINE_RESPONSES_BATCH_POLL_INTERVAL="${TRANSLATION_MODEL_TIMELINE_RESPONSES_BATCH_POLL_INTERVAL:-30}"
+TRANSLATION_MODEL_TIMELINE_RESPONSES_BATCH_TIMEOUT="${TRANSLATION_MODEL_TIMELINE_RESPONSES_BATCH_TIMEOUT:-0}"
 if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_MODEL_TIMELINE_ENABLED" != "0" ] && [ "$TRANSLATION_MODEL_TIMELINE_RESPONSES_RUN_LIMIT" -gt 0 ]; then
     echo "Step 5r2: Translating GPT-5.6 model-timeline requests at medium reasoning..." | tee -a "$LOGFILE"
-    uv run translate_lemmas.py \
-        --api-mode responses \
-        --model gpt-5.6-sol \
-        --profile-prefix gpt-5.6-sol \
-        --request-limit "$TRANSLATION_MODEL_TIMELINE_RESPONSES_REQUEST_LIMIT" \
-        --run-limit "$TRANSLATION_MODEL_TIMELINE_RESPONSES_RUN_LIMIT" \
-        --daily-token-limit "$TRANSLATION_MODEL_TIMELINE_RESPONSES_DAILY_TOKEN_LIMIT" \
-        --delay 1 \
-        --allow-human-evaluation-translations \
+    model_timeline_response_args=(
+        uv run translate_lemmas.py
+        --api-mode responses
+        --model gpt-5.6-sol
+        --profile-prefix gpt-5.6-sol
+        --request-limit "$TRANSLATION_MODEL_TIMELINE_RESPONSES_REQUEST_LIMIT"
+        --run-limit "$TRANSLATION_MODEL_TIMELINE_RESPONSES_RUN_LIMIT"
+        --daily-token-limit "$TRANSLATION_MODEL_TIMELINE_RESPONSES_DAILY_TOKEN_LIMIT"
+        --allow-human-evaluation-translations
+    )
+    if [ "$TRANSLATION_MODEL_TIMELINE_RESPONSES_USE_BATCH" != "0" ]; then
+        model_timeline_response_args+=(--batch)
+        if [ "$TRANSLATION_MODEL_TIMELINE_RESPONSES_BATCH_WAIT" != "0" ]; then
+            model_timeline_response_args+=(--batch-wait --batch-poll-interval "$TRANSLATION_MODEL_TIMELINE_RESPONSES_BATCH_POLL_INTERVAL")
+            if [ "$TRANSLATION_MODEL_TIMELINE_RESPONSES_BATCH_TIMEOUT" != "0" ]; then
+                model_timeline_response_args+=(--batch-timeout "$TRANSLATION_MODEL_TIMELINE_RESPONSES_BATCH_TIMEOUT")
+            fi
+        fi
+    else
+        model_timeline_response_args+=(--delay 1)
+    fi
+    "${model_timeline_response_args[@]}" \
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: GPT-5.6 model-timeline Responses step failed" | tee -a "$LOGFILE"
 fi
 

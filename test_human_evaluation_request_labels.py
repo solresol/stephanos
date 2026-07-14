@@ -2,7 +2,11 @@ import unittest
 
 from enqueue_human_evaluation_translations import evaluation_created_by
 from seed_translation_model_timeline_profiles import TIMELINE_PROFILES, timeline_profile_runtime
-from translate_lemmas import build_translation_request_artifact, is_human_evaluation_request
+from translate_lemmas import (
+    batch_endpoint_for_api_mode,
+    build_translation_request_artifact,
+    is_human_evaluation_request,
+)
 
 
 class HumanEvaluationRequestLabelTests(unittest.TestCase):
@@ -42,6 +46,25 @@ class HumanEvaluationRequestLabelTests(unittest.TestCase):
         profile = next(row for row in TIMELINE_PROFILES if row.profile_name == "gpt-5.6-sol")
 
         self.assertEqual(timeline_profile_runtime(profile), ("responses", "medium"))
+
+    def test_gpt_5_6_medium_batch_targets_responses_endpoint(self):
+        artifact = build_translation_request_artifact(
+            model="gpt-5.6-sol",
+            temperature=None,
+            top_p=None,
+            api_mode="responses",
+            reasoning_effort="medium",
+            system_prompt="Translate faithfully.",
+            lemma="Καβαλίς",
+            entry_number=1,
+            source_text="Καβαλὶς πόλις.",
+            transport="openai_batch",
+            custom_id="response-batch-test",
+        )
+
+        self.assertEqual(batch_endpoint_for_api_mode("responses"), "/v1/responses")
+        self.assertEqual(artifact["url"], "/v1/responses")
+        self.assertEqual(artifact["body"]["reasoning"], {"effort": "medium"})
 
     def test_gpt_5_4_timeline_keeps_chat_completions_without_explicit_reasoning(self):
         profile = next(row for row in TIMELINE_PROFILES if row.profile_name == "gpt-5.4")

@@ -26,6 +26,7 @@ from openai_batch_utils import (
     iter_jsonl,
     mark_batch_item,
     mark_batch_job_error,
+    normalize_batch_endpoint,
     submit_batch,
     update_batch_status,
     write_batch_output,
@@ -104,6 +105,12 @@ def normalize_api_mode(api_mode: str | None) -> str:
     if value not in API_MODES:
         raise ValueError(f"Unsupported translation API mode: {value}")
     return value
+
+
+def batch_endpoint_for_api_mode(api_mode: str | None) -> str:
+    api_mode = normalize_api_mode(api_mode)
+    endpoint = RESPONSES_ENDPOINT if api_mode == API_MODE_RESPONSES else CHAT_COMPLETIONS_ENDPOINT
+    return normalize_batch_endpoint(endpoint)
 
 
 def normalize_optional_float(value, default: float | None = None) -> float | None:
@@ -1200,16 +1207,21 @@ def submit_translation_batch(
     records: list[dict] = []
     total_runs = 0
     batch_model = None
+    batch_api_mode = normalize_api_mode(requests[0][7]) if requests else API_MODE_CHAT_COMPLETIONS
+    batch_endpoint = batch_endpoint_for_api_mode(batch_api_mode)
 
     job_id = create_batch_job(
         cur,
         purpose="translation",
         model=None,
+        endpoint=batch_endpoint,
         metadata={
             "request_limit": args.request_limit,
             "run_limit": args.run_limit,
             "daily_token_limit": args.daily_token_limit,
             "guidance_provenance": guidance_provenance_enabled,
+            "api_mode": batch_api_mode,
+            "endpoint": batch_endpoint,
         },
     )
     conn.commit()
@@ -1285,14 +1297,20 @@ def submit_translation_batch(
             conn.commit()
             continue
 
-        if normalize_api_mode(api_mode) != API_MODE_CHAT_COMPLETIONS:
+        request_api_mode = normalize_api_mode(api_mode)
+        request_endpoint = batch_endpoint_for_api_mode(request_api_mode)
+        if request_endpoint != batch_endpoint:
             mark_request_pending(
                 cur,
                 request_id,
-                "Deferred because Responses API translation requests are processed by the sync worker, not Chat Completions batch.",
+                "Deferred because OpenAI Batch input files can only contain one endpoint; "
+                f"current batch endpoint is {batch_endpoint}.",
             )
             conn.commit()
-            print(f"Request {request_id}: deferred {lemma} because api_mode={api_mode} is not batch-compatible.")
+            print(
+                f"Request {request_id}: deferred {lemma} because endpoint {request_endpoint} "
+                f"does not match current batch endpoint {batch_endpoint}."
+            )
             continue
 
         existing_count = completed_run_count(cur, request_id)
@@ -1438,7 +1456,13 @@ def submit_translation_batch(
     cur.execute("UPDATE openai_batch_jobs SET model = %s, request_count = %s, updated_at = NOW() WHERE id = %s", (batch_model, len(records), job_id))
     conn.commit()
     try:
-        batch_id = submit_batch(client, cur, job_id=job_id, records=records)
+        batch_id = submit_batch(
+            client,
+            cur,
+            job_id=job_id,
+            records=records,
+            endpoint=batch_endpoint,
+        )
     except Exception as exc:
         cur.execute(
             """
@@ -1712,6 +1736,16 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
     return processed, failed, expired
 
 
+def batch_job_matches_selection(job, *, args) -> bool:
+    job_endpoint = str(job[2] or "")
+    job_model = str(job[3] or "")
+    if args.api_mode != "all" and job_endpoint != batch_endpoint_for_api_mode(args.api_mode):
+        return False
+    if args.model and job_model and job_model != args.model:
+        return False
+    return True
+
+
 def recover_translation_batches(conn, cur, client: OpenAI, *, args) -> int:
     active = 0
     for job_id in get_recoverable_batch_job_ids(cur, purpose="translation"):
@@ -1724,7 +1758,8 @@ def recover_translation_batches(conn, cur, client: OpenAI, *, args) -> int:
         if batch.status in {"completed", "failed", "expired", "cancelled"}:
             collect_translation_batch(conn, cur, client, job_id=job_id)
             continue
-        if args.batch_wait:
+        blocks_selection = batch_job_matches_selection(job, args=args)
+        if args.batch_wait and blocks_selection:
             status = wait_for_openai_batch(
                 client,
                 cur,
@@ -1737,9 +1772,14 @@ def recover_translation_batches(conn, cur, client: OpenAI, *, args) -> int:
                 collect_translation_batch(conn, cur, client, job_id=job_id)
             else:
                 active += 1
-        else:
+        elif blocks_selection:
             print(f"Translation batch job {job_id} is still {batch.status}; not submitting a duplicate.")
             active += 1
+        else:
+            print(
+                f"Translation batch job {job_id} is still {batch.status}; "
+                "it targets another model or endpoint and does not block this submission."
+            )
     return active
 
 
