@@ -831,6 +831,7 @@ def fetch_requests(
     api_mode_filter: str = "all",
     model_filter: str | None = None,
     profile_prefix: str | None = None,
+    exclude_submitted_batch_items: bool = False,
 ):
     has_human_translation_expr = human_translation_exists_sql(cur)
     has_approved_human_translation_expr = approved_human_translation_exists_sql(cur)
@@ -908,6 +909,19 @@ def fetch_requests(
     if profile_prefix:
         query += " AND p.name LIKE %s"
         params.append(f"{profile_prefix}%")
+    if exclude_submitted_batch_items:
+        query += """
+            AND NOT EXISTS (
+                SELECT 1
+                FROM openai_batch_items bi
+                JOIN openai_batch_jobs bj ON bj.id = bi.batch_job_id
+                WHERE bi.purpose = 'translation'
+                  AND bi.local_id = r.id
+                  AND bi.status = 'submitted'
+                  AND bj.openai_batch_id IS NOT NULL
+                  AND bj.status NOT IN ('completed', 'failed', 'expired', 'cancelled')
+            )
+        """
     query += f" ORDER BY {order_by}"
     if request_limit is not None:
         query += f" LIMIT {int(request_limit)}"
@@ -1892,6 +1906,7 @@ def main():
         api_mode_filter=args.api_mode,
         model_filter=args.model,
         profile_prefix=args.profile_prefix,
+        exclude_submitted_batch_items=bool(args.batch and args.allow_parallel_batches),
     )
     print(f"Queued requests: {len(requests)}")
     if not requests:
