@@ -37,6 +37,17 @@ DEFAULT_VERSIONS = (1, 2, 3)
 SUCCESSFUL_RUN_STATUSES = ("completed", "approved")
 API_MODE_CHAT_COMPLETIONS = "chat_completions"
 API_MODE_RESPONSES = "responses"
+EVALUATION_CREATED_BY_MARKER = "enqueue_human_evaluation_translations.py"
+
+
+def evaluation_created_by(value: str | None) -> str:
+    """Keep every request from this evaluator recognisable to the worker guard."""
+    value = (value or "").strip()
+    if EVALUATION_CREATED_BY_MARKER.casefold() in value.casefold():
+        return value
+    if value:
+        return f"{EVALUATION_CREATED_BY_MARKER}:{value}"
+    return EVALUATION_CREATED_BY_MARKER
 
 
 def parse_versions(value: str | None) -> list[int]:
@@ -650,6 +661,7 @@ def main() -> None:
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    args.created_by = evaluation_created_by(args.created_by)
 
     if args.limit is not None and args.limit < 0:
         parser.error("--limit must be non-negative")

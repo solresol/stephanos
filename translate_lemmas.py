@@ -57,6 +57,8 @@ HUMAN_EVALUATION_REQUEST_MARKERS = (
     "human-evaluation",
     "human_eval",
     "human-eval",
+    "model_timeline",
+    "model-timeline",
     "enqueue_human_evaluation_translations.py",
 )
 
