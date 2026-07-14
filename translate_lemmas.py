@@ -637,6 +637,7 @@ def build_chat_completion_body(
     model: str,
     temperature: float | None,
     top_p: float | None,
+    reasoning_effort: str | None,
     system_prompt: str,
     lemma: str,
     entry_number: int | None,
@@ -663,6 +664,8 @@ def build_chat_completion_body(
         "tool_choice": {"type": "function", "function": {"name": "submit_translation"}},
     }
     body["top_p"] = 1.0 if top_p is None else float(top_p)
+    if reasoning_effort:
+        body["reasoning_effort"] = reasoning_effort
     return body
 
 
@@ -736,6 +739,7 @@ def build_translation_request_artifact(
             model=model,
             temperature=temperature,
             top_p=top_p,
+            reasoning_effort=reasoning_effort,
             system_prompt=system_prompt,
             lemma=lemma,
             entry_number=entry_number,

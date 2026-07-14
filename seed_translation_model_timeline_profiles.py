@@ -314,7 +314,9 @@ def upsert_profile_version(
         "default_temperature": None,
         "default_top_p": source_version.get("default_top_p"),
         "default_api_mode": "chat_completions",
-        "default_reasoning_effort": None,
+        "default_reasoning_effort": (
+            "none" if profile.model_slug.startswith("gpt-5.6") else None
+        ),
         "default_requested_runs": 1,
         "approved_human_queue_priority": DEFAULT_QUEUE_PRIORITY,
         "uses_guidance_context": bool(source_version.get("uses_guidance_context")),
