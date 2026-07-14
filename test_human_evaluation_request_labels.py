@@ -3,6 +3,7 @@ import unittest
 from enqueue_human_evaluation_translations import evaluation_created_by
 from seed_translation_model_timeline_profiles import TIMELINE_PROFILES, timeline_profile_runtime
 from translate_lemmas import (
+    batch_error_from_payload,
     batch_endpoint_for_api_mode,
     build_translation_request_artifact,
     is_human_evaluation_request,
@@ -65,6 +66,25 @@ class HumanEvaluationRequestLabelTests(unittest.TestCase):
         self.assertEqual(batch_endpoint_for_api_mode("responses"), "/v1/responses")
         self.assertEqual(artifact["url"], "/v1/responses")
         self.assertEqual(artifact["body"]["reasoning"], {"effort": "medium"})
+
+    def test_batch_error_file_preserves_http_error_body(self):
+        payload = {
+            "response": {
+                "status_code": 503,
+                "body": {
+                    "error": {
+                        "code": "server_is_overloaded",
+                        "message": "Please try again later.",
+                    }
+                },
+            },
+            "error": None,
+        }
+
+        self.assertEqual(
+            batch_error_from_payload(payload)["error"]["code"],
+            "server_is_overloaded",
+        )
 
     def test_gpt_5_4_timeline_keeps_chat_completions_without_explicit_reasoning(self):
         profile = next(row for row in TIMELINE_PROFILES if row.profile_name == "gpt-5.4")

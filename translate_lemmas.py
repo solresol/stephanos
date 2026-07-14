@@ -825,6 +825,17 @@ def extract_translation_from_response_body(body: dict, *, api_mode: str = API_MO
     return extract_translation_from_chat_completion_body(body)
 
 
+def batch_error_from_payload(payload: dict) -> dict:
+    error = payload.get("error")
+    if isinstance(error, dict) and error:
+        return error
+    response = payload.get("response") or {}
+    if int(response.get("status_code") or 0) >= 400:
+        body = response.get("body")
+        return body if isinstance(body, dict) and body else response
+    return {}
+
+
 def fetch_requests(
     cur,
     request_limit: int | None,
@@ -1660,7 +1671,7 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                 continue
             metadata = item["metadata"]
             request_id = int(metadata["request_id"])
-            error = payload.get("error") or {}
+            error = batch_error_from_payload(payload)
             status = "expired" if error.get("code") == "batch_expired" else "failed"
             mark_batch_item(cur, custom_id=custom_id, status=status, error_json=error)
             if status == "failed":
