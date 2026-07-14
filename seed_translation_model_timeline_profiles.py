@@ -18,6 +18,8 @@ SOURCE_PROFILE = "gpt-5.5"
 SOURCE_VERSIONS = (1, 2, 3)
 DEFAULT_STYLE_KIND = "literal"
 DEFAULT_QUEUE_PRIORITY = 4
+GPT56_BASELINE_API_MODE = "responses"
+GPT56_BASELINE_REASONING_EFFORT = "medium"
 
 
 @dataclass(frozen=True)
@@ -139,6 +141,13 @@ TIMELINE_PROFILES = (
         description="Approved-human model-timeline profile using GPT-5.6 Sol across Stephanos prompt v1/v2/v3.",
     ),
 )
+
+
+def timeline_profile_runtime(profile: TimelineProfileSeed) -> tuple[str, str | None]:
+    """Preserve GPT-5.5's medium-reasoning baseline for GPT-5.6 comparisons."""
+    if profile.model_slug.startswith("gpt-5.6"):
+        return GPT56_BASELINE_API_MODE, GPT56_BASELINE_REASONING_EFFORT
+    return "chat_completions", None
 
 
 def table_exists(cur, table_name: str) -> bool:
@@ -291,6 +300,7 @@ def upsert_profile_version(
     source_version: dict[str, object],
 ) -> None:
     version = int(source_version["version"])
+    api_mode, reasoning_effort = timeline_profile_runtime(profile)
     columns = ["profile_id", "version", "prompt_text", "notes", "active"]
     notes = (
         f"Model timeline evaluation: {profile.display_name} using prompt text "
@@ -313,10 +323,8 @@ def upsert_profile_version(
         "default_model": profile.model_slug,
         "default_temperature": None,
         "default_top_p": source_version.get("default_top_p"),
-        "default_api_mode": "chat_completions",
-        "default_reasoning_effort": (
-            "none" if profile.model_slug.startswith("gpt-5.6") else None
-        ),
+        "default_api_mode": api_mode,
+        "default_reasoning_effort": reasoning_effort,
         "default_requested_runs": 1,
         "approved_human_queue_priority": DEFAULT_QUEUE_PRIORITY,
         "uses_guidance_context": bool(source_version.get("uses_guidance_context")),

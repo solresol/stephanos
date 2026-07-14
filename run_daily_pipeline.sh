@@ -644,6 +644,24 @@ if [ "$TRANSLATION_RESPONSES_RUN_LIMIT" -gt 0 ]; then
     "${response_translation_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Responses API translation step failed" | tee -a "$LOGFILE"
 fi
 
+# Step 5r2: Run GPT-5.6 at the GPT-5.5-compatible medium reasoning baseline.
+TRANSLATION_MODEL_TIMELINE_RESPONSES_RUN_LIMIT="${TRANSLATION_MODEL_TIMELINE_RESPONSES_RUN_LIMIT:-10}"
+TRANSLATION_MODEL_TIMELINE_RESPONSES_REQUEST_LIMIT="${TRANSLATION_MODEL_TIMELINE_RESPONSES_REQUEST_LIMIT:-30}"
+TRANSLATION_MODEL_TIMELINE_RESPONSES_DAILY_TOKEN_LIMIT="${TRANSLATION_MODEL_TIMELINE_RESPONSES_DAILY_TOKEN_LIMIT:-250000}"
+if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_MODEL_TIMELINE_ENABLED" != "0" ] && [ "$TRANSLATION_MODEL_TIMELINE_RESPONSES_RUN_LIMIT" -gt 0 ]; then
+    echo "Step 5r2: Translating GPT-5.6 model-timeline requests at medium reasoning..." | tee -a "$LOGFILE"
+    uv run translate_lemmas.py \
+        --api-mode responses \
+        --model gpt-5.6-sol \
+        --profile-prefix gpt-5.6-sol \
+        --request-limit "$TRANSLATION_MODEL_TIMELINE_RESPONSES_REQUEST_LIMIT" \
+        --run-limit "$TRANSLATION_MODEL_TIMELINE_RESPONSES_RUN_LIMIT" \
+        --daily-token-limit "$TRANSLATION_MODEL_TIMELINE_RESPONSES_DAILY_TOKEN_LIMIT" \
+        --delay 1 \
+        --allow-human-evaluation-translations \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: GPT-5.6 model-timeline Responses step failed" | tee -a "$LOGFILE"
+fi
+
 # Step 5: Translate Chat Completions requests with gpt-5.5 after guidance coverage is complete
 echo "Step 5: Translating Chat Completions translation requests..." | tee -a "$LOGFILE"
 TRANSLATION_USE_BATCH="${TRANSLATION_USE_BATCH:-1}"
