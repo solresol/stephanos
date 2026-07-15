@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from enqueue_human_evaluation_translations import evaluation_created_by
 from seed_translation_model_timeline_profiles import TIMELINE_PROFILES, timeline_profile_runtime
@@ -6,11 +7,50 @@ from translate_lemmas import (
     batch_error_from_payload,
     batch_endpoint_for_api_mode,
     build_translation_request_artifact,
+    fetch_requests,
     is_human_evaluation_request,
 )
 
 
 class HumanEvaluationRequestLabelTests(unittest.TestCase):
+    @patch("translate_lemmas.prompt_version_approved_only_expr", return_value="FALSE")
+    @patch("translate_lemmas.prompt_version_guidance_expr", return_value="FALSE")
+    @patch("translate_lemmas.approved_human_translation_exists_sql", return_value="FALSE")
+    @patch("translate_lemmas.human_translation_exists_sql", return_value="FALSE")
+    @patch("translate_lemmas.column_exists", return_value=False)
+    def test_worker_can_exclude_non_batch_model_and_select_one_prompt_version(
+        self,
+        _column_exists,
+        _human_translation_exists,
+        _approved_translation_exists,
+        _guidance_expr,
+        _approved_only_expr,
+    ):
+        class RecordingCursor:
+            query = ""
+            params = []
+
+            def execute(self, query, params):
+                self.query = query
+                self.params = params
+
+            def fetchall(self):
+                return []
+
+        cur = RecordingCursor()
+        fetch_requests(
+            cur,
+            100,
+            api_mode_filter="chat_completions",
+            excluded_models=["gpt-5.3-chat-latest"],
+            profile_version_filter=2,
+        )
+
+        self.assertIn("NOT (COALESCE(r.model, %s) = ANY(%s))", cur.query)
+        self.assertIn("pv.version = %s", cur.query)
+        self.assertIn(["gpt-5.3-chat-latest"], cur.params)
+        self.assertEqual(cur.params[-1], 2)
+
     def test_custom_evaluation_label_is_normalized_for_worker(self):
         created_by = evaluation_created_by("run_daily_pipeline.sh:model-timeline")
 
@@ -89,6 +129,20 @@ class HumanEvaluationRequestLabelTests(unittest.TestCase):
     def test_gpt_5_4_timeline_keeps_chat_completions_without_explicit_reasoning(self):
         profile = next(row for row in TIMELINE_PROFILES if row.profile_name == "gpt-5.4")
 
+        self.assertEqual(timeline_profile_runtime(profile), ("chat_completions", None))
+
+    def test_gpt_5_2_timeline_pins_the_historical_snapshot(self):
+        profile = next(row for row in TIMELINE_PROFILES if row.profile_name == "gpt-5.2")
+
+        self.assertEqual(profile.runtime_model, "gpt-5.2-2025-12-11")
+        self.assertEqual(timeline_profile_runtime(profile), ("chat_completions", None))
+
+    def test_gpt_5_3_timeline_uses_non_batch_chat_completions(self):
+        profile = next(
+            row for row in TIMELINE_PROFILES if row.profile_name == "gpt-5.3-chat-latest"
+        )
+
+        self.assertEqual(profile.runtime_model, None)
         self.assertEqual(timeline_profile_runtime(profile), ("chat_completions", None))
 
 

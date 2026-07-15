@@ -8,6 +8,7 @@ os.environ.setdefault("DB_USER", "stephanos")
 
 from generate_translation_prompt_evaluation import (
     METRIC_LENGTH_SPECS,
+    MODEL_TIMELINE_PROFILE_NAMES,
     ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH,
     build_model_timeline_forecast_rows,
     metric_length_pattern_counts,
@@ -63,6 +64,18 @@ def summary(version: int) -> dict[str, object]:
 
 
 class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
+    def test_model_timeline_uses_historical_release_order(self) -> None:
+        self.assertEqual(
+            MODEL_TIMELINE_PROFILE_NAMES,
+            (
+                "gpt-5.2",
+                "gpt-5.3-chat-latest",
+                "gpt-5.4",
+                "gpt-5.5",
+                "gpt-5.6-sol",
+            ),
+        )
+
     def test_summary_table_sorts_by_prompt_version_and_includes_trigrams(self) -> None:
         html = render_summary_table([summary(3), summary(1), summary(2)])
 
@@ -171,6 +184,20 @@ class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
         rows = [
             {
                 "prompt_version": 1,
+                "release_date": "2025-12-11",
+                "mean_core_metric": 0.50,
+                "mean_rouge_l": 0.52,
+                "synthetic_zainaldi_mean_core_metric": 0.48,
+            },
+            {
+                "prompt_version": 1,
+                "release_date": "2026-03-03",
+                "mean_core_metric": 0.55,
+                "mean_rouge_l": 0.57,
+                "synthetic_zainaldi_mean_core_metric": 0.53,
+            },
+            {
+                "prompt_version": 1,
                 "release_date": "2026-03-05",
                 "mean_core_metric": 0.60,
                 "mean_rouge_l": 0.62,
@@ -199,7 +226,7 @@ class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
             if row["prompt_version"] == 1 and row["metric_key"] == "mean_core_metric"
         )
 
-        self.assertEqual(mean_row["completed_release_count"], 3)
+        self.assertEqual(mean_row["completed_release_count"], 5)
         self.assertEqual(mean_row["steady_improvement_status"], "steady improvement")
         self.assertEqual(mean_row["projection_status"], "linear projection from completed releases")
         self.assertRegex(str(mean_row["estimated_target_date"]), r"^2026-")

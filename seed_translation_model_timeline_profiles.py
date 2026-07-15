@@ -2,9 +2,9 @@
 """
 Seed model-timeline prompt profiles for the 100-row translation evaluation.
 
-The GPT-5.4 and GPT-5.6 profiles copy the established GPT-5.5 v1/v2/v3
-prompt texts so the paper corpus can compare model improvements while holding
-the Stephanos prompt version constant.
+The GPT-5.2, GPT-5.3 Chat, GPT-5.4, and GPT-5.6 profiles copy the established
+GPT-5.5 v1/v2/v3 prompt texts so the paper corpus can compare model
+improvements while holding the Stephanos prompt version constant.
 """
 
 from __future__ import annotations
@@ -41,9 +41,38 @@ class TimelineProfileSeed:
     display_name: str
     model_slug: str
     description: str
+    runtime_model: str | None = None
 
 
 MODEL_RELEASES = (
+    ModelReleaseSeed(
+        provider="openai",
+        model_slug="gpt-5.2",
+        display_name="GPT-5.2",
+        model_family="GPT-5",
+        release_date="2025-12-11",
+        api_release_date="2025-12-11",
+        source_url="https://developers.openai.com/api/docs/models/gpt-5.2",
+        source_label="OpenAI GPT-5.2 model docs",
+        notes=(
+            "Model docs list snapshot gpt-5.2-2025-12-11 and support for "
+            "Chat Completions, Responses, and Batch."
+        ),
+    ),
+    ModelReleaseSeed(
+        provider="openai",
+        model_slug="gpt-5.3-chat-latest",
+        display_name="GPT-5.3 Chat",
+        model_family="GPT-5",
+        release_date="2026-03-03",
+        api_release_date="2026-03-03",
+        source_url="https://openai.com/index/gpt-5-3-instant/",
+        source_label="OpenAI GPT-5.3 Instant release",
+        notes=(
+            "Deprecated rolling alias for GPT-5.3 Instant. Available through "
+            "Chat Completions and Responses, but not the Batch API."
+        ),
+    ),
     ModelReleaseSeed(
         provider="openai",
         model_slug="gpt-5.4",
@@ -128,6 +157,25 @@ MODEL_RELEASES = (
 )
 
 TIMELINE_PROFILES = (
+    TimelineProfileSeed(
+        profile_name="gpt-5.2",
+        display_name="GPT-5.2",
+        model_slug="gpt-5.2",
+        runtime_model="gpt-5.2-2025-12-11",
+        description=(
+            "Approved-human model-timeline profile using the pinned GPT-5.2 "
+            "snapshot across Stephanos prompt v1/v2/v3."
+        ),
+    ),
+    TimelineProfileSeed(
+        profile_name="gpt-5.3-chat-latest",
+        display_name="GPT-5.3 Chat",
+        model_slug="gpt-5.3-chat-latest",
+        description=(
+            "Approved-human historical model-timeline profile using the "
+            "deprecated rolling GPT-5.3 Chat alias across Stephanos prompt v1/v2/v3."
+        ),
+    ),
     TimelineProfileSeed(
         profile_name="gpt-5.4",
         display_name="GPT-5.4",
@@ -320,7 +368,7 @@ def upsert_profile_version(
     ]
     optional_values = {
         "approved_human_only": True,
-        "default_model": profile.model_slug,
+        "default_model": profile.runtime_model or profile.model_slug,
         "default_temperature": None,
         "default_top_p": source_version.get("default_top_p"),
         "default_api_mode": api_mode,

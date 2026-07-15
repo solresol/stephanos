@@ -75,7 +75,13 @@ ZAINALDI_PAPER_METRICS_CSV = OUTPUT_DIR / "prompt_evaluation_zainaldi_paper_metr
 NEURAL_METRICS_HELPER = Path(__file__).with_name("compute_neural_translation_metrics.py")
 DEFAULT_NEURAL_METRICS_PYTHON = Path("/home/stephanos/metric-envs/neural-metrics/bin/python")
 MAIN_PAPER_PROFILE = "gpt-5.5"
-MODEL_TIMELINE_PROFILE_NAMES = ("gpt-5.4", "gpt-5.5", "gpt-5.6-sol")
+MODEL_TIMELINE_PROFILE_NAMES = (
+    "gpt-5.2",
+    "gpt-5.3-chat-latest",
+    "gpt-5.4",
+    "gpt-5.5",
+    "gpt-5.6-sol",
+)
 MODEL_TIMELINE_PROMPT_VERSIONS = (1, 2, 3)
 HUMAN_EQUIVALENT_MEAN_METRIC_TARGET = 0.90
 MODEL_TIMELINE_CHART_SPECS = [
