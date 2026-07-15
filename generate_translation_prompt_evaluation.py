@@ -76,6 +76,11 @@ NEURAL_METRICS_HELPER = Path(__file__).with_name("compute_neural_translation_met
 DEFAULT_NEURAL_METRICS_PYTHON = Path("/home/stephanos/metric-envs/neural-metrics/bin/python")
 MAIN_PAPER_PROFILE = "gpt-5.5"
 MODEL_TIMELINE_PROFILE_NAMES = (
+    "gpt-4-turbo-2024-04-09",
+    "gpt-4o-2024-05-13",
+    "gpt-4o-2024-08-06",
+    "gpt-4o-2024-11-20",
+    "gpt-4.1-2025-04-14",
     "gpt-5",
     "gpt-5.1",
     "gpt-5.2",

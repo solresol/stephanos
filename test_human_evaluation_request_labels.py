@@ -156,6 +156,26 @@ class HumanEvaluationRequestLabelTests(unittest.TestCase):
         self.assertEqual(profile.runtime_model, "gpt-5-2025-08-07")
         self.assertEqual(timeline_profile_runtime(profile), ("chat_completions", None))
 
+    def test_gpt_4_family_timeline_pins_historical_snapshots(self):
+        expected_models = {
+            "gpt-4-turbo-2024-04-09",
+            "gpt-4o-2024-05-13",
+            "gpt-4o-2024-08-06",
+            "gpt-4o-2024-11-20",
+            "gpt-4.1-2025-04-14",
+        }
+        profiles = {
+            row.profile_name: row
+            for row in TIMELINE_PROFILES
+            if row.profile_name in expected_models
+        }
+
+        self.assertEqual(set(profiles), expected_models)
+        for model, profile in profiles.items():
+            self.assertEqual(profile.model_slug, model)
+            self.assertIsNone(profile.runtime_model)
+            self.assertEqual(timeline_profile_runtime(profile), ("chat_completions", None))
+
     def test_gpt_5_1_timeline_pins_the_historical_snapshot(self):
         profile = next(row for row in TIMELINE_PROFILES if row.profile_name == "gpt-5.1")
 

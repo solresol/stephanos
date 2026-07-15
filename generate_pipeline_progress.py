@@ -31,6 +31,11 @@ BILLERBECK_GERMAN_OCR_NIGHTLY_LIMIT = 3
 BILLERBECK_GERMAN_TRANSLATE_NIGHTLY_LIMIT = 5
 PAPER_MODEL_TARGET_ROWS = 100
 PAPER_MODEL_PROFILES = (
+    "gpt-4-turbo-2024-04-09",
+    "gpt-4o-2024-05-13",
+    "gpt-4o-2024-08-06",
+    "gpt-4o-2024-11-20",
+    "gpt-4.1-2025-04-14",
     "gpt-5",
     "gpt-5.1",
     "gpt-5.2",
