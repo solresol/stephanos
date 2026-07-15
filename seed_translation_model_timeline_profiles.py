@@ -2,9 +2,9 @@
 """
 Seed model-timeline prompt profiles for the 100-row translation evaluation.
 
-The GPT-5.2, GPT-5.3 Chat, GPT-5.4, and GPT-5.6 profiles copy the established
-GPT-5.5 v1/v2/v3 prompt texts so the paper corpus can compare model
-improvements while holding the Stephanos prompt version constant.
+The GPT-5, GPT-5.1, GPT-5.2, GPT-5.3 Chat, GPT-5.4, and GPT-5.6 profiles copy
+the established GPT-5.5 v1/v2/v3 prompt texts so the paper corpus can compare
+model improvements while holding the Stephanos prompt version constant.
 """
 
 from __future__ import annotations
@@ -45,6 +45,34 @@ class TimelineProfileSeed:
 
 
 MODEL_RELEASES = (
+    ModelReleaseSeed(
+        provider="openai",
+        model_slug="gpt-5",
+        display_name="GPT-5",
+        model_family="GPT-5",
+        release_date="2025-08-07",
+        api_release_date="2025-08-07",
+        source_url="https://developers.openai.com/api/docs/models/gpt-5",
+        source_label="OpenAI GPT-5 model docs",
+        notes=(
+            "Model docs list snapshot gpt-5-2025-08-07 and support for "
+            "Chat Completions, Responses, and Batch."
+        ),
+    ),
+    ModelReleaseSeed(
+        provider="openai",
+        model_slug="gpt-5.1",
+        display_name="GPT-5.1",
+        model_family="GPT-5",
+        release_date="2025-11-13",
+        api_release_date="2025-11-13",
+        source_url="https://developers.openai.com/api/docs/models/gpt-5.1",
+        source_label="OpenAI GPT-5.1 model docs",
+        notes=(
+            "Model docs list snapshot gpt-5.1-2025-11-13 and support for "
+            "Chat Completions, Responses, and Batch."
+        ),
+    ),
     ModelReleaseSeed(
         provider="openai",
         model_slug="gpt-5.2",
@@ -157,6 +185,26 @@ MODEL_RELEASES = (
 )
 
 TIMELINE_PROFILES = (
+    TimelineProfileSeed(
+        profile_name="gpt-5",
+        display_name="GPT-5",
+        model_slug="gpt-5",
+        runtime_model="gpt-5-2025-08-07",
+        description=(
+            "Approved-human model-timeline profile using the pinned GPT-5 "
+            "snapshot across Stephanos prompt v1/v2/v3."
+        ),
+    ),
+    TimelineProfileSeed(
+        profile_name="gpt-5.1",
+        display_name="GPT-5.1",
+        model_slug="gpt-5.1",
+        runtime_model="gpt-5.1-2025-11-13",
+        description=(
+            "Approved-human model-timeline profile using the pinned GPT-5.1 "
+            "snapshot across Stephanos prompt v1/v2/v3."
+        ),
+    ),
     TimelineProfileSeed(
         profile_name="gpt-5.2",
         display_name="GPT-5.2",
