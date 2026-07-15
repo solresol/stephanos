@@ -471,9 +471,9 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_ENA
     done
 fi
 
-# Step 4d7c: Queue guidance for GPT-5.4/GPT-5.6 model-timeline evaluations
+# Step 4d7c: Queue guidance for model-timeline evaluations
 HUMAN_EVAL_MODEL_TIMELINE_ENABLED="${HUMAN_EVAL_MODEL_TIMELINE_ENABLED:-1}"
-HUMAN_EVAL_MODEL_TIMELINE_PROFILES="${HUMAN_EVAL_MODEL_TIMELINE_PROFILES:-gpt-5.4 gpt-5.6-sol}"
+HUMAN_EVAL_MODEL_TIMELINE_PROFILES="${HUMAN_EVAL_MODEL_TIMELINE_PROFILES:-gpt-5.2 gpt-5.3-chat-latest gpt-5.4 gpt-5.6-sol}"
 HUMAN_EVAL_MODEL_TIMELINE_VERSIONS="${HUMAN_EVAL_MODEL_TIMELINE_VERSIONS:-1,2,3}"
 HUMAN_EVAL_MODEL_TIMELINE_SOURCE_DOCUMENT="${HUMAN_EVAL_MODEL_TIMELINE_SOURCE_DOCUMENT:-$HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT}"
 HUMAN_EVAL_MODEL_TIMELINE_GUIDANCE_LIMIT="${HUMAN_EVAL_MODEL_TIMELINE_GUIDANCE_LIMIT:-120}"
@@ -571,7 +571,7 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_ENA
     done
 fi
 
-# Step 4d8c: Queue GPT-5.4/GPT-5.6 model-timeline evaluation requests
+# Step 4d8c: Queue model-timeline evaluation requests
 if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_MODEL_TIMELINE_ENABLED" != "0" ] && [ "$HUMAN_EVAL_MODEL_TIMELINE_ENQUEUE_LIMIT" -gt 0 ]; then
     echo "Step 4d8c: Enqueuing model-timeline evaluation translations..." | tee -a "$LOGFILE"
     for timeline_profile in $HUMAN_EVAL_MODEL_TIMELINE_PROFILES; do
@@ -679,7 +679,27 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_MODEL_TIMELINE
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: GPT-5.6 model-timeline Responses step failed" | tee -a "$LOGFILE"
 fi
 
-# Step 5: Translate Chat Completions requests with gpt-5.5 after guidance coverage is complete
+# Step 5r3: GPT-5.3 Chat is a deprecated rolling alias that supports ordinary
+# Chat Completions, but not the Batch API. Drain it before the batch lane and
+# explicitly exclude it from batch submissions below.
+TRANSLATION_GPT53_RUN_LIMIT="${TRANSLATION_GPT53_RUN_LIMIT:-30}"
+TRANSLATION_GPT53_REQUEST_LIMIT="${TRANSLATION_GPT53_REQUEST_LIMIT:-60}"
+TRANSLATION_GPT53_DAILY_TOKEN_LIMIT="${TRANSLATION_GPT53_DAILY_TOKEN_LIMIT:-250000}"
+if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_MODEL_TIMELINE_ENABLED" != "0" ] && [ "$TRANSLATION_GPT53_RUN_LIMIT" -gt 0 ]; then
+    echo "Step 5r3: Translating GPT-5.3 Chat model-timeline requests without Batch..." | tee -a "$LOGFILE"
+    uv run translate_lemmas.py \
+        --api-mode chat_completions \
+        --model gpt-5.3-chat-latest \
+        --profile-prefix gpt-5.3-chat-latest \
+        --request-limit "$TRANSLATION_GPT53_REQUEST_LIMIT" \
+        --run-limit "$TRANSLATION_GPT53_RUN_LIMIT" \
+        --daily-token-limit "$TRANSLATION_GPT53_DAILY_TOKEN_LIMIT" \
+        --delay 1 \
+        --allow-human-evaluation-translations \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: GPT-5.3 Chat model-timeline step failed" | tee -a "$LOGFILE"
+fi
+
+# Step 5: Translate Batch-compatible Chat Completions requests after guidance coverage is complete
 echo "Step 5: Translating Chat Completions translation requests..." | tee -a "$LOGFILE"
 TRANSLATION_USE_BATCH="${TRANSLATION_USE_BATCH:-1}"
 TRANSLATION_BATCH_WAIT="${TRANSLATION_BATCH_WAIT:-1}"
@@ -687,7 +707,7 @@ TRANSLATION_BATCH_POLL_INTERVAL="${TRANSLATION_BATCH_POLL_INTERVAL:-30}"
 TRANSLATION_BATCH_TIMEOUT="${TRANSLATION_BATCH_TIMEOUT:-0}"
 translation_args=(uv run translate_lemmas.py --api-mode chat_completions)
 if [ "$TRANSLATION_USE_BATCH" != "0" ]; then
-    translation_args+=(--batch)
+    translation_args+=(--batch --exclude-model gpt-5.3-chat-latest)
     if [ "$TRANSLATION_BATCH_WAIT" != "0" ]; then
         translation_args+=(--batch-wait --batch-poll-interval "$TRANSLATION_BATCH_POLL_INTERVAL")
         if [ "$TRANSLATION_BATCH_TIMEOUT" != "0" ]; then

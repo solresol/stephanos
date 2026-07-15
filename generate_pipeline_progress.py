@@ -31,6 +31,8 @@ BILLERBECK_GERMAN_OCR_NIGHTLY_LIMIT = 3
 BILLERBECK_GERMAN_TRANSLATE_NIGHTLY_LIMIT = 5
 PAPER_MODEL_TARGET_ROWS = 100
 PAPER_MODEL_PROFILES = (
+    "gpt-5.2",
+    "gpt-5.3-chat-latest",
     "gpt-5.4",
     "gpt-5.5",
     "gpt-5.6-sol",

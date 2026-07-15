@@ -841,7 +841,9 @@ def fetch_requests(
     request_limit: int | None,
     api_mode_filter: str = "all",
     model_filter: str | None = None,
+    excluded_models: list[str] | None = None,
     profile_prefix: str | None = None,
+    profile_version_filter: int | None = None,
     exclude_submitted_batch_items: bool = False,
 ):
     has_human_translation_expr = human_translation_exists_sql(cur)
@@ -917,9 +919,15 @@ def fetch_requests(
     if model_filter:
         query += f" AND {model_expr} = %s"
         params.extend([DEFAULT_TRANSLATION_MODEL, model_filter])
+    if excluded_models:
+        query += f" AND NOT ({model_expr} = ANY(%s))"
+        params.extend([DEFAULT_TRANSLATION_MODEL, list(excluded_models)])
     if profile_prefix:
         query += " AND p.name LIKE %s"
         params.append(f"{profile_prefix}%")
+    if profile_version_filter is not None:
+        query += " AND pv.version = %s"
+        params.append(int(profile_version_filter))
     if exclude_submitted_batch_items:
         query += """
             AND NOT EXISTS (
@@ -1822,8 +1830,19 @@ def main():
     )
     parser.add_argument("--model", help="Restrict this worker invocation to one resolved model name.")
     parser.add_argument(
+        "--exclude-model",
+        action="append",
+        default=[],
+        help="Exclude a resolved model name; may be repeated.",
+    )
+    parser.add_argument(
         "--profile-prefix",
         help="Restrict this worker invocation to queued requests whose prompt profile starts with this prefix.",
+    )
+    parser.add_argument(
+        "--profile-version",
+        type=int,
+        help="Restrict this worker invocation to one numeric prompt-profile version.",
     )
     parser.add_argument("--batch", action="store_true", help="Submit translation requests through the OpenAI Batch API")
     parser.add_argument(
@@ -1916,7 +1935,9 @@ def main():
         args.request_limit,
         api_mode_filter=args.api_mode,
         model_filter=args.model,
+        excluded_models=args.exclude_model,
         profile_prefix=args.profile_prefix,
+        profile_version_filter=args.profile_version,
         exclude_submitted_batch_items=bool(args.batch and args.allow_parallel_batches),
     )
     print(f"Queued requests: {len(requests)}")
