@@ -150,6 +150,18 @@ class HumanEvaluationRequestLabelTests(unittest.TestCase):
 
         self.assertEqual(timeline_profile_runtime(profile), ("chat_completions", None))
 
+    def test_gpt_5_timeline_pins_the_historical_snapshot(self):
+        profile = next(row for row in TIMELINE_PROFILES if row.profile_name == "gpt-5")
+
+        self.assertEqual(profile.runtime_model, "gpt-5-2025-08-07")
+        self.assertEqual(timeline_profile_runtime(profile), ("chat_completions", None))
+
+    def test_gpt_5_1_timeline_pins_the_historical_snapshot(self):
+        profile = next(row for row in TIMELINE_PROFILES if row.profile_name == "gpt-5.1")
+
+        self.assertEqual(profile.runtime_model, "gpt-5.1-2025-11-13")
+        self.assertEqual(timeline_profile_runtime(profile), ("chat_completions", None))
+
     def test_gpt_5_2_timeline_pins_the_historical_snapshot(self):
         profile = next(row for row in TIMELINE_PROFILES if row.profile_name == "gpt-5.2")
 

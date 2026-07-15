@@ -68,6 +68,8 @@ class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
         self.assertEqual(
             MODEL_TIMELINE_PROFILE_NAMES,
             (
+                "gpt-5",
+                "gpt-5.1",
                 "gpt-5.2",
                 "gpt-5.3-chat-latest",
                 "gpt-5.4",
@@ -184,6 +186,20 @@ class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
         rows = [
             {
                 "prompt_version": 1,
+                "release_date": "2025-08-07",
+                "mean_core_metric": 0.40,
+                "mean_rouge_l": 0.42,
+                "synthetic_zainaldi_mean_core_metric": 0.38,
+            },
+            {
+                "prompt_version": 1,
+                "release_date": "2025-11-13",
+                "mean_core_metric": 0.45,
+                "mean_rouge_l": 0.47,
+                "synthetic_zainaldi_mean_core_metric": 0.43,
+            },
+            {
+                "prompt_version": 1,
                 "release_date": "2025-12-11",
                 "mean_core_metric": 0.50,
                 "mean_rouge_l": 0.52,
@@ -226,7 +242,7 @@ class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
             if row["prompt_version"] == 1 and row["metric_key"] == "mean_core_metric"
         )
 
-        self.assertEqual(mean_row["completed_release_count"], 5)
+        self.assertEqual(mean_row["completed_release_count"], 7)
         self.assertEqual(mean_row["steady_improvement_status"], "steady improvement")
         self.assertEqual(mean_row["projection_status"], "linear projection from completed releases")
         self.assertRegex(str(mean_row["estimated_target_date"]), r"^2026-")
