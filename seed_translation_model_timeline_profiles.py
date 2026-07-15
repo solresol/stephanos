@@ -2,9 +2,9 @@
 """
 Seed model-timeline prompt profiles for the 100-row translation evaluation.
 
-The GPT-5, GPT-5.1, GPT-5.2, GPT-5.3 Chat, GPT-5.4, and GPT-5.6 profiles copy
-the established GPT-5.5 v1/v2/v3 prompt texts so the paper corpus can compare
-model improvements while holding the Stephanos prompt version constant.
+The GPT-4-family and GPT-5-family profiles copy the established GPT-5.5
+v1/v2/v3 prompt texts so the paper corpus can compare model improvements while
+holding the Stephanos prompt version constant.
 """
 
 from __future__ import annotations
@@ -45,6 +45,61 @@ class TimelineProfileSeed:
 
 
 MODEL_RELEASES = (
+    ModelReleaseSeed(
+        provider="openai",
+        model_slug="gpt-4-turbo-2024-04-09",
+        display_name="GPT-4 Turbo (2024-04-09)",
+        model_family="GPT-4 Turbo",
+        release_date="2024-04-09",
+        api_release_date="2024-04-09",
+        source_url="https://developers.openai.com/api/docs/models/gpt-4-turbo",
+        source_label="OpenAI GPT-4 Turbo model docs",
+        notes="Pinned GPT-4 Turbo snapshot retained for Chat Completions and Batch.",
+    ),
+    ModelReleaseSeed(
+        provider="openai",
+        model_slug="gpt-4o-2024-05-13",
+        display_name="GPT-4o (2024-05-13)",
+        model_family="GPT-4o",
+        release_date="2024-05-13",
+        api_release_date="2024-05-13",
+        source_url="https://developers.openai.com/api/docs/models/gpt-4o",
+        source_label="OpenAI GPT-4o model docs",
+        notes="Original pinned GPT-4o snapshot retained for historical comparison.",
+    ),
+    ModelReleaseSeed(
+        provider="openai",
+        model_slug="gpt-4o-2024-08-06",
+        display_name="GPT-4o (2024-08-06)",
+        model_family="GPT-4o",
+        release_date="2024-08-06",
+        api_release_date="2024-08-06",
+        source_url="https://developers.openai.com/api/docs/models/gpt-4o",
+        source_label="OpenAI GPT-4o model docs",
+        notes="Pinned GPT-4o snapshot retained for Chat Completions and Batch.",
+    ),
+    ModelReleaseSeed(
+        provider="openai",
+        model_slug="gpt-4o-2024-11-20",
+        display_name="GPT-4o (2024-11-20)",
+        model_family="GPT-4o",
+        release_date="2024-11-20",
+        api_release_date="2024-11-20",
+        source_url="https://developers.openai.com/api/docs/models/gpt-4o",
+        source_label="OpenAI GPT-4o model docs",
+        notes="Pinned GPT-4o snapshot retained for Chat Completions and Batch.",
+    ),
+    ModelReleaseSeed(
+        provider="openai",
+        model_slug="gpt-4.1-2025-04-14",
+        display_name="GPT-4.1 (2025-04-14)",
+        model_family="GPT-4.1",
+        release_date="2025-04-14",
+        api_release_date="2025-04-14",
+        source_url="https://developers.openai.com/api/docs/models/gpt-4.1",
+        source_label="OpenAI GPT-4.1 model docs",
+        notes="Pinned GPT-4.1 snapshot retained for Chat Completions and Batch.",
+    ),
     ModelReleaseSeed(
         provider="openai",
         model_slug="gpt-5",
@@ -185,6 +240,51 @@ MODEL_RELEASES = (
 )
 
 TIMELINE_PROFILES = (
+    TimelineProfileSeed(
+        profile_name="gpt-4-turbo-2024-04-09",
+        display_name="GPT-4 Turbo (2024-04-09)",
+        model_slug="gpt-4-turbo-2024-04-09",
+        description=(
+            "Approved-human model-timeline profile using the pinned GPT-4 Turbo "
+            "2024-04-09 snapshot across Stephanos prompt v1/v2/v3."
+        ),
+    ),
+    TimelineProfileSeed(
+        profile_name="gpt-4o-2024-05-13",
+        display_name="GPT-4o (2024-05-13)",
+        model_slug="gpt-4o-2024-05-13",
+        description=(
+            "Approved-human model-timeline profile using the pinned GPT-4o "
+            "2024-05-13 snapshot across Stephanos prompt v1/v2/v3."
+        ),
+    ),
+    TimelineProfileSeed(
+        profile_name="gpt-4o-2024-08-06",
+        display_name="GPT-4o (2024-08-06)",
+        model_slug="gpt-4o-2024-08-06",
+        description=(
+            "Approved-human model-timeline profile using the pinned GPT-4o "
+            "2024-08-06 snapshot across Stephanos prompt v1/v2/v3."
+        ),
+    ),
+    TimelineProfileSeed(
+        profile_name="gpt-4o-2024-11-20",
+        display_name="GPT-4o (2024-11-20)",
+        model_slug="gpt-4o-2024-11-20",
+        description=(
+            "Approved-human model-timeline profile using the pinned GPT-4o "
+            "2024-11-20 snapshot across Stephanos prompt v1/v2/v3."
+        ),
+    ),
+    TimelineProfileSeed(
+        profile_name="gpt-4.1-2025-04-14",
+        display_name="GPT-4.1 (2025-04-14)",
+        model_slug="gpt-4.1-2025-04-14",
+        description=(
+            "Approved-human model-timeline profile using the pinned GPT-4.1 "
+            "2025-04-14 snapshot across Stephanos prompt v1/v2/v3."
+        ),
+    ),
     TimelineProfileSeed(
         profile_name="gpt-5",
         display_name="GPT-5",

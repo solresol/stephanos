@@ -68,6 +68,11 @@ class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
         self.assertEqual(
             MODEL_TIMELINE_PROFILE_NAMES,
             (
+                "gpt-4-turbo-2024-04-09",
+                "gpt-4o-2024-05-13",
+                "gpt-4o-2024-08-06",
+                "gpt-4o-2024-11-20",
+                "gpt-4.1-2025-04-14",
                 "gpt-5",
                 "gpt-5.1",
                 "gpt-5.2",
@@ -186,6 +191,41 @@ class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
         rows = [
             {
                 "prompt_version": 1,
+                "release_date": "2024-04-09",
+                "mean_core_metric": 0.15,
+                "mean_rouge_l": 0.17,
+                "synthetic_zainaldi_mean_core_metric": 0.13,
+            },
+            {
+                "prompt_version": 1,
+                "release_date": "2024-05-13",
+                "mean_core_metric": 0.20,
+                "mean_rouge_l": 0.22,
+                "synthetic_zainaldi_mean_core_metric": 0.18,
+            },
+            {
+                "prompt_version": 1,
+                "release_date": "2024-08-06",
+                "mean_core_metric": 0.25,
+                "mean_rouge_l": 0.27,
+                "synthetic_zainaldi_mean_core_metric": 0.23,
+            },
+            {
+                "prompt_version": 1,
+                "release_date": "2024-11-20",
+                "mean_core_metric": 0.30,
+                "mean_rouge_l": 0.32,
+                "synthetic_zainaldi_mean_core_metric": 0.28,
+            },
+            {
+                "prompt_version": 1,
+                "release_date": "2025-04-14",
+                "mean_core_metric": 0.35,
+                "mean_rouge_l": 0.37,
+                "synthetic_zainaldi_mean_core_metric": 0.33,
+            },
+            {
+                "prompt_version": 1,
                 "release_date": "2025-08-07",
                 "mean_core_metric": 0.40,
                 "mean_rouge_l": 0.42,
@@ -242,10 +282,10 @@ class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
             if row["prompt_version"] == 1 and row["metric_key"] == "mean_core_metric"
         )
 
-        self.assertEqual(mean_row["completed_release_count"], 7)
+        self.assertEqual(mean_row["completed_release_count"], 12)
         self.assertEqual(mean_row["steady_improvement_status"], "steady improvement")
         self.assertEqual(mean_row["projection_status"], "linear projection from completed releases")
-        self.assertRegex(str(mean_row["estimated_target_date"]), r"^2026-")
+        self.assertRegex(str(mean_row["estimated_target_date"]), r"^2027-")
 
     def test_model_timeline_charts_are_written(self) -> None:
         rows = []
