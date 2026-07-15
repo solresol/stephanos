@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from enqueue_human_evaluation_translations import evaluation_created_by
+from enqueue_human_evaluation_translations import evaluation_created_by, resolve_profile_versions
 from seed_translation_model_timeline_profiles import TIMELINE_PROFILES, timeline_profile_runtime
 from translate_lemmas import (
     batch_error_from_payload,
@@ -13,6 +13,25 @@ from translate_lemmas import (
 
 
 class HumanEvaluationRequestLabelTests(unittest.TestCase):
+    @patch("enqueue_human_evaluation_translations.column_exists", return_value=True)
+    def test_historical_evaluation_can_resolve_an_explicit_inactive_version(self, _column_exists):
+        class RecordingCursor:
+            query = ""
+
+            def execute(self, query, _params):
+                self.query = query
+
+            def fetchall(self):
+                return [
+                    (42, 1, "gpt-5.5", None, "chat_completions", None, 1, 4, True, False)
+                ]
+
+        cur = RecordingCursor()
+        rows = resolve_profile_versions(cur, 1, [1], include_inactive=True)
+
+        self.assertEqual(rows[0]["profile_version_id"], 42)
+        self.assertNotIn("COALESCE(active, TRUE) = TRUE", cur.query)
+
     @patch("translate_lemmas.prompt_version_approved_only_expr", return_value="FALSE")
     @patch("translate_lemmas.prompt_version_guidance_expr", return_value="FALSE")
     @patch("translate_lemmas.approved_human_translation_exists_sql", return_value="FALSE")

@@ -104,7 +104,13 @@ def resolve_profile(cur, profile_name: str) -> int:
     return int(row[0])
 
 
-def resolve_profile_versions(cur, profile_id: int, versions: list[int]) -> list[dict[str, object]]:
+def resolve_profile_versions(
+    cur,
+    profile_id: int,
+    versions: list[int],
+    *,
+    include_inactive: bool = False,
+) -> list[dict[str, object]]:
     optional_columns = [
         ("default_model", "NULLIF(default_model, '')", "NULL"),
         ("default_top_p", "default_top_p", "NULL"),
@@ -124,7 +130,7 @@ def resolve_profile_versions(cur, profile_id: int, versions: list[int]) -> list[
         )
     active_filter = (
         "AND COALESCE(active, TRUE) = TRUE"
-        if column_exists(cur, "translation_prompt_profile_versions", "active")
+        if not include_inactive and column_exists(cur, "translation_prompt_profile_versions", "active")
         else ""
     )
     cur.execute(
@@ -593,6 +599,11 @@ def main() -> None:
     parser.add_argument("--profile", default=DEFAULT_PROFILE, help="Prompt profile name")
     parser.add_argument("--versions", type=parse_versions, default=list(DEFAULT_VERSIONS), help="Prompt versions, e.g. 1,2,3")
     parser.add_argument(
+        "--include-inactive-versions",
+        action="store_true",
+        help="Permit explicitly named historical prompt versions that are no longer active.",
+    )
+    parser.add_argument(
         "--corpus",
         default=DEFAULT_PAPER_CORPUS,
         choices=CORPUS_CHOICES,
@@ -702,7 +713,12 @@ def main() -> None:
         )
     else:
         profile_id = resolve_profile(cur, args.profile)
-        profile_versions = resolve_profile_versions(cur, profile_id, args.versions)
+        profile_versions = resolve_profile_versions(
+            cur,
+            profile_id,
+            args.versions,
+            include_inactive=args.include_inactive_versions,
+        )
         for row in profile_versions:
             row["profile_name"] = args.profile
     open_requests = count_open_requests(cur, profile_versions)
