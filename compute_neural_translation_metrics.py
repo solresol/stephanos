@@ -11,6 +11,7 @@ from typing import Any
 
 
 DEFAULT_COMET_MODEL = "Unbabel/wmt22-comet-da"
+DEFAULT_XCOMET_MODEL = "Unbabel/XCOMET-XL"
 DEFAULT_BLEURT_CHECKPOINTS = (
     "/home/stephanos/metric-envs/bleurt/BLEURT-20",
     "bleurt-20",
@@ -62,12 +63,24 @@ def compute_bertscore(rows: list[dict[str, Any]], request: dict[str, Any]) -> tu
     return scores, "sidecar bert-score F1"
 
 
-def compute_comet(rows: list[dict[str, Any]], request: dict[str, Any]) -> tuple[dict[int, dict[str, float]], str]:
+def compute_comet_model(
+    rows: list[dict[str, Any]],
+    request: dict[str, Any],
+    *,
+    request_key: str,
+    default_model: str,
+    score_key: str,
+) -> tuple[dict[int, dict[str, float]], str]:
     from comet import download_model, load_from_checkpoint
 
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    model_name = str(request.get("comet_model") or DEFAULT_COMET_MODEL)
-    model_path = download_model(model_name)
+    model_name = str(request.get(request_key) or default_model)
+    if score_key == "xcomet":
+        from huggingface_hub import snapshot_download
+
+        model_path = Path(snapshot_download(repo_id=model_name)) / "checkpoints" / "model.ckpt"
+    else:
+        model_path = download_model(model_name)
     model = load_from_checkpoint(model_path)
     if request.get("use_gpu"):
         model = model.cuda()
@@ -91,8 +104,28 @@ def compute_comet(rows: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
     for row, score in zip(rows, raw_scores, strict=True):
         numeric = finite_float(score)
         if numeric is not None:
-            scores[int(row["row_index"])] = {"comet": numeric}
+            scores[int(row["row_index"])] = {score_key: numeric}
     return scores, f"sidecar {model_name}"
+
+
+def compute_comet(rows: list[dict[str, Any]], request: dict[str, Any]) -> tuple[dict[int, dict[str, float]], str]:
+    return compute_comet_model(
+        rows,
+        request,
+        request_key="comet_model",
+        default_model=DEFAULT_COMET_MODEL,
+        score_key="comet",
+    )
+
+
+def compute_xcomet(rows: list[dict[str, Any]], request: dict[str, Any]) -> tuple[dict[int, dict[str, float]], str]:
+    return compute_comet_model(
+        rows,
+        request,
+        request_key="xcomet_model",
+        default_model=DEFAULT_XCOMET_MODEL,
+        score_key="xcomet",
+    )
 
 
 def compute_bleurt(rows: list[dict[str, Any]], request: dict[str, Any]) -> tuple[dict[int, dict[str, float]], str]:
@@ -103,6 +136,7 @@ def compute_bleurt(rows: list[dict[str, Any]], request: dict[str, Any]) -> tuple
     raw_scores = scorer.score(
         references=[str(row.get("reference") or "") for row in rows],
         candidates=[str(row.get("candidate") or "") for row in rows],
+        batch_size=int(request.get("bleurt_batch_size") or 16),
     )
     scores = {}
     for row, score in zip(rows, raw_scores, strict=True):
@@ -115,6 +149,7 @@ def compute_bleurt(rows: list[dict[str, Any]], request: dict[str, Any]) -> tuple
 METRIC_FUNCTIONS = {
     "bertscore": compute_bertscore,
     "comet": compute_comet,
+    "xcomet": compute_xcomet,
     "bleurt": compute_bleurt,
 }
 

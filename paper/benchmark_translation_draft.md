@@ -2,7 +2,7 @@
 title: "Benchmarking LLM Translation of Stephanus of Byzantium: Prompt Design, Model Release, and the Limits of Reference-Based Evaluation"
 date: "July 2026"
 lang: en-AU
-fontsize: 10pt
+fontsize: 12pt
 geometry: margin=24mm
 header-includes:
   - |
@@ -20,7 +20,7 @@ header-includes:
 
 Large language models can produce fluent English from Ancient Greek, but fluency is a poor test for a scholarly translation. We evaluate model and prompt effects on 100 entries from the Kappa section of Stephanus of Byzantium's *Ethnika*, using an approved human translation for each entry. Twelve dated OpenAI models, from GPT-4 Turbo (April 2024) to GPT-5.6 Sol (July 2026), were run under three prompt conditions, giving 3,600 model-entry comparisons. Eight complete Claude model-prompt cells add 800 comparisons, treated as isolated cross-provider observations rather than a time series.
 
-The main outcome is the unweighted mean of BLEU-4, chrF++, METEOR and ROUGE-L at model-prompt level. Across the twelve OpenAI models, the reviewed house-style prompt (v2) scores 18.55 percentage points above the minimal prompt (v1); a longer prompt with entry-specific formula guidance (v3) adds a smaller gain and produces many more near-identical outputs. Similarity also rises with model release date, fastest under the detailed prompts, though individual releases sometimes score below their predecessors. The best Claude condition narrowly exceeds the best OpenAI condition (see Section 2.4 for its provenance status). The study needs an independent human translation or blinded classicist ratings before human equivalence can be measured.
+The main outcome is the unweighted mean of BLEU-4, chrF++, METEOR and ROUGE-L at model-prompt level. Across the twelve OpenAI models, the reviewed house-style prompt (v2) scores 18.55 percentage points above the minimal prompt (v1); a longer prompt with entry-specific formula guidance (v3) adds a smaller gain and produces many more near-identical outputs. Similarity also rises with model release date, fastest under the detailed prompts, though individual releases sometimes score below their predecessors. COMET-22 and BLEURT-20 independently reproduce the release-date trend for v2 and v3, while finding no trend for v1. The best Claude condition narrowly exceeds the best OpenAI condition (see Section 2.4 for its provenance status). The study needs an independent human translation or blinded classicist ratings before human equivalence can be measured.
 
 # 1. Introduction
 
@@ -94,7 +94,9 @@ Each machine output is compared with the approved translation for the same entry
 - METEOR, which rewards aligned lexical matches and recall (Banerjee and Lavie 2005); and
 - ROUGE-L, based on the longest common subsequence (Lin 2004).
 
-The main score is the unweighted mean of the four model-level metric means. It gives one readable summary without letting BLEU, whose numerical scale is lower in this corpus, disappear behind the other metrics. Every component is also reported separately. Experimental neural metrics (BERTScore, COMET, BLEURT) were incomplete for the historical model cells and are omitted.
+The main score is the unweighted mean of the four model-level metric means. It gives one readable summary without letting BLEU, whose numerical scale is lower in this corpus, disappear behind the other metrics. Every component is also reported separately.
+
+Two learned reference metrics provide separate robustness checks across all 4,400 comparisons. COMET-22 uses the Ancient Greek source, candidate translation and approved English reference (Rei et al. 2020). BLEURT-20 compares the candidate and reference through a learned text-generation metric (Sellam, Das and Parikh 2020). Their raw outputs are reported on their own scales and are not averaged into the lexical composite. Both models were run in eleven validated 400-row CPU shards on `raksasa`; every metric has one finite score for each benchmark row. XCOMET-XL is being evaluated separately and is not reported before that run is complete.
 
 ## 3.2 Exactness and length
 
@@ -114,7 +116,7 @@ The release-date analysis uses one observation per OpenAI model-prompt cell. Dat
 
 Prompt contrasts use paired tests across the twelve OpenAI models: the v3-v2 composite, for example, has twelve paired differences, one per model. This avoids treating 1,200 entry-level scores as independent observations.
 
-The historical projection solves the fitted line for a score of 0.90 — a planning marker adopted before any human-human baseline existed, not an expert-derived threshold. We report it because it answers a practical project question, then test how the date changes when the latest release is removed and when the regression is limited to GPT-5 and later.
+The historical projection solves the fitted line for a score of 0.90. This was a planning marker adopted before any human-human baseline existed, not an expert-derived threshold. We report it because it answers a practical project question, then test how the date changes when the latest release is removed and when the regression is limited to GPT-5 and later.
 
 # 4. Results
 
@@ -130,7 +132,7 @@ V3 raises the composite by a further 2.06 points (95% CI 0.95 to 3.16; $p=0.0017
 | v2 | 45.00% | 68.25% | 73.54% | 74.64% | 65.36% | 42.58 |
 | v3 | 46.80% | 70.19% | 76.08% | 76.58% | 67.41% | 43.62 |
 
-: **Table 1.** OpenAI prompt-condition means across twelve model releases. Each cell is first averaged over the same 100 entries, then across models.
+: OpenAI prompt-condition means across twelve model releases. Each cell is first averaged over the same 100 entries, then across models.
 
 Prompt design also changes output length. The human references average 44.2 words. V1 averages 47.7 words, v2 42.6 and v3 43.6. The newer prompts score higher while producing shorter outputs than v1.
 
@@ -144,7 +146,7 @@ The composite slope is positive under every prompt (Table 2).
 | v2 | 69.98% | 4.02 | 3.22 to 4.81 | 0.927 | $5.24\times10^{-7}$ | 19 Aug 2031 |
 | v3 | 72.93% | 4.92 | 3.28 to 6.56 | 0.817 | $5.51\times10^{-5}$ | 3 Feb 2030 |
 
-: **Table 2.** OLS regression of the four-metric mean on OpenAI model release date, twelve models per prompt.
+: OLS regression of the four-metric mean on OpenAI model release date, twelve models per prompt.
 
 The first-to-latest change is 4.15 points for v1, 9.05 for v2 and 14.05 for v3. Six of eleven v1 transitions are negative, compared with two for v2 and three for v3. GPT-5.3 has the highest v1 score (49.12%). GPT-5.6 has the highest v2 score (69.98%), only 0.10 points above GPT-5.5. GPT-5.5 has the highest OpenAI v3 score (74.19%); GPT-5.6 is 1.26 points lower.
 
@@ -155,21 +157,51 @@ The first-to-latest change is 4.15 points for v1, 9.05 for v2 and 14.05 for v3. 
 \label{fig:model-timeline}
 \end{figure}
 
-All four component metrics show the v2 and v3 trends; per-metric regressions are in Appendix B. V1 has positive component slopes too, but its METEOR and ROUGE-L relationships are weaker ($R^2=0.404$ and 0.457): time alone has not supplied the local conventions that v2 and v3 state explicitly.
+All four component metrics show the v2 and v3 trends; per-metric regressions are in Appendix B and the annotated component plots are in Appendix D. V1 has positive component slopes too, but its METEOR and ROUGE-L relationships are weaker ($R^2=0.404$ and 0.457): time alone has not supplied the local conventions that v2 and v3 state explicitly.
 
-## 4.3 Claude results are competitive but not a second time series
+## 4.3 COMET and BLEURT confirm a prompt-conditioned trend
+
+The learned metrics separate the prompt conditions in much the same way as the lexical measures. Across the twelve OpenAI models, mean COMET-22 rises from 0.7207 for v1 to 0.7868 for v2 and 0.7916 for v3. Mean BLEURT-20 rises from 0.6398 to 0.7327 and 0.7404. The paired v2-v1 gains are 0.0661 for COMET (95% CI 0.0581 to 0.0742; $p=1.58\times10^{-9}$) and 0.0929 for BLEURT (95% CI 0.0774 to 0.1085; $p=4.50\times10^{-8}$). V3 adds smaller gains over v2: 0.0047 for COMET ($p=0.0194$) and 0.0077 for BLEURT ($p=0.0394$).
+
+Release date is unrelated to either learned metric under v1. The COMET slope is -0.0018 per year ($R^2=0.058$, $p=0.452$), and the BLEURT slope is -0.0022 ($R^2=0.029$, $p=0.594$). Under v2 and v3, however, both slopes are positive with $p<0.001$ (Table 3). Newer models therefore improve when the prompt supplies the project's conventions, but do not converge on those conventions from the minimal request alone.
+
+| Prompt | COMET slope/year | COMET $R^2$ | COMET $p$ | BLEURT slope/year | BLEURT $R^2$ | BLEURT $p$ |
+|---|---:|---:|---:|---:|---:|---:|
+| v1 | -0.0018 | 0.058 | 0.452 | -0.0022 | 0.029 | 0.594 |
+| v2 | 0.0110 | 0.861 | $1.34\times10^{-5}$ | 0.0220 | 0.833 | $3.45\times10^{-5}$ |
+| v3 | 0.0148 | 0.774 | 0.000163 | 0.0295 | 0.759 | 0.000223 |
+
+: OLS regressions of mean learned-metric score on OpenAI model release date, twelve models per prompt. Slopes are raw score units per year.
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth]{figures/model-quality-over-time-comet.pdf}
+\caption{Mean COMET-22 score by model release date. OpenAI regressions are fitted separately by prompt; Claude observations are annotated but excluded from all fits.}
+\label{fig:comet-timeline}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth]{figures/model-quality-over-time-bleurt.pdf}
+\caption{Mean BLEURT-20 score by model release date, with the same model annotations and fitting rules as Figure~\ref{fig:comet-timeline}.}
+\label{fig:bleurt-timeline}
+\end{figure}
+
+The two metrics also agree on the leading conditions. Claude Fable 5 v3 is highest on COMET (0.8149), narrowly ahead of GPT-5.5 v3 (0.8140) and GPT-5.6 v3 (0.8135). Fable v3 is highest on BLEURT (0.7892), followed by GPT-5.6 v3 (0.7877) and GPT-5.5 v3 (0.7868). These margins are small beside the prompt differences and remain reference-dependent.
+
+## 4.4 Claude results are competitive but not a second time series
 
 Claude Fable 5 is the strongest Claude condition in each available prompt: 54.91% for v1, 71.48% for v2 and 74.87% for v3. Its v3 score is the highest observed composite in the study, 0.68 points above GPT-5.5 v3 and 1.94 above GPT-5.6 v3. Claude Sonnet 5 scores 49.62%, 67.16% and 73.16%. Opus 4.8 scores 49.25% on v1 and 72.80% on v3; v2 is missing.
 
 The cross-provider difference is small relative to the prompt effect: Fable's v3 lead over the best OpenAI result is less than one point, while moving the same OpenAI model from v1 to v2 averages more than eighteen points. For the provenance reasons in Section 2.4, the figure shows Claude points but does not fit them.
 
-## 4.4 Exact and near-exact outputs
+## 4.5 Exact and near-exact outputs
 
 No v1 output is an exact match or reaches the 0.98 normalised sequence threshold across the 1,200 OpenAI comparisons. V2 has 12 exact matches and 25 near-98% outputs. V3 also has 12 exact matches, but 78 near-98% outputs. V3 therefore does not increase exact copying across the full timeline; it increases the frequency with which the model lands close to the approved editorial form.
 
 The effect is concentrated in later models. GPT-5.5 v3 has six exact and eleven near-98% translations. GPT-5.6 v3 has three exact and eleven near-98% translations. Claude Fable 5 v3 has three exact and seven near-98% translations.
 
-## 4.5 What the aggregate scores hide
+## 4.6 What the aggregate scores hide
 
 Four entries show why a benchmark needs both statistics and reading.
 
@@ -205,7 +237,7 @@ A defensible equivalence claim requires one of two additions. The stronger desig
 
 # 6. Limitations
 
-Several limitations bound these results. There is one approved reference per entry, and all four metrics reward similarity to that wording. The 100 entries are a reviewed operational corpus, not a random sample of the *Ethnika*; results may differ in other letters, in the longer non-epitomised material or in passages dominated by verse and rare terminology. Prompt development and evaluation are not independent (Section 2.3), so the scores measure an operational workflow on its working corpus rather than performance on untouched test data; a future study should freeze a new letter before any rules are derived, then evaluate those rules without further editing. Finally, release date is a proxy for model generation, not a causal variable: the twelve observations share a provider, training lineage and evaluation procedure, and the slope will not necessarily continue.
+Several limitations bound these results. There is one approved reference per entry, and all six metrics reward similarity to that wording. COMET-22 and BLEURT-20 were trained for modern machine-translation or text-generation evaluation rather than Ancient Greek lexicography; agreement between them and the lexical metrics is useful, but their raw values are not calibrated measures of philological correctness or human equivalence. The 100 entries are a reviewed operational corpus, not a random sample of the *Ethnika*; results may differ in other letters, in the longer non-epitomised material or in passages dominated by verse and rare terminology. Prompt development and evaluation are not independent (Section 2.3), so the scores measure an operational workflow on its working corpus rather than performance on untouched test data; a future study should freeze a new letter before any rules are derived, then evaluate those rules without further editing. Finally, release date is a proxy for model generation, not a causal variable: the twelve observations share a provider, training lineage and evaluation procedure, and the slope will not necessarily continue.
 
 # 7. Conclusion
 
@@ -213,7 +245,7 @@ Translation similarity for the Kappa benchmark rises with both editorial instruc
 
 # Data and code availability
 
-The analysis script is `paper/analysis/benchmark_paper_analysis.py`. It rebuilds the deterministic metrics from the live PostgreSQL corpus and writes ignored CSV, JSON and LaTeX intermediates to its build directory. Figure 1 is generated as both PNG and PDF. The paper corpus is anchored to the imported final Kappa review tracker rather than the mutable set of all approved translations. Public release of entry-level Greek, human and model text remains subject to edition, translation and project licensing decisions.
+The lexical analysis script is `paper/analysis/benchmark_paper_analysis.py`; the resumable neural-metric runner and summarizer is `paper/analysis/neural_benchmark_analysis.py`. They rebuild metrics from the live PostgreSQL corpus and write ignored CSV, JSON and LaTeX intermediates to the paper build directory. The release-date figures are generated as both PNG and PDF. The paper corpus is anchored to the imported final Kappa review tracker rather than the mutable set of all approved translations. Public release of entry-level Greek, human and model text remains subject to edition, translation and project licensing decisions.
 
 # References
 
@@ -237,6 +269,10 @@ Papineni, Kishore, Salim Roukos, Todd Ward, and Wei-Jing Zhu. 2002. "BLEU: A Met
 
 Popovic, Maja. 2015. "chrF: Character n-gram F-score for Automatic MT Evaluation." In *Proceedings of the Tenth Workshop on Statistical Machine Translation*, 392-395. <https://aclanthology.org/W15-3049/>.
 
+Rei, Ricardo, Craig Stewart, Ana C. Farinha, and Alon Lavie. 2020. "COMET: A Neural Framework for MT Evaluation." In *Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing*, 2685-2702. <https://aclanthology.org/2020.emnlp-main.213/>.
+
+Sellam, Thibault, Dipanjan Das, and Ankur P. Parikh. 2020. "BLEURT: Learning Robust Metrics for Text Generation." In *Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics*, 7881-7892. <https://aclanthology.org/2020.acl-main.704/>.
+
 Zainaldin, James L., Cameron Pattison, Manuela Marai, Jacob Wu, and Mark J. Schiefsky. 2026. "Terminology Rarity Predicts Catastrophic Failure in LLM Translation of Low-Resource Ancient Languages: Evidence from Ancient Greek." arXiv:2602.24119. <https://arxiv.org/abs/2602.24119>.
 
 # Appendix A. Per-model benchmark cells
@@ -250,3 +286,27 @@ Zainaldin, James L., Cameron Pattison, Manuela Marai, Jacob Wu, and Mark J. Schi
 # Appendix C. Prompt-version contrasts
 
 \input{build/benchmark_analysis/prompt_delta_table.tex}
+
+# Appendix D. Component-metric release plots
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/model-quality-over-time-bleu4.pdf}
+
+\medskip
+
+\includegraphics[width=0.88\textwidth]{figures/model-quality-over-time-chrfpp.pdf}
+\caption{BLEU-4 and chrF++ release-date plots. Circles and dashed fits are the OpenAI series. Diamonds are Claude observations at provider release dates; they are annotated but excluded from every fit.}
+\label{fig:component-timelines-1}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/model-quality-over-time-meteor.pdf}
+
+\medskip
+
+\includegraphics[width=0.88\textwidth]{figures/model-quality-over-time-rouge-l.pdf}
+\caption{METEOR and ROUGE-L release-date plots, using the same encodings and exclusions as Figure~\ref{fig:component-timelines-1}.}
+\label{fig:component-timelines-2}
+\end{figure}
