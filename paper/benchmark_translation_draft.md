@@ -39,14 +39,11 @@ The Stephanus project records a translation workflow as the prompt and the avail
 
 ## 2.1 The Kappa paper corpus
 
-The evaluation set consists of 100 visible rows from the final Kappa translation review tracker, imported into PostgreSQL and linked to the live lemma table by source row number. Each benchmark item has:
+The evaluation set consists of 100 visible rows from the Kappa translation review tracker. Each benchmark item has:
 
 - the Greek text used for translation;
-- an approved English translation at reviewed or final stage;
-- the prompt and model metadata for each machine translation; and
-- a stable lemma identifier and corpus order.
-
-The frozen tracker matters because the project contains other approved human translations: using every currently approved row would change the sample as review proceeds. All paper calculations use the same 100 Kappa rows. The corpus is operational rather than randomly sampled; it includes short formulaic notices and long philological entries.
+- an approved English translation; and
+- the prompt and model metadata for each machine translation.
 
 ## 2.2 Source handling and provenance
 
