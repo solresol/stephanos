@@ -205,9 +205,9 @@ The effect is concentrated in later models. GPT-5.5 v3 has six exact and eleven 
 
 # 5. Discussion
 
-## 5.1 Prompt rules and model capability solve different problems
+## 5.1 Prompt rules and model capability
 
-The largest measured change is the move from v1 to v2. The minimal prompt asks for scholarly English but leaves "scholarly" undefined. Models fill the gap with familiar conventions: Latinised place names, ordinary English quotation practices, expanded citations and smooth paraphrase. V2 supplies the choices that reviewers had already made. The resulting gain is large because many reference differences are editorial and repeat across entries.
+The largest measured change is the move from v1 to v2. V1 asks for scholarly English but leaves "scholarly" undefined. Models fill the gap with familiar conventions: Latinised place names, ordinary English quotation practices, expanded citations and smooth paraphrase. V2 supplies the choices that reviewers had already made. The resulting gain is large because many reference differences are editorial and repeat across entries.
 
 V3 adds less to the four-metric mean. Its value appears more clearly in near-exact outputs, length agreement and the treatment of recurrent formulae. V2 establishes the house style, while v3 revises edge cases and adds local guidance. Once a translation has the correct opening, spelling, citation shape and formula wording, the remaining disagreements are concentrated in longer and less formulaic entries.
 
