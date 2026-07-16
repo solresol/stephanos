@@ -26,7 +26,7 @@ The reviewed house-style prompt (v2) scores 18.55 percentage points above the mi
 
 Stephanus of Byzantium's *Ethnika* is a geographical lexicon assembled in the sixth century CE and preserved mostly through an epitome. Its entries identify places and peoples, cite earlier authors, give ethnic and adjectival forms, and often discuss spelling, accentuation or derivation. A short entry may look simple: a place, its region, an author and an ethnonym. Other entries compress several distinct grammatical arguments into a few lines. They can include fragmentary quotations, book numbers, competing spellings and words mentioned as forms rather than used for their ordinary meanings.
 
-The prose is repetitive enough to invite automation, yet small mistakes can change the fact for which a reader consulted the lexicon. "Herodotus, book 7" is not the same as "Herodotus in Asia"; a work title is not a province; an ethnic form is not always the headword; and an accentual example should not be silently normalised into idiomatic English. A translation can be grammatical and still be wrong in the way that matters.
+The prose is repetitive enough that automation is needed.
 
 Earlier work on Ancient Greek LLM translation shows both high average performance and severe local failures. Zainaldin et al. (2026), evaluating Claude, Gemini and ChatGPT on twenty passages from Galen, found expert ratings near human quality on familiar expository prose but large failures where terminology was rare, and reported that reference-based metrics were informative only when translations spanned a wide quality range, not among already strong ones.
 
