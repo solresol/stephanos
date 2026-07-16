@@ -1,0 +1,252 @@
+---
+title: "Benchmarking LLM Translation of Stephanus of Byzantium: Prompt Design, Model Release, and the Limits of Reference-Based Evaluation"
+date: "July 2026"
+lang: en-AU
+fontsize: 10pt
+geometry: margin=24mm
+header-includes:
+  - |
+    \usepackage{booktabs}
+    \usepackage{longtable}
+    \usepackage{pdflscape}
+    \usepackage{float}
+    \usepackage{graphicx}
+    \usepackage{microtype}
+    \usepackage{caption}
+    \captionsetup{font=small,labelfont=bf}
+---
+
+# Abstract
+
+Large language models can produce fluent English from Ancient Greek, but fluency is a poor test for a scholarly translation. We evaluate model and prompt effects on 100 entries from the Kappa section of Stephanus of Byzantium's *Ethnika*, using an approved human translation for each entry. Twelve dated OpenAI models, from GPT-4 Turbo (April 2024) to GPT-5.6 Sol (July 2026), were run under three prompt conditions, giving 3,600 model-entry comparisons. Eight complete Claude model-prompt cells add 800 comparisons, treated as isolated cross-provider observations rather than a time series.
+
+The main outcome is the unweighted mean of BLEU-4, chrF++, METEOR and ROUGE-L at model-prompt level. Across the twelve OpenAI models, the reviewed house-style prompt (v2) scores 18.55 percentage points above the minimal prompt (v1); a longer prompt with entry-specific formula guidance (v3) adds a smaller gain and produces many more near-identical outputs. Similarity also rises with model release date, fastest under the detailed prompts, though individual releases sometimes score below their predecessors. The best Claude condition narrowly exceeds the best OpenAI condition (see Section 2.4 for its provenance status). The study needs an independent human translation or blinded classicist ratings before human equivalence can be measured.
+
+# 1. Introduction
+
+Stephanus of Byzantium's *Ethnika* is a geographical lexicon assembled in the sixth century CE and preserved mostly through an epitome. Its entries identify places and peoples, cite earlier authors, give ethnic and adjectival forms, and often discuss spelling, accentuation or derivation. A short entry may look simple: a place, its region, an author and an ethnonym. Other entries compress several distinct grammatical arguments into a few lines. They can include fragmentary quotations, book numbers, competing spellings and words mentioned as forms rather than used for their ordinary meanings.
+
+The prose is repetitive enough to invite automation, yet small mistakes can change the fact for which a reader consulted the lexicon. "Herodotus, book 7" is not the same as "Herodotus in Asia"; a work title is not a province; an ethnic form is not always the headword; and an accentual example should not be silently normalised into idiomatic English. A translation can be grammatical and still be wrong in the way that matters.
+
+Earlier work on Ancient Greek LLM translation shows both high average performance and severe local failures. Zainaldin et al. (2026), evaluating Claude, Gemini and ChatGPT on twenty passages from Galen, found expert ratings near human quality on familiar expository prose but large failures where terminology was rare, and reported that reference-based metrics were informative only when translations spanned a wide quality range, not among already strong ones.
+
+The Stephanus project asks a related but different question. Rather than testing a small set of passages under one prompt, it records a translation workflow as the prompt and the available models change. Reviewers converted recurring corrections into explicit rules about transliteration, citations, Greek forms, titles, ethnic terms, verse layout and metalinguistic language. The same 100 entries can therefore measure two kinds of change:
+
+1. what happens when the instructions move from a short general request to a reviewed editorial specification; and
+2. what happens when the model changes while the prompt condition remains fixed.
+
+Model and prompt effects cannot be inferred from one another. A better model can improve lexical and syntactic decisions, but it does not know the local edition's house style unless the request supplies it. Conversely, a detailed prompt can force an older model to use the required spelling and citation format without making that model better at Greek. The experiment separates those effects by crossing twelve OpenAI model releases with three prompt versions.
+
+# 2. Text, corpus and translation workflow
+
+## 2.1 The Kappa paper corpus
+
+The evaluation set consists of 100 visible rows from the final Kappa translation review tracker, imported into PostgreSQL and linked to the live lemma table by source row number. Each benchmark item has:
+
+- the Greek text used for translation;
+- an approved English translation at reviewed or final stage;
+- the prompt and model metadata for each machine translation; and
+- a stable lemma identifier and corpus order.
+
+The frozen tracker matters because the project contains other approved human translations: using every currently approved row would change the sample as review proceeds. All paper calculations use the same 100 Kappa rows. The corpus is operational rather than randomly sampled; it includes short formulaic notices and long philological entries.
+
+## 2.2 Source handling and provenance
+
+The pipeline begins with page images and OCR, then assembles lemma-level records; machine-derived and human-corrected Greek occupy separate database fields. Translation uses the current source-text version where one exists, then the human-corrected field, then the assembled OCR text. Each run records its Greek source, prompt version, model and request metadata, and is written only after a valid response. These controls make every error traceable to the Greek and the instructions that produced it.
+
+## 2.3 Prompt conditions
+
+Prompt v1 is a 308-character general instruction. It identifies the model as an expert classical philologist, names the *Ethnika*, asks for clear scholarly English and requests appropriate treatment of technical terms and place names. It does not specify the project's transliteration, quotation or citation conventions.
+
+Prompt v2 is a 4,685-character house-style specification. It was prepared from twenty human-reviewed translations, twenty machine comparisons and reviewer guidance from Brady, Greta and Gabriel. It requires Australasian punctuation, Greek-form transliteration, compact book citations, Arabic book numerals, single quotation marks for cited forms, italics for work titles and fixed renderings for recurrent formulae. It also tells the model to omit modern apparatus and locator codes.
+
+Prompt v3 is an 11,494-character revision prepared after further group review. It retains global rules for spelling, citation hygiene, metalinguistic precision and syntax. It also permits entry-specific guidance generated by formula recognisers. Those notes are applied only when the cited Greek evidence is present. The condition therefore tests a prompt-plus-guidance system, not prompt wording alone. V3 also revises rules for prose and verse quotation, inflected evidence and settlement-location wording.
+
+The prompt development set was not held out from the 100-entry benchmark. The scores should be read as a retrospective evaluation of an operational workflow, not as an estimate on untouched test data. V2 and v3 are especially affected because their rules encode corrections learned during review.
+
+## 2.4 Models and generation conditions
+
+The OpenAI time series contains twelve releases:
+
+- GPT-4 Turbo (9 April 2024);
+- GPT-4o snapshots dated 13 May, 6 August and 20 November 2024;
+- GPT-4.1 (14 April 2025);
+- GPT-5 (7 August 2025);
+- GPT-5.1 (13 November 2025);
+- GPT-5.2 (11 December 2025);
+- GPT-5.3 Chat (3 March 2026);
+- GPT-5.4 (5 March 2026);
+- GPT-5.5 (23 April 2026); and
+- GPT-5.6 Sol (9 July 2026).
+
+Release dates come from the project's model-release registry, which records the provider announcement or API changelog source. Every OpenAI model-prompt cell contains exactly 100 successful corpus translations. GPT-5.6 Sol used the Responses API with medium reasoning effort; the other OpenAI cells used Chat Completions, so the result is the performance of the available configured system, not a controlled ablation of model weights.^[Three GPT-5.2 v1 records use the unsuffixed `gpt-5.2` identifier and the remaining 97 use the dated snapshot; both are stored under the GPT-5.2 release profile. Two older GPT-5.5 v3 records lack API-mode metadata but have the expected model label and completed output.]
+
+The Claude comparison contains Sonnet 5, Opus 4.8 and Fable 5, released 30 June, 28 May and 9 June 2026 respectively (Anthropic announcements). Sonnet and Fable have complete v1-v3 cells; Opus has v1 and v3 but no v2, giving eight complete cells and 800 comparisons. The Claude translations were produced in external workspaces and imported; they retain file provenance and model labels but no native request record. They are plotted as individual observations, excluded from the OpenAI regression and not joined into a Claude series.
+
+# 3. Evaluation design
+
+## 3.1 Reference-based metrics
+
+Each machine output is compared with the approved translation for the same entry; English tokens retain words, internal apostrophes and numerals. Four deterministic metrics are used:
+
+- sentence BLEU-4, a precision-weighted n-gram measure with a brevity penalty (Papineni et al. 2002);
+- chrF++, which compares character n-grams and includes word n-grams (Popovic 2015);
+- METEOR, which rewards aligned lexical matches and recall (Banerjee and Lavie 2005); and
+- ROUGE-L, based on the longest common subsequence (Lin 2004).
+
+The main score is the unweighted mean of the four model-level metric means. It gives one readable summary without letting BLEU, whose numerical scale is lower in this corpus, disappear behind the other metrics. Every component is also reported separately. Experimental neural metrics (BERTScore, COMET, BLEURT) were incomplete for the historical model cells and are omitted.
+
+## 3.2 Exactness and length
+
+Translations are normalised for case and surface punctuation before exact comparison. We count exact matches and outputs with a normalised character-sequence ratio of at least 0.98; the latter includes minor punctuation or spelling differences and is called "near 98%" below.
+
+For each model-prompt cell we also record mean machine and human word counts and fit:
+
+$$
+\text{machine words} = \alpha + \beta(\text{human words}).
+$$
+
+A slope close to one indicates that output length scales with reference length.
+
+## 3.3 Statistical analysis
+
+The release-date analysis uses one observation per OpenAI model-prompt cell. Dates are converted to elapsed days from the first release, and ordinary least squares is fitted separately for each prompt and metric, giving twelve points per regression. We report the annualised slope, its 95% confidence interval, $R^2$ and the two-sided test of zero slope.
+
+Prompt contrasts use paired tests across the twelve OpenAI models: the v3-v2 composite, for example, has twelve paired differences, one per model. This avoids treating 1,200 entry-level scores as independent observations.
+
+The historical projection solves the fitted line for a score of 0.90 — a planning marker adopted before any human-human baseline existed, not an expert-derived threshold. We report it because it answers a practical project question, then test how the date changes when the latest release is removed and when the regression is limited to GPT-5 and later.
+
+# 4. Results
+
+## 4.1 Prompt design produces the largest single gain
+
+Table 1 averages the twelve OpenAI model-level scores within each prompt condition. V2 raises the four-metric mean from 46.81% to 65.36%. The paired gain is 18.55 points (95% CI 17.28 to 19.81; $p=3.01\times10^{-12}$). The increase occurs for every metric: 24.10 points for BLEU-4, 16.88 for chrF++, 16.74 for METEOR and 16.48 for ROUGE-L.
+
+V3 raises the composite by a further 2.06 points (95% CI 0.95 to 3.16; $p=0.00174$). The v3-v2 BLEU difference is 1.80 points and narrowly misses the conventional 0.05 threshold ($p=0.0507$). The other component gains are 1.94 points for chrF++ ($p=0.00323$), 2.54 for METEOR ($p=1.81\times10^{-5}$) and 1.94 for ROUGE-L ($p=0.000605$).
+
+| Prompt | BLEU-4 | chrF++ | METEOR | ROUGE-L | Four-metric mean | Mean machine words |
+|---|---:|---:|---:|---:|---:|---:|
+| v1 | 20.90% | 51.37% | 56.79% | 58.16% | 46.81% | 47.68 |
+| v2 | 45.00% | 68.25% | 73.54% | 74.64% | 65.36% | 42.58 |
+| v3 | 46.80% | 70.19% | 76.08% | 76.58% | 67.41% | 43.62 |
+
+: **Table 1.** OpenAI prompt-condition means across twelve model releases. Each cell is first averaged over the same 100 entries, then across models.
+
+Prompt design also changes output length. The human references average 44.2 words. V1 averages 47.7 words, v2 42.6 and v3 43.6. The newer prompts score higher while producing shorter outputs than v1.
+
+## 4.2 Similarity rises with model release date
+
+The composite slope is positive under every prompt (Table 2).
+
+| Prompt | Latest score | Slope, points/year | 95% CI | $R^2$ | $p$ | Provisional 90% date |
+|---|---:|---:|---:|---:|---:|---:|
+| v1 | 47.17% | 2.24 | 1.24 to 3.23 | 0.715 | 0.000532 | 17 Oct 2044 |
+| v2 | 69.98% | 4.02 | 3.22 to 4.81 | 0.927 | $5.24\times10^{-7}$ | 19 Aug 2031 |
+| v3 | 72.93% | 4.92 | 3.28 to 6.56 | 0.817 | $5.51\times10^{-5}$ | 3 Feb 2030 |
+
+: **Table 2.** OLS regression of the four-metric mean on OpenAI model release date, twelve models per prompt.
+
+The first-to-latest change is 4.15 points for v1, 9.05 for v2 and 14.05 for v3. Six of eleven v1 transitions are negative, compared with two for v2 and three for v3. GPT-5.3 has the highest v1 score (49.12%). GPT-5.6 has the highest v2 score (69.98%), only 0.10 points above GPT-5.5. GPT-5.5 has the highest OpenAI v3 score (74.19%); GPT-5.6 is 1.26 points lower.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/model-quality-over-time.pdf}
+\caption{Mean reference similarity by model release date. Circles are OpenAI model-prompt cells. Dashed lines are prompt-specific OLS fits over the twelve OpenAI releases. Diamonds are Claude observations at provider release dates; they are not connected or included in a fitted series. Pale vertical guides and rotated labels identify releases.}
+\label{fig:model-timeline}
+\end{figure}
+
+All four component metrics show the v2 and v3 trends; per-metric regressions are in Appendix B. V1 has positive component slopes too, but its METEOR and ROUGE-L relationships are weaker ($R^2=0.404$ and 0.457): time alone has not supplied the local conventions that v2 and v3 state explicitly.
+
+## 4.3 Claude results are competitive but not a second time series
+
+Claude Fable 5 is the strongest Claude condition in each available prompt: 54.91% for v1, 71.48% for v2 and 74.87% for v3. Its v3 score is the highest observed composite in the study, 0.68 points above GPT-5.5 v3 and 1.94 above GPT-5.6 v3. Claude Sonnet 5 scores 49.62%, 67.16% and 73.16%. Opus 4.8 scores 49.25% on v1 and 72.80% on v3; v2 is missing.
+
+The cross-provider difference is small relative to the prompt effect: Fable's v3 lead over the best OpenAI result is less than one point, while moving the same OpenAI model from v1 to v2 averages more than eighteen points. For the provenance reasons in Section 2.4, the figure shows Claude points but does not fit them.
+
+## 4.4 Exact and near-exact outputs
+
+No v1 output is an exact match or reaches the 0.98 normalised sequence threshold across the 1,200 OpenAI comparisons. V2 has 12 exact matches and 25 near-98% outputs. V3 also has 12 exact matches, but 78 near-98% outputs. V3 therefore does not increase exact copying across the full timeline; it increases the frequency with which the model lands close to the approved editorial form.
+
+The effect is concentrated in later models. GPT-5.5 v3 has six exact and eleven near-98% translations. GPT-5.6 v3 has three exact and eleven near-98% translations. Claude Fable 5 v3 has three exact and seven near-98% translations.
+
+## 4.5 What the aggregate scores hide
+
+Four entries show why a benchmark needs both statistics and reading.
+
+**Kadousioi (entry 8).** The approved translation reads: "Kadousioi: a people between the Caspian Sea and the Black Sea. Strabo, book 11." GPT-4 Turbo v3 leaves *Pontos* untranslated as "Pontus" and changes the punctuation. GPT-5.5, GPT-5.6 and Claude Fable v3 reproduce the approved text exactly. The gain comes from a documented local rule: translate *Pontos* as the Black Sea when the geographical context requires it.
+
+**Kanastron (entry 53).** The text distinguishes the place name *Kanastraion* from the ethnonym *Kanastraios*. GPT-4 Turbo v3 writes, "Kanastraios is the cape of Pallene", collapsing the contrast. The later v3 outputs preserve *Kanastraion* as the name cited by Sophocles and retain *Kanastraios* as the ethnonym. This is a small string difference with a clear philological consequence.
+
+**Kome (entry 310).** This is the lowest or near-lowest entry for several model-prompt cells. The line from Hesiod contains *enkomion* in a context that resists an easy English equivalent. Fable renders the phrase as "some other matter in the village"; GPT-5.5 uses "some other local matter"; GPT-5.6 writes "some other need ... in the village". The approved translation keeps the difficult form as "some matter ... as an enkomios". The smooth versions are readable but remove the lexical problem that the entry is discussing.
+
+**Kapetolion (entry 66).** This long accentual discussion remains a low-scoring item even when the later translations are defensible. The reference transliterates some cited forms and supplies a detailed paraphrase of the accent rule. Fable keeps more Greek script; GPT-5.6 uses "underlying form" and a slightly different explanation. Reference metrics penalise those choices, but a classicist must decide whether they are errors, equivalent editorial solutions or improvements. Low similarity is a reason to inspect the entry, not a verdict.
+
+# 5. Discussion
+
+## 5.1 Prompt rules and model capability solve different problems
+
+The largest measured change is the move from v1 to v2. The minimal prompt asks for scholarly English but leaves "scholarly" undefined. Models fill the gap with familiar conventions: Latinised place names, ordinary English quotation practices, expanded citations and smooth paraphrase. V2 supplies the choices that reviewers had already made. The resulting gain is large because many reference differences are editorial and repeat across entries.
+
+V3 adds less to the four-metric mean. Its value appears more clearly in near-exact outputs, length agreement and the treatment of recurrent formulae. V2 establishes the house style, while v3 revises edge cases and adds local guidance. Once a translation has the correct opening, spelling, citation shape and formula wording, the remaining disagreements are concentrated in longer and less formulaic entries.
+
+This changes where the human work happens rather than removing it. Reviewers identify a failure, decide whether it is local or recurrent, encode a rule, and test the next condition against the frozen set. Exact matches on formulaic entries reduce repeated editing; long metalinguistic entries remain review-heavy, which is where the benchmark directs attention. The output is a review queue in which routine forms are increasingly stable and difficult passages stay visible.
+
+## 5.2 Model progress is visible but uneven
+
+The release-date slopes for v2 and v3 are too large and consistent to dismiss as one lucky model, but the point sequence contains reversals. A project that replaces a model merely because a new label appears may lose quality under its actual prompt; candidates should be run under the production prompt on the fixed test set before switching.
+
+## 5.3 The provisional human-quality date is not a human-quality result
+
+The naive projections to 90% are in Table 2. The component projections range from October 2028 to May 2033 for v2 and v3. These dates are stable to removal of GPT-5.6: v2 shifts to October 2031 and v3 to March 2030. Restricting the regression to GPT-5 and later gives August 2031 for v2 and July 2029 for v3, although the recent v3 slope has only seven points and does not reach conventional significance ($p=0.112$).
+
+The threshold itself is arbitrary. A human translator compared with another human translator will not score 100% against one approved wording. Zainaldin et al. found mean expert ratings of 95.2/100 for LLM translations of familiar Galenic prose, but their number is an MQM human score, not BLEU or ROUGE, and cannot calibrate our 90% composite.
+
+A defensible equivalence claim requires one of two additions. The stronger design is a second independent human translation of the 100 entries, scored against the approved version with the same metrics and then reviewed by classicists. A smaller design would ask blinded classicists to rate a stratified subset of human and model translations for meaning, grammar, factual fidelity and editorial conformity. Either design would create a human distribution rather than a guessed line.
+
+# 6. Limitations
+
+Several limitations bound these results. There is one approved reference per entry, and all four metrics reward similarity to that wording. The 100 entries are a reviewed operational corpus, not a random sample of the *Ethnika*; results may differ in other letters, in the longer non-epitomised material or in passages dominated by verse and rare terminology. Prompt development and evaluation are not independent (Section 2.3), so the scores measure an operational workflow on its working corpus rather than performance on untouched test data; a future study should freeze a new letter before any rules are derived, then evaluate those rules without further editing. Finally, release date is a proxy for model generation, not a causal variable: the twelve observations share a provider, training lineage and evaluation procedure, and the slope will not necessarily continue.
+
+# 7. Conclusion
+
+Translation similarity for the Kappa benchmark rises with both editorial instruction and model release, but the two solve different problems: the reviewed prompt supplies the house style that fluent models otherwise miss, while newer releases improve unevenly and sometimes regress under a fixed prompt. The current best conditions cluster within about two points, a margin that should be checked against hard passages and reviewer workload before a model is chosen. The benchmark is ready to support model and prompt decisions, but it is not yet calibrated for human equivalence: the next experiment is a second-human or blinded-rating study that preserves the same 100-entry corpus and separates meaning, grammar, factual fidelity and house style.
+
+# Data and code availability
+
+The analysis script is `paper/analysis/benchmark_paper_analysis.py`. It rebuilds the deterministic metrics from the live PostgreSQL corpus and writes ignored CSV, JSON and LaTeX intermediates to its build directory. Figure 1 is generated as both PNG and PDF. The paper corpus is anchored to the imported final Kappa review tracker rather than the mutable set of all approved translations. Public release of entry-level Greek, human and model text remains subject to edition, translation and project licensing decisions.
+
+# References
+
+Anthropic. 2026a. "Introducing Claude Opus 4.8." 28 May 2026. <https://www.anthropic.com/news/claude-opus-4-8>.
+
+Anthropic. 2026b. "Claude Fable 5 and Claude Mythos 5." 9 June 2026. <https://www.anthropic.com/news/claude-fable-5-mythos-5>.
+
+Anthropic. 2026c. "Introducing Claude Sonnet 5." 30 June 2026. <https://www.anthropic.com/news/claude-sonnet-5>.
+
+Banerjee, Satanjeev, and Alon Lavie. 2005. "METEOR: An Automatic Metric for MT Evaluation with Improved Correlation with Human Judgments." In *Proceedings of the ACL Workshop on Intrinsic and Extrinsic Evaluation Measures for Machine Translation and/or Summarization*, 65-72. <https://aclanthology.org/W05-0909/>.
+
+Billerbeck, Margarethe, ed. 2006-. *Stephani Byzantii Ethnica*. Corpus Fontium Historiae Byzantinae 43. Berlin and New York: De Gruyter.
+
+Lin, Chin-Yew. 2004. "ROUGE: A Package for Automatic Evaluation of Summaries." In *Text Summarization Branches Out*, 74-81. <https://aclanthology.org/W04-1013/>.
+
+Meineke, August, ed. 1849. *Stephani Byzantii Ethnicorum quae supersunt*. Berlin: Reimer.
+
+OpenAI. 2024-2026. "API Changelog." <https://developers.openai.com/api/docs/changelog>.
+
+Papineni, Kishore, Salim Roukos, Todd Ward, and Wei-Jing Zhu. 2002. "BLEU: A Method for Automatic Evaluation of Machine Translation." In *Proceedings of the 40th Annual Meeting of the Association for Computational Linguistics*, 311-318. <https://aclanthology.org/P02-1040/>.
+
+Popovic, Maja. 2015. "chrF: Character n-gram F-score for Automatic MT Evaluation." In *Proceedings of the Tenth Workshop on Statistical Machine Translation*, 392-395. <https://aclanthology.org/W15-3049/>.
+
+Zainaldin, James L., Cameron Pattison, Manuela Marai, Jacob Wu, and Mark J. Schiefsky. 2026. "Terminology Rarity Predicts Catastrophic Failure in LLM Translation of Low-Resource Ancient Languages: Evidence from Ancient Greek." arXiv:2602.24119. <https://arxiv.org/abs/2602.24119>.
+
+# Appendix A. Per-model benchmark cells
+
+\input{build/benchmark_analysis/benchmark_cells_table.tex}
+
+# Appendix B. Metric-specific release regressions
+
+\input{build/benchmark_analysis/regression_table.tex}
+
+# Appendix C. Prompt-version contrasts
+
+\input{build/benchmark_analysis/prompt_delta_table.tex}
