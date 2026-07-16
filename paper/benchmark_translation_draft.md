@@ -153,11 +153,11 @@ The first-to-latest change is 4.15 points for v1, 9.05 for v2 and 14.05 for v3. 
 
 All four component metrics show the v2 and v3 trends; per-metric regressions are in Appendix B and the annotated component plots are in Appendix D. V1 has positive component slopes too, but its METEOR and ROUGE-L relationships are weaker ($R^2=0.404$ and 0.457): time alone has not supplied the local conventions that v2 and v3 state explicitly.
 
-## 4.3 COMET and BLEURT confirm a prompt-conditioned trend
+## 4.3 COMET and BLEURT
 
-The learned metrics separate the prompt conditions in much the same way as the lexical measures. Across the twelve OpenAI models, mean COMET-22 rises from 0.7207 for v1 to 0.7868 for v2 and 0.7916 for v3. Mean BLEURT-20 rises from 0.6398 to 0.7327 and 0.7404. The paired v2-v1 gains are 0.0661 for COMET (95% CI 0.0581 to 0.0742; $p=1.58\times10^{-9}$) and 0.0929 for BLEURT (95% CI 0.0774 to 0.1085; $p=4.50\times10^{-8}$). V3 adds smaller gains over v2: 0.0047 for COMET ($p=0.0194$) and 0.0077 for BLEURT ($p=0.0394$).
+Across the twelve OpenAI models, mean COMET-22 rises from 0.7207 for v1 to 0.7868 for v2 and 0.7916 for v3. Mean BLEURT-20 rises from 0.6398 to 0.7327 and 0.7404. The paired v2-v1 gains are 0.0661 for COMET (95% CI 0.0581 to 0.0742; $p=1.58\times10^{-9}$) and 0.0929 for BLEURT (95% CI 0.0774 to 0.1085; $p=4.50\times10^{-8}$). V3 adds smaller gains over v2: 0.0047 for COMET ($p=0.0194$) and 0.0077 for BLEURT ($p=0.0394$).
 
-Release date is unrelated to either learned metric under v1. The COMET slope is -0.0018 per year ($R^2=0.058$, $p=0.452$), and the BLEURT slope is -0.0022 ($R^2=0.029$, $p=0.594$). Under v2 and v3, however, both slopes are positive with $p<0.001$ (Table 3). Newer models therefore improve when the prompt supplies the project's conventions, but do not converge on those conventions from the minimal request alone.
+Release date is unrelated to either learned metric under v1. The COMET slope is -0.0018 per year ($R^2=0.058$, $p=0.452$), and the BLEURT slope is -0.0022 ($R^2=0.029$, $p=0.594$). Under v2 and v3, however, both slopes are positive with $p<0.001$ (Table 3). A naive interpretation would be that newer models improve when the prompt supplies the project's conventions, but do not converge on those conventions from the minimal request alone.
 
 | Prompt | COMET slope/year | COMET $R^2$ | COMET $p$ | BLEURT slope/year | BLEURT $R^2$ | BLEURT $p$ |
 |---|---:|---:|---:|---:|---:|---:|
