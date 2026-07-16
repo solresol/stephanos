@@ -85,16 +85,14 @@ We also compare with Claude Sonnet 5, Opus 4.8 and Fable 5, released 30 June, 28
 
 ## 3.1 Reference-based metrics
 
-Each machine output is compared with the approved translation for the same entry; English tokens retain words, internal apostrophes and numerals. Four deterministic metrics are used:
+Each machine output is compared with the approved translation for the same entry; English tokens retain words, internal apostrophes and numerals. Six reference-based metrics are used. Four are lexical:
 
 - sentence BLEU-4, a precision-weighted n-gram measure with a brevity penalty (Papineni et al. 2002);
 - chrF++, which compares character n-grams and includes word n-grams (Popovic 2015);
 - METEOR, which rewards aligned lexical matches and recall (Banerjee and Lavie 2005); and
 - ROUGE-L, based on the longest common subsequence (Lin 2004).
 
-The main score is the unweighted mean of the four model-level metric means. It gives one readable summary without letting BLEU, whose numerical scale is lower in this corpus, disappear behind the other metrics. Every component is also reported separately.
-
-Two learned reference metrics provide separate robustness checks across all 4,400 comparisons. COMET-22 uses the Ancient Greek source, candidate translation and approved English reference (Rei et al. 2020). BLEURT-20 compares the candidate and reference through a learned text-generation metric (Sellam, Das and Parikh 2020). Their raw outputs are reported on their own scales and are not averaged into the lexical composite. Both models were run in eleven validated 400-row CPU shards on `raksasa`; every metric has one finite score for each benchmark row. XCOMET-XL is being evaluated separately and is not reported before that run is complete.
+COMET-22 uses the Ancient Greek source, candidate translation and approved English reference (Rei et al. 2020). BLEURT-20 compares the candidate and reference through a learned text-generation metric (Sellam, Das and Parikh 2020).
 
 ## 3.2 Exactness and length
 
