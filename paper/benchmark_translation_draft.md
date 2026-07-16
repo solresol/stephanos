@@ -183,7 +183,7 @@ Release date is unrelated to either learned metric under v1. The COMET slope is 
 
 The two metrics also agree on the leading conditions. Claude Fable 5 v3 is highest on COMET (0.8149), narrowly ahead of GPT-5.5 v3 (0.8140) and GPT-5.6 v3 (0.8135). Fable v3 is highest on BLEURT (0.7892), followed by GPT-5.6 v3 (0.7877) and GPT-5.5 v3 (0.7868). These margins are small beside the prompt differences and remain reference-dependent.
 
-## 4.4 Claude results are competitive but not a second time series
+## 4.4 Claude results
 
 Claude Fable 5 is the strongest Claude condition in each available prompt: 54.91% for v1, 71.48% for v2 and 74.87% for v3. Its v3 score is the highest observed composite in the study, 0.68 points above GPT-5.5 v3 and 1.94 above GPT-5.6 v3. Claude Sonnet 5 scores 49.62%, 67.16% and 73.16%. Opus 4.8 scores 49.25% on v1 and 72.80% on v3; v2 is missing.
 
