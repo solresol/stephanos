@@ -215,9 +215,9 @@ We found that the most effective way to improve translation quality was to trans
 
 Broadly speaking, projects that provide guided prompts should expect human-level AI translation of Byzantine Greek to arrive between October 2028 and May 2033.
 
-## 5.2 Model progress is visible but uneven
+## 5.2 Model progress
 
-The release-date slopes for v2 and v3 are too large and consistent to dismiss as one lucky model, but the point sequence contains reversals. A project that replaces a model merely because a new label appears may lose quality under its actual prompt; candidates should be run under the production prompt on the fixed test set before switching.
+The release-date slopes for v2 and v3 are too large and consistent to dismiss as one lucky model, but the sequence contains reversals. A project that replaces a model merely because a new version appears may lose quality; candidates should be run under the production prompt on the fixed test set before switching.
 
 ## 5.3 The provisional human-quality date is not a human-quality result
 
