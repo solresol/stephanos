@@ -201,6 +201,14 @@ Every coherent annotation instruction has one PR. The separately requested Metac
 - PR: N/A
 - Verification: blue marks are part of the base charts; no added marks in base differencing
 
+## Merge results
+
+- Correction and requested-addition PRs #10-#35: merged in ledger order on 16 July 2026
+- Final-render repair PR #37: merged after the correction stack on 16 July 2026
+- Review gate: every merged PR was non-draft, mergeable, and had no pending or failing checks at merge time
+- Branch cleanup: the remote branches for the baseline PR #9, correction PRs #10-#35, and render-repair PR #37 were deleted and verified absent
+- Remaining open PR in this correction pass: this progress ledger (#36)
+
 ## Progress document
 
 - Branch: `codex/benchmark-2026-07-16-progress`
