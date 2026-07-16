@@ -4,6 +4,14 @@ This directory contains manuscript drafts based on the current Stephanos pipelin
 
 - `classical_review_draft.md`: Draft in a Classical Review style (philological audience).
 - `computing_venue_draft.tex`: Draft in a computing-journal/conference style (NLP/HCI/DH audience), in LaTeX format.
+- `benchmark_translation_draft.md`: Full empirical draft using the frozen
+  100-entry Kappa corpus, the 12-model OpenAI timeline, and the available
+  Claude comparison cells.
+- `figures/model-quality-over-time*.png`: Annotated release-date figures for
+  the four lexical metrics and their mean. Claude points use the same prompt
+  colours but remain unconnected and excluded from the OpenAI regressions.
+- `analysis/neural_benchmark_analysis.py`: Resumable sharded runner and
+  summarizer for COMET-22, XCOMET-XL, and BLEURT-20.
 - `Makefile`: Build targets for PDF/DOCX outputs.
 
 The empirical translation-workflow paper is based on the 100 visible Kappa rows
@@ -50,3 +58,41 @@ Build commands:
 - `cd paper && make classical-pdf` to build `build/classical_review_draft.pdf`
 - `cd paper && make classical-docx` to build `build/classical_review_draft.docx`
 - `cd paper && make all` to build all outputs
+- `cd paper && make benchmark-pdf` to refresh the live deterministic benchmark,
+  regenerate the annotated model timeline figure, and compile the full paper to
+  `output/pdf/stephanos_llm_translation_benchmark_draft.pdf`
+
+Neural metrics are deliberately separate because their checkpoints and runtimes
+are much larger than the lexical analysis. Prepare resumable 400-row shards
+after `benchmark-analysis` with the following command. Inputs, logs and raw
+scores are kept in the ignored `paper/neural_metrics/` directory so that
+`make clean` cannot remove an expensive completed run.
+
+```bash
+uv run paper/analysis/neural_benchmark_analysis.py prepare
+```
+
+Run each metric with the dedicated neural environment, then summarize only
+after every shard is present:
+
+```bash
+/home/stephanos/metric-envs/neural-metrics/bin/python \
+  paper/analysis/neural_benchmark_analysis.py run comet \
+  --python /home/stephanos/metric-envs/neural-metrics/bin/python
+uv run paper/analysis/neural_benchmark_analysis.py summarize \
+  --metrics comet xcomet bleurt
+```
+
+`Unbabel/XCOMET-XL` is a gated model whose checkpoint is distributed through
+Hugging Face. Download the accepted checkpoint to `raksasa`, then run the same
+sharded command there with CPU execution:
+
+```bash
+/home/stephanos/metric-envs/neural-metrics/bin/python \
+  paper/analysis/neural_benchmark_analysis.py run xcomet \
+  --python /home/stephanos/metric-envs/neural-metrics/bin/python \
+  --timeout 43200
+```
+
+The command resumes from validated 400-row shards. It does not use hosted
+Hugging Face compute; all scoring runs on `raksasa`.
