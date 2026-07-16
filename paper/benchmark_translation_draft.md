@@ -30,12 +30,10 @@ The prose is repetitive enough that automation is needed.
 
 Earlier work on Ancient Greek LLM translation shows both high average performance and severe local failures. Zainaldin et al. (2026), evaluating Claude, Gemini and ChatGPT on twenty passages from Galen, found expert ratings near human quality on familiar expository prose but large failures where terminology was rare, and reported that reference-based metrics were informative only when translations spanned a wide quality range, not among already strong ones.
 
-The Stephanus project asks a related but different question. Rather than testing a small set of passages under one prompt, it records a translation workflow as the prompt and the available models change. Reviewers converted recurring corrections into explicit rules about transliteration, citations, Greek forms, titles, ethnic terms, verse layout and metalinguistic language. The same 100 entries can therefore measure two kinds of change:
+The Stephanus project records a translation workflow as the prompt and the available models change. Reviewers converted recurring corrections into explicit rules about transliteration, citations, Greek forms, titles, ethnic terms, verse layout and metalinguistic language. The same 100 entries can therefore measure two kinds of change:
 
 1. what happens when the instructions move from a short general request to a reviewed editorial specification; and
 2. what happens when the model changes while the prompt condition remains fixed.
-
-Model and prompt effects cannot be inferred from one another. A better model can improve lexical and syntactic decisions, but it does not know the local edition's house style unless the request supplies it. Conversely, a detailed prompt can force an older model to use the required spelling and citation format without making that model better at Greek. The experiment separates those effects by crossing twelve OpenAI model releases with three prompt versions.
 
 # 2. Text, corpus and translation workflow
 
