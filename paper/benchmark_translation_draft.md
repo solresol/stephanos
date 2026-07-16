@@ -45,10 +45,6 @@ The evaluation set consists of 100 visible rows from the Kappa translation revie
 - an approved English translation; and
 - the prompt and model metadata for each machine translation.
 
-## 2.2 Source handling and provenance
-
-The pipeline begins with page images and OCR, then assembles lemma-level records; machine-derived and human-corrected Greek occupy separate database fields. Translation uses the current source-text version where one exists, then the human-corrected field, then the assembled OCR text. Each run records its Greek source, prompt version, model and request metadata, and is written only after a valid response. These controls make every error traceable to the Greek and the instructions that produced it.
-
 ## 2.3 Prompt conditions
 
 Prompt v1 is a 308-character general instruction. It identifies the model as an expert classical philologist, names the *Ethnika*, asks for clear scholarly English and requests appropriate treatment of technical terms and place names. It does not specify the project's transliteration, quotation or citation conventions.
