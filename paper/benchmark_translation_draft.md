@@ -118,6 +118,8 @@ The historical projection solves the fitted line for a score of 0.90, which is w
 
 Table 1 averages the first four metrics over the twelve OpenAI models within each prompt condition. V2 raises the four-metric mean from 46.81% to 65.36%. The paired gain is 18.55 points (95% CI 17.28 to 19.81; $p=3.01\times10^{-12}$). The increase occurs for every metric: 24.10 points for BLEU-4, 16.88 for chrF++, 16.74 for METEOR and 16.48 for ROUGE-L.
 
+Expressed as model time under the fitted v2 release trend, the 18.55-point gain is equivalent to about 55 months of model improvement ($18.55 / 4.02 \times 12$). This is much larger than the roughly nine months reported for forecasting scaffolds in Wilson's Metaculus synthesis, where the top five scaffolded bots gained 5 to 11 peer-score points per question over their unscaffolded baselines while frontier models improved at about 0.9 points per month (Wilson 2026). The tasks and score scales are not directly comparable, so this is a contextual contrast rather than a cross-study effect-size comparison.
+
 V3 raises the composite by a further 2.06 points (95% CI 0.95 to 3.16; $p=0.00174$). The v3-v2 BLEU difference is 1.80 points and narrowly misses the conventional 0.05 threshold ($p=0.0507$). The other component gains are 1.94 points for chrF++ ($p=0.00323$), 2.54 for METEOR ($p=1.81\times10^{-5}$) and 1.94 for ROUGE-L ($p=0.000605$).
 
 | Prompt | BLEU-4 | chrF++ | METEOR | ROUGE-L | Four-metric mean | Mean machine words |
@@ -254,6 +256,8 @@ Popovic, Maja. 2015. "chrF: Character n-gram F-score for Automatic MT Evaluation
 Rei, Ricardo, Craig Stewart, Ana C. Farinha, and Alon Lavie. 2020. "COMET: A Neural Framework for MT Evaluation." In *Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing*, 2685-2702. <https://aclanthology.org/2020.emnlp-main.213/>.
 
 Sellam, Thibault, Dipanjan Das, and Ankur P. Parikh. 2020. "BLEURT: Learning Robust Metrics for Text Generation." In *Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics*, 7881-7892. <https://aclanthology.org/2020.acl-main.704/>.
+
+Wilson, Ben. 2026. "AI Forecasting in 2026: What 11 Analyses Say." *Metaculus*, 16 May 2026, edited 8 July 2026. <https://www.metaculus.com/notebooks/43363/ai-forecasting-in-2026/>.
 
 Zainaldin, James L., Cameron Pattison, Manuela Marai, Jacob Wu, and Mark J. Schiefsky. 2026. "Terminology Rarity Predicts Catastrophic Failure in LLM Translation of Low-Resource Ancient Languages: Evidence from Ancient Greek." arXiv:2602.24119. <https://arxiv.org/abs/2602.24119>.
 
