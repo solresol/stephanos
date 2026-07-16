@@ -195,17 +195,13 @@ No v1 output is an exact match or reaches the 0.98 normalised sequence threshold
 
 The effect is concentrated in later models. GPT-5.5 v3 has six exact and eleven near-98% translations. GPT-5.6 v3 has three exact and eleven near-98% translations. Claude Fable 5 v3 has three exact and seven near-98% translations.
 
-## 4.6 What the aggregate scores hide
-
-Four entries show why a benchmark needs both statistics and reading.
+## 4.6 Three samples
 
 **Kadousioi (entry 8).** The approved translation reads: "Kadousioi: a people between the Caspian Sea and the Black Sea. Strabo, book 11." GPT-4 Turbo v3 leaves *Pontos* untranslated as "Pontus" and changes the punctuation. GPT-5.5, GPT-5.6 and Claude Fable v3 reproduce the approved text exactly. The gain comes from a documented local rule: translate *Pontos* as the Black Sea when the geographical context requires it.
 
 **Kanastron (entry 53).** The text distinguishes the place name *Kanastraion* from the ethnonym *Kanastraios*. GPT-4 Turbo v3 writes, "Kanastraios is the cape of Pallene", collapsing the contrast. The later v3 outputs preserve *Kanastraion* as the name cited by Sophocles and retain *Kanastraios* as the ethnonym. This is a small string difference with a clear philological consequence.
 
 **Kome (entry 310).** This is the lowest or near-lowest entry for several model-prompt cells. The line from Hesiod contains *enkomion* in a context that resists an easy English equivalent. Fable renders the phrase as "some other matter in the village"; GPT-5.5 uses "some other local matter"; GPT-5.6 writes "some other need ... in the village". The approved translation keeps the difficult form as "some matter ... as an enkomios". The smooth versions are readable but remove the lexical problem that the entry is discussing.
-
-**Kapetolion (entry 66).** This long accentual discussion remains a low-scoring item even when the later translations are defensible. The reference transliterates some cited forms and supplies a detailed paraphrase of the accent rule. Fable keeps more Greek script; GPT-5.6 uses "underlying form" and a slightly different explanation. Reference metrics penalise those choices, but a classicist must decide whether they are errors, equivalent editorial solutions or improvements. Low similarity is a reason to inspect the entry, not a verdict.
 
 # 5. Discussion
 
