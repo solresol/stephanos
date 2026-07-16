@@ -26,7 +26,7 @@
 
 ## Correction inventory
 
-Every coherent annotation instruction has one PR. The separately requested Metaculus addition also has its own PR.
+Every coherent annotation instruction has one PR. The separately requested Metaculus addition and the final-render repair each have their own PRs.
 
 1. Page 1 title replacement - PR: #10 - `codex/benchmark-2026-07-16-p001-title`
 2. Page 1 abstract rewrite - PR: #11 - `codex/benchmark-2026-07-16-p001-abstract`
@@ -54,6 +54,7 @@ Every coherent annotation instruction has one PR. The separately requested Metac
 24. Page 12 remove the conclusion - PR: #33 - `codex/benchmark-2026-07-16-p012-remove-conclusion`
 25. Page 12 remove data/code availability - PR: #34 - `codex/benchmark-2026-07-16-p012-remove-data-availability`
 26. Separate requested Metaculus comparison - PR: #35 - `codex/benchmark-2026-07-16-metaculus-comparison`
+27. Final-render repair for prompt wrapping and missing Greek glyphs - PR: #37 - `codex/benchmark-2026-07-16-render-repair`
 
 ## Page ledger
 
@@ -78,7 +79,7 @@ Every coherent annotation instruction has one PR. The separately requested Metac
 - Status: all annotations have PRs
 - Source: `paper/benchmark_translation_draft.md`
 - Changes: remove provenance section (#15); show exact live v1 prompt and live recogniser examples (#16); disclose twenty-item overlap (#17)
-- Verification: all three branches rebuilt successfully; prompt and examples checked against the live PostgreSQL database
+- Verification: all three annotation branches rebuilt successfully; prompt and examples checked against the live PostgreSQL database; final-render defect repaired and visually verified in #37
 - Unresolved questions: none
 
 ### Page 004
@@ -211,6 +212,7 @@ Every coherent annotation instruction has one PR. The separately requested Metac
 - Annotated pages: `10 / 19`
 - Coherent annotated corrections: `25`
 - Separately requested additions: `1`
-- Correction/change PRs: `26`
+- Final-render repairs: `1`
+- Correction/change PRs: `27`
 - Annotated corrections without a PR: `0`
 - Blocked or ambiguous corrections: `0`
