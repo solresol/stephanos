@@ -36,9 +36,44 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
-          plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          prompt: |
+            Review this pull request: ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+
+            First run `gh pr diff --name-only` to see which files changed, and decide
+            which review mode(s) below apply. A single PR can touch both — run each
+            relevant mode and skip the other rather than forcing one style onto
+            everything.
+
+            ## Paper mode
+            Applies to changes under `paper/` (e.g. benchmark_translation_draft.md) or
+            other prose/analysis writeups, as opposed to source code.
+            Read the full current version of each changed paper file, not just the diff,
+            so comments account for surrounding context. Review like an editor, not a
+            linter:
+            - Factual/numerical accuracy — do claims and figures match the data, tables,
+              and analysis scripts in the repo (e.g. paper/analysis, paper/figures)?
+            - Argument coherence — does each section actually support the paper's claims?
+            - Redundancy and AI slop — flag padded, repetitive, or hedge-heavy prose. This
+              repo has a standing goal of cutting that out (see commit "Prune benchmark
+              translation paper: cut AI slop and redundancy") — hold new text to that bar.
+            - Citation/reference correctness and consistency.
+            Leave specific, actionable PR comments tied to sections or lines. Don't
+            comment on code style in these files.
+
+            ## Code mode
+            Applies to non-paper source changes (.py, .sql, workflow/config files, etc).
+            Review for:
+            - Correctness bugs and edge cases.
+            - Adherence to this repo's CLAUDE.md conventions — idempotent processing
+              (`processed` flag discipline), strict JSON-only model output handling,
+              provenance fields, uv-based script execution, and the documented error
+              handling expectations (invalid JSON / missing images / API failures).
+            - Reuse, simplification, and efficiency opportunities — flag over-engineering
+              as readily as bugs.
+            Leave specific, actionable inline PR comments tied to lines.
+
+            If a mode finds nothing worth flagging, say so briefly rather than omitting
+            it silently — but don't manufacture findings just to have something to say.
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
