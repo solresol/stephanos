@@ -203,8 +203,8 @@ Every coherent annotation instruction has one PR. The separately requested Metac
 ## Progress document
 
 - Branch: `codex/benchmark-2026-07-16-progress`
-- PR: pending creation
-- Commit/push: pending
+- PR: https://github.com/solresol/stephanos/pull/36
+- Commit/push: committed and pushed
 
 ## Audit conclusion
 
