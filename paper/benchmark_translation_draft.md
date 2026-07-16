@@ -104,8 +104,6 @@ $$
 \text{machine words} = \alpha + \beta(\text{human words}).
 $$
 
-A slope close to one indicates that output length scales with reference length.
-
 ## 3.3 Statistical analysis
 
 The release-date analysis uses one observation per OpenAI model-prompt cell. Dates are converted to elapsed days from the first release, and ordinary least squares is fitted separately for each prompt and metric, giving twelve points per regression. We report the annualised slope, its 95% confidence interval, $R^2$ and the two-sided test of zero slope.
