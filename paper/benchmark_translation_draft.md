@@ -1,5 +1,5 @@
 ---
-title: "Benchmarking LLM Translation of Stephanus of Byzantium: Prompt Design, Model Release, and the Limits of Reference-Based Evaluation"
+title: "Benchmarking LLM Translation of Stephanus of Byzantium: To Find Effective Workflows for Automated Translation"
 date: "July 2026"
 lang: en-AU
 fontsize: 12pt
