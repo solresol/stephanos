@@ -229,10 +229,6 @@ The threshold itself is arbitrary. A human translator compared with another huma
 
 There is one approved reference per entry, and all six metrics reward similarity to that wording. COMET-22 and BLEURT-20 were trained for modern machine-translation or text-generation evaluation rather than Ancient Greek lexicography; agreement between them and the lexical metrics is useful, but their raw values are not calibrated measures of philological correctness or human equivalence. The 100 entries are a reviewed operational corpus, not a random sample of the *Ethnika*; results may differ in other letters, in the longer non-epitomised material or in passages dominated by verse and rare terminology. Prompt development and evaluation are not independent (Section 2.3), so the scores measure an operational workflow on its working corpus rather than performance on untouched test data; a future study should freeze a new letter before any rules are derived, then evaluate those rules without further editing. Finally, release date is a proxy for model generation, not a causal variable: the twelve observations share a provider, training lineage and evaluation procedure, and the slope will not necessarily continue.
 
-# Data and code availability
-
-The lexical analysis script is `paper/analysis/benchmark_paper_analysis.py`; the resumable neural-metric runner and summarizer is `paper/analysis/neural_benchmark_analysis.py`. They rebuild metrics from the live PostgreSQL corpus and write ignored CSV, JSON and LaTeX intermediates to the paper build directory. The release-date figures are generated as both PNG and PDF. The paper corpus is anchored to the imported final Kappa review tracker rather than the mutable set of all approved translations. Public release of entry-level Greek, human and model text remains subject to edition, translation and project licensing decisions.
-
 # References
 
 Anthropic. 2026a. "Introducing Claude Opus 4.8." 28 May 2026. <https://www.anthropic.com/news/claude-opus-4-8>.
