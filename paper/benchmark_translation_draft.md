@@ -219,13 +219,11 @@ Broadly speaking, projects that provide guided prompts should expect human-level
 
 The release-date slopes for v2 and v3 are too large and consistent to dismiss as one lucky model, but the sequence contains reversals. A project that replaces a model merely because a new version appears may lose quality; candidates should be run under the production prompt on the fixed test set before switching.
 
-## 5.3 The provisional human-quality date is not a human-quality result
+## 5.3 The provisional human-quality date
 
-The naive projections to 90% are in Table 2. The component projections range from October 2028 to May 2033 for v2 and v3. These dates are stable to removal of GPT-5.6: v2 shifts to October 2031 and v3 to March 2030. Restricting the regression to GPT-5 and later gives August 2031 for v2 and July 2029 for v3, although the recent v3 slope has only seven points and does not reach conventional significance ($p=0.112$).
+The naive projections to 90% are in Table 2. The component projections range from October 2028 to May 2033 for v2 and v3.
 
-The threshold itself is arbitrary. A human translator compared with another human translator will not score 100% against one approved wording. Zainaldin et al. found mean expert ratings of 95.2/100 for LLM translations of familiar Galenic prose, but their number is an MQM human score, not BLEU or ROUGE, and cannot calibrate our 90% composite.
-
-A defensible equivalence claim requires one of two additions. The stronger design is a second independent human translation of the 100 entries, scored against the approved version with the same metrics and then reviewed by classicists. A smaller design would ask blinded classicists to rate a stratified subset of human and model translations for meaning, grammar, factual fidelity and editorial conformity. Either design would create a human distribution rather than a guessed line.
+The threshold itself is arbitrary. A human translator compared with another human translator will not score 100% against one approved wording. Zainaldin et al. found mean expert ratings of 95.2/100 for LLM translations of familiar Galenic prose, but their number is an MQM human score, not BLEU or ROUGE.
 
 # 6. Limitations
 
