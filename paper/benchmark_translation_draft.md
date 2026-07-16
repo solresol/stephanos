@@ -116,7 +116,7 @@ The historical projection solves the fitted line for a score of 0.90, which is w
 
 ## 4.1 Prompt design produces the largest single gain
 
-Table 1 averages the twelve OpenAI model-level scores within each prompt condition. V2 raises the four-metric mean from 46.81% to 65.36%. The paired gain is 18.55 points (95% CI 17.28 to 19.81; $p=3.01\times10^{-12}$). The increase occurs for every metric: 24.10 points for BLEU-4, 16.88 for chrF++, 16.74 for METEOR and 16.48 for ROUGE-L.
+Table 1 averages the first four metrics over the twelve OpenAI models within each prompt condition. V2 raises the four-metric mean from 46.81% to 65.36%. The paired gain is 18.55 points (95% CI 17.28 to 19.81; $p=3.01\times10^{-12}$). The increase occurs for every metric: 24.10 points for BLEU-4, 16.88 for chrF++, 16.74 for METEOR and 16.48 for ROUGE-L.
 
 V3 raises the composite by a further 2.06 points (95% CI 0.95 to 3.16; $p=0.00174$). The v3-v2 BLEU difference is 1.80 points and narrowly misses the conventional 0.05 threshold ($p=0.0507$). The other component gains are 1.94 points for chrF++ ($p=0.00323$), 2.54 for METEOR ($p=1.81\times10^{-5}$) and 1.94 for ROUGE-L ($p=0.000605$).
 
