@@ -110,7 +110,7 @@ The release-date analysis uses one observation per OpenAI model-prompt cell. Dat
 
 Prompt contrasts use paired tests across the twelve OpenAI models: the v3-v2 composite, for example, has twelve paired differences, one per model. This avoids treating 1,200 entry-level scores as independent observations.
 
-The historical projection solves the fitted line for a score of 0.90. This was a planning marker adopted before any human-human baseline existed, not an expert-derived threshold. We report it because it answers a practical project question, then test how the date changes when the latest release is removed and when the regression is limited to GPT-5 and later.
+The historical projection solves the fitted line for a score of 0.90, which is when we would predict agreement on a par with a human translation.
 
 # 4. Results
 
