@@ -211,7 +211,7 @@ The largest measured change is the move from v1 to v2. V1 asks for scholarly Eng
 
 V3 adds less to the four-metric mean. Its value appears more clearly in near-exact outputs, length agreement and the treatment of recurrent formulae. V2 establishes the house style, while v3 revises edge cases and adds local guidance. Once a translation has the correct opening, spelling, citation shape and formula wording, the remaining disagreements are concentrated in longer and less formulaic entries.
 
-This changes where the human work happens rather than removing it. Reviewers identify a failure, decide whether it is local or recurrent, encode a rule, and test the next condition against the frozen set. Exact matches on formulaic entries reduce repeated editing; long metalinguistic entries remain review-heavy, which is where the benchmark directs attention. The output is a review queue in which routine forms are increasingly stable and difficult passages stay visible.
+We found that the most effective way to improve translation quality was to translate a small batch with both an AI system and an expert human translator, ask an AI system to identify repeated patterns in the incorrect or undertranslated outputs, and use those patterns to create a corrective prompt.
 
 ## 5.2 Model progress is visible but uneven
 
