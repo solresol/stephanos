@@ -145,22 +145,38 @@ def prepare(entries_path: Path, work_dir: Path, shard_size: int) -> None:
     print(json.dumps({"work_dir": str(work_dir), **manifest}, indent=2))
 
 
-def valid_output(path: Path, metric: str, expected_rows: int) -> bool:
+def valid_output(
+    path: Path,
+    metric: str,
+    expected_rows: int,
+    *,
+    expected_input_sha256: str,
+    expected_row_start: int,
+) -> bool:
     if not path.exists() or path.stat().st_size == 0:
         return False
     try:
         result = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        provenance = dict(result.get("provenance") or {})
+        status = str(dict(result.get("status") or {}).get(metric) or "")
+        scores = [item for item in result.get("scores") or [] if metric in item]
+        row_indexes = [int(item["row_index"]) for item in scores]
+        values = [finite_score(item[metric]) for item in scores]
+        provenance_input_sha256 = str(provenance.get("input_sha256") or "")
+        provenance_row_start = int(provenance.get("row_start", -1))
+        provenance_row_count = int(provenance.get("row_count", -1))
+    except (OSError, json.JSONDecodeError, AttributeError, KeyError, TypeError, ValueError):
         return False
-    status = str(dict(result.get("status") or {}).get(metric) or "")
-    scores = [item for item in result.get("scores") or [] if metric in item]
-    row_indexes = [int(item["row_index"]) for item in scores]
-    values = [finite_score(item[metric]) for item in scores]
+    expected_indexes = set(range(expected_row_start, expected_row_start + expected_rows))
     return (
         status == expected_metric_status(metric)
         and len(scores) == expected_rows
         and len(row_indexes) == len(set(row_indexes))
+        and set(row_indexes) == expected_indexes
         and all(value is not None for value in values)
+        and provenance_input_sha256 == expected_input_sha256
+        and provenance_row_start == expected_row_start
+        and provenance_row_count == expected_rows
     )
 
 
@@ -193,7 +209,13 @@ def run_metric(
     for shard in shards:
         input_path = work_dir / "inputs" / shard["name"]
         output_path = output_dir / shard["name"].replace("input-", "output-")
-        if valid_output(output_path, metric, int(shard["row_count"])):
+        if valid_output(
+            output_path,
+            metric,
+            int(shard["row_count"]),
+            expected_input_sha256=str(shard["sha256"]),
+            expected_row_start=int(shard["row_start"]),
+        ):
             completed += int(shard["row_count"])
             print(f"{metric}: retained {output_path.name}; {completed}/{manifest['row_count']}", flush=True)
             continue
@@ -227,9 +249,32 @@ def run_metric(
             raise RuntimeError(
                 f"{metric} {input_path.name} exited {completed_process.returncode}; see {log_path}"
             )
+        try:
+            scored_result = json.loads(completed_process.stdout)
+        except json.JSONDecodeError as exc:
+            detail = completed_process.stdout[-1000:]
+            raise RuntimeError(
+                f"{metric} {input_path.name} returned invalid JSON: {detail}"
+            ) from exc
+        if not isinstance(scored_result, dict):
+            raise RuntimeError(f"{metric} {input_path.name} returned a non-object JSON value")
+        scored_result["provenance"] = {
+            "input_sha256": str(shard["sha256"]),
+            "row_start": int(shard["row_start"]),
+            "row_count": int(shard["row_count"]),
+        }
         temporary_path = output_path.with_suffix(".json.tmp")
-        temporary_path.write_text(completed_process.stdout, encoding="utf-8")
-        if not valid_output(temporary_path, metric, int(shard["row_count"])):
+        temporary_path.write_text(
+            json.dumps(scored_result, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        if not valid_output(
+            temporary_path,
+            metric,
+            int(shard["row_count"]),
+            expected_input_sha256=str(shard["sha256"]),
+            expected_row_start=int(shard["row_start"]),
+        ):
             detail = completed_process.stdout[-1000:]
             raise RuntimeError(f"{metric} {input_path.name} returned incomplete output: {detail}")
         temporary_path.replace(output_path)

@@ -24,6 +24,7 @@ os.environ.setdefault("DB_HOST", "raksasa")
 os.environ.setdefault("DB_USER", "stephanos")
 
 import generate_translation_prompt_evaluation as evaluation  # noqa: E402
+from paper.analysis import prompt_development_overlap_analysis as prompt_overlap  # noqa: E402
 
 
 BUILD_DIR = ROOT / "paper" / "build" / "benchmark_analysis"
@@ -670,6 +671,7 @@ def main() -> None:
     write_csv(BUILD_DIR / "target_sensitivity.csv", sensitivity)
     write_latex_tables(cells, regressions, prompt_deltas)
     plot_timelines(cells)
+    prompt_overlap_result = prompt_overlap.run()
 
     result = {
         "corpus_entries": 100,
@@ -683,6 +685,7 @@ def main() -> None:
         "regressions": regressions,
         "prompt_deltas": prompt_deltas,
         "target_sensitivity": sensitivity,
+        "prompt_development_overlap": prompt_overlap_result,
     }
     (BUILD_DIR / "results.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))
