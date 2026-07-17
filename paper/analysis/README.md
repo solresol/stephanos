@@ -13,6 +13,19 @@ DB_HOST=raksasa DB_USER=stephanos uv run paper/analysis/benchmark_paper_analysis
 Generated CSV and JSON files are written below `paper/build/benchmark_analysis/`
 and are ignored by git. Publication figures are written to `paper/figures/`.
 
+The benchmark rebuild also runs `prompt_development_overlap_analysis.py`. That
+analysis recovers the twenty v2 prompt-development lemma IDs from
+`migrations/20260306_legacy_scholarly_prompt_v2.sql`, pairs v1 and v2 scores for
+the same twelve OpenAI models, and compares item-level gains with the other
+eighty benchmark entries. Its detailed JSON output is
+`paper/build/benchmark_analysis/prompt_development_overlap.json`.
+
+Run only that sensitivity analysis after the benchmark entries have been built:
+
+```sh
+uv run paper/analysis/prompt_development_overlap_analysis.py
+```
+
 ## Figure contract
 
 - **Question:** how does reference-based translation similarity change with
