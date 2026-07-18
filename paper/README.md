@@ -61,6 +61,7 @@ Build commands:
 - `cd paper && make classical-docx` to build `build/classical_review_draft.docx`
 - `cd paper && make all` to build all outputs
 - `cd paper && make benchmark-pdf` to refresh the live deterministic benchmark,
+  rebuild the learned-metric tables from the preserved neural-score cache,
   validate and score the guidance ablation, regenerate the annotated model
   timeline figure, and compile the full paper to
   `output/pdf/stephanos_llm_translation_benchmark_draft.pdf`
@@ -69,7 +70,9 @@ Neural metrics are deliberately separate because their checkpoints and runtimes
 are much larger than the lexical analysis. Prepare resumable 400-row shards
 after `benchmark-analysis` with the following command. Inputs, logs and raw
 scores are kept in the ignored `paper/neural_metrics/` directory so that
-`make clean` cannot remove an expensive completed run.
+`make clean` cannot remove an expensive completed run. `make benchmark-pdf`
+requires that completed cache and regenerates its learned-metric LaTeX inputs
+with the summarizer before compiling the paper.
 
 ```bash
 uv run paper/analysis/neural_benchmark_analysis.py prepare
