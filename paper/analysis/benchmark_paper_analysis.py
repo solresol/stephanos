@@ -8,7 +8,7 @@ import json
 import math
 import os
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -24,6 +24,7 @@ os.environ.setdefault("DB_HOST", "raksasa")
 os.environ.setdefault("DB_USER", "stephanos")
 
 import generate_translation_prompt_evaluation as evaluation  # noqa: E402
+from db import get_connection  # noqa: E402
 from paper.analysis import prompt_development_overlap_analysis as prompt_overlap  # noqa: E402
 
 
@@ -33,7 +34,7 @@ TARGET = 0.90
 METRIC_NAMES = ("BLEU-4", "chrF++", "METEOR", "ROUGE-L")
 METRIC_KEYS = tuple(evaluation.METRIC_KEY_BY_NAME[name] for name in METRIC_NAMES)
 METRIC_LABELS = dict(zip(METRIC_KEYS, METRIC_NAMES, strict=True))
-METRIC_LABELS["mean_lexical"] = "Mean of four lexical metrics"
+METRIC_LABELS["mean_lexical"] = "Four-metric mean"
 
 CLAUDE_RELEASES = {
     "claude_opus_4_8": {
@@ -108,6 +109,13 @@ def p_text(value: object) -> str:
     return f"{number:.2g}" if number >= 0.001 else f"{number:.2e}"
 
 
+def target_month(value: object) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    return datetime.strptime(text, "%Y-%m-%d").strftime("%b %Y")
+
+
 def write_latex_tables(
     cell_rows: list[dict[str, object]],
     regressions: list[dict[str, object]],
@@ -119,16 +127,20 @@ def write_latex_tables(
     )
     lines = [
         r"\begin{landscape}",
+        r"\begingroup",
         r"\section{Appendix A. Complete model--prompt results}",
         r"\scriptsize",
+        r"\renewcommand{\arraystretch}{0.88}",
+        r"\setlength{\LTpre}{0pt}",
+        r"\setlength{\LTpost}{0pt}",
         r"\begin{longtable}{llrrrrrrrr}",
-        r"\caption{Complete deterministic benchmark results for every available model--prompt cell. Scores are percentages.}\\",
+        r"\caption{Complete deterministic benchmark results for every available model--prompt cell. Scores are percentages; the $\geq$98\% count includes exact matches.}\\",
         r"\toprule",
-        r"Model & Prompt & BLEU-4 & chrF++ & METEOR & ROUGE-L & Mean & Exact & Near 98\% & Mean words \\",
+        r"Model & Prompt & BLEU-4 & chrF++ & METEOR & ROUGE-L & Mean & Exact & $\geq$98\% & Mean words \\",
         r"\midrule",
         r"\endfirsthead",
         r"\toprule",
-        r"Model & Prompt & BLEU-4 & chrF++ & METEOR & ROUGE-L & Mean & Exact & Near 98\% & Mean words \\",
+        r"Model & Prompt & BLEU-4 & chrF++ & METEOR & ROUGE-L & Mean & Exact & $\geq$98\% & Mean words \\",
         r"\midrule",
         r"\endhead",
     ]
@@ -141,20 +153,22 @@ def write_latex_tables(
             f"{float(row['mean_lexical']) * 100:.1f} & {int(row['exact_normalized_count'])} & "
             f"{int(row['near_normalized_98_count'])} & {float(row['ai_word_mean']):.1f} \\\\"
         )
-    lines.extend([r"\bottomrule", r"\end{longtable}", r"\end{landscape}"])
+    lines.extend([r"\bottomrule", r"\end{longtable}", r"\endgroup", r"\end{landscape}"])
     (BUILD_DIR / "benchmark_cells_table.tex").write_text("\n".join(lines), encoding="utf-8")
 
     lines = [
         r"\begingroup",
-        r"\setlength{\tabcolsep}{5pt}",
-        r"\begin{longtable}{clrrrrl}",
+        r"\scriptsize",
+        r"\renewcommand{\arraystretch}{0.92}",
+        r"\setlength{\tabcolsep}{3pt}",
+        r"\begin{longtable}{@{}clrrrrl@{}}",
         r"\caption{OLS regressions of model-level similarity on OpenAI model release date. Slopes and confidence limits are percentage points per year.}\\",
         r"\toprule",
-        r"Prompt & Metric & Slope & 95\% CI low & 95\% CI high & $R^2$ & $p$ / 90\% date \\",
+        r"Prompt & Metric & Slope & CI low & CI high & $R^2$ & $p$; 90\% month \\",
         r"\midrule",
         r"\endfirsthead",
         r"\toprule",
-        r"Prompt & Metric & Slope & 95\% CI low & 95\% CI high & $R^2$ & $p$ / 90\% date \\",
+        r"Prompt & Metric & Slope & CI low & CI high & $R^2$ & $p$; 90\% month \\",
         r"\midrule",
         r"\endhead",
     ]
@@ -164,20 +178,24 @@ def write_latex_tables(
             f"{float(row['slope_per_year']) * 100:.2f} & "
             f"{float(row['slope_ci_low_per_year']) * 100:.2f} & "
             f"{float(row['slope_ci_high_per_year']) * 100:.2f} & "
-            f"{float(row['r2']):.3f} & {p_text(row['p_value'])}; {row['target_date']} \\\\"
+            f"{float(row['r2']):.3f} & {p_text(row['p_value'])}; {target_month(row['target_date'])} \\\\"
         )
     lines.extend([r"\bottomrule", r"\end{longtable}", r"\endgroup"])
     (BUILD_DIR / "regression_table.tex").write_text("\n".join(lines), encoding="utf-8")
 
     lines = [
-        r"\begin{longtable}{llrrrr}",
+        r"\begingroup",
+        r"\scriptsize",
+        r"\renewcommand{\arraystretch}{0.92}",
+        r"\setlength{\tabcolsep}{3pt}",
+        r"\begin{longtable}{@{}llrrrr@{}}",
         r"\caption{Paired prompt-version differences across the 12 OpenAI models. Differences and confidence limits are percentage points.}\\",
         r"\toprule",
-        r"Metric & Contrast & Mean difference & 95\% CI low & 95\% CI high & $p$ \\",
+        r"Metric & Contrast & Mean difference & CI low & CI high & $p$ \\",
         r"\midrule",
         r"\endfirsthead",
         r"\toprule",
-        r"Metric & Contrast & Mean difference & 95\% CI low & 95\% CI high & $p$ \\",
+        r"Metric & Contrast & Mean difference & CI low & CI high & $p$ \\",
         r"\midrule",
         r"\endhead",
     ]
@@ -187,7 +205,7 @@ def write_latex_tables(
             f"{float(row['mean_delta']) * 100:.2f} & {float(row['ci_low']) * 100:.2f} & "
             f"{float(row['ci_high']) * 100:.2f} & {p_text(row['p_value'])} \\\\"
         )
-    lines.extend([r"\bottomrule", r"\end{longtable}"])
+    lines.extend([r"\bottomrule", r"\end{longtable}", r"\endgroup"])
     (BUILD_DIR / "prompt_delta_table.tex").write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -326,10 +344,13 @@ def summarize_cells() -> tuple[list[dict[str, object]], list[dict[str, object]]]
             "pair_count": len(pairs),
             "exact_normalized_count": int(summary["exact_normalized_count"]),
             "near_normalized_98_count": int(summary["near_normalized_98_count"]),
+            "near_normalized_98_nonexact_count": int(summary["near_normalized_98_count"])
+            - int(summary["exact_normalized_count"]),
             "human_word_mean": float(summary["human_word_mean"]),
             "ai_word_mean": float(summary["ai_word_mean"]),
             "mean_raw_length_delta": float(summary["mean_raw_length_delta"]),
             "length_slope": float(summary["slope"]),
+            "length_intercept": float(summary["intercept"]),
             "length_r2": float(summary["r2"]),
             "corpus_bleu": float(summary["corpus_bleu"]),
             "trigram_f1": float(summary["corpus_3gram_f1"]),
@@ -346,6 +367,15 @@ def summarize_cells() -> tuple[list[dict[str, object]], list[dict[str, object]]]
                     "provider": provider,
                     "profile_name": profile_name,
                     "prompt_version": prompt_version,
+                    "run_id": int(pair["run_id"]),
+                    "model": str(pair["model"]),
+                    "temperature": finite(pair.get("temperature")),
+                    "top_p": finite(pair.get("top_p")),
+                    "seed": pair.get("seed"),
+                    "api_mode": str(pair.get("api_mode") or ""),
+                    "reasoning_effort": str(pair.get("reasoning_effort") or ""),
+                    "run_created_at": pair.get("run_created_at"),
+                    "run_completed_at": pair.get("run_completed_at"),
                     "lemma_id": int(pair["lemma_id"]),
                     "entry_number": int(pair["entry_number"]),
                     "lemma": str(pair["lemma"]),
@@ -355,11 +385,194 @@ def summarize_cells() -> tuple[list[dict[str, object]], list[dict[str, object]]]
                     "human_word_count": int(pair["human_word_count"]),
                     "ai_word_count": int(pair["ai_word_count"]),
                     "exact_normalized": bool(pair["exact_normalized"]),
+                    "near_normalized_98": bool(pair["near_normalized_98"]),
                     **{key: float(pair[key]) for key in METRIC_KEYS},
                     "mean_lexical": float(np.mean([pair[key] for key in METRIC_KEYS])),
                 }
             )
+
+    guidance_counts = evaluation.fetch_guidance_link_counts(
+        sorted({int(row["run_id"]) for row in entry_rows})
+    )
+    for row in entry_rows:
+        row["guidance_link_count"] = guidance_counts.get(int(row["run_id"]), 0)
     return cell_rows, entry_rows
+
+
+def count_map(values: list[object]) -> dict[str, int]:
+    counts = Counter("(omitted)" if value in (None, "") else str(value) for value in values)
+    return dict(sorted(counts.items()))
+
+
+def generation_condition_summary(entry_rows: list[dict[str, object]]) -> dict[str, object]:
+    openai = [row for row in entry_rows if row["provider"] == "OpenAI"]
+    completed = [
+        row.get("run_completed_at") or row.get("run_created_at")
+        for row in openai
+        if row.get("run_completed_at") or row.get("run_created_at")
+    ]
+    return {
+        "openai_comparisons": len(openai),
+        "samples_per_model_prompt_entry": 1,
+        "generated_from": min(completed).isoformat() if completed else "",
+        "generated_to": max(completed).isoformat() if completed else "",
+        "temperature": count_map([row.get("temperature") for row in openai]),
+        "top_p": count_map([row.get("top_p") for row in openai]),
+        "seed": count_map([row.get("seed") for row in openai]),
+        "api_mode": count_map([row.get("api_mode") for row in openai]),
+        "reasoning_effort": count_map([row.get("reasoning_effort") for row in openai]),
+    }
+
+
+def guidance_provenance_summary(entry_rows: list[dict[str, object]]) -> dict[str, object]:
+    v3 = [
+        row
+        for row in entry_rows
+        if row["provider"] == "OpenAI" and int(row["prompt_version"]) == 3
+    ]
+    by_lemma: dict[int, list[int]] = defaultdict(list)
+    for row in v3:
+        by_lemma[int(row["lemma_id"])].append(int(row["guidance_link_count"]))
+    return {
+        "openai_v3_runs": len(v3),
+        "runs_with_recorded_guidance": sum(
+            1 for row in v3 if int(row["guidance_link_count"]) > 0
+        ),
+        "recorded_guidance_links": sum(int(row["guidance_link_count"]) for row in v3),
+        "benchmark_items": len(by_lemma),
+        "items_with_recorded_guidance_in_at_least_one_model": sum(
+            1 for values in by_lemma.values() if any(value > 0 for value in values)
+        ),
+        "items_with_recorded_guidance_in_all_models": sum(
+            1 for values in by_lemma.values() if values and all(value > 0 for value in values)
+        ),
+        "minimum_models_with_guidance_per_item": min(
+            (sum(value > 0 for value in values) for values in by_lemma.values()),
+            default=0,
+        ),
+        "unguided_item_comparison_available": any(
+            all(value == 0 for value in values) for values in by_lemma.values()
+        ),
+    }
+
+
+def human_revision_analysis(
+    entry_rows: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    references: dict[int, dict[str, str]] = {}
+    for row in entry_rows:
+        references[int(row["lemma_id"])] = {
+            "lemma": str(row["lemma"]),
+            "reviewed": str(row["human_translation_text"]),
+            "source_text": str(row["source_text"]),
+        }
+
+    conn = get_connection(dict_cursor=True)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT ON (lemma_id)
+            lemma_id,
+            translation_text,
+            COALESCE(created_by, '') AS created_by
+        FROM human_translations
+        WHERE lemma_id = ANY(%s)
+          AND stage = 'initial'
+          AND NULLIF(BTRIM(translation_text), '') IS NOT NULL
+        ORDER BY lemma_id,
+                 COALESCE(updated_at, reviewed_at, created_at) DESC,
+                 id DESC
+        """,
+        (sorted(references),),
+    )
+    initial_rows = list(cur.fetchall())
+    cur.close()
+    conn.close()
+
+    raw_rows = []
+    created_by = Counter()
+    for row in initial_rows:
+        lemma_id = int(row["lemma_id"])
+        reference = references.get(lemma_id)
+        if not reference:
+            continue
+        created_by[str(row["created_by"] or "(unknown)")] += 1
+        raw_rows.append(
+            {
+                "lemma_id": lemma_id,
+                "lemma": reference["lemma"],
+                "source_text": reference["source_text"],
+                "ai_translation_text": str(row["translation_text"]),
+                "human_translation_text": reference["reviewed"],
+            }
+        )
+
+    evaluator = evaluation.TranslationMetricEvaluator(METRIC_NAMES, neural_metrics_python="")
+    pairs = evaluation.build_pair_rows(raw_rows, metric_evaluator=evaluator)
+    output_rows = []
+    composites = []
+    for pair in pairs:
+        composite = float(np.mean([pair[key] for key in METRIC_KEYS]))
+        composites.append(composite)
+        output_rows.append(
+            {
+                "lemma_id": int(pair["lemma_id"]),
+                "lemma": str(pair["lemma"]),
+                **{key: float(pair[key]) for key in METRIC_KEYS},
+                "mean_lexical": composite,
+                "exact_normalized": bool(pair["exact_normalized"]),
+                "near_normalized_98": bool(pair["near_normalized_98"]),
+            }
+        )
+
+    values = np.asarray(composites, dtype=float)
+    ci = (
+        stats.t.interval(0.95, len(values) - 1, loc=float(values.mean()), scale=float(stats.sem(values)))
+        if len(values) > 1
+        else (float("nan"), float("nan"))
+    )
+    summary = {
+        "comparison": "stored initial expert draft against approved reviewed translation",
+        "pair_count": len(pairs),
+        "created_by": dict(sorted(created_by.items())),
+        **{
+            f"mean_{key}": float(np.mean([pair[key] for pair in pairs]))
+            for key in METRIC_KEYS
+        },
+        "mean_lexical": float(values.mean()) if len(values) else float("nan"),
+        "mean_lexical_ci_low": float(ci[0]),
+        "mean_lexical_ci_high": float(ci[1]),
+        "exact_normalized_count": sum(bool(pair["exact_normalized"]) for pair in pairs),
+        "near_normalized_98_count": sum(bool(pair["near_normalized_98"]) for pair in pairs),
+        "interpretation": (
+            "Human revision stability benchmark; not independent inter-translator agreement "
+            "and not a human-performance ceiling."
+        ),
+    }
+    return output_rows, summary
+
+
+def corpus_context_summary() -> dict[str, object]:
+    conn = get_connection(dict_cursor=True)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM assembled_lemmas
+        WHERE version = 'epitome'
+          AND LEFT(BTRIM(COALESCE(lemma, '')), 1) IN ('Κ', 'κ')
+        """
+    )
+    kappa_count = int(cur.fetchone()["count"])
+    cur.close()
+    conn.close()
+    return {
+        "paper_items": 100,
+        "current_kappa_epitome_items": kappa_count,
+        "paper_fraction_of_current_kappa": 100 / kappa_count if kappa_count else None,
+        "selection": "every row in the frozen final Kappa review-tracker PDF export",
+        "random_sample": False,
+    }
 
 
 TIMELINE_PLOTS = (
@@ -658,6 +871,10 @@ def main() -> None:
             regressions.append(fit_line(rows, metric_key))
     prompt_deltas = prompt_delta_rows(openai_cells)
     sensitivity = target_sensitivity_rows(openai_cells)
+    generation_conditions = generation_condition_summary(entries)
+    guidance_provenance = guidance_provenance_summary(entries)
+    human_revision_rows, human_revision = human_revision_analysis(entries)
+    corpus_context = corpus_context_summary()
 
     serializable_cells = []
     for row in sorted(cells, key=lambda item: (item["provider"], item["release_date"], item["prompt_version"])):
@@ -666,6 +883,7 @@ def main() -> None:
         )
     write_csv(BUILD_DIR / "benchmark_cells.csv", serializable_cells)
     write_csv(BUILD_DIR / "benchmark_entries.csv", entries)
+    write_csv(BUILD_DIR / "human_revision_rows.csv", human_revision_rows)
     write_csv(BUILD_DIR / "openai_release_regressions.csv", regressions)
     write_csv(BUILD_DIR / "openai_prompt_deltas.csv", prompt_deltas)
     write_csv(BUILD_DIR / "target_sensitivity.csv", sensitivity)
@@ -686,6 +904,10 @@ def main() -> None:
         "prompt_deltas": prompt_deltas,
         "target_sensitivity": sensitivity,
         "prompt_development_overlap": prompt_overlap_result,
+        "generation_conditions": generation_conditions,
+        "guidance_provenance": guidance_provenance,
+        "human_revision": human_revision,
+        "corpus_context": corpus_context,
     }
     (BUILD_DIR / "results.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))

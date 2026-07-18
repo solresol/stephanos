@@ -12,6 +12,28 @@ DB_HOST=raksasa DB_USER=stephanos uv run paper/analysis/benchmark_paper_analysis
 
 Generated CSV and JSON files are written below `paper/build/benchmark_analysis/`
 and are ignored by git. Publication figures are written to `paper/figures/`.
+The generated audit set includes `human_revision_rows.csv`, which compares the
+79 retained initial expert drafts with their approved reviewed versions. The
+main `results.json` also records generation settings, v3 guidance provenance,
+and the current Kappa-corpus denominator used in the paper.
+
+`human_revision_neural_analysis.py` applies XCOMET-XL to those same 79 retained
+expert-draft/approved-revision pairs. Prepare the provenance-checked input from
+the live database, run it in the dedicated neural environment, and summarize
+only after all row indexes 0--78 have one finite score:
+
+```sh
+DB_HOST=raksasa DB_USER=stephanos \
+  uv run paper/analysis/human_revision_neural_analysis.py prepare
+/home/stephanos/metric-envs/neural-metrics/bin/python \
+  paper/analysis/human_revision_neural_analysis.py run
+uv run paper/analysis/human_revision_neural_analysis.py summarize
+```
+
+The ignored audit outputs under `paper/build/benchmark_analysis/` are
+`human_revision_neural_rows.csv`, `human_revision_openai_subset_cells.csv`, and
+`human_revision_neural_results.json`. This is a within-workflow
+revision-stability calibration, not independent inter-translator agreement.
 
 The benchmark rebuild also runs `prompt_development_overlap_analysis.py`. That
 analysis recovers the twenty v2 prompt-development lemma IDs from
@@ -25,6 +47,28 @@ Run only that sensitivity analysis after the benchmark entries have been built:
 ```sh
 uv run paper/analysis/prompt_development_overlap_analysis.py
 ```
+
+`guidance_ablation_analysis.py` is the separate controlled GPT-5.6 experiment
+used to distinguish the v3 static prompt shell from matched entry-specific
+guidance. It requires the live `paper_guidance_ablation_gpt56` profile to have
+100 Kappa entries, three arms, and three completed runs per entry-arm. The
+script validates the 900-run design and request provenance, averages repetitions
+within each entry-arm, and then calculates paired entry-level contrasts:
+
+- B-A: v3 static shell minus v2;
+- C-B: matched guidance within the same v3 static shell; and
+- C-A: the deployed v3 prompt-plus-guidance system minus v2.
+
+Run it from the repository root:
+
+```sh
+DB_HOST=raksasa DB_USER=stephanos uv run paper/analysis/guidance_ablation_analysis.py
+```
+
+Its ignored audit outputs include run-level scores, entry-level means, arm
+summaries, paired contrasts, Batch API provenance, token counts, and actual
+standard-versus-Batch cost calculations under
+`paper/build/benchmark_analysis/guidance_ablation_*`.
 
 ## Figure contract
 
