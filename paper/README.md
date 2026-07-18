@@ -12,10 +12,12 @@ This directory contains manuscript drafts based on the current Stephanos pipelin
   colours but remain unconnected and excluded from the OpenAI regressions.
 - `analysis/neural_benchmark_analysis.py`: Resumable sharded runner and
   summarizer for COMET-22, XCOMET-XL, and BLEURT-20.
+- `analysis/guidance_ablation_analysis.py`: Controlled GPT-5.6 three-arm
+  analysis separating the v3 static shell from matched entry guidance.
 - `Makefile`: Build targets for PDF/DOCX outputs.
 
-The empirical translation-workflow paper is based on the 100 visible Kappa rows
-from Gabe's final review tracker export, not on every approved row currently in
+The empirical translation-workflow paper is based on all 100 rows in Gabe's
+frozen final Kappa review-tracker export, not on every approved row currently in
 `human_translations`. The provenance anchor is
 `data/kappa_review/final-kappa-translation-review-tracker-export.pdf`, parsed
 into `data/kappa_review/final-kappa-translation-review.rows.jsonl` and imported
@@ -59,7 +61,8 @@ Build commands:
 - `cd paper && make classical-docx` to build `build/classical_review_draft.docx`
 - `cd paper && make all` to build all outputs
 - `cd paper && make benchmark-pdf` to refresh the live deterministic benchmark,
-  regenerate the annotated model timeline figure, and compile the full paper to
+  validate and score the guidance ablation, regenerate the annotated model
+  timeline figure, and compile the full paper to
   `output/pdf/stephanos_llm_translation_benchmark_draft.pdf`
 
 Neural metrics are deliberately separate because their checkpoints and runtimes
@@ -96,3 +99,19 @@ sharded command there with CPU execution:
 
 The command resumes from validated 400-row shards. It does not use hosted
 Hugging Face compute; all scoring runs on `raksasa`.
+
+The smaller expert-revision calibration uses the same cached XCOMET checkpoint
+but a separate work directory and integrity contract:
+
+```bash
+DB_HOST=raksasa DB_USER=stephanos \
+  uv run paper/analysis/human_revision_neural_analysis.py prepare
+/home/stephanos/metric-envs/neural-metrics/bin/python \
+  paper/analysis/human_revision_neural_analysis.py run
+uv run paper/analysis/human_revision_neural_analysis.py summarize
+```
+
+It requires exactly 79 finite XCOMET scores with unique row indexes 0--78 and
+the model status `sidecar Unbabel/XCOMET-XL` before producing the row-level
+audit, matched OpenAI subset cells, and JSON summary under
+`paper/build/benchmark_analysis/`.
