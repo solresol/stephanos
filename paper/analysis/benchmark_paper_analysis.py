@@ -586,6 +586,7 @@ TIMELINE_PLOTS = (
         ),
         "y_label": "Mean reference-similarity score (%)",
         "target_line": True,
+        "show_regression_details": True,
     },
     {
         "metric_key": "bleu4",
@@ -632,10 +633,13 @@ def plot_timeline_metric(
     y_label: str,
     target_line: bool,
     score_scale: float = 100.0,
+    show_regression_details: bool = False,
 ) -> None:
     openai_rows = [row for row in cell_rows if row["provider"] == "OpenAI"]
     claude_rows = [row for row in cell_rows if row["provider"] == "Anthropic"]
     colors = {1: "#2f6fb2", 2: "#c47f16", 3: "#607744"}
+    regression_origin = min(row["release_date"] for row in openai_rows)
+    regression_details = []
 
     all_scores = np.asarray([float(row[metric_key]) * score_scale for row in cell_rows], dtype=float)
     if score_scale == 100.0:
@@ -677,11 +681,24 @@ def plot_timeline_metric(
             [row for row in openai_rows if row["prompt_version"] == prompt_version],
             key=lambda row: row["release_date"],
         )
-        x_days = np.asarray(
-            [(row["release_date"] - rows[0]["release_date"]).days for row in rows], dtype=float
+        x_years = np.asarray(
+            [
+                (row["release_date"] - regression_origin).days / 365.2425
+                for row in rows
+            ],
+            dtype=float,
         )
         y = np.asarray([float(row[metric_key]) * score_scale for row in rows], dtype=float)
-        fit = stats.linregress(x_days, y)
+        fit = stats.linregress(x_years, y)
+        regression_details.append(
+            {
+                "prompt_version": prompt_version,
+                "intercept": float(fit.intercept),
+                "slope_per_year": float(fit.slope),
+                "r2": float(fit.rvalue**2),
+                "p_value": float(fit.pvalue),
+            }
+        )
         ax.scatter(
             [row["release_date"] for row in rows],
             y,
@@ -694,7 +711,7 @@ def plot_timeline_metric(
         )
         ax.plot(
             [row["release_date"] for row in rows],
-            fit.intercept + fit.slope * x_days,
+            fit.intercept + fit.slope * x_years,
             color=colors[prompt_version],
             linewidth=1.8,
             linestyle="--",
@@ -787,6 +804,41 @@ def plot_timeline_metric(
             color="#5f6670",
             fontsize=8,
             va="bottom",
+        )
+
+    if show_regression_details:
+        origin_label = regression_origin.strftime("%-d %b %Y")
+        detail_lines = [
+            f"OLS fits: t = years since {origin_label}; y = predicted score (%)"
+        ]
+        for item in regression_details:
+            slope = float(item["slope_per_year"])
+            p_value = float(item["p_value"])
+            p_display = f"{p_value:.3f}" if p_value >= 0.001 else f"{p_value:.2e}"
+            slope_sign = "+" if slope >= 0 else "−"
+            detail_lines.append(
+                f"v{int(item['prompt_version'])}: y = {float(item['intercept']):.2f} "
+                f"{slope_sign} {abs(slope):.2f}t; "
+                f"R² = {float(item['r2']):.3f}; p = {p_display}"
+            )
+        ax.text(
+            0.018,
+            0.835,
+            "\n".join(detail_lines),
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            color="#303741",
+            fontsize=7.6,
+            linespacing=1.35,
+            bbox={
+                "boxstyle": "round,pad=0.45",
+                "facecolor": "white",
+                "edgecolor": "#c6cdd6",
+                "alpha": 0.94,
+                "linewidth": 0.7,
+            },
+            zorder=7,
         )
 
     fig.suptitle(
