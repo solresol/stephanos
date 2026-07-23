@@ -15,6 +15,11 @@ import re
 from statistics import fmean
 from typing import Any, Iterable
 
+import numpy as np
+from scipy import stats as scipy_stats
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import LeaveOneOut, cross_val_predict
+
 from site_navigation import render_site_navigation, site_navigation_styles
 
 
@@ -23,6 +28,7 @@ OUTPUT_DIR = Path("reference_site/statistics")
 OUTPUT_PATH = OUTPUT_DIR / "kappa_length_quality.html"
 OUTPUT_CSV = OUTPUT_DIR / "kappa_length_quality.csv"
 REVIEW_CSV = OUTPUT_DIR / "kappa_length_quality_review_set.csv"
+QUOTATION_ANALYSIS_CSV = OUTPUT_DIR / "kappa_quotation_quality_analysis.csv"
 
 DEFAULT_PROFILE_NAME = "gpt-5.6-sol"
 DEFAULT_PROFILE_VERSION = 3
@@ -37,6 +43,7 @@ METRIC_LABELS = {
     "rouge_l": "ROUGE-L",
 }
 GREEK_TOKEN_RE = re.compile(r"(?u)[\u0370-\u03FF\u1F00-\u1FFF]{2,}")
+DIRECT_QUOTATION_RE = re.compile(r"“[^”]+”", re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -70,6 +77,17 @@ def finite_float(value: object) -> float | None:
 
 def source_word_count(text: object) -> int:
     return len(GREEK_TOKEN_RE.findall(str(text or "")))
+
+
+def direct_quotation_count(text: object) -> int:
+    """Count explicit double-curly quotation spans in the Greek source text.
+
+    Meineke's guillemets around letters and orthographic forms are deliberately
+    excluded: the paper question concerns quoted passages, not metalinguistic
+    mention of individual characters.
+    """
+
+    return len(DIRECT_QUOTATION_RE.findall(str(text or "")))
 
 
 def load_official_entries(path: Path = OFFICIAL_LIST_PATH) -> list[OfficialEntry]:
@@ -247,6 +265,7 @@ def validate_and_order_rows(
         if length <= 0:
             raise RuntimeError(f"Kappa entry {entry.entry_number} has no Greek source words")
 
+        quotation_count = direct_quotation_count(row.get("source_text"))
         output.append(
             {
                 **row,
@@ -256,6 +275,8 @@ def validate_and_order_rows(
                 "official_order": entry.official_order,
                 "headword": entry.headword,
                 "source_word_count": length,
+                "direct_quotation_count": quotation_count,
+                "has_direct_quotation": quotation_count > 0,
             }
         )
     return output
@@ -297,6 +318,165 @@ def pearson_r(rows: list[dict[str, Any]], metric_key: str = "mean_lexical") -> f
     return numerator / denominator if denominator else 0.0
 
 
+def _r_squared(observed: np.ndarray, predicted: np.ndarray) -> float:
+    denominator = float(np.sum((observed - np.mean(observed)) ** 2))
+    if denominator <= 0:
+        return float("nan")
+    return 1.0 - float(np.sum((observed - predicted) ** 2)) / denominator
+
+
+def _loocv_result(
+    outcome: np.ndarray,
+    length_features: np.ndarray,
+    quote_indicator: np.ndarray,
+) -> dict[str, float]:
+    cv = LeaveOneOut()
+    baseline_predictions = cross_val_predict(
+        LinearRegression(),
+        length_features,
+        outcome,
+        cv=cv,
+    )
+    quotation_predictions = cross_val_predict(
+        LinearRegression(),
+        np.column_stack([length_features, quote_indicator]),
+        outcome,
+        cv=cv,
+    )
+
+    def metrics(predicted: np.ndarray) -> tuple[float, float, float]:
+        return (
+            _r_squared(outcome, predicted),
+            float(np.mean(np.abs(outcome - predicted))),
+            float(np.sqrt(np.mean((outcome - predicted) ** 2))),
+        )
+
+    baseline_r2, baseline_mae, baseline_rmse = metrics(baseline_predictions)
+    quotation_r2, quotation_mae, quotation_rmse = metrics(quotation_predictions)
+    return {
+        "baseline_r2": baseline_r2,
+        "quotation_r2": quotation_r2,
+        "delta_r2": quotation_r2 - baseline_r2,
+        "baseline_mae": baseline_mae,
+        "quotation_mae": quotation_mae,
+        "delta_mae": quotation_mae - baseline_mae,
+        "baseline_rmse": baseline_rmse,
+        "quotation_rmse": quotation_rmse,
+        "delta_rmse": quotation_rmse - baseline_rmse,
+    }
+
+
+def _hc3_quote_effect(
+    outcome: np.ndarray,
+    source_length: np.ndarray,
+    quote_indicator: np.ndarray,
+) -> dict[str, float]:
+    design = np.column_stack(
+        [np.ones(outcome.size, dtype=float), source_length, quote_indicator]
+    )
+    coefficients = np.linalg.lstsq(design, outcome, rcond=None)[0]
+    fitted = design @ coefficients
+    residuals = outcome - fitted
+    inverse = np.linalg.inv(design.T @ design)
+    leverage = np.sum(design * (design @ inverse), axis=1)
+    adjusted_residuals = residuals / np.maximum(1.0 - leverage, 1e-12)
+    meat = design.T @ np.diag(adjusted_residuals**2) @ design
+    covariance = inverse @ meat @ inverse
+    standard_error = math.sqrt(float(covariance[2, 2]))
+    degrees_of_freedom = int(outcome.size - design.shape[1])
+    estimate = float(coefficients[2])
+    statistic = estimate / standard_error if standard_error else float("nan")
+    p_value = (
+        float(2 * scipy_stats.t.sf(abs(statistic), degrees_of_freedom))
+        if math.isfinite(statistic)
+        else float("nan")
+    )
+    critical_value = float(scipy_stats.t.ppf(0.975, degrees_of_freedom))
+    return {
+        "adjusted_effect": estimate,
+        "hc3_standard_error": standard_error,
+        "ci_95_low": estimate - critical_value * standard_error,
+        "ci_95_high": estimate + critical_value * standard_error,
+        "p_value": p_value,
+        "length_coefficient": float(coefficients[1]),
+    }
+
+
+def analyze_quotation_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compare explicit-quotation entries with the rest of the frozen cohort."""
+
+    quote_indicator = np.asarray(
+        [bool(row.get("has_direct_quotation")) for row in rows],
+        dtype=float,
+    )
+    quote_count = int(np.sum(quote_indicator))
+    no_quote_count = int(quote_indicator.size - quote_count)
+    if quote_count == 0 or no_quote_count == 0:
+        raise RuntimeError(
+            "Quotation analysis requires both quotation and non-quotation entries"
+        )
+
+    source_length = np.asarray(
+        [float(row["source_word_count"]) for row in rows],
+        dtype=float,
+    )
+    metric_keys = ("mean_lexical", *METRIC_KEYS)
+    metric_results = []
+    for metric_key in metric_keys:
+        outcome = np.asarray([float(row[metric_key]) for row in rows], dtype=float)
+        quote_mean = float(np.mean(outcome[quote_indicator == 1]))
+        no_quote_mean = float(np.mean(outcome[quote_indicator == 0]))
+        result = {
+            "metric_key": metric_key,
+            "metric_label": METRIC_LABELS[metric_key],
+            "quote_mean": quote_mean,
+            "no_quote_mean": no_quote_mean,
+            "raw_difference": quote_mean - no_quote_mean,
+            **_hc3_quote_effect(outcome, source_length, quote_indicator),
+            **_loocv_result(outcome, source_length.reshape(-1, 1), quote_indicator),
+        }
+        metric_results.append(result)
+
+    primary = next(
+        result for result in metric_results if result["metric_key"] == "mean_lexical"
+    )
+    length_sensitivity = []
+    for length_form, length_features in (
+        ("Linear words", source_length.reshape(-1, 1)),
+        ("Log words", np.log1p(source_length).reshape(-1, 1)),
+        (
+            "Quadratic words",
+            np.column_stack([source_length, source_length**2]),
+        ),
+    ):
+        length_sensitivity.append(
+            {
+                "length_form": length_form,
+                **_loocv_result(
+                    np.asarray(
+                        [float(row["mean_lexical"]) for row in rows],
+                        dtype=float,
+                    ),
+                    length_features,
+                    quote_indicator,
+                ),
+            }
+        )
+
+    return {
+        "row_count": len(rows),
+        "quote_count": quote_count,
+        "no_quote_count": no_quote_count,
+        "quote_length_mean": float(np.mean(source_length[quote_indicator == 1])),
+        "no_quote_length_mean": float(np.mean(source_length[quote_indicator == 0])),
+        "quote_length_median": float(np.median(source_length[quote_indicator == 1])),
+        "no_quote_length_median": float(np.median(source_length[quote_indicator == 0])),
+        "metric_results": metric_results,
+        "primary": primary,
+        "length_sensitivity": length_sensitivity,
+    }
+
+
 def write_csv(path: Path, rows: list[dict[str, Any]], review_ids: set[int]) -> None:
     fields = [
         "official_order",
@@ -304,6 +484,8 @@ def write_csv(path: Path, rows: list[dict[str, Any]], review_ids: set[int]) -> N
         "lemma_id",
         "headword",
         "source_word_count",
+        "has_direct_quotation",
+        "direct_quotation_count",
         "mean_lexical",
         "bleu4",
         "chrfpp",
@@ -327,6 +509,57 @@ def write_csv(path: Path, rows: list[dict[str, Any]], review_ids: set[int]) -> N
             if int(row["lemma_id"]) not in review_ids:
                 item["review_decile"] = ""
             writer.writerow(item)
+
+
+def write_quotation_analysis_csv(path: Path, analysis: dict[str, Any]) -> None:
+    fields = [
+        "metric_key",
+        "metric_label",
+        "entry_count",
+        "quotation_entry_count",
+        "non_quotation_entry_count",
+        "quotation_mean",
+        "non_quotation_mean",
+        "raw_difference",
+        "length_adjusted_effect",
+        "hc3_standard_error",
+        "ci_95_low",
+        "ci_95_high",
+        "p_value",
+        "loocv_length_r2",
+        "loocv_length_plus_quotation_r2",
+        "loocv_delta_r2",
+        "loocv_length_mae",
+        "loocv_length_plus_quotation_mae",
+        "loocv_delta_mae",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for result in analysis["metric_results"]:
+            writer.writerow(
+                {
+                    "metric_key": result["metric_key"],
+                    "metric_label": result["metric_label"],
+                    "entry_count": analysis["row_count"],
+                    "quotation_entry_count": analysis["quote_count"],
+                    "non_quotation_entry_count": analysis["no_quote_count"],
+                    "quotation_mean": result["quote_mean"],
+                    "non_quotation_mean": result["no_quote_mean"],
+                    "raw_difference": result["raw_difference"],
+                    "length_adjusted_effect": result["adjusted_effect"],
+                    "hc3_standard_error": result["hc3_standard_error"],
+                    "ci_95_low": result["ci_95_low"],
+                    "ci_95_high": result["ci_95_high"],
+                    "p_value": result["p_value"],
+                    "loocv_length_r2": result["baseline_r2"],
+                    "loocv_length_plus_quotation_r2": result["quotation_r2"],
+                    "loocv_delta_r2": result["delta_r2"],
+                    "loocv_length_mae": result["baseline_mae"],
+                    "loocv_length_plus_quotation_mae": result["quotation_mae"],
+                    "loocv_delta_mae": result["delta_mae"],
+                }
+            )
 
 
 def render_review_table(rows: list[dict[str, Any]]) -> str:
@@ -374,6 +607,77 @@ def render_all_rows(rows: list[dict[str, Any]], review_ids: set[int]) -> str:
     return "".join(body)
 
 
+def _percentage_points(value: float, digits: int = 1) -> str:
+    return f"{value * 100:+.{digits}f} pp"
+
+
+def render_quotation_analysis(
+    analysis: dict[str, Any],
+    *,
+    profile_name: str,
+    profile_version: int,
+) -> str:
+    primary = analysis["primary"]
+    metric_rows = []
+    for result in analysis["metric_results"]:
+        metric_rows.append(
+            f"""<tr>
+  <td>{esc(result['metric_label'])}</td>
+  <td>{result['quote_mean'] * 100:.1f}%</td>
+  <td>{result['no_quote_mean'] * 100:.1f}%</td>
+  <td>{_percentage_points(result['raw_difference'])}</td>
+  <td>{_percentage_points(result['adjusted_effect'])}</td>
+  <td>{_percentage_points(result['ci_95_low'])} to {_percentage_points(result['ci_95_high'])}</td>
+  <td>{result['p_value']:.3f}</td>
+</tr>"""
+        )
+
+    sensitivity_rows = []
+    for result in analysis["length_sensitivity"]:
+        sensitivity_rows.append(
+            f"""<tr>
+  <td>{esc(result['length_form'])}</td>
+  <td>{result['baseline_r2']:.3f}</td>
+  <td>{result['quotation_r2']:.3f}</td>
+  <td>{result['delta_r2']:+.3f}</td>
+  <td>{result['baseline_mae'] * 100:.2f}%</td>
+  <td>{result['quotation_mae'] * 100:.2f}%</td>
+</tr>"""
+        )
+
+    return f"""
+  <section id="quotation-quality">
+    <h2>Do explicit quotations predict better translation scores?</h2>
+    <div class="finding">
+      <p><strong>No.</strong> In this cohort, entries with an explicit quotation scored lower, not higher. Their unadjusted four-metric mean was {primary['quote_mean'] * 100:.1f}% versus {primary['no_quote_mean'] * 100:.1f}% for entries without one.</p>
+      <p>Quotation entries were also much longer: {analysis['quote_length_mean']:.1f} versus {analysis['no_quote_length_mean']:.1f} Greek words on average. After a linear adjustment for source length, the quotation association was {_percentage_points(primary['adjusted_effect'])} (95% CI {_percentage_points(primary['ci_95_low'])} to {_percentage_points(primary['ci_95_high'])}; HC3 p={primary['p_value']:.3f}).</p>
+      <p>The incremental predictive value is weak. In leave-one-out cross-validation, adding the quotation flag to a linear length model changed R<sup>2</sup> from {primary['baseline_r2']:.3f} to {primary['quotation_r2']:.3f}, while mean absolute error stayed at {primary['baseline_mae'] * 100:.2f}% versus {primary['quotation_mae'] * 100:.2f}%. The small R<sup>2</sup> gain does not survive alternative log-length and quadratic-length specifications.</p>
+    </div>
+    <div class="metric-grid">
+      <div class="metric"><span class="label">Entries with explicit quotation</span><span class="value">{analysis['quote_count']} / {analysis['row_count']}</span></div>
+      <div class="metric"><span class="label">Raw mean-score difference</span><span class="value">{_percentage_points(primary['raw_difference'])}</span></div>
+      <div class="metric"><span class="label">Length-adjusted difference</span><span class="value">{_percentage_points(primary['adjusted_effect'])}</span></div>
+      <div class="metric"><span class="label">LOOCV R<sup>2</sup> change</span><span class="value">{primary['delta_r2']:+.3f}</span></div>
+    </div>
+    <h3>Score-by-score comparison</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Reference-similarity score</th><th>Quotation mean</th><th>No-quotation mean</th><th>Raw difference</th><th>Length-adjusted effect</th><th>95% CI</th><th>HC3 p</th></tr></thead>
+        <tbody>{''.join(metric_rows)}</tbody>
+      </table>
+    </div>
+    <h3>Out-of-sample sensitivity to the length model</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Length specification</th><th>Length-only R<sup>2</sup></th><th>Length + quotation R<sup>2</sup></th><th>Change</th><th>Length-only MAE</th><th>Length + quotation MAE</th></tr></thead>
+        <tbody>{''.join(sensitivity_rows)}</tbody>
+      </table>
+    </div>
+    <p class="note"><strong>Operational definition.</strong> “Explicit quotation” means that the Greek source contains at least one balanced <code>“…”</code> span. This reproducible rule excludes guillemets used around individual letters or forms. It does not identify uncited paraphrases or parallel passages, and it is only a proxy for possible prior representation in model training data. The outcome is entry-level similarity to the approved house translation for one <code>{esc(profile_name)}</code> v{profile_version} run per entry, not an expert correctness score. The primary regression is ordinary least squares with a linear word-count term and HC3 heteroskedasticity-robust uncertainty; individual metric rows are exploratory and not multiple-comparison adjusted.</p>
+  </section>
+"""
+
+
 def render_page(
     rows: list[dict[str, Any]],
     review_rows: list[dict[str, Any]],
@@ -382,6 +686,7 @@ def render_page(
     profile_version: int,
 ) -> str:
     review_ids = {int(row["lemma_id"]) for row in review_rows}
+    quotation_analysis = analyze_quotation_quality(rows)
     chart_rows = [
         {
             "officialOrder": int(row["official_order"]),
@@ -392,6 +697,7 @@ def render_page(
             "mean_lexical": float(row["mean_lexical"]),
             **{key: float(row[key]) for key in METRIC_KEYS},
             "reviewDecile": int(row.get("review_decile") or 0),
+            "hasDirectQuotation": bool(row.get("has_direct_quotation")),
             "href": f"../{headword_page_filename(int(row['lemma_id']))}",
         }
         for row in rows
@@ -435,11 +741,15 @@ def render_page(
     .point { cursor: pointer; fill: var(--blue); opacity: 0.78; stroke: white; stroke-width: 1.4; }
     .point:hover, .point:focus { opacity: 1; stroke: var(--ink); stroke-width: 2.5; }
     .point.review { fill: var(--gold); opacity: 1; stroke: #6f4300; stroke-width: 2; }
+    .point.quotation { stroke: #7a3e9d; stroke-width: 3; }
     .legend { align-items: center; color: var(--muted); display: flex; flex-wrap: wrap; font-size: 0.88rem; gap: 18px; margin: 8px 0; }
     .key { border-radius: 50%; display: inline-block; height: 11px; margin-right: 5px; width: 11px; }
     .key.all { background: var(--blue); }
     .key.review { background: var(--gold); border: 1px solid #6f4300; }
+    .key.quotation { background: white; border: 3px solid #7a3e9d; box-sizing: border-box; }
     .detail { background: #f7f9fc; border-left: 4px solid var(--blue); line-height: 1.5; margin-top: 10px; min-height: 48px; padding: 10px 13px; }
+    .finding { background: #f5f0f8; border-left: 5px solid #7a3e9d; line-height: 1.55; margin: 14px 0; padding: 12px 16px; }
+    .finding p { margin: 7px 0; }
     .table-wrap { overflow-x: auto; }
     table { border-collapse: collapse; font-size: 0.91rem; width: 100%; }
     th, td { border-bottom: 1px solid #e3e8ee; padding: 9px 10px; text-align: left; vertical-align: top; }
@@ -484,12 +794,14 @@ def render_page(
       <label class="check"><input id="review-only" type="checkbox"> Show only ten-entry review set</label>
       <span id="chart-status" class="chart-status" aria-live="polite"></span>
     </div>
-    <div class="legend"><span><i class="key all"></i>Official 100</span><span><i class="key review"></i>Decile-stratified review set</span><span>Dashed line: ordinary least-squares fit</span></div>
+    <div class="legend"><span><i class="key all"></i>Official 100</span><span><i class="key review"></i>Decile-stratified review set</span><span><i class="key quotation"></i>Explicit quotation</span><span>Dashed line: ordinary least-squares fit</span></div>
     <svg id="chart" viewBox="0 0 1100 650" role="img" aria-labelledby="chart-title chart-description">
       <desc id="chart-description">Scatter plot of Greek source word count against translation reference-similarity score for the official 100 Kappa headwords.</desc>
     </svg>
     <div id="point-detail" class="detail" aria-live="polite">Select a point to see its headword, length, score, and reference-page link.</div>
   </section>
+
+  __QUOTATION_ANALYSIS__
 
   <section>
     <h2>Ten-entry review set</h2>
@@ -507,6 +819,7 @@ def render_page(
     <ul class="downloads">
       <li><a href="kappa_length_quality.csv">All 100 chart rows (CSV)</a></li>
       <li><a href="kappa_length_quality_review_set.csv">Ten-entry review set (CSV)</a></li>
+      <li><a href="kappa_quotation_quality_analysis.csv">Quotation analysis (CSV)</a></li>
     </ul>
   </section>
 
@@ -570,6 +883,7 @@ function setDetail(row, metric) {
   detail.appendChild(strong);
   detail.append(` — Kappa entry ${row.entryNumber}; ${row.sourceWords} Greek words; ${metricLabels[metric]} ${(row[metric] * 100).toFixed(1)}%.`);
   if (row.reviewDecile) detail.append(` Review-set length decile ${row.reviewDecile}.`);
+  if (row.hasDirectQuotation) detail.append(" Explicit quotation marker present.");
 }
 
 function renderChart() {
@@ -619,7 +933,7 @@ function renderChart() {
       cx: xScale(row.sourceWords),
       cy: yScale(row[metric]),
       r: row.reviewDecile ? 7 : 5.2,
-      class: `point${row.reviewDecile ? " review" : ""}`,
+      class: `point${row.reviewDecile ? " review" : ""}${row.hasDirectQuotation ? " quotation" : ""}`,
       tabindex: "0",
       role: "button",
       "aria-label": `${row.headword}, ${row.sourceWords} Greek words, ${metricLabels[metric]} ${(row[metric] * 100).toFixed(1)} percent`
@@ -660,6 +974,14 @@ renderChart();
         .replace("__MEAN_LENGTH__", f"{mean_length:.1f}")
         .replace("__MEAN_QUALITY__", f"{mean_quality * 100:.1f}")
         .replace("__CORRELATION__", f"{correlation:.3f}")
+        .replace(
+            "__QUOTATION_ANALYSIS__",
+            render_quotation_analysis(
+                quotation_analysis,
+                profile_name=profile_name,
+                profile_version=profile_version,
+            ),
+        )
         .replace("__REVIEW_ROWS__", render_review_table(review_rows))
         .replace("__ALL_ROWS__", render_all_rows(rows, review_ids))
         .replace("__GENERATED__", esc(generated))
@@ -688,10 +1010,12 @@ def generate(
     rows = validate_and_order_rows(source_rows, official_entries)
     review_rows = select_review_rows(rows)
     review_ids = {int(row["lemma_id"]) for row in review_rows}
+    quotation_analysis = analyze_quotation_quality(rows)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     write_csv(OUTPUT_CSV, rows, review_ids)
     write_csv(REVIEW_CSV, review_rows, review_ids)
+    write_quotation_analysis_csv(QUOTATION_ANALYSIS_CSV, quotation_analysis)
     OUTPUT_PATH.write_text(
         render_page(
             rows,
@@ -726,6 +1050,7 @@ def main() -> None:
     print(f"Wrote {OUTPUT_PATH} with {len(rows)} official Kappa headwords")
     print(f"Wrote {OUTPUT_CSV}")
     print(f"Wrote {REVIEW_CSV} with {len(review_rows)} entries")
+    print(f"Wrote {QUOTATION_ANALYSIS_CSV}")
 
 
 if __name__ == "__main__":
