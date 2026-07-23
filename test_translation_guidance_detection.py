@@ -4,10 +4,26 @@ import unittest
 
 os.environ.setdefault("DB_HOST", "raksasa")
 
-from process_translation_guidance_scans import find_deterministic_match
+from process_translation_guidance_scans import (
+    find_deterministic_match,
+    sanitize_postgres_text,
+)
 
 
 class TranslationGuidanceDetectionTests(unittest.TestCase):
+    def test_postgres_text_sanitizer_replaces_nested_nul_characters(self):
+        value = {
+            "evidence": "Σύμαιθα + p\x00λις",
+            "nested": ["safe", {"detail": "\x00"}],
+            "literal_escape": r"\u0000",
+        }
+
+        sanitized = sanitize_postgres_text(value)
+
+        self.assertEqual(sanitized["evidence"], "Σύμαιθα + p\ufffdλις")
+        self.assertEqual(sanitized["nested"][1]["detail"], "\ufffd")
+        self.assertEqual(sanitized["literal_escape"], r"\u0000")
+
     def test_proper_noun_does_not_match_inside_longer_word(self):
         source = (
             "ἐθνικῶς ἀρκεῖ τὸ Ὁμηρικὸν Καβησσόθεν. "

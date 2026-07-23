@@ -88,6 +88,22 @@ def ensure_mini_model(model: str) -> str:
     return normalized
 
 
+def sanitize_postgres_text(value: object) -> object:
+    """Replace NUL characters that PostgreSQL text and jsonb cannot store."""
+    if isinstance(value, str):
+        return value.replace("\x00", "\ufffd")
+    if isinstance(value, dict):
+        return {
+            sanitize_postgres_text(key): sanitize_postgres_text(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [sanitize_postgres_text(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(sanitize_postgres_text(item) for item in value)
+    return value
+
+
 def column_exists(cur, table_name: str, column_name: str) -> bool:
     cur.execute(
         """
@@ -1002,6 +1018,8 @@ def upsert_match(cur, job: tuple, result: dict[str, object]) -> None:
         detector_kind,
         *_rest,
     ) = job
+    evidence_text = sanitize_postgres_text(result["evidence_text"])
+    evidence_json = sanitize_postgres_text(result["evidence_json"])
     cur.execute(
         """
         INSERT INTO translation_guidance_matches (
@@ -1041,8 +1059,8 @@ def upsert_match(cur, job: tuple, result: dict[str, object]) -> None:
             result["match_status"],
             int(result["occurrence_count"] or 0),
             result["confidence"],
-            result["evidence_text"],
-            json.dumps(result["evidence_json"], ensure_ascii=False),
+            evidence_text,
+            json.dumps(evidence_json, ensure_ascii=False),
         ),
     )
     row = cur.fetchone()
