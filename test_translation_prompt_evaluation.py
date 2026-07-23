@@ -13,6 +13,8 @@ from generate_translation_prompt_evaluation import (
     build_model_timeline_forecast_rows,
     metric_length_pattern_counts,
     metric_length_regression,
+    publish_benchmark_timeline_assets,
+    render_benchmark_timeline_figure,
     render_model_timeline_section,
     render_model_timeline_table,
     render_paper_metric_summary_table,
@@ -335,6 +337,42 @@ class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
             )
             for filename, _ in charts:
                 self.assertTrue((Path(temp_dir) / filename).is_file())
+
+    def test_benchmark_timeline_assets_are_published_and_rendered(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_dir = root / "paper"
+            image_dir = root / "site" / "prompt_images"
+            output_dir = root / "site"
+            source_dir.mkdir()
+            (source_dir / "model-quality-over-time.png").write_bytes(b"png")
+            (source_dir / "model-quality-over-time.pdf").write_bytes(b"pdf")
+
+            assets = publish_benchmark_timeline_assets(
+                source_dir=source_dir,
+                image_dir=image_dir,
+                output_dir=output_dir,
+            )
+            html = render_benchmark_timeline_figure(assets)
+
+            self.assertTrue(
+                assets["image"].startswith(
+                    "prompt_images/model-quality-over-time.png?v="
+                )
+            )
+            self.assertTrue(
+                assets["pdf"].startswith("model-quality-over-time.pdf?v=")
+            )
+            self.assertEqual(
+                (image_dir / "model-quality-over-time.png").read_bytes(),
+                b"png",
+            )
+            self.assertEqual(
+                (output_dir / "model-quality-over-time.pdf").read_bytes(),
+                b"pdf",
+            )
+            self.assertIn("reference-similarity scores", html)
+            self.assertIn('href="model-quality-over-time.pdf?v=', html)
 
     def test_metric_length_regression_identifies_positive_and_negative_correlations(self) -> None:
         positive_rows = [

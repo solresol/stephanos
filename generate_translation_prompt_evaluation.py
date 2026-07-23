@@ -14,6 +14,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import unicodedata
 
@@ -70,6 +71,9 @@ ROW_CSV = OUTPUT_DIR / "prompt_evaluation_rows.csv"
 REPEATABILITY_CSV = OUTPUT_DIR / "prompt_evaluation_repeatability.csv"
 MODEL_TIMELINE_CSV = OUTPUT_DIR / "prompt_evaluation_model_timeline.csv"
 MODEL_TIMELINE_FORECAST_CSV = OUTPUT_DIR / "prompt_evaluation_model_timeline_forecast.csv"
+BENCHMARK_TIMELINE_SOURCE_DIR = Path(__file__).resolve().parent / "paper" / "figures"
+BENCHMARK_TIMELINE_IMAGE = "model-quality-over-time.png"
+BENCHMARK_TIMELINE_PDF = "model-quality-over-time.pdf"
 METRIC_LENGTH_CSV = OUTPUT_DIR / "prompt_evaluation_metric_length_regressions.csv"
 SYNTHETIC_ZAINALDI_GALEN_CSV = OUTPUT_DIR / "prompt_evaluation_synthetic_zainaldi_galen.csv"
 ZAINALDI_PAPER_METRICS_CSV = OUTPUT_DIR / "prompt_evaluation_zainaldi_paper_metrics.csv"
@@ -3892,13 +3896,60 @@ def render_model_timeline_chart_stack(chart_paths: list[tuple[str, str]]) -> str
         return '<p class="warning">No model-timeline charts are available yet.</p>'
     figures = []
     for filename, label in chart_paths:
+        image_path = IMAGE_DIR / filename
+        cache_key = f"?v={image_path.stat().st_mtime_ns}" if image_path.is_file() else ""
         figures.append(
             f"""<figure>
-  <img src="prompt_images/{esc(filename)}" alt="{esc(label)}">
+  <img src="prompt_images/{esc(filename)}{cache_key}" alt="{esc(label)}">
   <figcaption>{esc(label)}.</figcaption>
 </figure>"""
         )
     return '<div class="chart-stack">' + "".join(figures) + "</div>"
+
+
+def publish_benchmark_timeline_assets(
+    *,
+    source_dir: Path = BENCHMARK_TIMELINE_SOURCE_DIR,
+    image_dir: Path = IMAGE_DIR,
+    output_dir: Path = OUTPUT_DIR,
+) -> dict[str, str]:
+    """Copy the paper-quality model timeline into the generated public site."""
+    image_source = source_dir / BENCHMARK_TIMELINE_IMAGE
+    pdf_source = source_dir / BENCHMARK_TIMELINE_PDF
+    if not image_source.is_file() or not pdf_source.is_file():
+        return {}
+
+    image_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    image_target = image_dir / BENCHMARK_TIMELINE_IMAGE
+    pdf_target = output_dir / BENCHMARK_TIMELINE_PDF
+    shutil.copy2(image_source, image_target)
+    shutil.copy2(pdf_source, pdf_target)
+    return {
+        "image": (
+            f"prompt_images/{BENCHMARK_TIMELINE_IMAGE}"
+            f"?v={image_target.stat().st_mtime_ns}"
+        ),
+        "pdf": f"{BENCHMARK_TIMELINE_PDF}?v={pdf_target.stat().st_mtime_ns}",
+    }
+
+
+def render_benchmark_timeline_figure(assets: dict[str, str] | None) -> str:
+    if not assets:
+        return '<p class="warning">The paper benchmark timeline is not available in this build.</p>'
+    image_path = assets.get("image", "")
+    pdf_path = assets.get("pdf", "")
+    if not image_path:
+        return '<p class="warning">The paper benchmark timeline image is not available in this build.</p>'
+    pdf_link = (
+        f' <a href="{esc(pdf_path)}">Download the vector PDF.</a>'
+        if pdf_path
+        else ""
+    )
+    return f"""<div class="chart-stack"><figure>
+  <a href="{esc(pdf_path or image_path)}"><img src="{esc(image_path)}" alt="Translation similarity by model release date for three Stephanos prompt versions"></a>
+  <figcaption>Mean of BLEU-4, chrF++, METEOR, and ROUGE-L across the same 100 Kappa entries. Circles are OpenAI model-prompt observations; dashed lines are prompt-specific OLS fits. Claude observations are shown as diamonds and excluded from the fitted trends. These are reference-similarity scores, not calibrated measures of philological correctness or human equivalence.{pdf_link}</figcaption>
+</figure></div>"""
 
 
 def render_model_timeline_forecast_table(rows: list[dict[str, object]]) -> str:
@@ -3966,15 +4017,19 @@ def render_model_timeline_page(
     *,
     chart_paths: list[tuple[str, str]] | None = None,
     forecast_rows: list[dict[str, object]] | None = None,
+    benchmark_assets: dict[str, str] | None = None,
 ) -> str:
-    html_parts = [page_header("OpenAI Model Translation Timeline", depth=1)]
+    html_parts = [page_header("Translation Similarity by Model Release Date", depth=1)]
     html_parts.append('<p><a href="prompt_evaluation.html">Back to translation prompt evaluation.</a></p>')
     html_parts.append(
-        '<p>This page tracks automated translation metrics over OpenAI model releases while keeping the Stephanos prompt version fixed. The GPT-5.4 and GPT-5.6 Sol rows are approved-human-only evaluation profiles; GPT-5.5 rows use the existing baseline prompt profile.</p>'
+        '<p>This page tracks automated reference-similarity metrics over model releases while keeping the Stephanos prompt version fixed. The overview includes twelve OpenAI releases and available Claude observations on the same 100-entry Kappa corpus.</p>'
     )
+    html_parts.append("<h2>Benchmark Overview</h2>")
+    html_parts.append(render_benchmark_timeline_figure(benchmark_assets))
     html_parts.append(
         f'<p class="note">Human-equivalent dates below use a provisional automated-score target of {format_percent(HUMAN_EQUIVALENT_MEAN_METRIC_TARGET)}. Replace this target with a second-human baseline when the project has one; until then, the projection is a planning proxy, not a claim about human adequacy.</p>'
     )
+    html_parts.append("<h2>OpenAI Planning Charts</h2>")
     html_parts.append(render_model_timeline_chart_stack(chart_paths or []))
     html_parts.append("<h2>Human-Equivalent Projection</h2>")
     html_parts.append(render_model_timeline_forecast_table(forecast_rows or []))
@@ -4470,6 +4525,7 @@ def generate_reports(
     add_model_timeline_synthetic_metrics(model_timeline_rows, synthetic_zainaldi_rows)
     model_timeline_forecast_rows = build_model_timeline_forecast_rows(model_timeline_rows)
     model_timeline_chart_paths = save_model_timeline_charts(model_timeline_rows, IMAGE_DIR)
+    benchmark_timeline_assets = publish_benchmark_timeline_assets()
     tracked_statuses = fetch_tracked_prompt_statuses()
     write_csv_outputs(
         summaries,
@@ -4485,6 +4541,7 @@ def generate_reports(
             model_timeline_rows,
             chart_paths=model_timeline_chart_paths,
             forecast_rows=model_timeline_forecast_rows,
+            benchmark_assets=benchmark_timeline_assets,
         ),
         encoding="utf-8",
     )
