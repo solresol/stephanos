@@ -13,6 +13,7 @@ from generate_translation_prompt_evaluation import (
     build_model_timeline_forecast_rows,
     metric_length_pattern_counts,
     metric_length_regression,
+    render_model_timeline_section,
     render_model_timeline_table,
     render_paper_metric_summary_table,
     render_metric_length_page,
@@ -186,6 +187,28 @@ class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
         self.assertIn("2026-07-09", html)
         self.assertIn("+5.0 pp", html)
         self.assertIn("+8.0 pp", html)
+
+    def test_main_page_model_timeline_section_links_without_duplicating_report(self) -> None:
+        rows = [
+            {
+                "prompt_version": prompt_version,
+                "profile_name": profile_name,
+                "status": "complete",
+            }
+            for prompt_version in (1, 2, 3)
+            for profile_name in ("gpt-5.4", "gpt-5.5", "gpt-5.6-sol")
+        ]
+
+        html = render_model_timeline_section(
+            rows,
+            chart_paths=[("model_timeline_mean_metric.png", "Mean automated metric")],
+        )
+
+        self.assertIn("3 OpenAI model releases across 3 fixed Stephanos prompt versions", html)
+        self.assertIn("9 of 9 model-prompt sets are complete", html)
+        self.assertIn('href="prompt_evaluation_model_timeline.html"', html)
+        self.assertNotIn("<table", html)
+        self.assertNotIn("prompt_images/", html)
 
     def test_model_timeline_forecast_projects_from_completed_releases(self) -> None:
         rows = [

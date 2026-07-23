@@ -1036,6 +1036,10 @@ fi
 
 # Step 9: Deploy to merah
 echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
+# Publish the comparatively small statistics tree first. The full generated site
+# is large enough to exceed its best-effort wall timeout, but a partial full-site
+# transfer must not leave current evaluation reports unpublished.
+run_rsync_logged reference_site/statistics/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/
 # Deploy reference_site/ (contains statistics.html, statistics/, statistics_images/, people.html, and all lemma pages)
 run_optional_rsync_logged "reference_site" reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
 # Remove stale prompt-evaluation detail artifacts for excluded experiment lanes.

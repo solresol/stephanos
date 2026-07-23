@@ -20,6 +20,7 @@ import unicodedata
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -2494,13 +2495,16 @@ def save_model_timeline_charts(rows: list[dict[str, object]], output_dir: Path) 
         if not any(by_prompt.values()):
             continue
         fig, ax = plt.subplots(figsize=(7.6, 4.2))
-        all_x: list[int] = []
+        all_x: list[float] = []
         for prompt_version, points in by_prompt.items():
             if not points:
                 continue
-            x = np.asarray([item["release_datetime"].toordinal() for item in points], dtype=float)
+            x = np.asarray(
+                mdates.date2num([item["release_datetime"] for item in points]),
+                dtype=float,
+            )
             y = np.asarray([item["metric_value"] for item in points], dtype=float)
-            all_x.extend(int(value) for value in x)
+            all_x.extend(float(value) for value in x)
             color = prompt_colors.get(prompt_version, "#2f6fb2")
             ax.scatter(
                 x,
@@ -2523,17 +2527,14 @@ def save_model_timeline_charts(rows: list[dict[str, object]], output_dir: Path) 
             label=f"provisional human-equivalent target ({target_percent:.0f}%)",
         )
         if all_x:
-            ticks = sorted(set(all_x))
-            ax.set_xticks(ticks)
-            ax.set_xticklabels(
-                [datetime.fromordinal(value).strftime("%Y-%m-%d") for value in ticks],
-                rotation=25,
-                ha="right",
-            )
-            if len(ticks) == 1:
-                ax.set_xlim(ticks[0] - 30, ticks[0] + 30)
+            release_dates = sorted(set(all_x))
+            date_locator = mdates.AutoDateLocator(minticks=4, maxticks=8)
+            ax.xaxis.set_major_locator(date_locator)
+            ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(date_locator))
+            if len(release_dates) == 1:
+                ax.set_xlim(release_dates[0] - 30, release_dates[0] + 30)
             else:
-                ax.set_xlim(min(ticks) - 10, max(ticks) + 10)
+                ax.set_xlim(min(release_dates) - 14, max(release_dates) + 14)
         ax.set_ylim(0, 100)
         ax.set_xlabel("OpenAI model release date")
         ax.set_ylabel(f"{label} (%)")
@@ -3947,12 +3948,17 @@ def render_model_timeline_section(
 ) -> str:
     if not rows:
         return ""
-    charts = render_model_timeline_chart_stack(chart_paths or [])
+    release_count = len({str(row.get("profile_name") or "") for row in rows})
+    prompt_versions = {
+        int(row.get("prompt_version") or 0)
+        for row in rows
+        if int(row.get("prompt_version") or 0) > 0
+    }
+    complete_count = sum(str(row.get("status") or "") == "complete" for row in rows)
+    total_count = len(rows)
     return f"""<h2>OpenAI Model Timeline</h2>
-<p class="note">This section compares the Stephanos v1/v2/v3 prompt texts across GPT-5.4, GPT-5.5, and GPT-5.6 Sol on the same 100-row Kappa paper corpus. Deltas are percentage-point changes from the previous available model in release order within the same prompt version.</p>
-{charts}
-{render_model_timeline_table(rows, full=False)}
-<p><a href="prompt_evaluation_model_timeline.html">Open the full model-timeline page.</a></p>"""
+<p class="note">The dedicated timeline analysis compares {release_count} OpenAI model releases across {len(prompt_versions)} fixed Stephanos prompt versions on the same 100-row Kappa paper corpus. {complete_count} of {total_count} model-prompt sets are complete.</p>
+<p><a href="prompt_evaluation_model_timeline.html">Open the model-timeline charts, projections, and detailed table.</a></p>"""
 
 
 def render_model_timeline_page(
