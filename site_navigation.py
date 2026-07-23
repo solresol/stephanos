@@ -65,6 +65,7 @@ MENU_SECTIONS: tuple[MenuSection, ...] = (
             MenuItem("word_count_stats", "Word Counts", "statistics/word_count.html"),
             MenuItem("translation_length", "Translation Length", "statistics/translation_length.html"),
             MenuItem("prompt_eval", "Prompt Evaluation", "statistics/prompt_evaluation.html"),
+            MenuItem("kappa_length_quality", "Kappa Length vs Quality", "statistics/kappa_length_quality.html"),
             MenuItem("translation_quality_predictor", "Translation Quality Predictor", "statistics/translation_quality_predictor.html"),
             MenuItem("guidance_stats", "Guidance Rule Statistics", "statistics/guidance_rules.html"),
             MenuItem("fingerprinting", "Stylometric Fingerprinting", "statistics/fingerprinting.html"),

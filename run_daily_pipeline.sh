@@ -890,8 +890,15 @@ uv run generate_statistics_site.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 7a0a: Generating translation prompt evaluation..." | tee -a "$LOGFILE"
 uv run generate_translation_prompt_evaluation.py --approved-human-only --corpus "$HUMAN_EVAL_CORPUS" 2>&1 | tee -a "$LOGFILE"
 
-# Step 7a0a1: Generate v3 translation quality predictor page
-echo "Step 7a0a1: Generating translation quality predictor page..." | tee -a "$LOGFILE"
+# Step 7a0a1: Generate the official 100-entry Kappa length/quality chart
+echo "Step 7a0a1: Generating Kappa length versus quality page..." | tee -a "$LOGFILE"
+uv run generate_kappa_length_quality_page.py \
+    --profile gpt-5.6-sol \
+    --version 3 \
+    2>&1 | tee -a "$LOGFILE"
+
+# Step 7a0a2: Generate v3 translation quality predictor page
+echo "Step 7a0a2: Generating translation quality predictor page..." | tee -a "$LOGFILE"
 uv run generate_translation_quality_predictor_page.py --corpus "$HUMAN_EVAL_CORPUS" 2>&1 | tee -a "$LOGFILE"
 
 # Step 7a0b: Generate translation operations/cost page
