@@ -1520,6 +1520,7 @@ def generate_navigation(current_page='index', in_subdirectory=False):
         'translation_quality_predictor': 'Translation Quality Predictor',
         'fingerprinting': 'Stylometric Fingerprinting',
         'vocabulary_signatures': 'Vocabulary Signatures',
+        'plesion_by_letter': 'πλησίον by Starting Letter',
         'regression': 'Stephanos vs Epitomizer Emphasis',
         'categories': 'By Category',
         'category_authors': 'Authors',
@@ -1574,6 +1575,7 @@ def main_menu_item_for_stats_page(current_page: str) -> str:
         "translation_quality_predictor": "translation_quality_predictor",
         "fingerprinting": "fingerprinting",
         "vocabulary_signatures": "vocabulary_signatures",
+        "plesion_by_letter": "plesion_by_letter",
         "guidance_rules": "guidance_stats",
         "regression": "regression",
         "etymology": "etymology",
@@ -3364,6 +3366,12 @@ def generate_index_page():
         <h3><a href="statistics/vocabulary_signatures.html">12. Vocabulary Signatures</a></h3>
         <p>DB-backed vocabulary profiles, Zipf-style segment summaries, printed-edition control tests,
         and unsupervised sliding-window clustering over the Meineke word-lemma index.</p>
+    </div>
+
+    <div class="section-card">
+        <h3><a href="statistics/plesion_by_letter.html">13. πλησίον by Headword Starting Letter</a></h3>
+        <p>The dated 20 June 2026 chart and exact figures for headword-level πλησίον prevalence by
+        Greek starting letter, including the Kappa comparison and downloadable PNG and CSV files.</p>
     </div>
 """
 

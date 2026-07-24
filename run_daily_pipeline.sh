@@ -913,6 +913,10 @@ uv run generate_fingerprinting_page.py 2>&1 | tee -a "$LOGFILE"
 echo "Step 7a0d: Generating vocabulary signature page..." | tee -a "$LOGFILE"
 uv run generate_vocabulary_signature_page.py 2>&1 | tee -a "$LOGFILE"
 
+# Step 7a0e: Publish the dated πλησίον-by-headword-letter research snapshot
+echo "Step 7a0e: Generating πλησίον by headword letter page..." | tee -a "$LOGFILE"
+uv run generate_plesion_letter_page.py 2>&1 | tee -a "$LOGFILE"
+
 # Step 7a1: Generate pipeline progress page
 echo "Step 7a1: Generating pipeline progress page..." | tee -a "$LOGFILE"
 uv run generate_pipeline_progress.py 2>&1 | tee -a "$LOGFILE"

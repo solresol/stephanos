@@ -70,6 +70,7 @@ MENU_SECTIONS: tuple[MenuSection, ...] = (
             MenuItem("guidance_stats", "Guidance Rule Statistics", "statistics/guidance_rules.html"),
             MenuItem("fingerprinting", "Stylometric Fingerprinting", "statistics/fingerprinting.html"),
             MenuItem("vocabulary_signatures", "Vocabulary Signatures", "statistics/vocabulary_signatures.html"),
+            MenuItem("plesion_by_letter", "πλησίον by Letter", "statistics/plesion_by_letter.html"),
             MenuItem("regression", "Stephanos vs Epitomizer", "statistics/regression.html"),
             MenuItem("categories", "Categories", "statistics/categories.html"),
             MenuItem("etymology", "Etymology", "statistics/etymology.html"),
