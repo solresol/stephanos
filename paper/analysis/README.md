@@ -17,6 +17,19 @@ The generated audit set includes `human_revision_rows.csv`, which compares the
 main `results.json` also records generation settings, v3 guidance provenance,
 and the current Kappa-corpus denominator used in the paper.
 
+`metric_distribution_analysis.py` plots the entry-level score distributions
+for one complete model/prompt cell. By default it uses GPT-5.6 Sol with prompt
+v3 and validates that all seven benchmark metrics are present for exactly 100
+distinct Kappa entries:
+
+```sh
+uv run paper/analysis/metric_distribution_analysis.py
+```
+
+It writes a faceted histogram figure, a box-and-point spread figure, and a
+quartile summary CSV. Select another complete cell with `--profile-name` and
+`--prompt-version`.
+
 `human_revision_neural_analysis.py` applies XCOMET-XL to those same 79 retained
 expert-draft/approved-revision pairs. Prepare the provenance-checked input from
 the live database, run it in the dedicated neural environment, and summarize
