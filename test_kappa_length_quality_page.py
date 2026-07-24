@@ -94,6 +94,8 @@ def test_quotation_analysis_reports_both_groups_and_loocv_comparison():
     assert analysis["quote_count"] == 20
     assert analysis["no_quote_count"] == 80
     assert analysis["primary"]["metric_key"] == "mean_lexical"
+    assert 0 <= analysis["primary"]["raw_p_value"] <= 1
+    assert analysis["primary"]["raw_ci_95_low"] < analysis["primary"]["raw_ci_95_high"]
     assert len(analysis["metric_results"]) == 5
     assert [row["length_form"] for row in analysis["length_sensitivity"]] == [
         "Linear words",

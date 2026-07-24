@@ -20,6 +20,16 @@ from scipy import stats as scipy_stats
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import LeaveOneOut, cross_val_predict
 
+from kappa_quality_predictor import (
+    analyze_predictors,
+    coverage_from_feature_rows,
+    fetch_database_features,
+    fetch_published_features,
+    load_feature_snapshot,
+    write_feature_snapshot,
+    write_model_results,
+    write_predictions,
+)
 from site_navigation import render_site_navigation, site_navigation_styles
 
 
@@ -29,6 +39,11 @@ OUTPUT_PATH = OUTPUT_DIR / "kappa_length_quality.html"
 OUTPUT_CSV = OUTPUT_DIR / "kappa_length_quality.csv"
 REVIEW_CSV = OUTPUT_DIR / "kappa_length_quality_review_set.csv"
 QUOTATION_ANALYSIS_CSV = OUTPUT_DIR / "kappa_quotation_quality_analysis.csv"
+PREDICTOR_FEATURE_SNAPSHOT_CSV = (
+    OUTPUT_DIR / "kappa_quality_predictor_feature_snapshot.csv"
+)
+PREDICTOR_MODELS_CSV = OUTPUT_DIR / "kappa_quality_predictor_models.csv"
+PREDICTOR_PREDICTIONS_CSV = OUTPUT_DIR / "kappa_quality_predictor_predictions.csv"
 
 DEFAULT_PROFILE_NAME = "gpt-5.6-sol"
 DEFAULT_PROFILE_VERSION = 3
@@ -149,6 +164,11 @@ def load_csv_rows(
                 "lemma_id": int(row["lemma_id"]),
                 "entry_number": int(row["entry_number"]),
                 "lemma": row.get("lemma") or "",
+                "source_text_version_id": (
+                    int(row["source_text_version_id"])
+                    if str(row.get("source_text_version_id") or "").strip()
+                    else None
+                ),
                 "source_text": row.get("source_text") or "",
                 "ai_translation_text": row.get("ai_translation_text") or "",
                 "human_translation_text": row.get("human_translation_text") or "",
@@ -202,6 +222,11 @@ def load_database_rows(
                 "lemma_id": int(pair["lemma_id"]),
                 "entry_number": int(pair["entry_number"]),
                 "lemma": pair.get("lemma") or "",
+                "source_text_version_id": (
+                    int(pair["source_text_version_id"])
+                    if pair.get("source_text_version_id") is not None
+                    else None
+                ),
                 "source_text": pair.get("source_text") or "",
                 "ai_translation_text": pair.get("ai_translation_text") or "",
                 "human_translation_text": pair.get("human_translation_text") or "",
@@ -402,6 +427,50 @@ def _hc3_quote_effect(
     }
 
 
+def _welch_mean_difference(
+    quote_values: np.ndarray,
+    no_quote_values: np.ndarray,
+) -> dict[str, float]:
+    """Return the unadjusted quotation-minus-no-quotation Welch comparison."""
+
+    quote_variance = float(np.var(quote_values, ddof=1))
+    no_quote_variance = float(np.var(no_quote_values, ddof=1))
+    quote_term = quote_variance / quote_values.size
+    no_quote_term = no_quote_variance / no_quote_values.size
+    standard_error = math.sqrt(quote_term + no_quote_term)
+    degrees_of_freedom = (quote_term + no_quote_term) ** 2 / (
+        quote_term**2 / (quote_values.size - 1)
+        + no_quote_term**2 / (no_quote_values.size - 1)
+    )
+    difference = float(np.mean(quote_values) - np.mean(no_quote_values))
+    statistic = difference / standard_error if standard_error else float("nan")
+    p_value = (
+        float(2 * scipy_stats.t.sf(abs(statistic), degrees_of_freedom))
+        if math.isfinite(statistic)
+        else float("nan")
+    )
+    critical_value = float(scipy_stats.t.ppf(0.975, degrees_of_freedom))
+    pooled_standard_deviation = math.sqrt(
+        (
+            (quote_values.size - 1) * quote_variance
+            + (no_quote_values.size - 1) * no_quote_variance
+        )
+        / (quote_values.size + no_quote_values.size - 2)
+    )
+    return {
+        "raw_standard_error": standard_error,
+        "raw_degrees_of_freedom": float(degrees_of_freedom),
+        "raw_ci_95_low": difference - critical_value * standard_error,
+        "raw_ci_95_high": difference + critical_value * standard_error,
+        "raw_p_value": p_value,
+        "cohen_d": (
+            difference / pooled_standard_deviation
+            if pooled_standard_deviation
+            else float("nan")
+        ),
+    }
+
+
 def analyze_quotation_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Compare explicit-quotation entries with the rest of the frozen cohort."""
 
@@ -432,6 +501,10 @@ def analyze_quotation_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "quote_mean": quote_mean,
             "no_quote_mean": no_quote_mean,
             "raw_difference": quote_mean - no_quote_mean,
+            **_welch_mean_difference(
+                outcome[quote_indicator == 1],
+                outcome[quote_indicator == 0],
+            ),
             **_hc3_quote_effect(outcome, source_length, quote_indicator),
             **_loocv_result(outcome, source_length.reshape(-1, 1), quote_indicator),
         }
@@ -483,6 +556,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]], review_ids: set[int]) -> N
         "entry_number",
         "lemma_id",
         "headword",
+        "source_text_version_id",
         "source_word_count",
         "has_direct_quotation",
         "direct_quotation_count",
@@ -521,6 +595,12 @@ def write_quotation_analysis_csv(path: Path, analysis: dict[str, Any]) -> None:
         "quotation_mean",
         "non_quotation_mean",
         "raw_difference",
+        "raw_standard_error",
+        "raw_degrees_of_freedom",
+        "raw_ci_95_low",
+        "raw_ci_95_high",
+        "raw_p_value",
+        "cohen_d",
         "length_adjusted_effect",
         "hc3_standard_error",
         "ci_95_low",
@@ -547,6 +627,12 @@ def write_quotation_analysis_csv(path: Path, analysis: dict[str, Any]) -> None:
                     "quotation_mean": result["quote_mean"],
                     "non_quotation_mean": result["no_quote_mean"],
                     "raw_difference": result["raw_difference"],
+                    "raw_standard_error": result["raw_standard_error"],
+                    "raw_degrees_of_freedom": result["raw_degrees_of_freedom"],
+                    "raw_ci_95_low": result["raw_ci_95_low"],
+                    "raw_ci_95_high": result["raw_ci_95_high"],
+                    "raw_p_value": result["raw_p_value"],
+                    "cohen_d": result["cohen_d"],
                     "length_adjusted_effect": result["adjusted_effect"],
                     "hc3_standard_error": result["hc3_standard_error"],
                     "ci_95_low": result["ci_95_low"],
@@ -611,6 +697,12 @@ def _percentage_points(value: float, digits: int = 1) -> str:
     return f"{value * 100:+.{digits}f} pp"
 
 
+def _p_value(value: float) -> str:
+    if value < 0.001:
+        return f"{value:.2e}"
+    return f"{value:.3f}"
+
+
 def render_quotation_analysis(
     analysis: dict[str, Any],
     *,
@@ -626,9 +718,11 @@ def render_quotation_analysis(
   <td>{result['quote_mean'] * 100:.1f}%</td>
   <td>{result['no_quote_mean'] * 100:.1f}%</td>
   <td>{_percentage_points(result['raw_difference'])}</td>
+  <td>{_percentage_points(result['raw_ci_95_low'])} to {_percentage_points(result['raw_ci_95_high'])}</td>
+  <td>{_p_value(result['raw_p_value'])}</td>
   <td>{_percentage_points(result['adjusted_effect'])}</td>
   <td>{_percentage_points(result['ci_95_low'])} to {_percentage_points(result['ci_95_high'])}</td>
-  <td>{result['p_value']:.3f}</td>
+  <td>{_p_value(result['p_value'])}</td>
 </tr>"""
         )
 
@@ -650,19 +744,21 @@ def render_quotation_analysis(
     <h2>Do explicit quotations predict better translation scores?</h2>
     <div class="finding">
       <p><strong>No.</strong> In this cohort, entries with an explicit quotation scored lower, not higher. Their unadjusted four-metric mean was {primary['quote_mean'] * 100:.1f}% versus {primary['no_quote_mean'] * 100:.1f}% for entries without one.</p>
+      <p>The raw difference is statistically significant under a two-sided Welch comparison: {_percentage_points(primary['raw_difference'])} (95% CI {_percentage_points(primary['raw_ci_95_low'])} to {_percentage_points(primary['raw_ci_95_high'])}; p={_p_value(primary['raw_p_value'])}; Cohen's d={primary['cohen_d']:.2f}). This is a descriptive group comparison, not evidence that quotation itself caused the lower score.</p>
       <p>Quotation entries were also much longer: {analysis['quote_length_mean']:.1f} versus {analysis['no_quote_length_mean']:.1f} Greek words on average. After a linear adjustment for source length, the quotation association was {_percentage_points(primary['adjusted_effect'])} (95% CI {_percentage_points(primary['ci_95_low'])} to {_percentage_points(primary['ci_95_high'])}; HC3 p={primary['p_value']:.3f}).</p>
       <p>The incremental predictive value is weak. In leave-one-out cross-validation, adding the quotation flag to a linear length model changed R<sup>2</sup> from {primary['baseline_r2']:.3f} to {primary['quotation_r2']:.3f}, while mean absolute error stayed at {primary['baseline_mae'] * 100:.2f}% versus {primary['quotation_mae'] * 100:.2f}%. The small R<sup>2</sup> gain does not survive alternative log-length and quadratic-length specifications.</p>
     </div>
     <div class="metric-grid">
       <div class="metric"><span class="label">Entries with explicit quotation</span><span class="value">{analysis['quote_count']} / {analysis['row_count']}</span></div>
       <div class="metric"><span class="label">Raw mean-score difference</span><span class="value">{_percentage_points(primary['raw_difference'])}</span></div>
+      <div class="metric"><span class="label">Raw Welch p</span><span class="value">{_p_value(primary['raw_p_value'])}</span></div>
       <div class="metric"><span class="label">Length-adjusted difference</span><span class="value">{_percentage_points(primary['adjusted_effect'])}</span></div>
       <div class="metric"><span class="label">LOOCV R<sup>2</sup> change</span><span class="value">{primary['delta_r2']:+.3f}</span></div>
     </div>
     <h3>Score-by-score comparison</h3>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Reference-similarity score</th><th>Quotation mean</th><th>No-quotation mean</th><th>Raw difference</th><th>Length-adjusted effect</th><th>95% CI</th><th>HC3 p</th></tr></thead>
+        <thead><tr><th>Reference-similarity score</th><th>Quotation mean</th><th>No-quotation mean</th><th>Raw difference</th><th>Raw 95% CI</th><th>Welch p</th><th>Length-adjusted effect</th><th>Adjusted 95% CI</th><th>HC3 p</th></tr></thead>
         <tbody>{''.join(metric_rows)}</tbody>
       </table>
     </div>
@@ -678,12 +774,109 @@ def render_quotation_analysis(
 """
 
 
+def render_predictor_analysis(
+    analysis: dict[str, Any] | None,
+    coverage: dict[str, Any] | None,
+) -> str:
+    if analysis is None:
+        return """
+  <section id="source-feature-predictor">
+    <h2>Which source features predict translation similarity?</h2>
+    <p class="note">The broader feature-block model was not regenerated because its current source-feature snapshot was unavailable. The quotation and length results above remain complete.</p>
+  </section>
+"""
+
+    by_family = {
+        str(result["family"]): result for result in analysis["results"]
+    }
+    best = analysis["best"]
+    best_mae = analysis["best_mae"]
+    all_result = by_family["all"]
+    all_no_quote = by_family["all_no_quotation"]
+    length_result = by_family["length"]
+    length_quote = by_family["length_quotation"]
+    structure_result = by_family["structure"]
+    rarity_result = by_family["rarity"]
+    citation_entity_result = by_family["citation_entity"]
+    recogniser_result = by_family["recogniser"]
+    all_comparison = analysis["comparisons"]["all_quote"]
+    length_comparison = analysis["comparisons"]["length_quote"]
+
+    if all_comparison["delta_mae_ci_high"] < 0:
+        quote_conclusion = "improved"
+    elif all_comparison["delta_mae_ci_low"] > 0:
+        quote_conclusion = "worsened"
+    else:
+        quote_conclusion = "did not clearly change"
+
+    table_rows = []
+    for result in analysis["results"]:
+        row_class = " class=\"best-model\"" if result["family"] == best["family"] else ""
+        alpha = result.get("selected_alpha_median")
+        table_rows.append(
+            f"""<tr{row_class}>
+  <td>{esc(result['family_label'])}</td>
+  <td>{int(result['feature_count_median'])}</td>
+  <td>{float(result['cv_r2']):.3f}</td>
+  <td>{float(result['cv_mae']) * 100:.2f}%</td>
+  <td>{float(result['cv_rmse']) * 100:.2f}%</td>
+  <td>{float(result['mae_improvement_vs_mean']) * 100:+.2f} pp</td>
+  <td>{float(result['spearman_r']):.3f}</td>
+  <td>{float(alpha):g}</td>
+</tr>"""
+            if alpha is not None
+            else f"""<tr{row_class}>
+  <td>{esc(result['family_label'])}</td>
+  <td>{int(result['feature_count_median'])}</td>
+  <td>{float(result['cv_r2']):.3f}</td>
+  <td>{float(result['cv_mae']) * 100:.2f}%</td>
+  <td>{float(result['cv_rmse']) * 100:.2f}%</td>
+  <td>{float(result['mae_improvement_vs_mean']) * 100:+.2f} pp</td>
+  <td>{float(result['spearman_r']):.3f}</td>
+  <td>—</td>
+</tr>"""
+        )
+
+    coverage = coverage or {}
+    row_count = int(coverage.get("row_count") or analysis["row_count"])
+    return f"""
+  <section id="source-feature-predictor">
+    <h2>Which source features predict translation similarity?</h2>
+    <div class="finding predictor-finding">
+      <p><strong>The best out-of-sample R<sup>2</sup> came from {esc(best['family_label'])}.</strong> It explained {float(best['cv_r2']) * 100:.1f}% of held-out score variance (nested-CV R<sup>2</sup>={float(best['cv_r2']):.3f}) with mean absolute error {float(best['cv_mae']) * 100:.2f}%. {esc(best_mae['family_label'])} had the lowest MAE at {float(best_mae['cv_mae']) * 100:.2f}% (R<sup>2</sup>={float(best_mae['cv_r2']):.3f}).</p>
+      <p>Source structure reached R<sup>2</sup>={float(structure_result['cv_r2']):.3f}, slightly above log length alone at {float(length_result['cv_r2']):.3f}, but that block includes character count, sentence count, and words per sentence and therefore carries length-adjacent signal. The standalone rarity, citation/entity, and recogniser blocks were weaker at R<sup>2</sup>={float(rarity_result['cv_r2']):.3f}, {float(citation_entity_result['cv_r2']):.3f}, and {float(recogniser_result['cv_r2']):.3f}.</p>
+      <p>The all-available model reached R<sup>2</sup>={float(all_result['cv_r2']):.3f}. Removing quotation features changed R<sup>2</sup> to {float(all_no_quote['cv_r2']):.3f} and MAE from {float(all_result['cv_mae']) * 100:.2f}% to {float(all_no_quote['cv_mae']) * 100:.2f}%. In paired bootstrap resampling, adding quotation {quote_conclusion} error: ΔMAE {all_comparison['delta_mae'] * 100:+.2f} pp (95% CI {all_comparison['delta_mae_ci_low'] * 100:+.2f} to {all_comparison['delta_mae_ci_high'] * 100:+.2f}).</p>
+      <p>The same result appears in the narrower check: adding quotation to log length changed R<sup>2</sup> from {float(length_result['cv_r2']):.3f} to {float(length_quote['cv_r2']):.3f}, with ΔMAE {length_comparison['delta_mae'] * 100:+.2f} pp (95% CI {length_comparison['delta_mae_ci_low'] * 100:+.2f} to {length_comparison['delta_mae_ci_high'] * 100:+.2f}). Quotation is therefore useful as a descriptive marker of difficult, long entries, but not as a stable independent predictor in this sample.</p>
+    </div>
+    <div class="metric-grid">
+      <div class="metric"><span class="label">Outer validation</span><span class="value">{int(analysis['outer_splits'])}-fold</span></div>
+      <div class="metric"><span class="label">Inner tuning</span><span class="value">{int(analysis['inner_splits'])}-fold</span></div>
+      <div class="metric"><span class="label">Best held-out R<sup>2</sup></span><span class="value">{float(best['cv_r2']):.3f}</span></div>
+      <div class="metric"><span class="label">Lowest held-out MAE</span><span class="value">{float(best_mae['cv_mae']) * 100:.2f}%</span></div>
+    </div>
+    <h3>Nested cross-validated feature-block comparison</h3>
+    <p class="note">Each row predicts the same four-metric mean for unseen entries. The ridge penalty, vocabulary, document frequencies, imputation, and scaling are all learned inside the training folds. The highlighted row has the highest held-out R<sup>2</sup>; feature counts are training-fold medians.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Source feature set</th><th>Features</th><th>CV R<sup>2</sup></th><th>CV MAE</th><th>CV RMSE</th><th>MAE gain vs mean</th><th>Spearman r</th><th>Median ridge α</th></tr></thead>
+        <tbody>{''.join(table_rows)}</tbody>
+      </table>
+    </div>
+    <h3>What went into the all-available model?</h3>
+    <p>Only information present in the Greek source before translation: log word count; explicit-quotation count and quoted-word proportion; sentence and punctuation structure; Diorisis lexical-rarity ratios; structured citation and named-entity counts; guidance-recogniser rule hits; and Greek TF-IDF unigrams and bigrams. AI-output length and any translation-similarity metric are excluded from the predictors.</p>
+    <p class="note"><strong>Coverage.</strong> Feature source: {esc(coverage.get('feature_source') or 'source-feature snapshot')}. Recogniser hits cover {int(coverage.get('recogniser_entry_count') or 0)} / {row_count} entries; entity features {int(coverage.get('entity_entry_count') or 0)} / {row_count}; citations {int(coverage.get('citation_entry_count') or 0)} / {row_count}; current-version rarity and sentence segmentation {int(coverage.get('rarity_current_count') or 0)} / {row_count} and {int(coverage.get('sentence_segmentation_current_count') or 0)} / {row_count}. Source-version mismatches are treated as missing and imputed within training folds. Parsed dependency-grammar coverage is {int(coverage.get('parsed_grammar_count') or 0)} / {row_count}, so it is not included. These are predictive associations in a 100-entry observational cohort; individual ridge coefficients are not treated as stable explanations.</p>
+  </section>
+"""
+
+
 def render_page(
     rows: list[dict[str, Any]],
     review_rows: list[dict[str, Any]],
     *,
     profile_name: str,
     profile_version: int,
+    predictor_analysis: dict[str, Any] | None = None,
+    predictor_coverage: dict[str, Any] | None = None,
 ) -> str:
     review_ids = {int(row["lemma_id"]) for row in review_rows}
     quotation_analysis = analyze_quotation_quality(rows)
@@ -749,12 +942,14 @@ def render_page(
     .key.quotation { background: white; border: 3px solid #7a3e9d; box-sizing: border-box; }
     .detail { background: #f7f9fc; border-left: 4px solid var(--blue); line-height: 1.5; margin-top: 10px; min-height: 48px; padding: 10px 13px; }
     .finding { background: #f5f0f8; border-left: 5px solid #7a3e9d; line-height: 1.55; margin: 14px 0; padding: 12px 16px; }
+    .predictor-finding { background: #eef5fb; border-left-color: var(--blue); }
     .finding p { margin: 7px 0; }
     .table-wrap { overflow-x: auto; }
     table { border-collapse: collapse; font-size: 0.91rem; width: 100%; }
     th, td { border-bottom: 1px solid #e3e8ee; padding: 9px 10px; text-align: left; vertical-align: top; }
     th { background: #edf2f7; color: var(--ink); position: sticky; top: 0; }
     tr:hover td { background: #fafcff; }
+    tr.best-model td { background: #fff7e6; font-weight: 650; }
     details p { line-height: 1.55; max-width: 1000px; }
     summary { color: #205b91; cursor: pointer; }
     a { color: #205b91; }
@@ -803,6 +998,8 @@ def render_page(
 
   __QUOTATION_ANALYSIS__
 
+  __PREDICTOR_ANALYSIS__
+
   <section>
     <h2>Ten-entry review set</h2>
     <p class="note">The 100 entries are sorted by Greek source length into ten equal groups. The lowest four-metric score in each group is selected. This gives one challenge entry from every length decile and avoids reducing review to only the ten longest or ten lowest-scoring entries.</p>
@@ -820,6 +1017,9 @@ def render_page(
       <li><a href="kappa_length_quality.csv">All 100 chart rows (CSV)</a></li>
       <li><a href="kappa_length_quality_review_set.csv">Ten-entry review set (CSV)</a></li>
       <li><a href="kappa_quotation_quality_analysis.csv">Quotation analysis (CSV)</a></li>
+      <li><a href="kappa_quality_predictor_models.csv">Predictor model comparison (CSV)</a></li>
+      <li><a href="kappa_quality_predictor_predictions.csv">Held-out predictions (CSV)</a></li>
+      <li><a href="kappa_quality_predictor_feature_snapshot.csv">Source-feature snapshot (CSV)</a></li>
     </ul>
   </section>
 
@@ -982,6 +1182,13 @@ renderChart();
                 profile_version=profile_version,
             ),
         )
+        .replace(
+            "__PREDICTOR_ANALYSIS__",
+            render_predictor_analysis(
+                predictor_analysis,
+                predictor_coverage,
+            ),
+        )
         .replace("__REVIEW_ROWS__", render_review_table(review_rows))
         .replace("__ALL_ROWS__", render_all_rows(rows, review_ids))
         .replace("__GENERATED__", esc(generated))
@@ -1011,17 +1218,93 @@ def generate(
     review_rows = select_review_rows(rows)
     review_ids = {int(row["lemma_id"]) for row in review_rows}
     quotation_analysis = analyze_quotation_quality(rows)
+    predictor_rows: list[dict[str, Any]] | None = None
+    predictor_coverage: dict[str, Any] | None = None
+    if input_csv is None:
+        predictor_rows, predictor_coverage = fetch_database_features(rows)
+    elif PREDICTOR_FEATURE_SNAPSHOT_CSV.exists():
+        snapshot_rows = load_feature_snapshot(PREDICTOR_FEATURE_SNAPSHOT_CSV)
+        snapshot_by_lemma = {
+            int(row["lemma_id"]): row for row in snapshot_rows
+        }
+        if (
+            set(snapshot_by_lemma) == {int(row["lemma_id"]) for row in rows}
+            and all(
+                snapshot_by_lemma[int(row["lemma_id"])].get(
+                    "source_text_version_id"
+                )
+                is not None
+                for row in rows
+            )
+            and all(
+                str(
+                    snapshot_by_lemma[int(row["lemma_id"])].get(
+                        "feature_source"
+                    )
+                    or ""
+                ).strip()
+                for row in rows
+            )
+            and all(
+                str(snapshot_by_lemma[int(row["lemma_id"])].get("source_text") or "")
+                == str(row.get("source_text") or "")
+                for row in rows
+            )
+        ):
+            predictor_rows = [
+                {
+                    **snapshot_by_lemma[int(row["lemma_id"])],
+                    **row,
+                    "source_text_version_id": (
+                        row.get("source_text_version_id")
+                        or snapshot_by_lemma[int(row["lemma_id"])].get(
+                            "source_text_version_id"
+                        )
+                    ),
+                    "recogniser_features": snapshot_by_lemma[int(row["lemma_id"])].get(
+                        "recogniser_features",
+                        {},
+                    ),
+                }
+                for row in rows
+            ]
+            predictor_coverage = coverage_from_feature_rows(predictor_rows)
+        if predictor_rows is None:
+            predictor_rows, predictor_coverage = fetch_published_features(
+                rows,
+                profile_name=profile_name,
+                profile_version=profile_version,
+            )
+    else:
+        predictor_rows, predictor_coverage = fetch_published_features(
+            rows,
+            profile_name=profile_name,
+            profile_version=profile_version,
+        )
+
+    predictor_analysis = (
+        analyze_predictors(predictor_rows) if predictor_rows is not None else None
+    )
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     write_csv(OUTPUT_CSV, rows, review_ids)
     write_csv(REVIEW_CSV, review_rows, review_ids)
     write_quotation_analysis_csv(QUOTATION_ANALYSIS_CSV, quotation_analysis)
+    if predictor_rows is not None and predictor_analysis is not None:
+        write_feature_snapshot(PREDICTOR_FEATURE_SNAPSHOT_CSV, predictor_rows)
+        write_model_results(PREDICTOR_MODELS_CSV, predictor_analysis)
+        write_predictions(PREDICTOR_PREDICTIONS_CSV, predictor_rows, predictor_analysis)
+        print(f"Wrote {PREDICTOR_MODELS_CSV}")
+        print(f"Wrote {PREDICTOR_PREDICTIONS_CSV}")
+        print(f"Wrote {PREDICTOR_FEATURE_SNAPSHOT_CSV}")
     OUTPUT_PATH.write_text(
         render_page(
             rows,
             review_rows,
             profile_name=profile_name,
             profile_version=profile_version,
+            predictor_analysis=predictor_analysis,
+            predictor_coverage=predictor_coverage,
         ),
         encoding="utf-8",
     )
