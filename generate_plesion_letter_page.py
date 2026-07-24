@@ -19,6 +19,7 @@ DEFAULT_SOURCE_PNG = Path("paper/figures/plesion-headword-rate-by-letter.png")
 DEFAULT_OUTPUT = Path("reference_site/statistics/plesion_by_letter.html")
 DEFAULT_ASSET_DIR = Path("reference_site/statistics_images")
 SNAPSHOT_DATE = "2026-06-20"
+PUBLISHED_ASSET_STEM = f"plesion-headword-rate-by-letter-{SNAPSHOT_DATE}"
 
 
 @dataclass(frozen=True)
@@ -295,8 +296,8 @@ def main() -> None:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.asset_dir.mkdir(parents=True, exist_ok=True)
-    published_png = args.asset_dir / args.source_png.name
-    published_csv = args.asset_dir / args.source_csv.name
+    published_png = args.asset_dir / f"{PUBLISHED_ASSET_STEM}{args.source_png.suffix}"
+    published_csv = args.asset_dir / f"{PUBLISHED_ASSET_STEM}{args.source_csv.suffix}"
     shutil.copy2(args.source_png, published_png)
     shutil.copy2(args.source_csv, published_csv)
 
