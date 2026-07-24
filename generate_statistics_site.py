@@ -3308,6 +3308,7 @@ def generate_index_page():
         <h3><a href="statistics/prompt_evaluation.html">3. Translation Prompt Evaluation</a></h3>
         <p>Compare AI prompt versions against approved human translations with BLEU-4, chrF++, METEOR, ROUGE-L, BERTScore, COMET, BLEURT, length regression, and residual analysis.</p>
         <p><a href="statistics/prompt_evaluation_model_timeline.html">View translation similarity by model release date.</a></p>
+        <p><a href="statistics/translation_quality_distributions.html">Compare entry-level score distributions for prompt v1, v2, and v3 across all benchmark models.</a></p>
     </div>
 
     <div class="section-card">
