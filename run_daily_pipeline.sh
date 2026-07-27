@@ -589,10 +589,10 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_MODEL_TIMELINE
     done
 fi
 
-# Step 4e: Enqueue preferred-source publication requests after the paper-facing
-# approved-human reasoning lane. Re-enable this to resume canonical publication
-# order; without a letter filter, that resumes with Alpha.
-TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-0}"
+# Step 4e: Enqueue one preferred-source publication request per daily run after
+# the paper-facing approved-human reasoning lane. Without a letter filter, this
+# advances in canonical order from Alpha.
+TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-1}"
 TRANSLATION_ENQUEUE_ORDER="${TRANSLATION_ENQUEUE_ORDER:-canonical}"
 TRANSLATION_ENQUEUE_PRIORITY="${TRANSLATION_ENQUEUE_PRIORITY:-20}"
 TRANSLATION_ENQUEUE_LETTER="${TRANSLATION_ENQUEUE_LETTER:-}"
