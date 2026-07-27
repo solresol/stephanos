@@ -889,11 +889,13 @@ def mark_ai_translations_outdated_for_guidance_match(
             FROM translation_runs tr
             JOIN assembled_lemmas a ON a.id = tr.lemma_id
             JOIN lemma_source_text_versions stv ON stv.id = tr.source_text_version_id
+            JOIN translation_prompt_profile_versions pv ON pv.id = tr.profile_version_id
             WHERE tr.lemma_id = %s
               AND tr.source_text_version_id = %s
               AND stv.source_document = ANY(%s)
               AND tr.status = ANY(%s)
               AND COALESCE(tr.translation_text, '') != ''
+              AND COALESCE(pv.uses_guidance_context, FALSE) = TRUE
               AND COALESCE(a.reviewed_english_translation, '') = ''
               AND COALESCE(a.corrected_english_translation, '') = ''
               {run_guidance_filter}
