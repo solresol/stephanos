@@ -42,7 +42,14 @@ def load_diff_counts(path: Path) -> dict[str, int]:
     }
 
 
-def build_body(*, greeting: str, history: dict, authority: dict, diff: dict) -> str:
+def build_body(
+    *,
+    greeting: str,
+    history: dict,
+    authority: dict,
+    diff: dict,
+    fetch_status: str | None = None,
+) -> str:
     latest_snapshot = history.get("latest_snapshot_id") or authority.get("snapshot_id") or "unknown"
     fetched_at = history.get("latest_fetched_at") or "unknown"
     mention_changed = diff["mention_changed"]
@@ -54,6 +61,18 @@ def build_body(*, greeting: str, history: dict, authority: dict, diff: dict) -> 
     ethnic_rows = int(authority.get("ethnic_suggestion_rows") or 0)
     new_id_rows = int(authority.get("new_id_rows") or 0)
 
+    if fetch_status == "unchanged":
+        change_summary = (
+            "No changes in the ToposText StephByz file were detected in the past 24 hours."
+        )
+    else:
+        change_summary = (
+            f"Since the previous imported snapshot, they count {mention_changed:,} "
+            f"tag-level changes across {changed_tag_entries:,} entries: "
+            f"{mention_added:,} added entity tags and {mention_removed:,} removed entity tags. "
+            f"They also saw {entry_text_changed:,} entries with text changes."
+        )
+
     return f"""{greeting}
 
 The bots have finished their overnight ToposText check and confirm that the Dropbox edits are being picked up.
@@ -61,7 +80,7 @@ The bots have finished their overnight ToposText check and confirm that the Drop
 Latest imported snapshot: {latest_snapshot}
 Fetched: {fetched_at}
 
-Since the previous imported snapshot, they count {mention_changed:,} tag-level changes across {changed_tag_entries:,} entries: {mention_added:,} added entity tags and {mention_removed:,} removed entity tags. They also saw {entry_text_changed:,} entries with text changes.
+{change_summary}
 
 Current review worklists:
 - {re_candidate_rows:,} possible RE candidate rows
@@ -89,7 +108,13 @@ def build_message(args: argparse.Namespace) -> EmailMessage:
     history = load_json(args.history_summary)
     authority = load_json(args.authority_summary)
     diff = load_diff_counts(args.diff_csv)
-    body = build_body(greeting=args.greeting, history=history, authority=authority, diff=diff)
+    body = build_body(
+        greeting=args.greeting,
+        history=history,
+        authority=authority,
+        diff=diff,
+        fetch_status=args.fetch_status,
+    )
 
     message = EmailMessage()
     message["From"] = args.from_address
@@ -110,6 +135,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--history-summary", type=Path, default=DEFAULT_HISTORY_SUMMARY)
     parser.add_argument("--authority-summary", type=Path, default=DEFAULT_AUTHORITY_SUMMARY)
     parser.add_argument("--diff-csv", type=Path, default=DEFAULT_DIFF_CSV)
+    parser.add_argument("--fetch-status", choices=("fetched", "unchanged"))
     return parser.parse_args(argv)
 
 

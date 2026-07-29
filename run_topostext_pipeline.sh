@@ -143,6 +143,7 @@ if [ -n "${TOPOSTEXT_EMAIL_RECIPIENTS:-}" ]; then
     trap 'rm -f "$email_file"' EXIT
     uv run generate_topostext_email_summary.py \
         --to "$TOPOSTEXT_EMAIL_RECIPIENTS" \
+        --fetch-status "$fetch_status" \
         > "$email_file"
 
     TOPOSTEXT_EMAIL_FROM_ENVELOPE="${TOPOSTEXT_EMAIL_FROM_ENVELOPE:-stephanos@symmachus.org}"
