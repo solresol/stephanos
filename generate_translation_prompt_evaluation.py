@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 import csv
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+import hashlib
 import html
 import json
 import math
@@ -41,6 +42,12 @@ except ImportError:  # pragma: no cover - sklearn is a project dependency.
     cross_val_score = None
 
 from db import get_connection
+from neural_translation_metric_cache import (
+    CACHE_SCHEMA_VERSION as NEURAL_METRIC_CACHE_SCHEMA_VERSION,
+    DEFAULT_CACHE_PATH as DEFAULT_NEURAL_METRICS_CACHE,
+    NeuralTranslationMetricCache,
+    content_sha256 as neural_metric_content_sha256,
+)
 from paper_corpus import (
     CORPUS_CHOICES,
     CORPUS_APPROVED_HUMAN,
@@ -170,6 +177,11 @@ METRIC_KEY_BY_NAME = {
     "BLEURT": "bleurt",
 }
 METRIC_NAME_BY_KEY = {value: key for key, value in METRIC_KEY_BY_NAME.items()}
+NEURAL_METRIC_SCORE_FIELDS = {
+    "bertscore": ("bertscore", "bertscore_precision", "bertscore_recall"),
+    "comet": ("comet",),
+    "bleurt": ("bleurt",),
+}
 METRIC_ALIASES = {
     "bleu": "BLEU-4",
     "bleu4": "BLEU-4",
@@ -575,6 +587,9 @@ class TranslationMetricEvaluator:
         bertscore_batch_size: int = 16,
         comet_batch_size: int = 8,
         neural_metrics_python: str | None = None,
+        neural_metrics_cache: str | Path | None = None,
+        refresh_neural_metrics_cache: bool = False,
+        neural_metrics_chunk_size: int = 1000,
     ) -> None:
         self.metric_names = metric_names
         self.metric_keys = tuple(METRIC_KEY_BY_NAME[name] for name in metric_names)
@@ -582,6 +597,11 @@ class TranslationMetricEvaluator:
         self.bertscore_batch_size = bertscore_batch_size
         self.comet_batch_size = comet_batch_size
         self.neural_metrics_python = resolve_neural_metrics_python(neural_metrics_python)
+        self.neural_metrics_cache = NeuralTranslationMetricCache(
+            resolve_neural_metrics_cache_path(neural_metrics_cache)
+        )
+        self.refresh_neural_metrics_cache = refresh_neural_metrics_cache
+        self.neural_metrics_chunk_size = max(1, neural_metrics_chunk_size)
         self.sidecar_metric_keys: set[str] = set()
         self.handlers: dict[str, object] = {}
         self.status: dict[str, str] = {}
@@ -708,6 +728,199 @@ class TranslationMetricEvaluator:
         metric_keys = sorted(self.sidecar_metric_keys)
         if not metric_keys or not rows or not self.neural_metrics_python:
             return
+        content_keys = [neural_metric_content_sha256(row) for row in rows]
+        row_indexes_by_content: dict[str, list[int]] = defaultdict(list)
+        for row_index, content_key in enumerate(content_keys):
+            row_indexes_by_content[content_key].append(row_index)
+        representative_indexes = {
+            content_key: row_indexes[0]
+            for content_key, row_indexes in row_indexes_by_content.items()
+        }
+        metric_configurations = {
+            metric_key: self._sidecar_metric_configuration(metric_key)
+            for metric_key in metric_keys
+        }
+        cached_scores: dict[tuple[str, str], dict[str, float]] = {}
+        if not self.refresh_neural_metrics_cache:
+            try:
+                cached_scores = self.neural_metrics_cache.load(
+                    row_indexes_by_content,
+                    metric_configurations,
+                )
+            except Exception as exc:
+                print(f"  Warning: neural metric cache read failed: {exc}")
+
+        cache_hit_counts = Counter()
+        computed_counts = Counter()
+        for content_key, row_indexes in row_indexes_by_content.items():
+            for metric_key in metric_keys:
+                scores = cached_scores.get((content_key, metric_key))
+                if not self._complete_metric_scores(metric_key, scores):
+                    continue
+                for row_index in row_indexes:
+                    rows[row_index].update(scores)
+                    cache_hit_counts[metric_key] += 1
+
+        sidecar_status: dict[str, str] = {}
+        sidecar_row_metric_count = 0
+        for metric_key in metric_keys:
+            missing_content_keys = [
+                content_key
+                for content_key, representative_index in representative_indexes.items()
+                if not self._row_has_metric_scores(
+                    rows[representative_index],
+                    metric_key,
+                )
+            ]
+            for chunk_start in range(
+                0,
+                len(missing_content_keys),
+                self.neural_metrics_chunk_size,
+            ):
+                content_chunk = missing_content_keys[
+                    chunk_start : chunk_start + self.neural_metrics_chunk_size
+                ]
+                sidecar_rows = [
+                    rows[representative_indexes[content_key]]
+                    for content_key in content_chunk
+                ]
+                sidecar_row_metric_count += len(sidecar_rows)
+                response = self._invoke_sidecar(sidecar_rows, (metric_key,))
+                if response is None:
+                    continue
+                sidecar_status.update(
+                    {
+                        str(response_metric_key): str(detail)
+                        for response_metric_key, detail in dict(
+                            response.get("status") or {}
+                        ).items()
+                    }
+                )
+                cache_entries = []
+                for item in response.get("scores") or []:
+                    local_row_index = int(item.get("row_index"))
+                    if local_row_index < 0 or local_row_index >= len(content_chunk):
+                        continue
+                    content_key = content_chunk[local_row_index]
+                    score_fields = NEURAL_METRIC_SCORE_FIELDS[metric_key]
+                    scores = {
+                        field: float(item[field])
+                        for field in score_fields
+                        if field in item
+                    }
+                    if not self._complete_metric_scores(metric_key, scores):
+                        continue
+                    for row_index in row_indexes_by_content[content_key]:
+                        rows[row_index].update(scores)
+                        computed_counts[metric_key] += 1
+                    cache_entries.append(
+                        (
+                            content_key,
+                            metric_key,
+                            metric_configurations[metric_key],
+                            scores,
+                        )
+                    )
+                if cache_entries:
+                    try:
+                        self.neural_metrics_cache.store(cache_entries)
+                    except Exception as exc:
+                        print(f"  Warning: neural metric cache write failed: {exc}")
+
+        for metric_key in metric_keys:
+            scored_count = sum(
+                self._row_has_metric_scores(row, metric_key)
+                for row in rows
+            )
+            cache_count = cache_hit_counts[metric_key]
+            computed_count = computed_counts[metric_key]
+            sidecar_detail = sidecar_status.get(metric_key, "")
+            if scored_count == len(rows):
+                details = []
+                if sidecar_detail and not sidecar_detail.startswith("unavailable:"):
+                    details.append(sidecar_detail)
+                if cache_count:
+                    details.append(f"persistent cache {cache_count:,}/{len(rows):,}")
+                if computed_count:
+                    details.append(f"computed {computed_count:,}")
+                self._mark_available(
+                    metric_key,
+                    "; ".join(details) or "persistent cache",
+                )
+            else:
+                missing_count = len(rows) - scored_count
+                failure_detail = sidecar_detail.removeprefix("unavailable:").strip()
+                if failure_detail:
+                    failure_detail += "; "
+                for row in rows:
+                    for field in NEURAL_METRIC_SCORE_FIELDS[metric_key]:
+                        row.pop(field, None)
+                self._mark_unavailable(
+                    metric_key,
+                    f"{failure_detail}{missing_count:,}/{len(rows):,} rows lack scores",
+                )
+        total_cache_hits = sum(cache_hit_counts.values())
+        total_computed = sum(computed_counts.values())
+        print(
+            "  Neural metric cache: "
+            f"{total_cache_hits:,} row-metric hit(s), "
+            f"{total_computed:,} computed, "
+            f"{sidecar_row_metric_count:,} row-metric miss(es) sent to sidecar."
+        )
+
+    def _sidecar_metric_configuration(self, metric_key: str) -> dict[str, object]:
+        try:
+            helper_sha256 = hashlib.sha256(NEURAL_METRICS_HELPER.read_bytes()).hexdigest()
+        except OSError:
+            helper_sha256 = "unavailable"
+        configuration: dict[str, object] = {
+            "cache_schema_version": NEURAL_METRIC_CACHE_SCHEMA_VERSION,
+            "cache_epoch": os.environ.get("STEPHANOS_NEURAL_METRICS_CACHE_EPOCH", "1"),
+            "helper_sha256": helper_sha256,
+            "metric_key": metric_key,
+            "python": str(Path(self.neural_metrics_python or "").resolve()),
+            "use_gpu": self.use_gpu,
+        }
+        if metric_key == "bertscore":
+            configuration.update({"language": "en", "model": "bert-score-default"})
+        elif metric_key == "comet":
+            configuration["model"] = os.environ.get(
+                "STEPHANOS_COMET_MODEL",
+                "Unbabel/wmt22-comet-da",
+            )
+        elif metric_key == "bleurt":
+            configuration["checkpoint"] = (
+                os.environ.get("BLEURT_CHECKPOINT") or "auto:BLEURT-20"
+            )
+        return configuration
+
+    @staticmethod
+    def _complete_metric_scores(
+        metric_key: str,
+        scores: dict[str, float] | None,
+    ) -> bool:
+        if not scores:
+            return False
+        return all(
+            finite_float(scores.get(field)) is not None
+            for field in NEURAL_METRIC_SCORE_FIELDS[metric_key]
+        )
+
+    @staticmethod
+    def _row_has_metric_scores(
+        row: dict[str, object],
+        metric_key: str,
+    ) -> bool:
+        return all(
+            finite_float(row.get(field)) is not None
+            for field in NEURAL_METRIC_SCORE_FIELDS[metric_key]
+        )
+
+    def _invoke_sidecar(
+        self,
+        rows: list[dict[str, object]],
+        metric_keys: tuple[str, ...],
+    ) -> dict[str, object] | None:
         payload = {
             "metrics": metric_keys,
             "use_gpu": self.use_gpu,
@@ -741,32 +954,19 @@ class TranslationMetricEvaluator:
         except Exception as exc:
             for key in metric_keys:
                 self._mark_unavailable(key, f"sidecar invocation failed ({exc})")
-            return
+            return None
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "no output").strip().splitlines()[-1]
             for key in metric_keys:
                 self._mark_unavailable(key, f"sidecar failed ({detail})")
-            return
+            return None
         try:
             response = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
             for key in metric_keys:
                 self._mark_unavailable(key, f"sidecar returned invalid JSON ({exc})")
-            return
-
-        for key, status in dict(response.get("status") or {}).items():
-            if key in METRIC_NAME_BY_KEY:
-                if str(status).startswith("unavailable:"):
-                    self._mark_unavailable(key, str(status).removeprefix("unavailable:").strip())
-                else:
-                    self._mark_available(key, str(status))
-        for item in response.get("scores") or []:
-            row_index = int(item.get("row_index"))
-            if row_index < 0 or row_index >= len(rows):
-                continue
-            for metric_key in ("bertscore", "bertscore_precision", "bertscore_recall", "comet", "bleurt"):
-                if metric_key in item:
-                    rows[row_index][metric_key] = float(item[metric_key])
+            return None
+        return dict(response)
 
     def _apply_lexical_metrics(self, row: dict[str, object]) -> None:
         hypothesis = str(row.get("ai_translation_text") or "")
@@ -2106,6 +2306,22 @@ def resolve_neural_metrics_python(value: str | None = None) -> str | None:
         if candidate and Path(candidate).exists():
             return candidate
     return None
+
+
+def resolve_neural_metrics_cache_path(
+    value: str | Path | None = None,
+) -> Path | None:
+    configured = (
+        value
+        if value is not None
+        else os.environ.get(
+            "STEPHANOS_NEURAL_METRICS_CACHE",
+            str(DEFAULT_NEURAL_METRICS_CACHE),
+        )
+    )
+    if str(configured).strip().casefold() in {"", "off", "none", "disabled"}:
+        return None
+    return Path(configured).expanduser().resolve()
 
 
 def page_header(title: str, *, depth: int, current_item: str = "prompt_eval") -> str:
@@ -4427,6 +4643,9 @@ def generate_reports(
     bertscore_batch_size: int,
     comet_batch_size: int,
     neural_metrics_python: str | None,
+    neural_metrics_cache: str | Path | None = None,
+    refresh_neural_metrics_cache: bool = False,
+    neural_metrics_chunk_size: int = 1000,
 ) -> list[dict[str, object]]:
     corpus = normalize_corpus(corpus)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -4441,6 +4660,9 @@ def generate_reports(
         bertscore_batch_size=bertscore_batch_size,
         comet_batch_size=comet_batch_size,
         neural_metrics_python=neural_metrics_python,
+        neural_metrics_cache=neural_metrics_cache,
+        refresh_neural_metrics_cache=refresh_neural_metrics_cache,
+        neural_metrics_chunk_size=neural_metrics_chunk_size,
     )
     prompt_metadata = fetch_prompt_run_metadata()
     db_rows = fetch_comparison_rows(approved_human_only=approved_human_only, corpus=corpus)
@@ -4625,6 +4847,30 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--neural-metrics-cache",
+        default=None,
+        help=(
+            "Persistent SQLite cache for neural metric scores. Defaults to "
+            "STEPHANOS_NEURAL_METRICS_CACHE or "
+            f"{DEFAULT_NEURAL_METRICS_CACHE}; use 'off' to disable."
+        ),
+    )
+    parser.add_argument(
+        "--refresh-neural-metrics-cache",
+        action="store_true",
+        help="Recompute all neural metric scores and replace matching cache entries.",
+    )
+    parser.add_argument(
+        "--neural-metrics-chunk-size",
+        type=int,
+        default=int(os.environ.get("STEPHANOS_NEURAL_METRICS_CHUNK_SIZE", "1000")),
+        help=(
+            "Maximum rows per metric-sidecar invocation. Completed chunks are cached "
+            "immediately so interrupted runs can resume. Defaults to "
+            "STEPHANOS_NEURAL_METRICS_CHUNK_SIZE or 1000."
+        ),
+    )
+    parser.add_argument(
         "--min-galton-samples",
         type=int,
         default=30,
@@ -4653,6 +4899,9 @@ def main() -> None:
         bertscore_batch_size=args.bertscore_batch_size,
         comet_batch_size=args.comet_batch_size,
         neural_metrics_python=args.neural_metrics_python,
+        neural_metrics_cache=args.neural_metrics_cache,
+        refresh_neural_metrics_cache=args.refresh_neural_metrics_cache,
+        neural_metrics_chunk_size=args.neural_metrics_chunk_size,
     )
     print(f"Generated {len(summaries)} prompt evaluation page(s).")
     for summary in summaries:

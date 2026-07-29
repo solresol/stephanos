@@ -1,7 +1,11 @@
+import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("DB_HOST", "raksasa")
 os.environ.setdefault("DB_USER", "stephanos")
@@ -9,6 +13,7 @@ os.environ.setdefault("DB_USER", "stephanos")
 from generate_translation_prompt_evaluation import (
     METRIC_LENGTH_SPECS,
     MODEL_TIMELINE_PROFILE_NAMES,
+    TranslationMetricEvaluator,
     ZAINALDI_GALEN_MEAN_PASSAGE_LENGTH,
     build_model_timeline_forecast_rows,
     metric_length_pattern_counts,
@@ -64,6 +69,243 @@ def summary(version: int) -> dict[str, object]:
         "two_edit_count": version + 1,
         "mean_abs_length_residual": 1.5,
     }
+
+
+class NeuralMetricCacheTests(unittest.TestCase):
+    @staticmethod
+    def evaluator(
+        cache_path: Path,
+        *,
+        refresh: bool = False,
+        chunk_size: int = 1000,
+        metric_keys: set[str] | None = None,
+    ) -> TranslationMetricEvaluator:
+        evaluator = TranslationMetricEvaluator(
+            (),
+            neural_metrics_python=sys.executable,
+            neural_metrics_cache=cache_path,
+            refresh_neural_metrics_cache=refresh,
+            neural_metrics_chunk_size=chunk_size,
+        )
+        evaluator.sidecar_metric_keys = metric_keys or {
+            "bertscore",
+            "comet",
+            "bleurt",
+        }
+        return evaluator
+
+    @staticmethod
+    def row(*, reference: str = "The approved translation.") -> dict[str, object]:
+        return {
+            "source_text": "Ἑλληνικὸν κείμενον",
+            "ai_translation_text": "The machine translation.",
+            "human_translation_text": reference,
+        }
+
+    @staticmethod
+    def fake_sidecar(requests: list[dict[str, object]]):
+        def run(*_args, **kwargs) -> subprocess.CompletedProcess:
+            request = json.loads(kwargs["input"])
+            requests.append(request)
+            scores = []
+            for row in request["rows"]:
+                item = {"row_index": row["row_index"]}
+                if "bertscore" in request["metrics"]:
+                    item.update(
+                        {
+                            "bertscore": 0.81,
+                            "bertscore_precision": 0.82,
+                            "bertscore_recall": 0.80,
+                        }
+                    )
+                if "comet" in request["metrics"]:
+                    item["comet"] = 0.71
+                if "bleurt" in request["metrics"]:
+                    item["bleurt"] = 0.61
+                scores.append(item)
+            response = {
+                "status": {
+                    metric: f"test {metric}"
+                    for metric in request["metrics"]
+                },
+                "scores": scores,
+            }
+            return subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=json.dumps(response),
+                stderr="",
+            )
+
+        return run
+
+    def test_second_run_uses_cache_and_deduplicates_identical_texts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "metrics.sqlite3"
+            requests = []
+            duplicate_rows = [self.row(), self.row()]
+
+            with patch(
+                "generate_translation_prompt_evaluation.subprocess.run",
+                side_effect=self.fake_sidecar(requests),
+            ) as sidecar:
+                self.evaluator(cache_path).apply_neural(duplicate_rows)
+                self.assertEqual(sidecar.call_count, 3)
+                self.assertTrue(all(len(request["rows"]) == 1 for request in requests))
+                self.assertEqual(
+                    {request["metrics"][0] for request in requests},
+                    {"bertscore", "comet", "bleurt"},
+                )
+
+                cached_rows = [self.row(), self.row()]
+                self.evaluator(cache_path).apply_neural(cached_rows)
+                self.assertEqual(sidecar.call_count, 3)
+
+            for row in cached_rows:
+                self.assertEqual(row["bertscore"], 0.81)
+                self.assertEqual(row["comet"], 0.71)
+                self.assertEqual(row["bleurt"], 0.61)
+            cache_bytes = cache_path.read_bytes()
+            self.assertNotIn("Ἑλληνικὸν κείμενον".encode("utf-8"), cache_bytes)
+            self.assertNotIn(b"The approved translation.", cache_bytes)
+
+    def test_changed_reference_is_the_only_cache_miss(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "metrics.sqlite3"
+            requests = []
+            with patch(
+                "generate_translation_prompt_evaluation.subprocess.run",
+                side_effect=self.fake_sidecar(requests),
+            ) as sidecar:
+                self.evaluator(cache_path).apply_neural([self.row()])
+                rows = [
+                    self.row(),
+                    self.row(reference="A corrected approved translation."),
+                ]
+                self.evaluator(cache_path).apply_neural(rows)
+
+            self.assertEqual(sidecar.call_count, 6)
+            self.assertTrue(
+                all(
+                    request["rows"][0]["reference"]
+                    == "A corrected approved translation."
+                    for request in requests[3:]
+                )
+            )
+
+    def test_metric_configuration_change_invalidates_only_that_metric(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "metrics.sqlite3"
+            requests = []
+            with patch(
+                "generate_translation_prompt_evaluation.subprocess.run",
+                side_effect=self.fake_sidecar(requests),
+            ) as sidecar:
+                self.evaluator(cache_path).apply_neural([self.row()])
+                with patch.dict(
+                    os.environ,
+                    {"STEPHANOS_COMET_MODEL": "example/revised-comet"},
+                ):
+                    self.evaluator(cache_path).apply_neural([self.row()])
+
+            self.assertEqual(sidecar.call_count, 4)
+            self.assertEqual(requests[3]["metrics"], ["comet"])
+            self.assertEqual(len(requests[3]["rows"]), 1)
+
+    def test_completed_chunks_survive_a_later_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "metrics.sqlite3"
+            requests = []
+            successful_sidecar = self.fake_sidecar(requests)
+            attempts = 0
+
+            def flaky_sidecar(*args, **kwargs):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 2:
+                    requests.append(json.loads(kwargs["input"]))
+                    raise subprocess.TimeoutExpired(cmd=args[0], timeout=7200)
+                return successful_sidecar(*args, **kwargs)
+
+            rows = [
+                self.row(reference="First approved translation."),
+                self.row(reference="Second approved translation."),
+                self.row(reference="Third approved translation."),
+            ]
+            with patch(
+                "generate_translation_prompt_evaluation.subprocess.run",
+                side_effect=flaky_sidecar,
+            ):
+                self.evaluator(
+                    cache_path,
+                    chunk_size=1,
+                    metric_keys={"bertscore"},
+                ).apply_neural(rows)
+
+            resumed_requests = []
+            with patch(
+                "generate_translation_prompt_evaluation.subprocess.run",
+                side_effect=self.fake_sidecar(resumed_requests),
+            ) as sidecar:
+                resumed_rows = [
+                    self.row(reference="First approved translation."),
+                    self.row(reference="Second approved translation."),
+                    self.row(reference="Third approved translation."),
+                ]
+                self.evaluator(
+                    cache_path,
+                    chunk_size=1,
+                    metric_keys={"bertscore"},
+                ).apply_neural(resumed_rows)
+
+            self.assertEqual(sidecar.call_count, 1)
+            self.assertEqual(
+                resumed_requests[0]["rows"][0]["reference"],
+                "Second approved translation.",
+            )
+            self.assertTrue(
+                all("bertscore" in row for row in resumed_rows)
+            )
+
+    def test_failed_cache_miss_does_not_publish_partial_metric_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "metrics.sqlite3"
+            requests = []
+            with patch(
+                "generate_translation_prompt_evaluation.subprocess.run",
+                side_effect=self.fake_sidecar(requests),
+            ):
+                self.evaluator(cache_path).apply_neural([self.row()])
+
+            failed_response = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "status": {
+                            "bertscore": "unavailable: test failure",
+                            "comet": "unavailable: test failure",
+                            "bleurt": "unavailable: test failure",
+                        },
+                        "scores": [{"row_index": 0}],
+                    }
+                ),
+                stderr="",
+            )
+            rows = [
+                self.row(),
+                self.row(reference="A corrected approved translation."),
+            ]
+            with patch(
+                "generate_translation_prompt_evaluation.subprocess.run",
+                return_value=failed_response,
+            ):
+                self.evaluator(cache_path).apply_neural(rows)
+
+            for row in rows:
+                self.assertNotIn("bertscore", row)
+                self.assertNotIn("comet", row)
+                self.assertNotIn("bleurt", row)
 
 
 class TranslationPromptEvaluationRenderingTests(unittest.TestCase):
