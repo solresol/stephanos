@@ -43,7 +43,7 @@ from translation_guidance_coverage import (
 )
 
 
-DEFAULT_MODEL = "gpt-5.4-mini"
+DEFAULT_MODEL = "gpt-5.6-luna"
 DEFAULT_DAILY_TOKEN_LIMIT = 2_000_000
 DEFAULT_GUIDANCE_AI_LIMIT = 2_000
 DETECTOR_VERSION = CURRENT_DETECTOR_VERSION

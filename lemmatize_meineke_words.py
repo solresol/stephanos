@@ -21,7 +21,7 @@ from openai import BadRequestError, OpenAI
 from api_keys import load_api_key
 from db import get_connection
 
-DEFAULT_MODEL = "gpt-5.4-mini"
+DEFAULT_MODEL = "gpt-5.6-luna"
 DEFAULT_DAILY_TOKEN_LIMIT = 250_000
 DEFAULT_DELAY = 1.0
 CONTEXT_CHARS = 48

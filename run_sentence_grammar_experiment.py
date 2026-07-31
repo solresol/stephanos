@@ -37,7 +37,7 @@ SCRIPT_VERSION = "run_sentence_grammar_experiment.py:v1"
 SEGMENTATION_METHOD = "regex_punctuation"
 SEGMENTATION_MODEL = "python_re"
 SEGMENTATION_VERSION = "v1"
-DEFAULT_MODEL = "gpt-5.4-mini"
+DEFAULT_MODEL = "gpt-5.6-luna"
 DEFAULT_JUDGE_MODEL = "gpt-5.5"
 REPORT_DIR = Path("tmp/sentence_grammar_experiments")
 

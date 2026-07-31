@@ -99,7 +99,7 @@ EXTRACT_ALIASES_TOOL = {
 }
 
 
-def extract_aliases_for_lemma(client, headword, greek_text, model="gpt-5.4-mini"):
+def extract_aliases_for_lemma(client, headword, greek_text, model="gpt-5.6-luna"):
     """
     Call OpenAI API to extract aliases.
 
@@ -169,7 +169,7 @@ def main():
     parser.add_argument("--limit", type=int, help="Limit number of lemmas to process")
     parser.add_argument("--reprocess", action="store_true",
                         help="Reprocess all lemmas (clear existing stephanos aliases first)")
-    parser.add_argument("--model", default="gpt-5.4-mini", help="Model to use")
+    parser.add_argument("--model", default="gpt-5.6-luna", help="Model to use")
     args = parser.parse_args()
 
     api_key = load_api_key()

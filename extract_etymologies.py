@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Extract etymologies from lemma entries using ChatGPT-5.4-mini.
+Extract etymologies from lemma entries using GPT-5.6 Luna.
 
 For each unanalyzed lemma, identifies etymological explanations and categorizes them.
 """
@@ -84,7 +84,7 @@ EXTRACT_ETYMOLOGIES_TOOL = {
 }
 
 
-def extract_etymologies_for_lemma(client, greek_text, model="gpt-5.4-mini"):
+def extract_etymologies_for_lemma(client, greek_text, model="gpt-5.6-luna"):
     """
     Call OpenAI API to extract etymologies.
 

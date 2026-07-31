@@ -56,9 +56,9 @@ German lane.
 ## Stage D — Entity / Wikidata linking
 | Script | Disambiguation model | Writes | Human-guard |
 | --- | --- | --- | --- |
-| `link_wikidata.py` | `gpt-5.4-mini` | `proper_nouns.wikidata_*` | protects `human_resolution_status` |
+| `link_wikidata.py` | `gpt-5.6-luna` | `proper_nouns.wikidata_*` | protects `human_resolution_status` |
 | `link_wikidata_places.py` | **`gpt-4o-mini`** (divergent) | geocoding cols on `assembled_lemmas` | **no human-authority guard** (C-09) |
-| `link_wikidata_source_citation_units.py` | `gpt-5.4-mini` | `source_citation_units.*_wikidata_*` | reuses human proper-noun resolutions |
+| `link_wikidata_source_citation_units.py` | `gpt-5.6-luna` | `source_citation_units.*_wikidata_*` | reuses human proper-noun resolutions |
 
 Common pattern: Wikidata `wbsearchentities` + SPARQL with HTTP retry on
 {429,5xx}; **OpenAI calls have no retry**.

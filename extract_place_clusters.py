@@ -313,7 +313,7 @@ def main() -> int:
         help="Stop once this many extraction tokens have been used in the current run",
     )
     parser.add_argument("--lemma-id", type=int, default=None, help="Process a single lemma ID")
-    parser.add_argument("--model", default="gpt-5.4-mini", help="OpenAI model to use for extraction")
+    parser.add_argument("--model", default="gpt-5.6-luna", help="OpenAI model to use for extraction")
     parser.add_argument("--delay", type=float, default=0.0, help="Delay between lemmas")
     parser.add_argument(
         "--rebuild",

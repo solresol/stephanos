@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-PRICING_AS_OF = "2026-06-19"
+PRICING_AS_OF = "2026-07-31"
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,12 @@ class ModelPricing:
 
 
 MODEL_PRICING = {
+    "gpt-5.6-luna": ModelPricing(
+        model="gpt-5.6-luna",
+        input_per_million=0.20,
+        output_per_million=1.20,
+        source_url="https://developers.openai.com/api/docs/pricing",
+    ),
     "gpt-5.5": ModelPricing(
         model="gpt-5.5",
         input_per_million=5.00,

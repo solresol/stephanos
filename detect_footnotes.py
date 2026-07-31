@@ -26,7 +26,7 @@ import canonical_variants
 from source_documents import public_source_document_list_sql, source_document_priority_sql
 
 
-DEFAULT_MODEL = "gpt-5.4-mini"
+DEFAULT_MODEL = "gpt-5.6-luna"
 DETECTOR_VERSION = "2026-05-09-v1"
 UPDATED_BY_PREFIX = "ai_footnote_detector:"
 

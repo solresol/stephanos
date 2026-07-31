@@ -680,7 +680,7 @@ def preferred_machine_choice(ranked_candidates: list[dict]) -> dict:
     }
 
 
-def extract_place_clusters_for_lemma(client, headword: str, greek_text: str, english_translation: str = "", model: str = "gpt-5.4-mini") -> tuple[list[dict], int]:
+def extract_place_clusters_for_lemma(client, headword: str, greek_text: str, english_translation: str = "", model: str = "gpt-5.6-luna") -> tuple[list[dict], int]:
     response = client.chat.completions.create(
         model=model,
         messages=[

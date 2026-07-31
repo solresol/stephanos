@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const defaultUrgentGuidanceScanModel = "gpt-5.4-mini"
+const defaultUrgentGuidanceScanModel = "gpt-5.6-luna"
 
 const urgentFormulaSystemPrompt = "You judge whether a Greek translation formula applies to a Stephanos entry. " +
 	"Match only the Greek surface pattern described by the rule. X/Y placeholders are variable slots, " +

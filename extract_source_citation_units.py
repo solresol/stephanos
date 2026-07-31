@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Extract structured source-citation units from Stephanos Greek lemmas using gpt-5.4-mini.
+Extract structured source-citation units from Stephanos Greek lemmas using gpt-5.6-luna.
 
 Goal: treat (author + work + book + identifiers) as the atomic unit.
 
@@ -163,7 +163,7 @@ def hash_input_text(text: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract structured source-citation units for lemmas")
-    parser.add_argument("--model", default="gpt-5.4-mini", help="Model to use (default: gpt-5.4-mini)")
+    parser.add_argument("--model", default="gpt-5.6-luna", help="Model to use (default: gpt-5.6-luna)")
     parser.add_argument("--limit", type=int, help="Limit number of lemmas to process")
     parser.add_argument("--lemma-id", type=int, help="Process only a specific lemma_id")
     parser.add_argument(

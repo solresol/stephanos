@@ -31,7 +31,7 @@ from db import get_connection
 WIKIDATA_ENDPOINT = "https://query.wikidata.org/sparql"
 
 # OpenAI model for disambiguation
-DISAMBIGUATION_MODEL = "gpt-5.4-mini"
+DISAMBIGUATION_MODEL = "gpt-5.6-luna"
 
 # Categories of interest for filtering Wikidata results
 ANCIENT_OCCUPATIONS = [
