@@ -471,6 +471,33 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_ENA
     done
 fi
 
+# Step 4d7b-repeat: Queue guidance for the controlled v3 repeatability study.
+# Keep this lane separate from the general experiment list and pin it to the
+# frozen 100-entry paper corpus so an environment override cannot broaden it.
+HUMAN_EVAL_REPEAT_ENABLED="${HUMAN_EVAL_REPEAT_ENABLED:-1}"
+HUMAN_EVAL_REPEAT_PROFILE="gpt-5.5_v3_repeat"
+HUMAN_EVAL_REPEAT_CORPUS="paper_kappa_review"
+HUMAN_EVAL_REPEAT_SOURCE_DOCUMENT="${HUMAN_EVAL_REPEAT_SOURCE_DOCUMENT:-$HUMAN_EVAL_TRANSLATION_SOURCE_DOCUMENT}"
+HUMAN_EVAL_REPEAT_GUIDANCE_LIMIT="${HUMAN_EVAL_REPEAT_GUIDANCE_LIMIT:-100}"
+HUMAN_EVAL_REPEAT_ENQUEUE_LIMIT="${HUMAN_EVAL_REPEAT_ENQUEUE_LIMIT:-10}"
+HUMAN_EVAL_REPEAT_MAX_OPEN_REQUESTS="${HUMAN_EVAL_REPEAT_MAX_OPEN_REQUESTS:-100}"
+HUMAN_EVAL_REPEAT_PRIORITY="${HUMAN_EVAL_REPEAT_PRIORITY:-4}"
+HUMAN_EVAL_REPEAT_CREATED_BY="${HUMAN_EVAL_REPEAT_CREATED_BY:-run_daily_pipeline.sh:human-eval-repeat}"
+if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_REPEAT_ENABLED" != "0" ] && [ "$HUMAN_EVAL_REPEAT_GUIDANCE_LIMIT" -gt 0 ]; then
+    echo "Step 4d7b-repeat: Queueing guidance for the frozen 100-entry v3 repeatability study..." | tee -a "$LOGFILE"
+    uv run enqueue_human_evaluation_translations.py \
+        --profile "$HUMAN_EVAL_REPEAT_PROFILE" \
+        --versions 1 \
+        --corpus "$HUMAN_EVAL_REPEAT_CORPUS" \
+        --source-document "$HUMAN_EVAL_REPEAT_SOURCE_DOCUMENT" \
+        --limit "$HUMAN_EVAL_REPEAT_GUIDANCE_LIMIT" \
+        --priority "$HUMAN_EVAL_REPEAT_PRIORITY" \
+        --created-by "$HUMAN_EVAL_REPEAT_CREATED_BY" \
+        --prepare-guidance-first \
+        --guidance-only \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: v3 repeatability guidance queue failed" | tee -a "$LOGFILE"
+fi
+
 # Step 4d7c: Queue guidance for model-timeline evaluations
 HUMAN_EVAL_MODEL_TIMELINE_ENABLED="${HUMAN_EVAL_MODEL_TIMELINE_ENABLED:-1}"
 HUMAN_EVAL_MODEL_TIMELINE_PROFILES="${HUMAN_EVAL_MODEL_TIMELINE_PROFILES:-gpt-4-turbo-2024-04-09 gpt-4o-2024-05-13 gpt-4o-2024-08-06 gpt-4o-2024-11-20 gpt-4.1-2025-04-14 gpt-5 gpt-5.1 gpt-5.2 gpt-5.3-chat-latest gpt-5.4 gpt-5.6-sol}"
@@ -500,7 +527,7 @@ fi
 
 # Step 4d8: Process a bounded translation-guidance scan batch before translation
 TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT="${TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT:-2000}"
-TRANSLATION_GUIDANCE_SCAN_MODEL="${TRANSLATION_GUIDANCE_SCAN_MODEL:-gpt-5.4-mini}"
+TRANSLATION_GUIDANCE_SCAN_MODEL="${TRANSLATION_GUIDANCE_SCAN_MODEL:-gpt-5.6-luna}"
 TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT="${TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT:-2000000}"
 TRANSLATION_GUIDANCE_SCAN_GUIDANCE_AI_LIMIT="${TRANSLATION_GUIDANCE_SCAN_GUIDANCE_AI_LIMIT:-${TRANSLATION_GUIDANCE_SCAN_FORMULA_AI_LIMIT:-$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT}}"
 TRANSLATION_GUIDANCE_SCAN_DELAY="${TRANSLATION_GUIDANCE_SCAN_DELAY:-0}"
@@ -569,6 +596,22 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_EXPERIMENT_ENA
             --require-guidance-complete \
             2>&1 | tee -a "$LOGFILE" || echo "  Warning: approved-human experiment enqueue failed for ${experiment_profile}" | tee -a "$LOGFILE"
     done
+fi
+
+# Step 4d8b-repeat: Queue controlled v3 repeats for only the frozen paper corpus.
+if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_REPEAT_ENABLED" != "0" ] && [ "$HUMAN_EVAL_REPEAT_ENQUEUE_LIMIT" -gt 0 ]; then
+    echo "Step 4d8b-repeat: Enqueuing frozen 100-entry v3 repeatability requests..." | tee -a "$LOGFILE"
+    uv run enqueue_human_evaluation_translations.py \
+        --profile "$HUMAN_EVAL_REPEAT_PROFILE" \
+        --versions 1 \
+        --corpus "$HUMAN_EVAL_REPEAT_CORPUS" \
+        --source-document "$HUMAN_EVAL_REPEAT_SOURCE_DOCUMENT" \
+        --limit "$HUMAN_EVAL_REPEAT_ENQUEUE_LIMIT" \
+        --max-open-requests "$HUMAN_EVAL_REPEAT_MAX_OPEN_REQUESTS" \
+        --priority "$HUMAN_EVAL_REPEAT_PRIORITY" \
+        --created-by "$HUMAN_EVAL_REPEAT_CREATED_BY" \
+        --require-guidance-complete \
+        2>&1 | tee -a "$LOGFILE" || echo "  Warning: v3 repeatability enqueue failed" | tee -a "$LOGFILE"
 fi
 
 # Step 4d8c: Queue model-timeline evaluation requests
@@ -729,7 +772,7 @@ uv run backfill_translation_run_request_payloads.py \
 
 # Step 5a0: Low-priority AI footnote detection (default: one check per run)
 FOOTNOTE_DETECTION_LIMIT="${FOOTNOTE_DETECTION_LIMIT:-1}"
-FOOTNOTE_DETECTION_MODEL="${FOOTNOTE_DETECTION_MODEL:-gpt-5.4-mini}"
+FOOTNOTE_DETECTION_MODEL="${FOOTNOTE_DETECTION_MODEL:-gpt-5.6-luna}"
 FOOTNOTE_DETECTION_DAILY_TOKEN_LIMIT="${FOOTNOTE_DETECTION_DAILY_TOKEN_LIMIT:-20000}"
 if [ "$FOOTNOTE_DETECTION_LIMIT" -gt 0 ]; then
     echo "Step 5a0: Detecting AI footnotes slowly..." | tee -a "$LOGFILE"
@@ -770,7 +813,7 @@ if [ "$PLACE_CLUSTER_EXTRACT_LIMIT" -gt 0 ]; then
 fi
 
 # Step 5b2: Extract structured source-citation units (author+work+book)
-SOURCE_CITATION_EXTRACT_MODEL="${SOURCE_CITATION_EXTRACT_MODEL:-gpt-5.4-mini}"
+SOURCE_CITATION_EXTRACT_MODEL="${SOURCE_CITATION_EXTRACT_MODEL:-gpt-5.6-luna}"
 SOURCE_CITATION_EXTRACT_LIMIT="${SOURCE_CITATION_EXTRACT_LIMIT:-300}"
 SOURCE_CITATION_EXTRACT_DELAY="${SOURCE_CITATION_EXTRACT_DELAY:-0.1}"
 if [ "$SOURCE_CITATION_EXTRACT_LIMIT" -gt 0 ]; then
@@ -819,7 +862,7 @@ uv run extract_aliases.py --limit 20 2>&1 | tee -a "$LOGFILE"
 echo "Step 5f: Generating spelling variants..." | tee -a "$LOGFILE"
 uv run generate_spelling_variants.py 2>&1 | tee -a "$LOGFILE"
 
-# Step 5g: Analyze Meineke/Billerbeck differences with gpt-5.4-mini (small daily batch)
+# Step 5g: Analyze Meineke/Billerbeck differences with gpt-5.6-luna (small daily batch)
 echo "Step 5g: Analyzing Meineke/Billerbeck differences..." | tee -a "$LOGFILE"
 MEINEKE_DIFF_DAILY_TOKEN_LIMIT="${MEINEKE_DIFF_DAILY_TOKEN_LIMIT:-1000000}"
 uv run analyze_meineke_differences.py --limit 20 --daily-token-limit "$MEINEKE_DIFF_DAILY_TOKEN_LIMIT" --delay 1 2>&1 | tee -a "$LOGFILE"
