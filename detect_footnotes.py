@@ -476,6 +476,7 @@ def iter_candidates(cur, *, lemma_id: int | None, limit: int, force: bool) -> li
 def call_detector(client: OpenAI, candidate: Candidate, *, model: str) -> tuple[dict[str, Any], int]:
     response = client.chat.completions.create(
         model=model,
+        reasoning_effort="none",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {

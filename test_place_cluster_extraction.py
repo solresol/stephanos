@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import unittest
+from unittest.mock import MagicMock
 
 from place_cluster_extraction import (
     build_wikidata_candidates,
     explicit_place_list_count,
+    extract_place_clusters_for_lemma,
     normalize_place_cluster_payload,
     preferred_machine_choice,
     place_cluster_queue_priority,
@@ -16,6 +18,28 @@ from link_wikidata_places import (
 
 
 class PlaceClusterExtractionTests(unittest.TestCase):
+    def test_luna_chat_request_disables_reasoning_for_function_tool(self):
+        client = MagicMock()
+        response = client.chat.completions.create.return_value
+        response.choices = [MagicMock()]
+        response.choices[0].message.tool_calls = [MagicMock()]
+        response.choices[0].message.tool_calls[0].function.arguments = '{"place_clusters": []}'
+        response.usage.total_tokens = 17
+
+        clusters, tokens = extract_place_clusters_for_lemma(
+            client,
+            "Καπρίη",
+            "Καπρίη, πόλις.",
+            model="gpt-5.6-luna",
+        )
+
+        self.assertEqual(clusters, [])
+        self.assertEqual(tokens, 17)
+        self.assertEqual(
+            client.chat.completions.create.call_args.kwargs["reasoning_effort"],
+            "none",
+        )
+
     def test_normalize_payload_preserves_seven_distinct_same_named_places(self):
         payload = {
             "place_clusters": [

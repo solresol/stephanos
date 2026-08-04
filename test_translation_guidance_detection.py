@@ -5,12 +5,16 @@ import unittest
 os.environ.setdefault("DB_HOST", "raksasa")
 
 from process_translation_guidance_scans import (
+    DEFAULT_MODEL,
     find_deterministic_match,
     sanitize_postgres_text,
 )
 
 
 class TranslationGuidanceDetectionTests(unittest.TestCase):
+    def test_default_guidance_model_satisfies_mini_guard(self):
+        self.assertIn("-mini", DEFAULT_MODEL)
+
     def test_postgres_text_sanitizer_replaces_nested_nul_characters(self):
         value = {
             "evidence": "Σύμαιθα + p\x00λις",
