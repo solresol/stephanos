@@ -92,6 +92,7 @@ def extract_etymologies_for_lemma(client, greek_text, model="gpt-5.6-luna"):
     """
     response = client.chat.completions.create(
         model=model,
+        reasoning_effort="none",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": USER_PROMPT.format(greek_text=greek_text)}
