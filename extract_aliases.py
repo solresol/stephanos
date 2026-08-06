@@ -107,6 +107,7 @@ def extract_aliases_for_lemma(client, headword, greek_text, model="gpt-5.6-luna"
     """
     response = client.chat.completions.create(
         model=model,
+        reasoning_effort="none",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": USER_PROMPT.format(headword=headword, greek_text=greek_text)}
