@@ -9,6 +9,7 @@ REMOTE_HOST="${1:-stephanos@merah.cassia.ifost.org.au}"
 REMOTE_BUILD_DIR="${2:-/home/stephanos/stephanos/review_cgi_build}"
 REMOTE_CGI_DIR="${3:-/var/www/vhosts/stephanos.symmachus.org/cgi-bin}"
 REMOTE_PUBLIC_CGI_DIR="${4:-/var/www/vhosts/stephanos.symmachus.org/public-cgi}"
+REMOTE_GO="${REMOTE_GO:-/usr/local/go1.26.5/bin/go}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -46,18 +47,20 @@ echo "Building static review CGI binaries on ${REMOTE_HOST}..."
 ssh "$REMOTE_HOST" "
     set -euo pipefail
     cd '$REMOTE_BUILD_DIR'
+    test -x '$REMOTE_GO'
+    export GOTOOLCHAIN=local
     export CGO_ENABLED=1
     export CC=/usr/bin/cc
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o review.cgi review.go common.go guidance_common.go page.go templates.go shared_helpers.go site_nav.go
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o entities.cgi entities.go common.go guidance_common.go page.go templates.go shared_helpers.go site_nav.go
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance.cgi guidance.go common.go guidance_common.go guidance_urgent_common.go templates.go shared_helpers.go site_nav.go
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance_impacts.cgi guidance_impacts.go common.go guidance_common.go shared_helpers.go site_nav.go
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o final_review.cgi final_review.go common.go guidance_common.go shared_helpers.go site_nav.go
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o canonical_translation.cgi canonical_translation.go common.go guidance_common.go
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance_status.cgi guidance_status.go common.go guidance_common.go guidance_urgent_common.go
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o guidance_urgent_worker guidance_urgent_worker.go common.go guidance_common.go guidance_urgent_common.go
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o save.cgi save.go common.go guidance_common.go guidance_urgent_common.go
-    /usr/local/bin/go build -ldflags '-linkmode external -extldflags -static' -o status.cgi status.go common.go guidance_common.go
+    '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o review.cgi review.go common.go guidance_common.go page.go templates.go shared_helpers.go site_nav.go
+    '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o entities.cgi entities.go common.go guidance_common.go page.go templates.go shared_helpers.go site_nav.go
+    '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o guidance.cgi guidance.go common.go guidance_common.go guidance_urgent_common.go templates.go shared_helpers.go site_nav.go
+    '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o guidance_impacts.cgi guidance_impacts.go common.go guidance_common.go shared_helpers.go site_nav.go
+    '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o final_review.cgi final_review.go common.go guidance_common.go shared_helpers.go site_nav.go
+    '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o canonical_translation.cgi canonical_translation.go common.go guidance_common.go
+    '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o guidance_status.cgi guidance_status.go common.go guidance_common.go guidance_urgent_common.go
+    '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o guidance_urgent_worker guidance_urgent_worker.go common.go guidance_common.go guidance_urgent_common.go
+    '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o save.cgi save.go common.go guidance_common.go guidance_urgent_common.go
+    '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o status.cgi status.go common.go guidance_common.go
     install -m 755 review.cgi '$REMOTE_CGI_DIR/review.cgi'
     install -m 755 entities.cgi '$REMOTE_CGI_DIR/entities.cgi'
     install -m 755 guidance.cgi '$REMOTE_CGI_DIR/guidance.cgi'
