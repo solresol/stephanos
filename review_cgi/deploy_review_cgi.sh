@@ -10,6 +10,7 @@ REMOTE_BUILD_DIR="${2:-/home/stephanos/stephanos/review_cgi_build}"
 REMOTE_CGI_DIR="${3:-/var/www/vhosts/stephanos.symmachus.org/cgi-bin}"
 REMOTE_PUBLIC_CGI_DIR="${4:-/var/www/vhosts/stephanos.symmachus.org/public-cgi}"
 REMOTE_GO="${REMOTE_GO:-/usr/local/go1.26.5/bin/go}"
+SSH_OPTS=(-o ServerAliveInterval=30 -o ServerAliveCountMax=20)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -36,15 +37,16 @@ SOURCE_FILES=(
 )
 
 echo "Preparing remote build directory on ${REMOTE_HOST}..."
-ssh "$REMOTE_HOST" "mkdir -p '$REMOTE_BUILD_DIR'"
+ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "mkdir -p '$REMOTE_BUILD_DIR'"
 
 echo "Uploading review CGI sources..."
 rsync -az \
+    -e "ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20" \
     "${SOURCE_FILES[@]/#/${SCRIPT_DIR}/}" \
     "${REMOTE_HOST}:${REMOTE_BUILD_DIR}/"
 
 echo "Building static review CGI binaries on ${REMOTE_HOST}..."
-ssh "$REMOTE_HOST" "
+ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "
     set -euo pipefail
     cd '$REMOTE_BUILD_DIR'
     test -x '$REMOTE_GO'
