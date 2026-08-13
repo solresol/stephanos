@@ -74,6 +74,7 @@ ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "
     install -m 755 guidance_urgent_worker '$REMOTE_CGI_DIR/guidance_urgent_worker'
     install -m 755 save.cgi '$REMOTE_CGI_DIR/save.cgi'
     install -m 755 status.cgi '$REMOTE_CGI_DIR/status.cgi'
+    install -m 755 status.cgi '$REMOTE_PUBLIC_CGI_DIR/status.cgi'
 "
 
 echo "Review CGI deployed to ${REMOTE_HOST}:${REMOTE_CGI_DIR} and ${REMOTE_PUBLIC_CGI_DIR}"
