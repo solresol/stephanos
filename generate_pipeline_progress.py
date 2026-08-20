@@ -120,8 +120,8 @@ def translation_model_coverage(cur) -> dict[str, object] | None:
         )
     ):
         return None
-    experiment_enqueue_limit = max(0, env_int("HUMAN_EVAL_EXPERIMENT_ENQUEUE_LIMIT", 1))
-    responses_run_limit = max(0, env_int("TRANSLATION_RESPONSES_RUN_LIMIT", 1))
+    experiment_enqueue_limit = max(0, env_int("HUMAN_EVAL_EXPERIMENT_ENQUEUE_LIMIT", 10))
+    responses_run_limit = max(0, env_int("TRANSLATION_RESPONSES_RUN_LIMIT", 10))
     paper_corpus_cte = paper_kappa_review_cte_body("paper_corpus")
     cur.execute(
         f"""
