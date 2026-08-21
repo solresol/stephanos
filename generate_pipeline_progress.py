@@ -297,6 +297,8 @@ def get_progress_stats(conn) -> dict:
         "completed": translated_total,
         "pending": total_with_billerbeck - translated_total,
         "unit": "entries",
+        "planned_rate_per_day": max(0, env_int("TRANSLATION_ENQUEUE_LIMIT", 20)),
+        "detail": "Publication target 20 entries/day after guidance lookahead; the weekly rate remains observed completions.",
     }
     human_reviewed_total = row[2] + row[3]
     stats["translation_human"] = {

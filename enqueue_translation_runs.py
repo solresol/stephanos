@@ -533,6 +533,11 @@ def main():
         help="Queue missing prompt-eligible guidance checks for selected candidates before enqueueing translations",
     )
     parser.add_argument(
+        "--guidance-only",
+        action="store_true",
+        help="Queue missing guidance checks without enqueueing translation requests",
+    )
+    parser.add_argument(
         "--require-guidance-complete",
         action="store_true",
         help="Only enqueue translation requests whose prompt-eligible guidance coverage is complete",
@@ -552,6 +557,8 @@ def main():
         parser.error("--priority must be non-negative")
     if args.repeat is not None and args.repeat <= 0:
         parser.error("--repeat must be positive")
+    if args.guidance_only and not args.prepare_guidance_first:
+        parser.error("--guidance-only requires --prepare-guidance-first")
 
     conn = get_connection()
     cur = conn.cursor()
@@ -627,11 +634,16 @@ def main():
 
     if (args.prepare_guidance_first or args.require_guidance_complete) and not uses_guidance_context:
         print("Prompt version does not use guidance context; skipping guidance-first enqueue checks.")
+        if args.guidance_only:
+            conn.rollback()
+            conn.close()
+            return
 
     if uses_guidance_context and (args.prepare_guidance_first or args.require_guidance_complete):
         ready = []
         incomplete = []
         guidance_rows_inserted = 0
+        guidance_rows_promoted = 0
         for row in candidates:
             lemma_id = int(row["lemma_id"])
             source_text_version_id = int(row["source_text_version_id"])
@@ -649,6 +661,7 @@ def main():
                     notes="queued before translation request because guidance-first mode is enabled",
                 )
                 guidance_rows_inserted += queued["inserted"]
+                guidance_rows_promoted += queued["promoted"]
                 coverage = guidance_coverage_counts(
                     cur,
                     source_text_version_id=int(source_text_version_id),
@@ -668,6 +681,16 @@ def main():
         print(f"Guidance-incomplete candidates: {len(incomplete)}")
         if args.prepare_guidance_first:
             print(f"Missing guidance queue rows inserted: {guidance_rows_inserted}")
+            print(f"Existing guidance queue rows promoted: {guidance_rows_promoted}")
+
+        if args.guidance_only:
+            print("Guidance-only mode: no translation requests queued.")
+            if args.dry_run:
+                conn.rollback()
+            else:
+                conn.commit()
+            conn.close()
+            return
 
         if args.require_guidance_complete:
             candidates = ready

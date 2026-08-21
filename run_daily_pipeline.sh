@@ -526,8 +526,42 @@ if [ "$HUMAN_EVAL_TRANSLATION_ENABLED" != "0" ] && [ "$HUMAN_EVAL_MODEL_TIMELINE
     done
 fi
 
+# Stage guidance for the normal publication lane before the bounded scan. A
+# modest lookahead keeps tomorrow's candidates warm without broadening the
+# number of translations that can be published in one run.
+TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-20}"
+export TRANSLATION_ENQUEUE_LIMIT
+TRANSLATION_GUIDANCE_LOOKAHEAD_LIMIT="${TRANSLATION_GUIDANCE_LOOKAHEAD_LIMIT:-30}"
+TRANSLATION_GUIDANCE_QUEUE_PRIORITY="${TRANSLATION_GUIDANCE_QUEUE_PRIORITY:-20}"
+TRANSLATION_ENQUEUE_ORDER="${TRANSLATION_ENQUEUE_ORDER:-canonical}"
+TRANSLATION_ENQUEUE_PRIORITY="${TRANSLATION_ENQUEUE_PRIORITY:-20}"
+TRANSLATION_ENQUEUE_LETTER="${TRANSLATION_ENQUEUE_LETTER:-}"
+TRANSLATION_ENQUEUE_HEADWORD_PREFIX="${TRANSLATION_ENQUEUE_HEADWORD_PREFIX:-}"
+if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ] && [ "$TRANSLATION_GUIDANCE_LOOKAHEAD_LIMIT" -gt 0 ]; then
+    echo "Step 4d7d: Staging guidance for publication translations..." | tee -a "$LOGFILE"
+    publication_guidance_args=(
+        uv run enqueue_translation_runs.py
+        --profile gpt-5.5
+        --source-document preferred
+        --limit "$TRANSLATION_GUIDANCE_LOOKAHEAD_LIMIT"
+        --missing-final
+        --order "$TRANSLATION_ENQUEUE_ORDER"
+        --repeat 1
+        --prepare-guidance-first
+        --guidance-only
+        --guidance-queue-priority "$TRANSLATION_GUIDANCE_QUEUE_PRIORITY"
+    )
+    if [ -n "$TRANSLATION_ENQUEUE_LETTER" ]; then
+        publication_guidance_args+=(--letter "$TRANSLATION_ENQUEUE_LETTER")
+    fi
+    if [ -n "$TRANSLATION_ENQUEUE_HEADWORD_PREFIX" ]; then
+        publication_guidance_args+=(--headword-prefix "$TRANSLATION_ENQUEUE_HEADWORD_PREFIX")
+    fi
+    "${publication_guidance_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: publication guidance staging failed" | tee -a "$LOGFILE"
+fi
+
 # Step 4d8: Process a bounded translation-guidance scan batch before translation
-TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT="${TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT:-2000}"
+TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT="${TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT:-3000}"
 TRANSLATION_GUIDANCE_SCAN_MODEL="${TRANSLATION_GUIDANCE_SCAN_MODEL:-gpt-5.4-mini}"
 TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT="${TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT:-2000000}"
 TRANSLATION_GUIDANCE_SCAN_GUIDANCE_AI_LIMIT="${TRANSLATION_GUIDANCE_SCAN_GUIDANCE_AI_LIMIT:-${TRANSLATION_GUIDANCE_SCAN_FORMULA_AI_LIMIT:-$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT}}"
@@ -636,11 +670,6 @@ fi
 # Step 4e: Enqueue one preferred-source publication request per daily run after
 # the paper-facing approved-human reasoning lane. Without a letter filter, this
 # advances in canonical order from Alpha.
-TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-1}"
-TRANSLATION_ENQUEUE_ORDER="${TRANSLATION_ENQUEUE_ORDER:-canonical}"
-TRANSLATION_ENQUEUE_PRIORITY="${TRANSLATION_ENQUEUE_PRIORITY:-20}"
-TRANSLATION_ENQUEUE_LETTER="${TRANSLATION_ENQUEUE_LETTER:-}"
-TRANSLATION_ENQUEUE_HEADWORD_PREFIX="${TRANSLATION_ENQUEUE_HEADWORD_PREFIX:-}"
 if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
     echo "Step 4e: Enqueuing translation run requests..." | tee -a "$LOGFILE"
     translation_enqueue_args=(
@@ -654,6 +683,7 @@ if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
         --repeat 1
         --prepare-guidance-first
         --require-guidance-complete
+        --guidance-queue-priority "$TRANSLATION_GUIDANCE_QUEUE_PRIORITY"
     )
     if [ -n "$TRANSLATION_ENQUEUE_LETTER" ]; then
         translation_enqueue_args+=(--letter "$TRANSLATION_ENQUEUE_LETTER")
