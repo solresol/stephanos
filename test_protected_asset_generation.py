@@ -3,6 +3,7 @@ from pathlib import Path
 
 from cleanup_legacy_protected_assets import cleanup_legacy_assets
 from protected_assets import (
+    remove_stale_headword_pages,
     remove_stale_image_assets,
     render_page_scan_links,
     write_asset_manifest,
@@ -48,6 +49,18 @@ def test_manifest_and_owned_image_cleanup_are_scoped(tmp_path):
         wrapper_names={"image_1.html"},
         legacy_source_names={"old.jpg"},
     ) is False
+
+
+def test_stale_headword_cleanup_is_scoped_to_generator_pages(tmp_path):
+    (tmp_path / "headword_1.html").write_text("keep", encoding="utf-8")
+    (tmp_path / "headword_2.html").write_text("remove", encoding="utf-8")
+    (tmp_path / "index.html").write_text("keep", encoding="utf-8")
+
+    removed = remove_stale_headword_pages(tmp_path, {"headword_1.html"})
+
+    assert removed == ["headword_2.html"]
+    assert (tmp_path / "headword_1.html").exists()
+    assert (tmp_path / "index.html").exists()
 
 
 def _build_cleanup_site(tmp_path: Path, *, reference_legacy: bool) -> Path:

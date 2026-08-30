@@ -54,6 +54,16 @@ def remove_stale_image_assets(images_dir: Path, expected_names: set[str]) -> lis
     return sorted(removed)
 
 
+def remove_stale_headword_pages(output_dir: Path, expected_names: set[str]) -> list[str]:
+    """Remove only obsolete generator-owned headword_<id>.html pages."""
+    removed = []
+    for path in output_dir.glob("headword_*.html"):
+        if path.is_file() and path.name not in expected_names:
+            path.unlink()
+            removed.append(path.name)
+    return sorted(removed)
+
+
 def write_asset_manifest(
     output_dir: Path,
     *,

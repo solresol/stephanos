@@ -21,7 +21,7 @@ import canonical_variants
 import citation_format
 from source_documents import public_source_document_list_sql, source_document_priority_sql
 from site_navigation import render_site_navigation, site_navigation_styles
-from protected_assets import render_page_scan_links
+from protected_assets import remove_stale_headword_pages, render_page_scan_links
 from translation_rendering import (
     render_inline_markup,
     sanitize_public_translation_text,
@@ -3942,14 +3942,21 @@ def main():
         (output_dir / f"letter_{slug}.html").write_text(page_html, encoding='utf-8')
 
     # Generate canonical per-headword pages.
+    expected_headword_pages = set()
     for lemma in lemmas:
         lemma_id = int(lemma.get("lemma_id") or 0)
+        page_filename = headword_page_filename(lemma_id)
+        expected_headword_pages.add(page_filename)
         page_html = generate_headword_page(
             lemma,
             overlaps=overlap_by_lemma.get(lemma_id, []),
             overlap_run_id=overlap_run_id,
         )
-        (output_dir / headword_page_filename(lemma_id)).write_text(page_html, encoding='utf-8')
+        (output_dir / page_filename).write_text(page_html, encoding='utf-8')
+
+    stale_headword_pages = remove_stale_headword_pages(
+        output_dir, expected_headword_pages
+    )
 
     scrubbed_files = scrub_public_reference_site_files(output_dir)
 
@@ -3957,6 +3964,7 @@ def main():
     print(f"  Total lemmas: {stats['total_lemmas']}")
     print(f"  Translated lemmas: {stats['translated_lemmas']}")
     print(f"  Pages OCR'd: {stats['processed_images']} / {stats['total_images']}")
+    print(f"  Stale headword pages removed: {len(stale_headword_pages)}")
     if overlap_run_id:
         print(f"  Herodian overlap run used: {overlap_run_id}")
     else:
