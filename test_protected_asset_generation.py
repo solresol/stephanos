@@ -60,7 +60,9 @@ def _build_cleanup_site(tmp_path: Path, *, reference_legacy: bool) -> Path:
         '<img src="images/image_1.jpg">', encoding="utf-8"
     )
     (protected / "old.jpg").write_bytes(b"legacy")
-    (protected / "old.html").write_text("legacy wrapper", encoding="utf-8")
+    (protected / "old.html").write_text(
+        '<img src="old.jpg">', encoding="utf-8"
+    )
     write_asset_manifest(
         protected,
         image_names={"image_1.jpg"},

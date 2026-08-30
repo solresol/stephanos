@@ -48,17 +48,35 @@ def _resolve_site_path(source: Path, site_root: Path, raw_url: str) -> str | Non
 
 
 def referenced_candidate_paths(site_root: Path, candidates: set[str]) -> set[str]:
-    referenced = set()
+    directly_referenced = set()
+    candidate_edges: dict[str, set[str]] = {}
     for html_path in site_root.rglob("*.html"):
         parser = _LinkParser()
         try:
             parser.feed(html_path.read_text(encoding="utf-8", errors="replace"))
         except OSError:
             continue
+        source = html_path.relative_to(site_root).as_posix()
+        targets = set()
         for raw_url in parser.urls:
             resolved = _resolve_site_path(html_path, site_root, raw_url)
             if resolved in candidates:
-                referenced.add(resolved)
+                targets.add(resolved)
+        if source in candidates:
+            candidate_edges[source] = targets
+        else:
+            directly_referenced.update(targets)
+
+    # A stale wrapper and its image can reference each other. Treat those as
+    # reachable only when a current, non-candidate page links into the island.
+    referenced = set(directly_referenced)
+    queue = list(directly_referenced)
+    while queue:
+        source = queue.pop()
+        for target in candidate_edges.get(source, set()):
+            if target not in referenced:
+                referenced.add(target)
+                queue.append(target)
     return referenced
 
 
