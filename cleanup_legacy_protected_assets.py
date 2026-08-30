@@ -118,7 +118,14 @@ def cleanup_legacy_assets(site_root: Path, *, apply: bool = False) -> dict[str, 
         "referenced": sorted(referenced),
         "removable": removable,
     }
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    display_report = {
+        key: value
+        for key, value in report.items()
+        if key not in {"referenced", "removable"}
+    }
+    display_report["referenced_sample"] = report["referenced"][:20]
+    display_report["removable_sample"] = report["removable"][:50]
+    print(json.dumps(display_report, ensure_ascii=False, indent=2))
     return report
 
 
