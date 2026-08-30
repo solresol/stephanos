@@ -61,7 +61,14 @@ def _build_cleanup_site(tmp_path: Path, *, reference_legacy: bool) -> Path:
     )
     (protected / "old.jpg").write_bytes(b"legacy")
     (protected / "old.html").write_text(
-        '<img src="old.jpg">', encoding="utf-8"
+        '<title>Old - Stephanos OCR</title><div class="image-container">'
+        '<img src="old.jpg"></div>',
+        encoding="utf-8",
+    )
+    (protected / "orphan.html").write_text(
+        '<title>Orphan - Stephanos OCR</title><div class="image-container">'
+        '<a href="old.html">old</a></div>',
+        encoding="utf-8",
     )
     write_asset_manifest(
         protected,
@@ -85,13 +92,18 @@ def test_legacy_cleanup_removes_only_unreferenced_assets(tmp_path):
     site = _build_cleanup_site(tmp_path, reference_legacy=False)
 
     dry_run = cleanup_legacy_assets(site)
-    assert dry_run["removable"] == ["protected/old.html", "protected/old.jpg"]
+    assert dry_run["removable"] == [
+        "protected/old.html",
+        "protected/old.jpg",
+        "protected/orphan.html",
+    ]
     assert (site / "protected/old.jpg").exists()
 
     applied = cleanup_legacy_assets(site, apply=True)
-    assert applied["removed_count"] == 2
+    assert applied["removed_count"] == 3
     assert not (site / "protected/old.jpg").exists()
     assert not (site / "protected/old.html").exists()
+    assert not (site / "protected/orphan.html").exists()
     assert (site / "protected/images/image_1.jpg").exists()
 
 
@@ -99,11 +111,12 @@ def test_legacy_cleanup_retains_referenced_assets(tmp_path):
     site = _build_cleanup_site(tmp_path, reference_legacy=True)
     report = cleanup_legacy_assets(site, apply=True)
 
-    assert report["removed_count"] == 0
+    assert report["removed_count"] == 1
     assert set(report["referenced"]) == {
         "protected/old.html",
         "protected/old.jpg",
     }
+    assert not (site / "protected/orphan.html").exists()
 
 
 def test_reference_site_links_use_canonical_image_id_wrappers():

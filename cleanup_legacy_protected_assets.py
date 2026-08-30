@@ -109,6 +109,16 @@ def cleanup_legacy_assets(site_root: Path, *, apply: bool = False) -> dict[str, 
     wrapper_candidates = {
         protected_dir / f"{Path(name).stem}.html" for name in legacy_names
     }
+    for path in protected_dir.glob("*.html"):
+        relative = path.relative_to(site_root).as_posix()
+        if relative in canonical_paths:
+            continue
+        try:
+            prefix = path.read_text(encoding="utf-8", errors="replace")[:12000]
+        except OSError:
+            continue
+        if "Stephanos OCR" in prefix and "image-container" in prefix:
+            wrapper_candidates.add(path)
     candidates = root_images | {
         path for path in wrapper_candidates if path.is_file()
     }
