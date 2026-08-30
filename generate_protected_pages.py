@@ -7,11 +7,18 @@ import re
 from pathlib import Path
 from datetime import datetime, timezone
 from db import get_connection
+from protected_assets import (
+    IMAGE_EXTENSIONS,
+    IMAGES_SUBDIR,
+    remove_stale_image_assets,
+    write_asset_manifest,
+    write_bytes_if_changed,
+    write_text_if_changed,
+)
 from site_navigation import render_site_navigation, site_navigation_styles
 
 
 OUTPUT_DIR = "reference_site/protected"
-IMAGES_SUBDIR = "images"
 
 def normalize_headword_for_display(headword: str) -> str:
     """Remove full outer angle-bracket wrapper from OCR headwords."""
@@ -630,6 +637,11 @@ def main():
 
     # Group images by volume
     images_by_volume = {}
+    expected_image_names = set()
+    expected_wrapper_names = set()
+    legacy_source_names = set()
+    images_written = 0
+    images_reused = 0
 
     # Generate individual pages and extract images
     generated = 0
@@ -648,14 +660,23 @@ def main():
 
         # Generate HTML page with navigation
         page_name = protected_page_name(image_id)
+        expected_wrapper_names.add(page_name)
         extracted_image_name = protected_image_name(image_id, filename, mime_type)
         image_src = f"{IMAGES_SUBDIR}/{extracted_image_name}"
         html = generate_image_page(image_data, lemmas, image_src=image_src, prev_page=prev_page, next_page=next_page)
-        (output_dir / page_name).write_text(html, encoding='utf-8')
+        write_text_if_changed(output_dir / page_name, html)
 
         # Extract image from database if we have it
         if image_blob:
-            (images_dir / extracted_image_name).write_bytes(image_blob)
+            expected_image_names.add(extracted_image_name)
+            if write_bytes_if_changed(images_dir / extracted_image_name, image_blob):
+                images_written += 1
+            else:
+                images_reused += 1
+
+        original_name = Path(filename or "").name
+        if original_name and Path(original_name).suffix.lower() in IMAGE_EXTENSIONS:
+            legacy_source_names.add(original_name)
 
         # Group by volume for index
         vol_key = (image_data[10], image_data[11])  # (volume_number, volume_label)
@@ -669,12 +690,22 @@ def main():
 
     # Generate index page
     index_html = generate_protected_index(images_by_volume)
-    (output_dir / "index.html").write_text(index_html, encoding='utf-8')
+    write_text_if_changed(output_dir / "index.html", index_html)
+    stale_images = remove_stale_image_assets(images_dir, expected_image_names)
+    write_asset_manifest(
+        output_dir,
+        image_names=expected_image_names,
+        wrapper_names=expected_wrapper_names,
+        legacy_source_names=legacy_source_names,
+    )
 
     conn.close()
 
     print(f"\nProtected pages generated in {output_dir.absolute()}")
     print(f"  Image wrapper pages: {len(images)}")
+    print(f"  Canonical images written: {images_written}")
+    print(f"  Canonical images reused unchanged: {images_reused}")
+    print(f"  Stale canonical images removed: {len(stale_images)}")
     print(f"  Volumes: {len(images_by_volume)}")
     print(f"  Index page: protected/index.html")
 

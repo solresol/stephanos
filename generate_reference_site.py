@@ -21,6 +21,7 @@ import canonical_variants
 import citation_format
 from source_documents import public_source_document_list_sql, source_document_priority_sql
 from site_navigation import render_site_navigation, site_navigation_styles
+from protected_assets import render_page_scan_links
 from translation_rendering import (
     render_inline_markup,
     sanitize_public_translation_text,
@@ -800,12 +801,15 @@ def get_all_lemmas(cur):
                 ORDER BY li.position LIMIT 1) as ocr_model,
                a.meineke_id, a.billerbeck_id,
                COALESCE(
-                   (SELECT json_agg(i.image_filename ORDER BY li.position)
+                   (SELECT json_agg(
+                        json_build_object('id', i.id, 'filename', i.image_filename)
+                        ORDER BY li.position
+                    )
                     FROM images i
                     JOIN lemma_images li ON li.image_id = i.id
                     WHERE li.lemma_id = a.id),
                    '[]'::json
-               ) as image_filenames,
+               ) as image_references,
                a.word_count, a.version,
                a.corrected_greek_scan, a.corrected_english_translation,
                a.review_status, a.reviewed_by, a.reviewed_at,
@@ -1012,7 +1016,7 @@ def get_all_lemmas(cur):
     translation_guidance_hits_by_lemma = fetch_public_translation_guidance_hits(cur)
 
     all_lemmas = []
-    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_filenames, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at, wikidata_place_qid, wikidata_place_label, latitude, longitude, pleiades_id, translation_prompt_version, translation_blocked, translation_block_reason in rows:
+    for lemma_id, lemma, entry_number, lemma_type, greek_text, human_greek_text, confidence, translation_col, translated, ocr_processed_at, ocr_generation_name, ocr_model, meineke_id, billerbeck_id, image_references, word_count, version, corrected_greek_scan, corrected_english_translation, review_status, reviewed_by, reviewed_at, wikidata_place_qid, wikidata_place_label, latitude, longitude, pleiades_id, translation_prompt_version, translation_blocked, translation_block_reason in rows:
         # Public Greek preference: current public Meineke source text (or Meineke headword paragraph).
         greek_source_variant = ""
         greek_source_origin = ""
@@ -1079,12 +1083,12 @@ def get_all_lemmas(cur):
         translation = selected_translation_text
         english_translation = selected_translation_text
 
-        # Parse image filenames (psycopg2 auto-deserializes JSON)
-        if isinstance(image_filenames, list):
-            images = image_filenames
-        elif image_filenames:
+        # Parse canonical image references (psycopg2 normally deserializes JSON).
+        if isinstance(image_references, list):
+            images = image_references
+        elif image_references:
             try:
-                images = json.loads(image_filenames)
+                images = json.loads(image_references)
             except (json.JSONDecodeError, TypeError):
                 images = []
         else:
@@ -1111,7 +1115,7 @@ def get_all_lemmas(cur):
             "meineke_id": meineke_id or "",
             "billerbeck_id": billerbeck_id or "",
             "translated": bool(translated),
-            "image_filenames": images,
+            "image_references": images,
             "word_count": word_count,
             "proper_nouns": proper_nouns_by_lemma.get(lemma_id, []),
             "place_clusters": place_clusters_by_lemma.get(lemma_id, []),
@@ -1918,12 +1922,8 @@ def render_lemma_cards(lemmas):
             link_rows.append(("Place links", " | ".join(place_parts)))
 
         # Add page image links (to HTML wrappers)
-        if lemma.get("image_filenames"):
-            image_links = []
-            for img in lemma["image_filenames"]:
-                # Link to HTML wrapper page instead of raw image
-                html_page = img.replace('.jpg', '.html').replace('.png', '.html')
-                image_links.append(f'<a href="protected/{html_page}" target="_blank">{img}</a>')
+        if lemma.get("image_references"):
+            image_links = render_page_scan_links(lemma["image_references"])
             link_rows.append(("Page scans", ", ".join(image_links)))
         # Add edit link to review system
         link_rows.append(("Review", f'<a href="/cgi-bin/review.cgi?id={lemma["lemma_id"]}">Open review page</a>'))
@@ -3810,55 +3810,6 @@ def generate_meineke_comparison_page(stats: dict) -> str:
     return html
 
 
-def extract_images_from_database(cur, output_dir: Path):
-    """Extract image BLOBs from database to protected directory"""
-    protected_dir = output_dir / "protected"
-    protected_dir.mkdir(exist_ok=True)
-    used_names = set()
-
-    # Get all unique image filenames used in assembled lemmas
-    cur.execute(
-        """
-        SELECT DISTINCT i.image_filename, i.image_data, i.image_mime_type
-        FROM images i
-        WHERE i.id IN (
-            SELECT DISTINCT unnest(
-                ARRAY(
-                    SELECT jsonb_array_elements_text(a.source_image_ids::jsonb)::int
-                    FROM assembled_lemmas a
-                    WHERE COALESCE(a.quarantined, FALSE) = FALSE
-                )
-            )
-        )
-        AND i.image_data IS NOT NULL
-        """
-    )
-
-    images = cur.fetchall()
-    extracted = 0
-
-    for filename, image_data, mime_type in images:
-        if not image_data:
-            continue
-
-        # Keep extracted files inside protected/ even if DB filename contains paths like ../graphic/...
-        safe_name = Path(filename or "").name
-        if not safe_name:
-            safe_name = f"image_{extracted + 1:06d}.bin"
-        if safe_name in used_names:
-            stem = Path(safe_name).stem
-            suffix = Path(safe_name).suffix
-            digest = hashlib.sha1((filename or safe_name).encode("utf-8")).hexdigest()[:8]
-            safe_name = f"{stem}_{digest}{suffix}"
-        used_names.add(safe_name)
-
-        image_path = protected_dir / safe_name
-        image_path.write_bytes(image_data)
-        extracted += 1
-
-    return extracted
-
-
 def main():
     conn = get_connection()
     cur = conn.cursor()
@@ -3913,9 +3864,6 @@ def main():
     output_dir.mkdir(exist_ok=True)
     (output_dir / "prompts").mkdir(exist_ok=True)
     write_search_ui_asset(output_dir)
-
-    # Extract images from database to protected directory
-    images_extracted = extract_images_from_database(cur, output_dir)
 
     # Generate Meineke comparison page (best-effort; don't fail the whole site on stats issues)
     try:
@@ -4009,7 +3957,6 @@ def main():
     print(f"  Total lemmas: {stats['total_lemmas']}")
     print(f"  Translated lemmas: {stats['translated_lemmas']}")
     print(f"  Pages OCR'd: {stats['processed_images']} / {stats['total_images']}")
-    print(f"  Images extracted from database: {images_extracted}")
     if overlap_run_id:
         print(f"  Herodian overlap run used: {overlap_run_id}")
     else:

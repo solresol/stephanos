@@ -1024,6 +1024,8 @@ uv run generate_translation_guidance_page.py 2>&1 | tee -a "$LOGFILE"
 # Step 7c: Generate protected pages
 echo "Step 7c: Generating protected pages..." | tee -a "$LOGFILE"
 uv run generate_protected_pages.py 2>&1 | tee -a "$LOGFILE"
+echo "Step 7c0: Removing unreferenced legacy protected scan assets..." | tee -a "$LOGFILE"
+uv run cleanup_legacy_protected_assets.py --apply 2>&1 | tee -a "$LOGFILE"
 
 # Step 7c1: Generate headword clustering page (UMAP + clustering)
 echo "Step 7c1: Generating headword clustering page..." | tee -a "$LOGFILE"
@@ -1132,8 +1134,11 @@ echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
 # is large enough to exceed its best-effort wall timeout, but a partial full-site
 # transfer must not leave current evaluation reports unpublished.
 run_rsync_logged reference_site/statistics/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/
-# Deploy reference_site/ (contains statistics.html, statistics/, statistics_images/, people.html, and all lemma pages)
-run_optional_rsync_logged "reference_site" reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
+# Publish the generator-owned protected tree separately so stale scan assets are
+# deleted only inside that scoped destination.
+run_optional_rsync_logged "protected site" --delete-after reference_site/protected/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/protected/
+# Deploy the remaining generated site without retransferring the two trees above.
+run_optional_rsync_logged "reference_site" --exclude=/statistics/ --exclude=/protected/ reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
 # Remove stale prompt-evaluation detail artifacts for excluded experiment lanes.
 ssh stephanos@merah.cassia.ifost.org.au "sh -c '\
 rm -f /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompts/gpt-5-5-v3-repeat*.html \
