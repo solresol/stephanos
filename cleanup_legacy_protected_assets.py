@@ -117,7 +117,7 @@ def cleanup_legacy_assets(site_root: Path, *, apply: bool = False) -> dict[str, 
             prefix = path.read_text(encoding="utf-8", errors="replace")[:12000]
         except OSError:
             continue
-        if "Stephanos OCR" in prefix and "image-container" in prefix:
+        if "Stephanos OCR" in prefix and "image-display" in prefix:
             wrapper_candidates.add(path)
     candidates = root_images | {
         path for path in wrapper_candidates if path.is_file()

@@ -61,12 +61,12 @@ def _build_cleanup_site(tmp_path: Path, *, reference_legacy: bool) -> Path:
     )
     (protected / "old.jpg").write_bytes(b"legacy")
     (protected / "old.html").write_text(
-        '<title>Old - Stephanos OCR</title><div class="image-container">'
+        '<title>Old - Stephanos OCR</title><div class="image-display">'
         '<img src="old.jpg"></div>',
         encoding="utf-8",
     )
     (protected / "orphan.html").write_text(
-        '<title>Orphan - Stephanos OCR</title><div class="image-container">'
+        '<title>Orphan - Stephanos OCR</title><div class="image-display">'
         '<a href="old.html">old</a></div>',
         encoding="utf-8",
     )
