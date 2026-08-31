@@ -9,6 +9,7 @@ daily_pipeline.lock
 __pycache__/
 *.pyc
 *~
+.DS_Store
 config.py
 stephanos.ini
 .claude/settings.local.json
