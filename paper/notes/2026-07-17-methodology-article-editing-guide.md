@@ -12,7 +12,7 @@ This guide lists every placeholder, comment, and TODO in Greta's draft, who owns
 
 **What to do:** Condense `paper/benchmark_translation_draft.md` (sections 3–4, ~1,800 words as written) into 1000–1500 words. Everything needed is already drafted there. Key numbers to carry over:
 
-- Design: 100 Kappa entries × 12 dated OpenAI models (GPT-4 Turbo, Apr 2024 → GPT-5.6 Sol, Jul 2026) × 3 prompt conditions = 3,600 model–entry comparisons; plus Claude Sonnet 5 / Opus 4.8 / Fable 5 (800 comparisons, Opus lacks a v2 cell).
+- Design: 100 Kappa entries × 12 dated OpenAI models (GPT-4 Turbo, Apr 2024 → GPT-5.6 Sol, Jul 2026) × 3 prompt conditions = 3,600 model–entry comparisons; plus Claude Sonnet 5 / Opus 4.8 / Fable 5 across all three prompt conditions (900 comparisons).
 - Prompt sizes: v1 = 308 characters, v2 = 4,685, v3 = 11,494 (plus recognizer-generated entry-specific guidance).
 - Headline effect: v2 lifts the four-metric composite from 46.81% to 65.36% — a paired gain of 18.55 points (95% CI 17.28–19.81, p=3.01e-12), equivalent to ~55 months of model progress under the fitted v2 trend. v3 adds a further 2.06 points (CI 0.95–3.16, p=0.00174).
 - Length: human references average 44.2 words; v1 outputs 47.7, v2 42.6, v3 43.6 — newer prompts score higher while writing less.

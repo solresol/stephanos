@@ -16,8 +16,7 @@ models improve. To answer both, we ran all three prompt conditions across
 twelve dated OpenAI models released between April 2024 (GPT-4 Turbo) and July
 2026 (GPT-5.6), giving 3,600 model–entry comparisons. For cross-provider
 context we also ran the prompts over three Anthropic Claude models released in
-mid-2026 (Sonnet 5, Opus 4.8 and Fable 5), adding a further 800 comparisons
-(Opus was not run under V2).
+mid-2026 (Sonnet 5, Opus 4.8 and Fable 5), adding a further 900 comparisons.
 
 Each machine translation was scored against the approved human translation of
 the same entry. We report four standard lexical machine-translation metrics —

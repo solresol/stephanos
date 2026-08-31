@@ -2,7 +2,6 @@ import pytest
 
 from generate_translation_quality_histograms import (
     BIN_COUNT,
-    KNOWN_MISSING_CELLS,
     METRIC_KEYS,
     PROFILE_META,
     PROFILE_ORDER,
@@ -19,8 +18,6 @@ def synthetic_rows(entry_count=2):
     for profile_name in PROFILE_ORDER:
         provider, profile_label, release_date = PROFILE_META[profile_name]
         for version in (1, 2, 3):
-            if (profile_name, version) in KNOWN_MISSING_CELLS:
-                continue
             for order in range(1, entry_count + 1):
                 quality = 0.20 + version * 0.15 + order * 0.01
                 rows.append(
@@ -71,9 +68,9 @@ def test_score_row_filters_to_benchmark_profiles_and_computes_mean():
     assert score_row({**row, "profile_name": "experimental-profile"}) is None
 
 
-def test_validation_requires_all_cells_except_known_opus_gap():
+def test_validation_requires_all_cells():
     rows = validate_rows(synthetic_rows(), expected_entry_count=2)
-    assert len(rows) == (len(PROFILE_ORDER) * 3 - 1) * 2
+    assert len(rows) == len(PROFILE_ORDER) * 3 * 2
 
     incomplete = [row for row in rows if not (
         row["profile_name"] == "gpt-5.6-sol"
@@ -93,7 +90,7 @@ def test_histogram_uses_fixed_twenty_bins_and_includes_one_in_last_bin():
     assert counts[-1] == 2
 
 
-def test_summary_rows_include_all_metrics_and_missing_opus_cell():
+def test_summary_rows_include_all_metrics_and_complete_opus_cell():
     summaries = summary_rows(validate_rows(synthetic_rows(), expected_entry_count=2))
 
     complete = [
@@ -104,14 +101,15 @@ def test_summary_rows_include_all_metrics_and_missing_opus_cell():
     ]
     assert {row["metric"] for row in complete} == set(METRIC_KEYS)
     assert all(row["n"] == 2 for row in complete)
-    missing = [
+    opus_v2 = [
         row
         for row in summaries
         if row["profile_name"] == "claude_opus_4_8"
         and row["profile_version"] == 2
     ]
-    assert len(missing) == 1
-    assert missing[0]["status"] == "missing"
+    assert len(opus_v2) == len(METRIC_KEYS)
+    assert all(row["n"] == 2 for row in opus_v2)
+    assert all(row["status"] == "complete" for row in opus_v2)
 
 
 def test_rendered_page_defaults_to_gpt56_and_preserves_quality_caveat():
@@ -120,6 +118,6 @@ def test_rendered_page_defaults_to_gpt56_and_preserves_quality_caveat():
 
     assert '<option value="gpt-5.6-sol" selected>' in page
     assert "reference similarity to the approved house-style translation" in page
-    assert "Claude Opus 4.8 v2 is displayed as a missing cell" in page
+    assert "All three Claude models have complete v1, v2 and v3 cells" in page
     assert "translation_quality_distribution_rows.csv" in page
     assert '"profile":"gpt-5.6-sol"' in page

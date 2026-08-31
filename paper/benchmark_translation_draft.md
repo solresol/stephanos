@@ -81,7 +81,7 @@ The OpenAI time series contains twelve releases:
 
 Release dates come from the project's model-release registry, which records the provider announcement or API changelog source. They identify model chronology, not the date of generation: the benchmark outputs were produced between 14 February and 16 July 2026. Every OpenAI model-prompt cell contains exactly one successful translation of each of the 100 entries. Temperature and seed were omitted from every request. Top-p was 1.0 in 3,598 records; two legacy v3 records do not retain it. GPT-5.6 Sol used the Responses API with medium reasoning effort; all but two legacy records for the other cells used Chat Completions. The timeline result is therefore the performance of the configured systems, not a controlled ablation of model weights.
 
-We also compare with Claude Sonnet 5, Opus 4.8 and Fable 5, released 30 June, 28 May and 9 June 2026 respectively (Anthropic announcements). Sonnet and Fable have complete v1-v3 cells; Opus has v1 and v3 but no v2, giving eight complete cells and 800 comparisons. The Claude translations were produced once per entry in external Claude Code workspaces and imported. They retain source files, prompt-version metadata and model labels, but no native request record or sampling parameters. They are plotted as individual descriptive observations, excluded from the OpenAI regression and not joined into a Claude series.
+We also compare with Claude Sonnet 5, Opus 4.8 and Fable 5, released 30 June, 28 May and 9 June 2026 respectively (Anthropic announcements). All three have complete v1-v3 cells, giving nine complete cells and 900 comparisons. The Claude translations were produced once per entry in external Claude Code workspaces and imported. They retain source files, prompt-version metadata and model labels, but no native request record or sampling parameters. They are plotted as individual descriptive observations, excluded from the OpenAI regression and not joined into a Claude series.
 
 # 3. Evaluation design
 
@@ -243,11 +243,11 @@ The 79 entries with stored expert drafts permit a like-for-like XCOMET compariso
 \label{fig:bleurt-timeline}
 \end{figure}
 
-COMET and BLEURT rank Claude Fable 5 v3 first, at 0.8149 and 0.7892 respectively. XCOMET instead ranks Claude Sonnet 5 v3 first (0.5962), followed by Opus 4.8 v3 (0.5894), GPT-5.6 v3 (0.5885) and Fable v3 (0.5881). The top XCOMET values are separated by less than 0.008, and all three metrics place a v3 condition first. These rankings remain reference-dependent.
+COMET and BLEURT rank Claude Fable 5 v3 first, at 0.8149 and 0.7894 respectively. XCOMET instead ranks Claude Sonnet 5 v3 first (0.5954), followed by Opus 4.8 v3 (0.5895), GPT-5.6 v3 (0.5882) and Fable v3 (0.5877). The top XCOMET values are separated by less than 0.008, and all three metrics place a v3 condition first. These rankings remain reference-dependent.
 
 ## 4.6 Claude results
 
-Claude Fable 5 is the strongest Claude condition in each available prompt: 54.91% for v1, 71.48% for v2 and 74.87% for v3. Its v3 score is the highest observed composite in the study, 0.68 points above GPT-5.5 v3 and 1.94 above GPT-5.6 v3. Claude Sonnet 5 scores 49.62%, 67.16% and 73.16%. Opus 4.8 scores 49.25% on v1 and 72.80% on v3; v2 is missing.
+Claude Fable 5 is the strongest Claude condition in each prompt: 54.92% for v1, 71.49% for v2 and 74.89% for v3. Its v3 score is the highest observed composite in the study, 0.68 points above GPT-5.5 v3 and 1.94 above GPT-5.6 v3. Claude Sonnet 5 scores 49.63%, 67.17% and 73.18%. Opus 4.8 scores 49.26%, 69.80% and 72.82%.
 
 The cross-provider difference is small relative to the prompt effect: Fable's v3 lead over the best OpenAI result is less than one point, while moving the same OpenAI model from v1 to v2 averages more than eighteen points. For the provenance reasons in Section 2.3, the figure shows Claude points but does not fit them.
 

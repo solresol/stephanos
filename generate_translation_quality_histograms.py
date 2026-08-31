@@ -78,9 +78,6 @@ PROFILE_META = {
     "claude_fable_5": ("Anthropic", "Claude Fable 5", "2026-06-09"),
     "claude_sonnet_5": ("Anthropic", "Claude Sonnet 5", "2026-06-30"),
 }
-KNOWN_MISSING_CELLS = {("claude_opus_4_8", 2)}
-
-
 def esc(value: object) -> str:
     return html.escape(str(value or ""), quote=True)
 
@@ -166,7 +163,7 @@ def validate_rows(
     *,
     expected_entry_count: int = EXPECTED_ENTRY_COUNT,
 ) -> list[dict[str, object]]:
-    """Require complete, unique model/prompt cells except documented gaps."""
+    """Require complete, unique model/prompt cells."""
 
     profile_rank = {name: index for index, name in enumerate(PROFILE_ORDER)}
     cells: dict[tuple[str, int], list[dict[str, object]]] = defaultdict(list)
@@ -178,8 +175,6 @@ def validate_rows(
         for version in MODEL_TIMELINE_PROMPT_VERSIONS:
             key = (profile_name, version)
             cell = cells.get(key, [])
-            if key in KNOWN_MISSING_CELLS and not cell:
-                continue
             if len(cell) != expected_entry_count:
                 errors.append(
                     f"{profile_name} v{version}: expected {expected_entry_count} rows, found {len(cell)}"
@@ -468,7 +463,7 @@ def render_page(rows: list[dict[str, object]]) -> str:
   <details>
     <summary>Method and comparability</summary>
     <p>Each model/prompt cell contains the same 100 entries from Gabe's final Kappa review-tracker export. Scores compare the latest completed or approved translation run in that cell with the approved human translation. Histograms use 20 fixed-width bins from 0 to 1 and show the percentage of entries in each bin, so every panel has the same score scale. GPT-5.2 v1 retains the actual run-model labels recorded in PostgreSQL; the profile cell is not relabelled from those run records.</p>
-    <p>Claude Opus 4.8 v2 is displayed as a missing cell because no translations exist for that profile/version. It is not treated as a zero score or removed from the model list.</p>
+    <p>All three Claude models have complete v1, v2 and v3 cells. As with the OpenAI comparisons, each cell contains the same 100 entries.</p>
   </details>
   <p class="note">Generated __GENERATED__ from the paper-corpus prompt-evaluation rows.</p>
 </main>

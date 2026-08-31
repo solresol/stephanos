@@ -659,8 +659,11 @@ def plot_timeline_metric(
         y_min = math.floor(
             (float(np.min(all_scores)) - score_span * 0.16) / tick_step
         ) * tick_step
+        # Neural-metric figures label the three tightly clustered Claude models
+        # above their highest prompt score. Reserve enough vertical room for the
+        # staggered labels instead of clipping them against the axes boundary.
         y_max = math.ceil(
-            (float(np.max(all_scores)) + score_span * 0.24) / tick_step
+            (float(np.max(all_scores)) + score_span * 0.45) / tick_step
         ) * tick_step
     if target_line:
         y_max = max(y_max, 92.0)
@@ -884,7 +887,7 @@ def plot_timeline_metric(
     fig.text(
         0.01,
         0.012,
-        "OpenAI release dates: project model-release registry. Claude dates: Anthropic announcements. Claude Opus 4.8 v2 was not available.",
+        "OpenAI release dates: project model-release registry. Claude dates: Anthropic announcements.",
         fontsize=7.5,
         color="#5c646e",
     )
@@ -913,8 +916,9 @@ def main() -> None:
     expected_openai = len(evaluation.MODEL_TIMELINE_PROFILE_NAMES) * 3
     if len(openai_cells) != expected_openai:
         raise RuntimeError(f"Expected {expected_openai} complete OpenAI cells, found {len(openai_cells)}")
-    if len(claude_cells) != 8:
-        raise RuntimeError(f"Expected eight complete Claude cells, found {len(claude_cells)}")
+    expected_claude = len(CLAUDE_RELEASES) * 3
+    if len(claude_cells) != expected_claude:
+        raise RuntimeError(f"Expected {expected_claude} complete Claude cells, found {len(claude_cells)}")
 
     regressions = []
     for prompt_version in (1, 2, 3):
@@ -951,7 +955,7 @@ def main() -> None:
         "claude_models": len(CLAUDE_RELEASES),
         "claude_cells": len(claude_cells),
         "claude_comparisons": sum(int(row["pair_count"]) for row in claude_cells),
-        "missing_claude_cells": ["claude_opus_4_8 v2"],
+        "missing_claude_cells": [],
         "regressions": regressions,
         "prompt_deltas": prompt_deltas,
         "target_sensitivity": sensitivity,

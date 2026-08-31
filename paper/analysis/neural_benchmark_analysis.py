@@ -36,6 +36,9 @@ METRIC_MODELS = {
     "xcomet": "Unbabel/XCOMET-XL",
     "bleurt": "/home/stephanos/metric-envs/bleurt/BLEURT-20",
 }
+EXPECTED_CELL_ENTRY_COUNT = 100
+EXPECTED_CELL_COUNT = 45
+EXPECTED_ROW_COUNT = EXPECTED_CELL_ENTRY_COUNT * EXPECTED_CELL_COUNT
 
 
 def expected_metric_status(metric: str) -> str:
@@ -71,10 +74,14 @@ def file_sha256(path: Path) -> str:
 
 def load_and_validate_manifest(work_dir: Path) -> dict[str, Any]:
     manifest = json.loads((work_dir / "manifest.json").read_text(encoding="utf-8"))
-    if int(manifest.get("row_count") or 0) != 4400:
-        raise RuntimeError(f"Manifest row count is not 4,400: {manifest.get('row_count')}")
-    if int(manifest.get("cell_count") or 0) != 44:
-        raise RuntimeError(f"Manifest cell count is not 44: {manifest.get('cell_count')}")
+    if int(manifest.get("row_count") or 0) != EXPECTED_ROW_COUNT:
+        raise RuntimeError(
+            f"Manifest row count is not {EXPECTED_ROW_COUNT:,}: {manifest.get('row_count')}"
+        )
+    if int(manifest.get("cell_count") or 0) != EXPECTED_CELL_COUNT:
+        raise RuntimeError(
+            f"Manifest cell count is not {EXPECTED_CELL_COUNT}: {manifest.get('cell_count')}"
+        )
     if dict(manifest.get("metric_models") or {}) != METRIC_MODELS:
         raise RuntimeError("Manifest metric model definitions do not match the current runner")
     total_rows = 0
@@ -96,11 +103,11 @@ def load_and_validate_manifest(work_dir: Path) -> dict[str, Any]:
 
 def prepare(entries_path: Path, work_dir: Path, shard_size: int) -> None:
     rows = read_csv(entries_path)
-    if len(rows) != 4400:
-        raise RuntimeError(f"Expected 4,400 benchmark rows, found {len(rows)}")
+    if len(rows) != EXPECTED_ROW_COUNT:
+        raise RuntimeError(f"Expected {EXPECTED_ROW_COUNT:,} benchmark rows, found {len(rows)}")
     cells = {(row["profile_name"], row["prompt_version"]) for row in rows}
-    if len(cells) != 44:
-        raise RuntimeError(f"Expected 44 benchmark cells, found {len(cells)}")
+    if len(cells) != EXPECTED_CELL_COUNT:
+        raise RuntimeError(f"Expected {EXPECTED_CELL_COUNT} benchmark cells, found {len(cells)}")
 
     input_dir = work_dir / "inputs"
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -497,7 +504,10 @@ def summarize(entries_path: Path, cells_path: Path, work_dir: Path, metrics: lis
                 **{metric: float(np.mean([float(row[metric]) for row in rows])) for metric in metrics},
             }
         )
-    if any(int(row["pair_count"]) != 100 for row in cell_rows) or len(cell_rows) != 44:
+    if (
+        any(int(row["pair_count"]) != EXPECTED_CELL_ENTRY_COUNT for row in cell_rows)
+        or len(cell_rows) != EXPECTED_CELL_COUNT
+    ):
         raise RuntimeError("Neural cell integrity check failed")
 
     regressions = []

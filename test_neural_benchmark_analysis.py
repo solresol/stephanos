@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 from paper.analysis.neural_benchmark_analysis import expected_metric_status, valid_output
+from paper.analysis.neural_benchmark_cache_upgrade import metric_score_by_content
 
 
 class NeuralBenchmarkOutputValidationTests(unittest.TestCase):
@@ -67,6 +68,35 @@ class NeuralBenchmarkOutputValidationTests(unittest.TestCase):
             self.write_output(path, include_provenance=False)
 
             self.assertFalse(self.is_valid(path))
+
+
+class NeuralBenchmarkCacheUpgradeTests(unittest.TestCase):
+    def test_averages_float32_noise_for_duplicate_metric_inputs(self):
+        rows = [
+            {"row_index": 0, "source": "s", "candidate": "c", "reference": "r"},
+            {"row_index": 1, "source": "s", "candidate": "c", "reference": "r"},
+        ]
+
+        scores = metric_score_by_content(
+            rows,
+            {0: 0.75, 1: 0.7500004},
+            metric="comet",
+        )
+
+        self.assertAlmostEqual(scores[("s", "c", "r")], 0.7500002)
+
+    def test_rejects_materially_different_duplicate_scores(self):
+        rows = [
+            {"row_index": 0, "source": "s", "candidate": "c", "reference": "r"},
+            {"row_index": 1, "source": "s", "candidate": "c", "reference": "r"},
+        ]
+
+        with self.assertRaisesRegex(RuntimeError, "inconsistent comet scores"):
+            metric_score_by_content(
+                rows,
+                {0: 0.75, 1: 0.76},
+                metric="comet",
+            )
 
 
 if __name__ == "__main__":
