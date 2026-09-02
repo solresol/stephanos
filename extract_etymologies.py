@@ -15,6 +15,15 @@ from db import get_connection
 SYSTEM_PROMPT = """You are a classical philologist specializing in Byzantine Greek geographical texts and ancient etymology.
 You are analyzing entries from Stephanos of Byzantium's Ethnika to identify etymological explanations."""
 
+ETYMOLOGY_CATEGORIES = {
+    "EPONYM_PERSON",
+    "MORPHOLOGICAL_COMPOSITION",
+    "PLACE_TRANSFER",
+    "BORROWING_NON_GREEK",
+    "FOLK_ETYMOLOGY_NARRATIVE",
+    "UNCLEAR_METALINGUISTIC",
+}
+
 USER_PROMPT = """Extract all etymological explanations from this Greek text.
 
 An etymology is an explanation of where a place name comes from. Look for phrases like:
@@ -63,14 +72,7 @@ EXTRACT_ETYMOLOGIES_TOOL = {
                             },
                             "category": {
                                 "type": "string",
-                                "enum": [
-                                    "EPONYM_PERSON",
-                                    "MORPHOLOGICAL_COMPOSITION",
-                                    "PLACE_TRANSFER",
-                                    "BORROWING_NON_GREEK",
-                                    "FOLK_ETYMOLOGY_NARRATIVE",
-                                    "UNCLEAR_METALINGUISTIC"
-                                ],
+                                "enum": sorted(ETYMOLOGY_CATEGORIES),
                                 "description": "Category of etymology"
                             }
                         },
@@ -82,6 +84,33 @@ EXTRACT_ETYMOLOGIES_TOOL = {
         }
     }
 }
+
+
+def validate_etymologies(etymologies):
+    """Validate the complete model result before any rows are inserted."""
+    if not isinstance(etymologies, list):
+        raise ValueError("etymologies must be a list")
+
+    required_fields = ("greek_text", "english_translation", "category")
+    for index, etymology in enumerate(etymologies):
+        if not isinstance(etymology, dict):
+            raise ValueError(f"etymology {index} must be an object")
+
+        missing_fields = [
+            field for field in required_fields
+            if not isinstance(etymology.get(field), str)
+            or not etymology[field].strip()
+        ]
+        if missing_fields:
+            fields = ", ".join(missing_fields)
+            raise ValueError(f"etymology {index} has missing or empty fields: {fields}")
+
+        if etymology["category"] not in ETYMOLOGY_CATEGORIES:
+            raise ValueError(
+                f"etymology {index} has invalid category: {etymology['category']}"
+            )
+
+    return etymologies
 
 
 def extract_etymologies_for_lemma(client, greek_text, model="gpt-5.6-luna"):
@@ -106,7 +135,8 @@ def extract_etymologies_for_lemma(client, greek_text, model="gpt-5.6-luna"):
 
     tokens_used = response.usage.total_tokens if response.usage else 0
 
-    return result.get("etymologies", []), tokens_used
+    etymologies = validate_etymologies(result.get("etymologies", []))
+    return etymologies, tokens_used
 
 
 def main():
