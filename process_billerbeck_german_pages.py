@@ -33,6 +33,17 @@ ALLOWED_STATUS = {
 }
 
 
+def strip_nul_characters(value):
+    """Remove JSON string NULs that PostgreSQL cannot store in jsonb."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, list):
+        return [strip_nul_characters(item) for item in value]
+    if isinstance(value, dict):
+        return {key: strip_nul_characters(item) for key, item in value.items()}
+    return value
+
+
 def load_gemini_api_key() -> str:
     key_path = Path.home() / ".gemini.key"
     if not key_path.exists():
@@ -219,7 +230,7 @@ def process_image(model_name: str, image_bytes: bytes, hints: dict) -> tuple[dic
             response_schema=RESPONSE_SCHEMA,
         ),
     )
-    payload = json.loads(response.text)
+    payload = strip_nul_characters(json.loads(response.text))
     tokens_used = 0
     if hasattr(response, "usage_metadata") and response.usage_metadata:
         tokens_used = response.usage_metadata.total_token_count
