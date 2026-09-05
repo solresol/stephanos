@@ -251,6 +251,7 @@ def find_candidates(
     include_quarantined: bool,
     include_translated: bool,
     has_human_translations: bool,
+    untranslated_only: bool = False,
     letter: str | None = None,
     headword_prefix: str | None = None,
     headword_start: str | None = None,
@@ -344,6 +345,19 @@ def find_candidates(
               AND trr.status IN ('pending', 'running')
         )
     """
+
+    # Publication model upgrades must not restart passages translated under
+    # another profile, source revision, or the legacy pipeline.
+    if untranslated_only:
+        query += """
+            AND COALESCE(a.translation, '') = ''
+            AND NOT EXISTS (
+                SELECT 1 FROM translation_runs tr
+                WHERE tr.lemma_id = a.id
+                  AND tr.status IN ('approved', 'completed', 'blocked', 'hidden')
+                  AND COALESCE(tr.translation_text, '') != ''
+            )
+        """
 
     # Queue only when the authoritative translation_run layer does not already
     # have a successful run for the target profile/version + current source text.
@@ -519,6 +533,10 @@ def main():
         help="Also queue lemmas that already have an AI translation (default: queue untranslated/outdated only)",
     )
     parser.add_argument("--model", help="Override the prompt version default model")
+    parser.add_argument(
+        "--untranslated-only", action="store_true",
+        help="Exclude existing legacy translations and successful runs across all profiles and source versions",
+    )
     parser.add_argument("--top-p", type=float, help="Override the prompt version default top_p")
     parser.add_argument(
         "--api-mode",
@@ -619,6 +637,7 @@ def main():
         include_quarantined=bool(args.include_quarantined),
         include_translated=bool(args.include_translated),
         has_human_translations=has_human_translations,
+        untranslated_only=args.untranslated_only,
         letter=args.letter,
         headword_prefix=args.headword_prefix,
         headword_start=args.headword_start,

@@ -677,6 +677,10 @@ if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
         --profile gpt-5.5
         --source-document preferred
         --limit "$TRANSLATION_ENQUEUE_LIMIT"
+        --model gpt-5.6-sol
+        --api-mode responses
+        --reasoning-effort medium
+        --untranslated-only
         --missing-final
         --order "$TRANSLATION_ENQUEUE_ORDER"
         --priority "$TRANSLATION_ENQUEUE_PRIORITY"
@@ -692,6 +696,19 @@ if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
         translation_enqueue_args+=(--headword-prefix "$TRANSLATION_ENQUEUE_HEADWORD_PREFIX")
     fi
     "${translation_enqueue_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: enqueue step failed" | tee -a "$LOGFILE"
+fi
+
+# Keep the existing publication prompt profile, recording the new model on each
+# request/run. This lane is independent of the model-comparison experiments.
+if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
+    echo "Step 5p: Translating unpublished passages with GPT-5.6-sol..." | tee -a "$LOGFILE"
+    uv run translate_lemmas.py \
+        --api-mode responses --model gpt-5.6-sol --profile-prefix gpt-5.5 \
+        --request-limit "$TRANSLATION_ENQUEUE_LIMIT" \
+        --run-limit "$TRANSLATION_ENQUEUE_LIMIT" \
+        --daily-token-limit 100000 \
+        --batch --batch-wait --batch-poll-interval 30 \
+        2>&1 | tee -a "$LOGFILE"
 fi
 
 # Step 5r: Translate Responses API/reasoning requests slowly before the batch lane
