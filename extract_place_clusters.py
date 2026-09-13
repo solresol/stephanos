@@ -12,7 +12,6 @@ from openai import OpenAI
 from psycopg2.extras import Json
 
 from api_keys import load_api_key
-from db import get_connection
 from link_wikidata_places import query_wikidata_places
 from source_documents import public_source_document_list_sql, source_document_priority_sql
 from place_cluster_extraction import (
@@ -238,7 +237,11 @@ def replace_mentions_and_candidates(cur, lemma_id: int, cluster_id: int, cluster
             ),
         )
 
-    for candidate in cluster.get("candidates", []):
+    save_cluster_candidates(cur, cluster_id, cluster.get("candidates", []))
+
+
+def save_cluster_candidates(cur, cluster_id: int, candidates: list[dict]) -> None:
+    for candidate in candidates:
         cur.execute(
             """
             INSERT INTO place_cluster_candidates (
@@ -284,14 +287,10 @@ def replace_mentions_and_candidates(cur, lemma_id: int, cluster_id: int, cluster
 def build_cluster_records(headword: str, clusters: list[dict]) -> list[dict]:
     records: list[dict] = []
     for cluster in clusters:
-        try:
-            raw_candidates = query_wikidata_places(
-                cluster.get("candidate_query_text") or cluster.get("inferred_canonical_name") or headword,
-                None,
-            )
-        except Exception as exc:
-            print(f"    Warning: candidate lookup failed for {cluster['display_label']}: {exc}")
-            raw_candidates = []
+        raw_candidates = query_wikidata_places(
+            cluster.get("candidate_query_text") or cluster.get("inferred_canonical_name") or headword,
+            None,
+        )
 
         candidate_rows = rank_place_candidates(cluster, build_wikidata_candidates(cluster, raw_candidates))
         machine_choice = preferred_machine_choice(candidate_rows)
@@ -302,7 +301,69 @@ def build_cluster_records(headword: str, clusters: list[dict]) -> list[dict]:
     return records
 
 
+def has_human_cluster_edits(cluster: dict) -> bool:
+    return any(value is not None and value != "" for key, value in cluster.items()
+               if key.startswith("human_"))
+
+
+def refresh_cluster_candidates(conn, *, lemma_id: int | None, limit: int | None, dry_run: bool) -> int:
+    """Retry enrichment of stored clusters without another model call or source edits."""
+    from psycopg2.extras import RealDictCursor
+
+    if lemma_id is None and limit is None:
+        limit = 3
+
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        where = "pc.lemma_id = %s" if lemma_id is not None else """
+            NOT EXISTS (SELECT 1 FROM place_cluster_candidates c WHERE c.place_cluster_id=pc.id)
+        """
+        params = [lemma_id] if lemma_id is not None else []
+        limit_sql = "LIMIT %s" if limit is not None else ""
+        if limit is not None:
+            params.append(limit)
+        cur.execute(f"""SELECT pc.*, a.lemma AS headword FROM place_clusters pc
+            JOIN assembled_lemmas a ON a.id=pc.lemma_id
+            WHERE {where} AND pc.human_resolution_status IS NULL
+            ORDER BY pc.id {limit_sql}""", params)
+        rows = [dict(row) for row in cur.fetchall()]
+    conn.rollback()
+    failures = 0
+    for cluster in rows:
+        if has_human_cluster_edits(cluster):
+            print(f"  cluster {cluster['id']}: preserved human edits")
+            continue
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM place_cluster_mentions WHERE place_cluster_id=%s ORDER BY mention_order", (cluster['id'],))
+                cluster['mentions'] = [dict(row) for row in cur.fetchall()]
+            conn.rollback()
+            record = build_cluster_records(cluster['headword'], [cluster])[0]
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM place_clusters WHERE id=%s FOR UPDATE", (cluster['id'],))
+                current = cur.fetchone()
+                if not current or has_human_cluster_edits(dict(current)) or current['updated_at'] != cluster['updated_at']:
+                    conn.rollback()
+                    print(f"  cluster {cluster['id']}: changed during lookup; preserved")
+                    continue
+                fields = tuple(preferred_machine_choice([]))
+                cur.execute("UPDATE place_clusters SET " + ', '.join(f'{field}=%s' for field in fields)
+                            + ", updated_at=NOW() WHERE id=%s",
+                            [record[field] or None for field in fields] + [cluster['id']])
+                save_cluster_candidates(cur, cluster['id'], record['candidates'])
+            if dry_run:
+                conn.rollback()
+            else:
+                conn.commit()
+            print(f"  cluster {cluster['id']}: {'dry run, ' if dry_run else ''}{len(record['candidates'])} candidates, {record['resolution_status']}")
+        except Exception as exc:
+            conn.rollback()
+            failures += 1
+            print(f"  cluster {cluster['id']}: lookup pending ({exc})")
+    return 1 if failures else 0
+
+
 def main() -> int:
+    from db import get_connection
     parser = argparse.ArgumentParser(description="Extract per-lemma place clusters for named-entity review.")
     parser.add_argument("--limit", type=int, default=None, help="Legacy alias for --daily-limit")
     parser.add_argument("--daily-limit", type=int, default=None, help="Maximum number of lemmas to process in this run")
@@ -315,6 +376,8 @@ def main() -> int:
     parser.add_argument("--lemma-id", type=int, default=None, help="Process a single lemma ID")
     parser.add_argument("--model", default="gpt-5.6-luna", help="OpenAI model to use for extraction")
     parser.add_argument("--delay", type=float, default=0.0, help="Delay between lemmas")
+    parser.add_argument("--refresh-candidates", action="store_true", help="Retry Wikidata on stored clusters without model calls; preserves human edits")
+    parser.add_argument("--dry-run", action="store_true", help="With --refresh-candidates, roll back candidate changes")
     parser.add_argument(
         "--rebuild",
         action="store_true",
@@ -322,6 +385,16 @@ def main() -> int:
     )
     args = parser.parse_args()
     effective_limit = args.daily_limit if args.daily_limit is not None else args.limit
+
+    if args.refresh_candidates:
+        conn = get_connection()
+        try:
+            return refresh_cluster_candidates(conn, lemma_id=args.lemma_id,
+                limit=effective_limit, dry_run=args.dry_run)
+        finally:
+            conn.close()
+    if args.dry_run:
+        parser.error("--dry-run requires --refresh-candidates")
 
     api_key = load_api_key()
     client = OpenAI(api_key=api_key)

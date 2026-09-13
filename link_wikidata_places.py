@@ -21,6 +21,7 @@ import os
 import time
 import re
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import requests
 from openai import OpenAI
@@ -123,24 +124,81 @@ ANCIENT_WORLD_BOUNDS = {
 }
 
 RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+WIKIDATA_USER_AGENT = "StephanosProject/1.1 (https://stephanos.symmachus.org/; ancient geography research)"
+_next_request_at = 0.0
+_cooldown_until = 0.0
+_response_cache = {}
+
+
+def retry_after_seconds(value: str | None) -> float:
+    """Accept both forms of Retry-After without shortening a server cooldown."""
+    if not value:
+        return 0.0
+    try:
+        return max(0.0, float(int(value)))
+    except ValueError:
+        try:
+            when = parsedate_to_datetime(value)
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
 
 
 def get_with_retries(url: str, *, params: dict, headers: dict, timeout: int, attempts: int = 3):
-    last_exc = None
+    """Pace every request, cache successes and leave unavailable lookups pending.
+
+    A long Retry-After defers this worker instead of sleeping beyond a minute.
+    The cooldown also applies to later requests in the same process.
+    """
+    global _next_request_at, _cooldown_until
+    if attempts < 1:
+        raise ValueError("attempts must be positive")
+    params = dict(params)
+    if params.get("action"):
+        params.setdefault("maxlag", 5)
+    headers = {**headers, "User-Agent": WIKIDATA_USER_AGENT}
+    key = (url, json.dumps(params, sort_keys=True), json.dumps(headers, sort_keys=True))
+    if key in _response_cache:
+        return _response_cache[key]
     for attempt in range(1, attempts + 1):
+        wait = max(_next_request_at, _cooldown_until) - time.monotonic()
+        if wait > 60:
+            raise requests.RequestException(f"Wikidata lookup deferred: retry after {wait:.0f} seconds")
+        if wait > 0:
+            time.sleep(wait)
+        _next_request_at = time.monotonic() + 1.0
+        response = None
+        api_code = None
         try:
             response = requests.get(url, params=params, headers=headers, timeout=timeout)
             response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Wikidata response is not a JSON object")
+            if "error" in payload:
+                api_code = payload["error"].get("code")
+                raise requests.RequestException(f"Wikidata API error: {api_code}", response=response)
+            if len(_response_cache) >= 256:
+                _response_cache.clear()
+            _response_cache[key] = response
             return response
         except requests.RequestException as exc:
-            last_exc = exc
             status_code = getattr(getattr(exc, "response", None), "status_code", None)
-            if status_code not in RETRYABLE_HTTP_STATUS_CODES or attempt >= attempts:
+            retryable = (
+                status_code in RETRYABLE_HTTP_STATUS_CODES
+                or api_code in {"maxlag", "ratelimited"}
+                or isinstance(exc, (requests.Timeout, requests.ConnectionError))
+            )
+            if not retryable:
                 raise
-            time.sleep(0.75 * attempt)
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError("Retry helper exhausted without a response")
+            delay = max(5.0 * 2 ** (attempt - 1), retry_after_seconds(
+                response.headers.get("Retry-After") if response is not None else None
+            ))
+            _cooldown_until = max(_cooldown_until, time.monotonic() + delay)
+            if attempt >= attempts or delay > 60:
+                raise
 
 
 def is_within_ancient_world(lat: float, lon: float) -> bool:
@@ -420,9 +478,8 @@ def query_wikidata_places(name_greek: str, name_english: str = None) -> list:
                 candidates.append(data)
 
         except Exception as e:
-            print(f"  Warning: Wikidata query failed for '{term}': {e}")
-
-        time.sleep(0.3)  # Rate limit
+            # Partial searches are not evidence that a place has no candidates.
+            raise RuntimeError(f"Wikidata lookup incomplete for {term!r}: {e}") from e
 
     # Sort: ancient places first, then by presence of coordinates
     candidates.sort(key=lambda x: (

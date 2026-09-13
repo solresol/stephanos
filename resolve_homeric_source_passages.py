@@ -22,11 +22,11 @@ from xml.etree import ElementTree
 import requests
 from bs4 import BeautifulSoup
 
-from db import get_connection
+from perseus_homer import CanonicalHomer
 
 
-RESOLVER_VERSION = "homeric_source_passages_v1"
-PERSEUS_CTS_URL = "http://www.perseus.tufts.edu/hopper/CTS"
+RESOLVER_VERSION = "homeric_source_passages_v2"
+PERSEUS_CTS_URL = "https://www.perseus.tufts.edu/hopper/CTS"
 PERSEUS_TEXT_URL = "https://www.perseus.tufts.edu/hopper/text"
 SCAIFE_READER_BASE = "https://scaife.perseus.org/reader/"
 
@@ -238,6 +238,47 @@ def fetch_perseus_translation(ref: HomericRef, *, timeout: int = 30) -> str:
     return text
 
 
+class HomericFetcher:
+    """Avoid duplicate failures and fall back to explicitly identified source XML."""
+
+    def __init__(self):
+        self.cache = {}
+        self.hopper_available = True
+        self.canonical = CanonicalHomer()
+
+    def fetch(self, ref: HomericRef) -> dict:
+        urn = build_cts_urn(ref)
+        if urn not in self.cache:
+            try:
+                result = None
+                if self.hopper_available:
+                    try:
+                        greek = fetch_perseus_cts_line(urn, timeout=10)
+                        english = fetch_perseus_translation(ref, timeout=10)
+                        result = {
+                            "cts_urn": urn, "greek_text": greek, "translation_text": english,
+                            "translation_source": HOMER_WORKS[ref.work_key]["translation_source"],
+                            "translation_url": build_perseus_translation_url(ref),
+                            "retrieval": {"provider": "Perseus Hopper", "cts_url": PERSEUS_CTS_URL},
+                            "note": "Greek passage is the exact Perseus CTS line; English is the surrounding Murray translation card.",
+                        }
+                    except requests.RequestException as exc:
+                        self.hopper_available = False
+                        print(f"  Perseus Hopper unavailable ({type(exc).__name__}); using the versioned Perseus source repository.", flush=True)
+                    except (RuntimeError, ElementTree.ParseError):
+                        # A malformed or missing passage can still exist in the source XML.
+                        pass
+                if result is None:
+                    result = self.canonical.fetch(ref.work_key, ref.book, ref.line)
+                self.cache[urn] = result
+            except Exception as exc:
+                self.cache[urn] = exc
+        result = self.cache[urn]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
 def ensure_required_tables(cur) -> None:
     required = [
         "source_citation_units",
@@ -327,6 +368,8 @@ def upsert_passage(
     match_status: str,
     match_confidence: str,
     evidence: dict,
+    translation_source: str | None = None,
+    translation_url: str | None = None,
 ) -> None:
     (
         mention_id,
@@ -401,11 +444,11 @@ def upsert_passage(
             ref.passage_ref,
             cts_urn,
             build_scaife_url(cts_urn),
-            build_perseus_translation_url(ref),
+            translation_url or build_perseus_translation_url(ref),
             quote_text,
             greek_text,
             translation_text,
-            work["translation_source"],
+            translation_source or work["translation_source"],
             match_status,
             match_confidence,
             json.dumps(evidence, ensure_ascii=False),
@@ -426,6 +469,7 @@ def parse_identifiers(identifiers_json: str) -> list[str]:
 
 
 def main() -> None:
+    from db import get_connection
     parser = argparse.ArgumentParser(description="Resolve explicit Homeric source citations to source passages.")
     parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--lemma-id", type=int, help="Process only one lemma")
@@ -454,6 +498,7 @@ def main() -> None:
 
     print(f"Homeric source mentions selected: {len(rows)}", flush=True)
     resolved = skipped = failed = 0
+    fetcher = HomericFetcher()
     for row in rows:
         (
             mention_id,
@@ -478,8 +523,7 @@ def main() -> None:
         for ref in refs:
             cts_urn = build_cts_urn(ref)
             try:
-                greek_text = fetch_perseus_cts_line(cts_urn)
-                translation_text = fetch_perseus_translation(ref)
+                passage = fetcher.fetch(ref)
                 evidence = {
                     "parsed_ref": {
                         "work": ref.work_key,
@@ -488,15 +532,17 @@ def main() -> None:
                         "raw": ref.raw,
                     },
                     "retrieval": {
-                        "cts_urn": cts_urn,
-                        "perseus_translation_url": build_perseus_translation_url(ref),
-                        "scaife_url": build_scaife_url(cts_urn),
+                        **passage["retrieval"],
+                        "requested_cts_urn": cts_urn,
+                        "cts_urn": passage["cts_urn"],
+                        "perseus_translation_url": passage["translation_url"],
+                        "scaife_url": build_scaife_url(passage["cts_urn"]),
                     },
-                    "note": "Greek passage is the exact Perseus CTS line; English passage is the surrounding Perseus Hopper translation card.",
+                    "note": passage["note"],
                 }
                 if args.dry_run:
                     print(
-                        f"  mention {mention_id}: {HOMER_WORKS[ref.work_key]['title']} {ref.passage_ref} -> {cts_urn}",
+                        f"  mention {mention_id}: {HOMER_WORKS[ref.work_key]['title']} {ref.passage_ref} -> {passage['cts_urn']}",
                         flush=True,
                     )
                 else:
@@ -504,9 +550,11 @@ def main() -> None:
                         cur,
                         mention_row=row,
                         ref=ref,
-                        cts_urn=cts_urn,
-                        greek_text=greek_text,
-                        translation_text=translation_text,
+                        cts_urn=passage["cts_urn"],
+                        greek_text=passage["greek_text"],
+                        translation_text=passage["translation_text"],
+                        translation_source=passage["translation_source"],
+                        translation_url=passage["translation_url"],
                         match_status="resolved",
                         match_confidence="high",
                         evidence=evidence,
