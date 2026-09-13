@@ -15,6 +15,9 @@ SSH_OPTS=(-o ServerAliveInterval=30 -o ServerAliveCountMax=20)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 SOURCE_FILES=(
+    "grammar.go"
+    "grammar_store.go"
+    "grammar_review_schema.sql"
     "common.go"
     "guidance_common.go"
     "page.go"
@@ -63,6 +66,9 @@ ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "
     '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o guidance_urgent_worker guidance_urgent_worker.go common.go guidance_common.go guidance_urgent_common.go
     '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o save.cgi save.go common.go guidance_common.go guidance_urgent_common.go
     '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o status.cgi status.go common.go guidance_common.go
+    '$REMOTE_GO' build -ldflags '-linkmode external -extldflags -static' -o grammar.cgi grammar.go grammar_store.go site_nav.go
+    install -m 755 grammar.cgi '$REMOTE_CGI_DIR/grammar.cgi'
+    install -m 755 grammar.cgi '$REMOTE_PUBLIC_CGI_DIR/grammar.cgi'
     install -m 755 review.cgi '$REMOTE_CGI_DIR/review.cgi'
     install -m 755 entities.cgi '$REMOTE_CGI_DIR/entities.cgi'
     install -m 755 guidance.cgi '$REMOTE_CGI_DIR/guidance.cgi'

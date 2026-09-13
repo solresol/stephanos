@@ -1,0 +1,1445 @@
+{
+  "schema": "stephanos_grammar_worked_pilot_v1",
+  "created_date": "2026-09-09",
+  "status": "unreviewed_worked_examples",
+  "author": "Codex, current task",
+  "corpus": "paper_kappa_review",
+  "source_file": "data/kappa_review/final-kappa-translation-review.rows.jsonl",
+  "selection": "Five purposefully selected excerpts from five of the frozen 100 tracker entries; not a random sample and not five complete entry parses.",
+  "evaluation_note": "The gold reference is an approved translation, not a gold grammatical annotation. Existing tracker translation comments for entries 1–3 were visible during source inspection. This is an informed worked demonstration, not a blind accuracy evaluation.",
+  "conventions": [
+    "Surface word forms preserve source spelling, accents and elision marks. Source line breaks are collapsed only for the displayed passage; punctuation-only tokens are omitted.",
+    "Each token has a lemma, UPOS, human-readable morphology in xpos, Greek-specific feats, head and UD-like deprel. A root has head 0. Local relation subtypes are explanatory, not a claim of strict UD treebank compliance.",
+    "Tense values Pres, Aor and Perf explicitly name Greek present, aorist and perfect. Voice gives the contextual interpretation; notes retain middle/passive morphological ambiguity where relevant.",
+    "Nominal predicates head their copulas. Elliptical clauses may promote an expressed noun; absent verbs, kinship nouns and participants are discussed rather than inserted.",
+    "Confidence is qualitative self-assessment of the combined analysis, not a measured probability. Alternative attachments are recorded where the text does not settle the choice.",
+    "Corpus membership was checked against the current read-only database selector, which returned 100 entries. The parsed text is explicitly the frozen tracker export; no claim of identity with every current edition-specific source version is made.",
+    "No database grammar analyses, approval flags or gold references were created or changed."
+  ],
+  "passages": [
+    {
+      "entry_number": 1,
+      "title": "Καβαλίς — a reported statement crossing a full stop",
+      "literal_translation": "Alexander the polymath, however, gives the feminine as Kabalissa, and says that she is Olbian by descent.",
+      "sentence_note": "φησὶ governs the naming construction and the ensuing accusative-and-infinitive statement. The printed full stop before εἶναι does not cancel that dependence. The latter clause has αὐτήν as its accusative subject, Ὀλβίαν as predicate, and τὸ γένος as an accusative of respect.",
+      "observations": [
+        "εἶναι is a present active infinitive, not an independent finite verb. Its reporting verb is φησὶ in the preceding printed sentence.",
+        "αὐτήν and Ὀλβίαν are feminine accusative singular. The parse preserves that singular even if an idiomatic English translation generalises to a people.",
+        "τὸ γένος means 'with respect to descent'; it is neither the subject of εἶναι nor an object of that copula."
+      ],
+      "uncertainties": [
+        "The exact referent of αὐτήν remains uncertain: the city or a female bearer of the ethnic designation. The morphology and reported-statement construction are clearer than the referent.",
+        "Καβάλισσαν … τὸ θηλυκόν is encoded as object plus naming predicate under φησὶ. An analysis supplying an unexpressed εἶναι would encode its dependencies differently. No absent word has been inserted.",
+        "The second content clause is attached directly to φησὶ; a treebank could instead coordinate it with the first complement."
+      ],
+      "tokens": [
+        {
+          "form": "ὁ",
+          "lemma": "ὁ",
+          "upos": "DET",
+          "xpos": "article; nominative masculine singular",
+          "feats": {
+            "Case": "Nom",
+            "Gender": "Masc",
+            "Number": "Sing",
+            "PronType": "Art"
+          },
+          "head": "4",
+          "deprel": "det",
+          "role": "Article of the subject phrase.",
+          "confidence": "high",
+          "note": "",
+          "id": "1"
+        },
+        {
+          "form": "δὲ",
+          "lemma": "δέ",
+          "upos": "CCONJ",
+          "xpos": "postpositive connective",
+          "feats": {},
+          "head": "6",
+          "deprel": "cc",
+          "role": "Links Alexander's report with the preceding account.",
+          "confidence": "high",
+          "note": "",
+          "id": "2"
+        },
+        {
+          "form": "πολυίστωρ",
+          "lemma": "πολύιστωρ",
+          "upos": "ADJ",
+          "xpos": "adjective used as epithet; nominative masculine singular",
+          "feats": {
+            "Case": "Nom",
+            "Gender": "Masc",
+            "Number": "Sing"
+          },
+          "head": "4",
+          "deprel": "amod",
+          "role": "Describes Alexander as the polymath.",
+          "confidence": "high",
+          "note": "",
+          "id": "3"
+        },
+        {
+          "form": "Ἀλέξανδρος",
+          "lemma": "Ἀλέξανδρος",
+          "upos": "PROPN",
+          "xpos": "proper noun; nominative masculine singular",
+          "feats": {
+            "Case": "Nom",
+            "Gender": "Masc",
+            "Number": "Sing"
+          },
+          "head": "6",
+          "deprel": "nsubj",
+          "role": "Subject of φησί.",
+          "confidence": "high",
+          "note": "",
+          "id": "4"
+        },
+        {
+          "form": "Καβάλισσαν",
+          "lemma": "Καβάλισσα",
+          "upos": "PROPN",
+          "xpos": "feminine ethnic designation; accusative singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Fem",
+            "Number": "Sing"
+          },
+          "head": "6",
+          "deprel": "xcomp",
+          "role": "Naming predicate: the feminine form given.",
+          "confidence": "medium",
+          "note": "Accusative of a quoted ethnic designation; object-plus-predicate analysis is a working choice.",
+          "id": "5"
+        },
+        {
+          "form": "φησὶ",
+          "lemma": "φημί",
+          "upos": "VERB",
+          "xpos": "present active indicative; third singular",
+          "feats": {
+            "Mood": "Ind",
+            "Number": "Sing",
+            "Person": "3",
+            "Tense": "Pres",
+            "VerbForm": "Fin",
+            "Voice": "Act"
+          },
+          "head": "0",
+          "deprel": "root",
+          "role": "Reporting verb for both constructions.",
+          "confidence": "high",
+          "note": "",
+          "id": "6"
+        },
+        {
+          "form": "τὸ",
+          "lemma": "ὁ",
+          "upos": "DET",
+          "xpos": "article; accusative neuter singular in this analysis",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Neut",
+            "Number": "Sing",
+            "PronType": "Art"
+          },
+          "head": "8",
+          "deprel": "det",
+          "role": "Article substantivising θηλυκόν.",
+          "confidence": "medium",
+          "note": "The visible neuter form is nominative/accusative syncretic.",
+          "id": "7"
+        },
+        {
+          "form": "θηλυκόν",
+          "lemma": "θηλυκός",
+          "upos": "ADJ",
+          "xpos": "substantivised adjective; accusative neuter singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Neut",
+            "Number": "Sing"
+          },
+          "head": "6",
+          "deprel": "obj",
+          "role": "The feminine form, as object of the naming construction.",
+          "confidence": "medium",
+          "note": "Accusative is syntactically inferred; the form could also be nominative in isolation.",
+          "id": "8"
+        },
+        {
+          "form": "εἶναι",
+          "lemma": "εἰμί",
+          "upos": "AUX",
+          "xpos": "present active infinitive",
+          "feats": {
+            "Tense": "Pres",
+            "VerbForm": "Inf",
+            "Voice": "Act"
+          },
+          "head": "14",
+          "deprel": "cop",
+          "role": "Copula of the indirect statement.",
+          "confidence": "high",
+          "note": "",
+          "id": "9"
+        },
+        {
+          "form": "δὲ",
+          "lemma": "δέ",
+          "upos": "CCONJ",
+          "xpos": "postpositive connective",
+          "feats": {},
+          "head": "14",
+          "deprel": "cc",
+          "role": "Adds the further reported statement.",
+          "confidence": "high",
+          "note": "",
+          "id": "10"
+        },
+        {
+          "form": "τὸ",
+          "lemma": "ὁ",
+          "upos": "DET",
+          "xpos": "article; accusative neuter singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Neut",
+            "Number": "Sing",
+            "PronType": "Art"
+          },
+          "head": "12",
+          "deprel": "det",
+          "role": "Article of the accusative of respect.",
+          "confidence": "high",
+          "note": "",
+          "id": "11"
+        },
+        {
+          "form": "γένος",
+          "lemma": "γένος",
+          "upos": "NOUN",
+          "xpos": "noun; accusative neuter singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Neut",
+            "Number": "Sing"
+          },
+          "head": "14",
+          "deprel": "obl:respect",
+          "role": "Limits 'Olbian' to descent or origin.",
+          "confidence": "high",
+          "note": "",
+          "id": "12"
+        },
+        {
+          "form": "αὐτὴν",
+          "lemma": "αὐτός",
+          "upos": "PRON",
+          "xpos": "anaphoric pronoun; accusative feminine singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Fem",
+            "Number": "Sing",
+            "Person": "3",
+            "PronType": "Prs"
+          },
+          "head": "14",
+          "deprel": "nsubj",
+          "role": "Accusative subject of εἶναι.",
+          "confidence": "high",
+          "note": "Antecedent uncertain; case, gender and number are clear.",
+          "id": "13"
+        },
+        {
+          "form": "Ὀλβίαν",
+          "lemma": "Ὄλβιος",
+          "upos": "ADJ",
+          "xpos": "ethnic adjective; accusative feminine singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Fem",
+            "Number": "Sing"
+          },
+          "head": "6",
+          "deprel": "ccomp",
+          "role": "Predicate of the reported statement, agreeing with αὐτήν.",
+          "confidence": "medium",
+          "note": "Parsed as the ethnic adjective 'Olbian'; whether the city or a female inhabitant is meant remains open.",
+          "id": "14"
+        }
+      ],
+      "text": "ὁ δὲ πολυίστωρ Ἀλέξανδρος Καβάλισσαν φησὶ τὸ θηλυκόν. εἶναι δὲ τὸ γένος αὐτὴν Ὀλβίαν.",
+      "source": {
+        "tracker_row_id": 1,
+        "tracker_visual_order": 1,
+        "jsonl_line": 1,
+        "tracker_headword": "Καβαλίς",
+        "full_entry_greek": "Καβαλίς, πόλις πλησίον Κιβύρας πρὸς νότον\nΜαιάνδρου. [Στράβων τρισκαιδεκάτῃ.] ἡ γενικὴ\nΚαβαλίδος. ὁ πολίτης Καβαλεύς. Ἑκαταῖος Ἀσίᾳ. καὶ\nθηλυκῶς, ὡς Στράβων ἐν τῇ εἰρημένῃ “ἀπόγονοι δὲ\nΛυδῶν οἱ Κιβυρᾶται τῶν κατασχόντων τὴν Καβαλίδα”.\nὁ δὲ πολυίστωρ Ἀλέξανδρος Καβάλισσαν φησὶ τὸ\nθηλυκόν. εἶναι δὲ τὸ γένος αὐτὴν Ὀλβίαν.",
+        "full_entry_greek_sha256": "a228f82661e05d401d0015e1bd0fa1ec4ee8f8c8bbafafb3af14a08343ade249",
+        "normalized_excerpt_char_start": 235,
+        "normalized_excerpt_char_end": 320,
+        "excerpt_sha256": "431fde8f043119033885be6630a80d8a4ae084ec54da2c98f9e7ea810dca98ca",
+        "database_membership": {
+          "entry_number": 1,
+          "lemma_id": 2054,
+          "corpus_order": 1,
+          "kappa_review_row_id": 101,
+          "human_translation_id": 46
+        }
+      }
+    },
+    {
+      "entry_number": 2,
+      "title": "Καβασσός — an accusative-and-infinitive statement with a traveller's dative",
+      "literal_translation": "Hekataios the Milesian says that Kabessos is a city on the far side of Thracian Haimos for someone who has crossed it.",
+      "sentence_note": "Ἑκαταῖος is the subject of φησιν; Καβησσόν is the accusative subject and πόλιν the accusative predicate of εἶναι. ὑπερβάντι introduces the perspective of an unspecified traveller, with τὸν Θρᾴκιον Αἷμον as its object.",
+      "observations": [
+        "ὑπερβάντι is the second-aorist active participle of ὑπερβαίνω, dative masculine singular in context: 'for someone who has crossed'.",
+        "It does not agree with Καβησσόν or πόλιν, both accusative feminine singular. Its implicit human participant is separate from the city.",
+        "Smyth §1497 gives a close structural parallel with διαβάντι τὸν ποταμόν, a road described from the perspective of someone who has crossed a river. This supports the present interpretation without requiring an emendation."
+      ],
+      "references": [
+        {
+          "title": "Smyth, Greek Grammar §1497: the dative participle of a person observing",
+          "url": "https://www.perseus.tufts.edu/hopper/text?doc=Perseus%3Atext%3A1999.04.0007%3Apart%3D4%3Achapter%3D42%3Asection%3D96"
+        }
+      ],
+      "uncertainties": [
+        "The dative participle can be represented as a nominal oblique or as an adverbial participial clause. The working tree uses obl on the reported predicate πόλιν.",
+        "The form ὑπερβάντι is masculine/neuter syncretic; masculine is the contextual analysis of the implicit traveller.",
+        "Grammar alone does not determine whether the geographical wording is a direct quotation embedded in indirect discourse."
+      ],
+      "tokens": [
+        {
+          "form": "Ἑκαταῖος",
+          "lemma": "Ἑκαταῖος",
+          "upos": "PROPN",
+          "xpos": "proper noun; nominative masculine singular",
+          "feats": {
+            "Case": "Nom",
+            "Gender": "Masc",
+            "Number": "Sing"
+          },
+          "head": "8",
+          "deprel": "nsubj",
+          "role": "Subject of φησιν.",
+          "confidence": "high",
+          "note": "",
+          "id": "1"
+        },
+        {
+          "form": "δ´",
+          "lemma": "δέ",
+          "upos": "CCONJ",
+          "xpos": "elided postpositive connective",
+          "feats": {},
+          "head": "8",
+          "deprel": "cc",
+          "role": "Links this report to the previous citation.",
+          "confidence": "high",
+          "note": "The source's acute-shaped elision mark is preserved.",
+          "id": "2"
+        },
+        {
+          "form": "ὁ",
+          "lemma": "ὁ",
+          "upos": "DET",
+          "xpos": "article; nominative masculine singular",
+          "feats": {
+            "Case": "Nom",
+            "Gender": "Masc",
+            "Number": "Sing",
+            "PronType": "Art"
+          },
+          "head": "4",
+          "deprel": "det",
+          "role": "Introduces the attributive ethnic.",
+          "confidence": "high",
+          "note": "",
+          "id": "3"
+        },
+        {
+          "form": "Μιλήσιος",
+          "lemma": "Μιλήσιος",
+          "upos": "ADJ",
+          "xpos": "ethnic adjective; nominative masculine singular",
+          "feats": {
+            "Case": "Nom",
+            "Gender": "Masc",
+            "Number": "Sing"
+          },
+          "head": "1",
+          "deprel": "amod",
+          "role": "Identifies Hekataios as Milesian.",
+          "confidence": "high",
+          "note": "",
+          "id": "4"
+        },
+        {
+          "form": "Καβησσὸν",
+          "lemma": "Καβησσός",
+          "upos": "PROPN",
+          "xpos": "city name; accusative feminine singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Fem",
+            "Number": "Sing"
+          },
+          "head": "6",
+          "deprel": "nsubj",
+          "role": "Subject of the infinitival statement.",
+          "confidence": "high",
+          "note": "Feminine city name despite the -ος/-ον ending.",
+          "id": "5"
+        },
+        {
+          "form": "πόλιν",
+          "lemma": "πόλις",
+          "upos": "NOUN",
+          "xpos": "noun; accusative feminine singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Fem",
+            "Number": "Sing"
+          },
+          "head": "8",
+          "deprel": "ccomp",
+          "role": "Predicate of the indirect statement.",
+          "confidence": "high",
+          "note": "",
+          "id": "6"
+        },
+        {
+          "form": "εἶναί",
+          "lemma": "εἰμί",
+          "upos": "AUX",
+          "xpos": "present active infinitive",
+          "feats": {
+            "Tense": "Pres",
+            "VerbForm": "Inf",
+            "Voice": "Act"
+          },
+          "head": "6",
+          "deprel": "cop",
+          "role": "Copula linking Καβησσόν and πόλιν.",
+          "confidence": "high",
+          "note": "Additional accent before enclitic φησιν does not change the lemma.",
+          "id": "7"
+        },
+        {
+          "form": "φησιν",
+          "lemma": "φημί",
+          "upos": "VERB",
+          "xpos": "present active indicative; third singular",
+          "feats": {
+            "Mood": "Ind",
+            "Number": "Sing",
+            "Person": "3",
+            "Tense": "Pres",
+            "VerbForm": "Fin",
+            "Voice": "Act"
+          },
+          "head": "0",
+          "deprel": "root",
+          "role": "Reporting verb.",
+          "confidence": "high",
+          "note": "",
+          "id": "8"
+        },
+        {
+          "form": "ὑπερβάντι",
+          "lemma": "ὑπερβαίνω",
+          "upos": "VERB",
+          "xpos": "second-aorist active participle; dative masculine singular",
+          "feats": {
+            "Case": "Dat",
+            "Gender": "Masc",
+            "Number": "Sing",
+            "Tense": "Aor",
+            "VerbForm": "Part",
+            "Voice": "Act"
+          },
+          "head": "6",
+          "deprel": "obl",
+          "role": "Dative of the traveller's perspective.",
+          "confidence": "medium",
+          "note": "The aorist presents the crossing as completed relative to locating the city.",
+          "id": "9"
+        },
+        {
+          "form": "τὸν",
+          "lemma": "ὁ",
+          "upos": "DET",
+          "xpos": "article; accusative masculine singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Masc",
+            "Number": "Sing",
+            "PronType": "Art"
+          },
+          "head": "12",
+          "deprel": "det",
+          "role": "Article of Αἷμον.",
+          "confidence": "high",
+          "note": "",
+          "id": "10"
+        },
+        {
+          "form": "Θρᾴκιον",
+          "lemma": "Θρᾴκιος",
+          "upos": "ADJ",
+          "xpos": "adjective; accusative masculine singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Masc",
+            "Number": "Sing"
+          },
+          "head": "12",
+          "deprel": "amod",
+          "role": "Modifies the mountain name.",
+          "confidence": "high",
+          "note": "",
+          "id": "11"
+        },
+        {
+          "form": "Αἷμον",
+          "lemma": "Αἷμος",
+          "upos": "PROPN",
+          "xpos": "mountain name; accusative masculine singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Masc",
+            "Number": "Sing"
+          },
+          "head": "9",
+          "deprel": "obj",
+          "role": "Object of crossing.",
+          "confidence": "high",
+          "note": "",
+          "id": "12"
+        }
+      ],
+      "text": "Ἑκαταῖος δ´ ὁ Μιλήσιος Καβησσὸν πόλιν εἶναί φησιν ὑπερβάντι τὸν Θρᾴκιον Αἷμον.",
+      "source": {
+        "tracker_row_id": 2,
+        "tracker_visual_order": 2,
+        "jsonl_line": 2,
+        "tracker_headword": "Καβασσός",
+        "full_entry_greek": "Καβασσός, πόλις ἐν Καππαδοκίᾳ, πατρὶς Ὀθρυονέως.\nὍμηρος “Καβησσόθεν ἔνδον ἐόντα”. Ἑκαταῖος δ´ ὁ\nΜιλήσιος Καβησσὸν πόλιν εἶναί φησιν ὑπερβάντι τὸν\nΘρᾴκιον Αἷμον. καὶ συμφωνεῖ καὶ ἡ τοῦ γάμου ἐλπὶς\nτῶν Θρᾳκῶν ἀκολασίᾳ. Ἑλλάνικος δὲ τῆς Λυκίας\nπόλιν Καβησσόν. Ἀπίων δὲ ἀληθέστερόν φησι κώμην\nεἶναι Καππαδοκίας μεταξὺ Ταρσοῦ καὶ Μαζάκων.\nΜάζακα δὲ ἡ Καππαδοκίας ἐκαλεῖτο Καισάρεια.\nἐθνικῶς ἀρκεῖ τὸ Ὁμηρικὸν Καβησσόθεν. πολλὰ γὰρ\nτοιαῦτα, ὡς τὸ Καμειρόθεν, τὰ τοπικὰ ἐθνικῶς.\nδύναται δὲ Καβήσσιος ἢ Καβησσίτης.",
+        "full_entry_greek_sha256": "2f1447d32daa5c648a0962e7ad294d875f4735df373cc842c41c570f8bec7daa",
+        "normalized_excerpt_char_start": 82,
+        "normalized_excerpt_char_end": 160,
+        "excerpt_sha256": "a264633f7e2730d225708ce695d3a2f4961ad055a13e5e58967880eb9c842d19",
+        "database_membership": {
+          "entry_number": 2,
+          "lemma_id": 2055,
+          "corpus_order": 2,
+          "kappa_review_row_id": 102,
+          "human_translation_id": 121
+        }
+      }
+    },
+    {
+      "entry_number": 3,
+      "title": "Καβειρία — a contracted feminine genitive and elliptical parentage",
+      "literal_translation": "And the nymphs [are called] Kabeirides, from Kabeiro, [daughter] of Proteus and Anchinoe, from whom and Hephaistos [came] Kadmilos.",
+      "sentence_note": "The nominal wording names the nymphs and gives an origin. Καβειροῦς is genitive feminine singular from Καβειρώ, governed by ἀπό. The parentage phrase with τῆς is elliptical. A further elliptical relative clause concerns Kadmilos.",
+      "observations": [
+        "Καβειροῦς is not a masculine genitive of a name in -ος. The contracted feminine paradigm in -ώ and the following feminine article τῆς support Καβειρώ.",
+        "Πρωτέως and Ἀγχινόης are coordinated genitives specifying Kabeiro's parentage. '[Daughter]' makes the English relationship explicit but is not a visible Greek token.",
+        "The preferred parse treats ἧς καὶ Ἡφαίστου as coordinated sources under ἀπό: 'from whom and Hephaistos'. A second defensible parse treats καί as 'also' and Ἡφαίστου as a parentage genitive with Κάδμιλος. Both preserve the parentage; their dependencies differ."
+      ],
+      "references": [
+        {
+          "title": "LSJ, πειθώ: the comparable -ώ / -οῦς contracted feminine paradigm",
+          "url": "https://atlas.perseus.tufts.edu/dictionaries/entry/urn%3Acite2%3Ascaife-viewer%3Adictionaries.v1%3Alsj-n80328/"
+        }
+      ],
+      "uncertainties": [
+        "No verb is expressed in either nominal clause. The first tree uses Καβειρίδες as a nominal predicate; an existential analysis with apposition is also possible.",
+        "τῆς introduces an elliptical parentage phrase. The tree attaches it to Καβειροῦς as a resumptive attributive article and attaches the parent genitives to that name. A scheme with empty nodes for an omitted kinship noun would differ.",
+        "The coordination-versus-additive reading of καὶ Ἡφαίστου remains open. The alternative attachments are recorded explicitly."
+      ],
+      "alternative_dependencies": [
+        {
+          "description": "Additive καί and a parentage genitive attached to Kadmilos",
+          "changes": [
+            {
+              "token_id": "12",
+              "head": "14",
+              "deprel": "advmod"
+            },
+            {
+              "token_id": "13",
+              "head": "14",
+              "deprel": "nmod:poss"
+            }
+          ]
+        }
+      ],
+      "tokens": [
+        {
+          "form": "καὶ",
+          "lemma": "καί",
+          "upos": "CCONJ",
+          "xpos": "additive connective",
+          "feats": {},
+          "head": "3",
+          "deprel": "cc",
+          "role": "Continues the sequence of derived names.",
+          "confidence": "high",
+          "note": "",
+          "id": "1"
+        },
+        {
+          "form": "νύμφαι",
+          "lemma": "νύμφη",
+          "upos": "NOUN",
+          "xpos": "noun; nominative feminine plural",
+          "feats": {
+            "Case": "Nom",
+            "Gender": "Fem",
+            "Number": "Plur"
+          },
+          "head": "3",
+          "deprel": "nsubj",
+          "role": "Nymphs bearing the designation.",
+          "confidence": "medium",
+          "note": "Working nominal-predicate analysis; an appositional parse is also possible.",
+          "id": "2"
+        },
+        {
+          "form": "Καβειρίδες",
+          "lemma": "Καβειρίς",
+          "upos": "PROPN",
+          "xpos": "group designation; nominative feminine plural",
+          "feats": {
+            "Case": "Nom",
+            "Gender": "Fem",
+            "Number": "Plur"
+          },
+          "head": "0",
+          "deprel": "root",
+          "role": "Designation Kabeirides.",
+          "confidence": "medium",
+          "note": "No finite verb or copula appears in the Greek.",
+          "id": "3"
+        },
+        {
+          "form": "ἀπὸ",
+          "lemma": "ἀπό",
+          "upos": "ADP",
+          "xpos": "preposition governing genitive",
+          "feats": {},
+          "head": "5",
+          "deprel": "case",
+          "role": "Introduces the source name.",
+          "confidence": "high",
+          "note": "",
+          "id": "4"
+        },
+        {
+          "form": "Καβειροῦς",
+          "lemma": "Καβειρώ",
+          "upos": "PROPN",
+          "xpos": "contracted proper noun; genitive feminine singular",
+          "feats": {
+            "Case": "Gen",
+            "Gender": "Fem",
+            "Number": "Sing"
+          },
+          "head": "3",
+          "deprel": "obl:source",
+          "role": "Name from which the designation is derived.",
+          "confidence": "high",
+          "note": "",
+          "id": "5"
+        },
+        {
+          "form": "τῆς",
+          "lemma": "ὁ",
+          "upos": "DET",
+          "xpos": "article; genitive feminine singular",
+          "feats": {
+            "Case": "Gen",
+            "Gender": "Fem",
+            "Number": "Sing",
+            "PronType": "Art"
+          },
+          "head": "5",
+          "deprel": "det",
+          "role": "Introduces Kabeiro's elliptical parentage description.",
+          "confidence": "medium",
+          "note": "It is feminine, not an article agreeing with the masculine Πρωτέως.",
+          "id": "6"
+        },
+        {
+          "form": "Πρωτέως",
+          "lemma": "Πρωτεύς",
+          "upos": "PROPN",
+          "xpos": "proper noun; genitive masculine singular",
+          "feats": {
+            "Case": "Gen",
+            "Gender": "Masc",
+            "Number": "Sing"
+          },
+          "head": "5",
+          "deprel": "nmod:poss",
+          "role": "First parent in the elliptical filiation phrase.",
+          "confidence": "medium",
+          "note": "Possessive-style label represents parentage without adding a kinship noun.",
+          "id": "7"
+        },
+        {
+          "form": "καὶ",
+          "lemma": "καί",
+          "upos": "CCONJ",
+          "xpos": "coordinating conjunction",
+          "feats": {},
+          "head": "9",
+          "deprel": "cc",
+          "role": "Coordinates the two parents.",
+          "confidence": "high",
+          "note": "",
+          "id": "8"
+        },
+        {
+          "form": "Ἀγχινόης",
+          "lemma": "Ἀγχινόη",
+          "upos": "PROPN",
+          "xpos": "proper noun; genitive feminine singular",
+          "feats": {
+            "Case": "Gen",
+            "Gender": "Fem",
+            "Number": "Sing"
+          },
+          "head": "7",
+          "deprel": "conj",
+          "role": "Second parent.",
+          "confidence": "high",
+          "note": "",
+          "id": "9"
+        },
+        {
+          "form": "ἀφ´",
+          "lemma": "ἀπό",
+          "upos": "ADP",
+          "xpos": "elided/aspirated preposition governing genitive",
+          "feats": {},
+          "head": "11",
+          "deprel": "case",
+          "role": "Introduces the relative source expression.",
+          "confidence": "high",
+          "note": "The source's elision mark is retained.",
+          "id": "10"
+        },
+        {
+          "form": "ἧς",
+          "lemma": "ὅς",
+          "upos": "PRON",
+          "xpos": "relative pronoun; genitive feminine singular",
+          "feats": {
+            "Case": "Gen",
+            "Gender": "Fem",
+            "Number": "Sing",
+            "PronType": "Rel"
+          },
+          "head": "14",
+          "deprel": "obl:source",
+          "role": "Refers back to Kabeiro.",
+          "confidence": "high",
+          "note": "",
+          "id": "11"
+        },
+        {
+          "form": "καὶ",
+          "lemma": "καί",
+          "upos": "CCONJ",
+          "xpos": "coordinating conjunction in the preferred analysis",
+          "feats": {},
+          "head": "13",
+          "deprel": "cc",
+          "role": "Coordinates Hephaistos with the relative pronoun.",
+          "confidence": "medium",
+          "note": "Alternative: additive adverbial 'also'.",
+          "id": "12"
+        },
+        {
+          "form": "Ἡφαίστου",
+          "lemma": "Ἥφαιστος",
+          "upos": "PROPN",
+          "xpos": "proper noun; genitive masculine singular",
+          "feats": {
+            "Case": "Gen",
+            "Gender": "Masc",
+            "Number": "Sing"
+          },
+          "head": "11",
+          "deprel": "conj",
+          "role": "Second source under ἀπό in the preferred analysis.",
+          "confidence": "medium",
+          "note": "Alternative: parentage genitive attached directly to Κάδμιλος.",
+          "id": "13"
+        },
+        {
+          "form": "Κάδμιλος",
+          "lemma": "Κάδμιλος",
+          "upos": "PROPN",
+          "xpos": "proper noun; nominative masculine singular",
+          "feats": {
+            "Case": "Nom",
+            "Gender": "Masc",
+            "Number": "Sing"
+          },
+          "head": "5",
+          "deprel": "acl:relcl",
+          "role": "Promoted head of the elliptical relative clause.",
+          "confidence": "medium",
+          "note": "Semantically the subject of an unexpressed coming-to-be or parentage predicate.",
+          "id": "14"
+        }
+      ],
+      "text": "καὶ νύμφαι Καβειρίδες, ἀπὸ Καβειροῦς τῆς Πρωτέως καὶ Ἀγχινόης, ἀφ´ ἧς καὶ Ἡφαίστου Κάδμιλος.",
+      "source": {
+        "tracker_row_id": 3,
+        "tracker_visual_order": 3,
+        "jsonl_line": 3,
+        "tracker_headword": "Καβειρία",
+        "full_entry_greek": "Καβειρία, πόλις τῆς κάτω Ἀσίας, ἧς τὴν γῆν Καβείριοι\nᾤκουν. εἰσὶ καὶ Καβείριοι ἔθνος Βοιωτίας, ὡς\nΠαυσανίας ἐνάτῳ. καὶ Κάβειρος Καβειρία, ἀφ´ οὗ τὸ\nΚαβειραῖος καὶ Καβειραία καὶ Καβειρίτης. καὶ\nΚαβείριον· τούτου τὸ ἐθνικὸν Καβείριος, ὡς τὸ\nΒυζάντιον Βυζάντιος, καὶ Καβειρία τὸ θηλυκόν. καὶ\nΚαβειριεύς. καὶ νύμφαι Καβειρίδες, ἀπὸ Καβειροῦς\nτῆς Πρωτέως καὶ Ἀγχινόης, ἀφ´ ἧς καὶ Ἡφαίστου\nΚάδμιλος. ἔστι δὲ ἡ μὲν Καβειρίς παρὰ τὸ Κάβειρος, ἡ\nδὲ Καβειριάς παρὰ τὸ Καβείριος. τὸ κτητικὸν\nΚαβειρικός καὶ Καβειρική, καὶ καβειριάζεσθαι ῥῆμα.",
+        "full_entry_greek_sha256": "d0c5e960b0e44ddb611d54f6722676abfe689fe4af70e495488d849b3dfff0bc",
+        "normalized_excerpt_char_start": 301,
+        "normalized_excerpt_char_end": 393,
+        "excerpt_sha256": "dbf358e81f1de18f0365548f6459eaaca5c2d10e446971685c86b57b1953e9ac",
+        "database_membership": {
+          "entry_number": 3,
+          "lemma_id": 2056,
+          "corpus_order": 3,
+          "kappa_review_row_id": 103,
+          "human_translation_id": 47
+        }
+      }
+    },
+    {
+      "entry_number": 10,
+      "title": "Κάθαια — result with an indicative and a predicate accusative",
+      "literal_translation": "They honour the beautiful to such a degree that they choose the most beautiful as king.",
+      "sentence_note": "τιμῶσι has the substantivised adjective τοὺς καλούς as object and ἐπὶ τοσοῦτον as an extent phrase. ὥστε introduces a result clause with the finite indicative αἱροῦνται. In that clause τὸν κάλλιστον is the object and βασιλέα its predicate complement.",
+      "observations": [
+        "αἱροῦνται is present middle indicative, third plural, of αἱρέω: 'they choose'. The middle is meaningful here; this is not 'they are chosen'.",
+        "ὥστε with this indicative presents the selection as an asserted result of the degree of honour.",
+        "τὸν κάλλιστον is substantivised and superlative: 'the most beautiful [man]'. βασιλέα states what they choose him as."
+      ],
+      "uncertainties": [
+        "The inhabitants are the inferred subject of both finite verbs; no explicit subject noun appears in the excerpt.",
+        "Some annotation schemes attach βασιλέα to the object as a secondary predicate; this working tree uses xcomp attached to αἱροῦνται."
+      ],
+      "tokens": [
+        {
+          "form": "τιμῶσι",
+          "lemma": "τιμάω",
+          "upos": "VERB",
+          "xpos": "present active indicative; third plural",
+          "feats": {
+            "Mood": "Ind",
+            "Number": "Plur",
+            "Person": "3",
+            "Tense": "Pres",
+            "VerbForm": "Fin",
+            "Voice": "Act"
+          },
+          "head": "0",
+          "deprel": "root",
+          "role": "Main predicate: they honour.",
+          "confidence": "high",
+          "note": "",
+          "id": "1"
+        },
+        {
+          "form": "δὲ",
+          "lemma": "δέ",
+          "upos": "CCONJ",
+          "xpos": "postpositive connective",
+          "feats": {},
+          "head": "1",
+          "deprel": "cc",
+          "role": "Continues the entry.",
+          "confidence": "high",
+          "note": "",
+          "id": "2"
+        },
+        {
+          "form": "τοὺς",
+          "lemma": "ὁ",
+          "upos": "DET",
+          "xpos": "article; accusative masculine plural",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Masc",
+            "Number": "Plur",
+            "PronType": "Art"
+          },
+          "head": "4",
+          "deprel": "det",
+          "role": "Substantivises καλούς.",
+          "confidence": "high",
+          "note": "",
+          "id": "3"
+        },
+        {
+          "form": "καλοὺς",
+          "lemma": "καλός",
+          "upos": "ADJ",
+          "xpos": "substantivised adjective; accusative masculine plural, positive degree",
+          "feats": {
+            "Case": "Acc",
+            "Degree": "Pos",
+            "Gender": "Masc",
+            "Number": "Plur"
+          },
+          "head": "1",
+          "deprel": "obj",
+          "role": "Those who are beautiful.",
+          "confidence": "high",
+          "note": "",
+          "id": "4"
+        },
+        {
+          "form": "ἐπὶ",
+          "lemma": "ἐπί",
+          "upos": "ADP",
+          "xpos": "preposition governing accusative here",
+          "feats": {},
+          "head": "6",
+          "deprel": "case",
+          "role": "Marks extent.",
+          "confidence": "high",
+          "note": "",
+          "id": "5"
+        },
+        {
+          "form": "τοσοῦτον",
+          "lemma": "τοσοῦτος",
+          "upos": "PRON",
+          "xpos": "demonstrative of degree; accusative neuter singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Neut",
+            "Number": "Sing",
+            "PronType": "Dem"
+          },
+          "head": "1",
+          "deprel": "obl:extent",
+          "role": "To such a degree.",
+          "confidence": "high",
+          "note": "",
+          "id": "6"
+        },
+        {
+          "form": "ὥστε",
+          "lemma": "ὥστε",
+          "upos": "SCONJ",
+          "xpos": "result conjunction",
+          "feats": {},
+          "head": "11",
+          "deprel": "mark",
+          "role": "Introduces the result clause.",
+          "confidence": "high",
+          "note": "",
+          "id": "7"
+        },
+        {
+          "form": "βασιλέα",
+          "lemma": "βασιλεύς",
+          "upos": "NOUN",
+          "xpos": "noun; accusative masculine singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Masc",
+            "Number": "Sing"
+          },
+          "head": "11",
+          "deprel": "xcomp",
+          "role": "Predicate accusative: as king.",
+          "confidence": "high",
+          "note": "",
+          "id": "8"
+        },
+        {
+          "form": "τὸν",
+          "lemma": "ὁ",
+          "upos": "DET",
+          "xpos": "article; accusative masculine singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Masc",
+            "Number": "Sing",
+            "PronType": "Art"
+          },
+          "head": "10",
+          "deprel": "det",
+          "role": "Substantivises the superlative.",
+          "confidence": "high",
+          "note": "",
+          "id": "9"
+        },
+        {
+          "form": "κάλλιστον",
+          "lemma": "καλός",
+          "upos": "ADJ",
+          "xpos": "substantivised superlative adjective; accusative masculine singular",
+          "feats": {
+            "Case": "Acc",
+            "Degree": "Sup",
+            "Gender": "Masc",
+            "Number": "Sing"
+          },
+          "head": "11",
+          "deprel": "obj",
+          "role": "The most beautiful man, whom they choose.",
+          "confidence": "high",
+          "note": "",
+          "id": "10"
+        },
+        {
+          "form": "αἱροῦνται",
+          "lemma": "αἱρέω",
+          "upos": "VERB",
+          "xpos": "present middle indicative; third plural",
+          "feats": {
+            "Mood": "Ind",
+            "Number": "Plur",
+            "Person": "3",
+            "Tense": "Pres",
+            "VerbForm": "Fin",
+            "Voice": "Mid"
+          },
+          "head": "1",
+          "deprel": "advcl:result",
+          "role": "Result predicate: they choose.",
+          "confidence": "high",
+          "note": "",
+          "id": "11"
+        }
+      ],
+      "text": "τιμῶσι δὲ τοὺς καλοὺς ἐπὶ τοσοῦτον, ὥστε βασιλέα τὸν κάλλιστον αἱροῦνται.",
+      "source": {
+        "tracker_row_id": 10,
+        "tracker_visual_order": 10,
+        "jsonl_line": 10,
+        "tracker_headword": "Κάθαια",
+        "full_entry_greek": "Κάθαια, πόλις Ἰνδική. τιμῶσι δὲ τοὺς καλοὺς ἐπὶ\nτοσοῦτον, ὥστε βασιλέα τὸν κάλλιστον αἱροῦνται. ὁ\nπολίτης Καθαιαῖος.",
+        "full_entry_greek_sha256": "114c9bab9c05d0063b4f2b8d911ba10ee0f57fefe791c88776dbfdd1c59d9c67",
+        "normalized_excerpt_char_start": 22,
+        "normalized_excerpt_char_end": 95,
+        "excerpt_sha256": "ff5aeee4355e8f1de7bc810b06c9e62bddfc9e9fe0e54d00dd164f57ab77c4e0",
+        "database_membership": {
+          "entry_number": 10,
+          "lemma_id": 2062,
+          "corpus_order": 10,
+          "kappa_review_row_id": 110,
+          "human_translation_id": 104
+        }
+      }
+    },
+    {
+      "entry_number": 310,
+      "title": "Κώμη — a purpose infinitive, a genitive absolute and an entry label",
+      "literal_translation": "Kome: along long roads they built places at intervals for sleeping when night came on; hence it has received its name, according to Philoxenos.",
+      "sentence_note": "Κώμη is the entry label, not the subject of the plural ἔκτισαν. χωρία is the object. πρὸς τὸ κοιμᾶσθαι expresses purpose; νυκτὸς ἐπιγενομένης is a temporal genitive absolute within that purpose context. ὅθεν introduces an explanation of the name, and ὡς Φιλόξενος is an elliptical source attribution.",
+      "observations": [
+        "ἔκτισαν is aorist active indicative, third plural. Its human subject is unexpressed; χωρία is accusative neuter plural.",
+        "κοιμᾶσθαι is present middle/passive in form, with the middle/intransitive sense 'sleep'. The article τὸ is accusative neuter singular under πρός; the infinitive itself has no inflected case.",
+        "νυκτός is genitive singular, and ἐπιγενομένης is the agreeing aorist middle participle, genitive feminine singular, of ἐπιγίγνομαι. Together they supply the temporal condition 'when night came on'.",
+        "ἐπικέκληται is perfect middle/passive indicative, third singular, with passive sense 'has been named'. Its understood subject is the place/designation under discussion, not plural χωρία.",
+        "The purpose infinitive leaves its sleeping participants implicit: road users in context. It should not automatically be forced to share the builders as its subject."
+      ],
+      "uncertainties": [
+        "μέσα describes intermediate places; 'at intervals' is contextual English rather than a numerical spacing claim.",
+        "The genitive absolute is attached to κοιμᾶσθαι because nightfall supplies the setting for sleep. Broader attachment to the building-for-sleeping proposition is possible.",
+        "Φιλόξενος is promoted as the head of an elliptical citation clause; no unexpressed φησί is added.",
+        "The sentence reports an etymological explanation. Parsing its grammar does not establish that the proposed derivation of κώμη from sleeping is historically correct."
+      ],
+      "tokens": [
+        {
+          "form": "Κώμη",
+          "lemma": "κώμη",
+          "upos": "NOUN",
+          "xpos": "entry headword; nominative feminine singular",
+          "feats": {
+            "Case": "Nom",
+            "Gender": "Fem",
+            "Number": "Sing"
+          },
+          "head": "8",
+          "deprel": "dislocated",
+          "role": "Hanging entry label, meaning village.",
+          "confidence": "medium",
+          "note": "It cannot be the grammatical subject of third-plural ἔκτισαν.",
+          "id": "1"
+        },
+        {
+          "form": "ἐν",
+          "lemma": "ἐν",
+          "upos": "ADP",
+          "xpos": "preposition governing dative",
+          "feats": {},
+          "head": "5",
+          "deprel": "case",
+          "role": "Introduces the road location.",
+          "confidence": "high",
+          "note": "",
+          "id": "2"
+        },
+        {
+          "form": "ταῖς",
+          "lemma": "ὁ",
+          "upos": "DET",
+          "xpos": "article; dative feminine plural",
+          "feats": {
+            "Case": "Dat",
+            "Gender": "Fem",
+            "Number": "Plur",
+            "PronType": "Art"
+          },
+          "head": "5",
+          "deprel": "det",
+          "role": "Article of ὁδοῖς.",
+          "confidence": "high",
+          "note": "",
+          "id": "3"
+        },
+        {
+          "form": "μακραῖς",
+          "lemma": "μακρός",
+          "upos": "ADJ",
+          "xpos": "adjective; dative feminine plural",
+          "feats": {
+            "Case": "Dat",
+            "Gender": "Fem",
+            "Number": "Plur"
+          },
+          "head": "5",
+          "deprel": "amod",
+          "role": "Describes the roads as long.",
+          "confidence": "high",
+          "note": "",
+          "id": "4"
+        },
+        {
+          "form": "ὁδοῖς",
+          "lemma": "ὁδός",
+          "upos": "NOUN",
+          "xpos": "noun; dative feminine plural",
+          "feats": {
+            "Case": "Dat",
+            "Gender": "Fem",
+            "Number": "Plur"
+          },
+          "head": "8",
+          "deprel": "obl",
+          "role": "Location of the building.",
+          "confidence": "high",
+          "note": "",
+          "id": "5"
+        },
+        {
+          "form": "μέσα",
+          "lemma": "μέσος",
+          "upos": "ADJ",
+          "xpos": "adjective; accusative neuter plural",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Neut",
+            "Number": "Plur"
+          },
+          "head": "7",
+          "deprel": "amod",
+          "role": "Describes the places as intermediate.",
+          "confidence": "high",
+          "note": "",
+          "id": "6"
+        },
+        {
+          "form": "χωρία",
+          "lemma": "χωρίον",
+          "upos": "NOUN",
+          "xpos": "noun; accusative neuter plural",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Neut",
+            "Number": "Plur"
+          },
+          "head": "8",
+          "deprel": "obj",
+          "role": "Places or settlements built.",
+          "confidence": "high",
+          "note": "",
+          "id": "7"
+        },
+        {
+          "form": "ἔκτισαν",
+          "lemma": "κτίζω",
+          "upos": "VERB",
+          "xpos": "aorist active indicative; third plural",
+          "feats": {
+            "Mood": "Ind",
+            "Number": "Plur",
+            "Person": "3",
+            "Tense": "Aor",
+            "VerbForm": "Fin",
+            "Voice": "Act"
+          },
+          "head": "0",
+          "deprel": "root",
+          "role": "They built; subject unexpressed.",
+          "confidence": "high",
+          "note": "",
+          "id": "8"
+        },
+        {
+          "form": "πρὸς",
+          "lemma": "πρός",
+          "upos": "ADP",
+          "xpos": "preposition governing the accusative articular infinitive",
+          "feats": {},
+          "head": "11",
+          "deprel": "mark",
+          "role": "Marks the purpose clause.",
+          "confidence": "high",
+          "note": "Labelled mark because its complement is an infinitival clause; nominal analyses may use case.",
+          "id": "9"
+        },
+        {
+          "form": "τὸ",
+          "lemma": "ὁ",
+          "upos": "DET",
+          "xpos": "article; accusative neuter singular",
+          "feats": {
+            "Case": "Acc",
+            "Gender": "Neut",
+            "Number": "Sing",
+            "PronType": "Art"
+          },
+          "head": "11",
+          "deprel": "det",
+          "role": "Article of the articular infinitive.",
+          "confidence": "high",
+          "note": "",
+          "id": "10"
+        },
+        {
+          "form": "κοιμᾶσθαι",
+          "lemma": "κοιμάω",
+          "upos": "VERB",
+          "xpos": "present middle/passive infinitive; middle/intransitive sense",
+          "feats": {
+            "Tense": "Pres",
+            "VerbForm": "Inf",
+            "Voice": "Mid"
+          },
+          "head": "8",
+          "deprel": "advcl:purpose",
+          "role": "Purpose: sleeping.",
+          "confidence": "high",
+          "note": "The shared middle/passive ending is interpreted through the intransitive sense; no case is assigned to the infinitive.",
+          "id": "11"
+        },
+        {
+          "form": "νυκτὸς",
+          "lemma": "νύξ",
+          "upos": "NOUN",
+          "xpos": "noun; genitive feminine singular",
+          "feats": {
+            "Case": "Gen",
+            "Gender": "Fem",
+            "Number": "Sing"
+          },
+          "head": "13",
+          "deprel": "nsubj",
+          "role": "Subject of the genitive absolute.",
+          "confidence": "high",
+          "note": "",
+          "id": "12"
+        },
+        {
+          "form": "ἐπιγενομένης",
+          "lemma": "ἐπιγίγνομαι",
+          "upos": "VERB",
+          "xpos": "second-aorist middle participle; genitive feminine singular",
+          "feats": {
+            "Case": "Gen",
+            "Gender": "Fem",
+            "Number": "Sing",
+            "Tense": "Aor",
+            "VerbForm": "Part",
+            "Voice": "Mid"
+          },
+          "head": "11",
+          "deprel": "advcl",
+          "role": "Temporal genitive absolute: night having come on.",
+          "confidence": "high",
+          "note": "",
+          "id": "13"
+        },
+        {
+          "form": "ὅθεν",
+          "lemma": "ὅθεν",
+          "upos": "ADV",
+          "xpos": "relative adverb",
+          "feats": {
+            "PronType": "Rel"
+          },
+          "head": "16",
+          "deprel": "advmod",
+          "role": "Hence; links the proposed naming explanation to the preceding account.",
+          "confidence": "high",
+          "note": "",
+          "id": "14"
+        },
+        {
+          "form": "καὶ",
+          "lemma": "καί",
+          "upos": "ADV",
+          "xpos": "additive/focusing particle",
+          "feats": {},
+          "head": "16",
+          "deprel": "advmod",
+          "role": "Also/accordingly, within the naming explanation.",
+          "confidence": "high",
+          "note": "",
+          "id": "15"
+        },
+        {
+          "form": "ἐπικέκληται",
+          "lemma": "ἐπικαλέω",
+          "upos": "VERB",
+          "xpos": "perfect middle/passive indicative; third singular, passive sense",
+          "feats": {
+            "Mood": "Ind",
+            "Number": "Sing",
+            "Person": "3",
+            "Tense": "Perf",
+            "VerbForm": "Fin",
+            "Voice": "Pass"
+          },
+          "head": "8",
+          "deprel": "advcl",
+          "role": "Has received its name.",
+          "confidence": "medium",
+          "note": "The understood singular subject is associated with the entry headword.",
+          "id": "16"
+        },
+        {
+          "form": "ὡς",
+          "lemma": "ὡς",
+          "upos": "SCONJ",
+          "xpos": "source-attribution marker",
+          "feats": {},
+          "head": "18",
+          "deprel": "mark",
+          "role": "According to; introduces the source citation.",
+          "confidence": "high",
+          "note": "",
+          "id": "17"
+        },
+        {
+          "form": "Φιλόξενος",
+          "lemma": "Φιλόξενος",
+          "upos": "PROPN",
+          "xpos": "proper noun; nominative masculine singular",
+          "feats": {
+            "Case": "Nom",
+            "Gender": "Masc",
+            "Number": "Sing"
+          },
+          "head": "16",
+          "deprel": "advcl",
+          "role": "Source of the naming account.",
+          "confidence": "medium",
+          "note": "Promoted nominal head of an elliptical 'as Philoxenos says' clause.",
+          "id": "18"
+        }
+      ],
+      "text": "Κώμη, ἐν ταῖς μακραῖς ὁδοῖς μέσα χωρία ἔκτισαν πρὸς τὸ κοιμᾶσθαι νυκτὸς ἐπιγενομένης, ὅθεν καὶ ἐπικέκληται, ὡς Φιλόξενος.",
+      "source": {
+        "tracker_row_id": 310,
+        "tracker_visual_order": 99,
+        "jsonl_line": 99,
+        "tracker_headword": "Κώμη",
+        "full_entry_greek": "Κώμη, ἐν ταῖς μακραῖς ὁδοῖς μέσα χωρία ἔκτισαν πρὸς\nτὸ κοιμᾶσθαι νυκτὸς ἐπιγενομένης, ὅθεν καὶ\nἐπικέκληται, ὡς Φιλόξενος. ὁ οἰκήτωρ ἐγκώμιος.\nἩσίοδος “εἰ γάρ τοι καὶ χρῆμ´ ἐγκώμιον ἄλλο γένοιτο”.\nκαὶ κωμαῖος καὶ κωμήτης ἀρσενικῶς καὶ θηλυκῶς διὰ\nτοῦ « ι ». καὶ ὁ δῆμος κώμη. εἴρηται ἀπὸ τοῦ ἐν αὐταῖς\nκοιμᾶσθαί τε καὶ αὐλίζεσθαι. λέγεται καὶ κωμήτωρ.",
+        "full_entry_greek_sha256": "f6f143d88de8e73ad5269261338e786c119e21fe5db05fd2fc4308f9f09c672f",
+        "normalized_excerpt_char_start": 0,
+        "normalized_excerpt_char_end": 121,
+        "excerpt_sha256": "770322f0e51c8873dc9db57fa6b7adb83619e02fdcf6766c8bbf36601db468bf",
+        "database_membership": {
+          "entry_number": 310,
+          "lemma_id": 7266,
+          "corpus_order": 99,
+          "kappa_review_row_id": 199,
+          "human_translation_id": 116
+        }
+      }
+    }
+  ],
+  "source_sha256": "cfa3ae969b9a6a87c93ebdedd6f74b88b8efd9d584ad645643a7a952c89f7883",
+  "source_row_count": 100,
+  "live_membership_check": {
+    "date": "2026-09-09",
+    "selector": "paper_corpus.paper_kappa_review_cte_body",
+    "row_count": 100,
+    "database_access": "read_only"
+  },
+  "validation": {
+    "checks": [
+      {
+        "entry_number": 1,
+        "token_count": 14,
+        "source_span_exact": true,
+        "token_coverage_complete": true,
+        "single_root_acyclic": true,
+        "existing_payload_normalizer_accepts": true
+      },
+      {
+        "entry_number": 2,
+        "token_count": 12,
+        "source_span_exact": true,
+        "token_coverage_complete": true,
+        "single_root_acyclic": true,
+        "existing_payload_normalizer_accepts": true
+      },
+      {
+        "entry_number": 3,
+        "token_count": 14,
+        "source_span_exact": true,
+        "token_coverage_complete": true,
+        "single_root_acyclic": true,
+        "existing_payload_normalizer_accepts": true
+      },
+      {
+        "entry_number": 10,
+        "token_count": 11,
+        "source_span_exact": true,
+        "token_coverage_complete": true,
+        "single_root_acyclic": true,
+        "existing_payload_normalizer_accepts": true
+      },
+      {
+        "entry_number": 310,
+        "token_count": 18,
+        "source_span_exact": true,
+        "token_coverage_complete": true,
+        "single_root_acyclic": true,
+        "existing_payload_normalizer_accepts": true
+      }
+    ],
+    "passage_count": 5,
+    "token_count": 69,
+    "human_grammar_review": "not_performed",
+    "grammar_accuracy_score": null,
+    "source_export_unchanged": true
+  }
+}

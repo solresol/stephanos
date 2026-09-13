@@ -498,32 +498,19 @@ def create_grammar_run(
     notes: str,
 ) -> int:
     run_id = f"grammar-{batch_id}-{model}-{reasoning_effort}-{attempt_kind}-{uuid4().hex[:8]}"
+    from grammar_workflow import register_model
+
+    model_id = register_model(cur, "openai", model)
     cur.execute(
-        """
-        INSERT INTO sentence_grammar_runs (
-            run_id,
-            parser_kind,
-            model,
-            prompt_version,
-            parser_version,
-            annotation_scheme,
-            status,
-            response_json,
-            notes
-        )
-        VALUES (%s, 'llm', %s, %s, %s, 'ud-ish-morphosyntax-v1', 'running', %s, %s)
-        RETURNING id
-        """,
-        (
-            run_id,
-            model,
-            PARSE_PROMPT_VERSION,
-            SCRIPT_VERSION,
-            Json({"batch_id": batch_id, "reasoning_effort": reasoning_effort, "attempt_kind": attempt_kind}),
-            notes,
-        ),
+        """INSERT INTO sentence_grammar_runs
+        (run_id,parser_kind,model,grammar_model_id,prompt_version,parser_version,annotation_scheme,status,notes)
+        VALUES (%s,'llm',%s,%s,%s,%s,'ud-ish-morphosyntax-v1','running',%s) RETURNING id""",
+        (run_id,model,model_id,PARSE_PROMPT_VERSION,SCRIPT_VERSION,notes),
     )
-    return int(cur.fetchone()["id"])
+    grammar_run_id = int(cur.fetchone()["id"])
+    for order, (kind, value) in enumerate((("batch_id",batch_id),("reasoning_effort",reasoning_effort),("attempt_kind",attempt_kind)), 1):
+        cur.execute("INSERT INTO sentence_grammar_run_notes VALUES (%s,%s,%s,%s)", (grammar_run_id,order,kind,value))
+    return grammar_run_id
 
 
 def create_evaluation_run(
@@ -804,81 +791,19 @@ def insert_analysis(
     prompt_context: dict[str, Any],
     context_items: list[dict[str, Any]],
 ) -> int:
-    cur.execute(
-        """
-        INSERT INTO sentence_grammar_analyses (
-            sentence_id,
-            grammar_run_id,
-            status,
-            conllu,
-            response_json,
-            sentence_note,
-            input_tokens,
-            output_tokens,
-            token_count,
-            parent_analysis_id,
-            attempt_number,
-            attempt_kind,
-            prompt_context_json,
-            prompt_context_sha256,
-            acceptance_status
-        )
-        VALUES (%s, %s, 'completed', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'unreviewed')
-        RETURNING id
-        """,
-        (
-            sentence.sentence_id,
-            grammar_run_id,
-            conllu_for_parse(sentence, parse_payload),
-            Json(parse_payload),
-            parse_payload.get("sentence_note", ""),
-            int(usage.get("input_tokens", 0)),
-            int(usage.get("output_tokens", 0)),
-            len(parse_payload["tokens"]),
-            parent_analysis_id,
-            attempt_number,
-            attempt_kind,
-            Json(prompt_context),
-            json_sha256(prompt_context),
-        ),
+    from grammar_workflow import register_model, store_analysis
+
+    cur.execute("SELECT model,started_at FROM sentence_grammar_runs WHERE id=%s", (grammar_run_id,))
+    run = cur.fetchone()
+    model_id = register_model(cur, "openai", run["model"], run["started_at"])
+    cur.execute("UPDATE sentence_grammar_runs SET grammar_model_id=%s WHERE id=%s", (model_id,grammar_run_id))
+    analysis_id = store_analysis(
+        cur, sentence_id=sentence.sentence_id, run_id=grammar_run_id,
+        payload=parse_payload, parent_id=parent_analysis_id,
+        attempt_number=attempt_number, attempt_kind=attempt_kind, usage=usage,
     )
-    analysis_id = int(cur.fetchone()["id"])
-    for token in parse_payload["tokens"]:
-        cur.execute(
-            """
-            INSERT INTO sentence_grammar_tokens (
-                analysis_id,
-                token_order,
-                token_id,
-                form,
-                lemma,
-                upos,
-                xpos,
-                feats_raw,
-                feats,
-                head_token_id,
-                deprel,
-                confidence,
-                note
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                analysis_id,
-                token["token_order"],
-                token["token_id"],
-                token["form"],
-                token.get("lemma"),
-                token.get("upos"),
-                token.get("xpos"),
-                token.get("feats_raw") or "_",
-                Json(token.get("feats") or {}),
-                token.get("head_token_id"),
-                token.get("deprel"),
-                token.get("confidence") or "unknown",
-                token.get("note") or "",
-            ),
-        )
+    cur.execute("UPDATE sentence_grammar_analyses SET prompt_context_sha256=%s WHERE id=%s",
+                (json_sha256(prompt_context), analysis_id))
     for order, item in enumerate(context_items, start=1):
         if item["kind"] == "feedback":
             cur.execute(

@@ -35,3 +35,8 @@ check_column.py
 migrate_add_parisinus_column.py
 refactor_terminology.py
 REFACTORING_SUMMARY.md
+
+# Relational grammar review export and locally built editor
+grammar_data.sqlite
+grammar_data.sqlite.new
+review_cgi/grammar.cgi

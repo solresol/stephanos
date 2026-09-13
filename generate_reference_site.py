@@ -1928,6 +1928,15 @@ def render_lemma_cards(lemmas):
         # Add edit link to review system
         link_rows.append(("Review", f'<a href="/cgi-bin/review.cgi?id={lemma["lemma_id"]}">Open review page</a>'))
         metadata_sections.append(render_key_value_metadata_table("Links", link_rows))
+        if lemma.get("grammar_available"):
+            metadata_sections.append(
+                f'<details class="grammar-details"><summary>Grammar parses</summary>'
+                f'<p><a href="/public-cgi/grammar.cgi?lemma_id={lemma["lemma_id"]}">Open grammar page</a> · '
+                f'<a href="/cgi-bin/grammar.cgi?lemma_id={lemma["lemma_id"]}">Review or correct parses</a></p>'
+                f'<iframe title="Grammar parses for this entry" loading="lazy" '
+                f'src="/public-cgi/grammar.cgi?lemma_id={lemma["lemma_id"]}&amp;embed=1" '
+                'style="width:100%;height:640px;border:1px solid #ddd"></iframe></details>'
+            )
         metadata_html = "".join(section for section in metadata_sections if section)
 
         # Status badges (populated by JavaScript)
@@ -3816,6 +3825,10 @@ def main():
 
     # Get all lemmas and bucket by letter
     lemmas = get_all_lemmas(cur)
+    cur.execute("SELECT DISTINCT lemma_id FROM grammar_analysis_catalog WHERE is_public_greek AND source_is_current")
+    grammar_lemma_ids = {row[0] for row in cur.fetchall()}
+    for lemma in lemmas:
+        lemma["grammar_available"] = lemma["lemma_id"] in grammar_lemma_ids
     prompt_versions = get_prompt_versions(cur)
     prompt_headwords = get_prompt_version_headwords(cur)
     for item in prompt_versions:

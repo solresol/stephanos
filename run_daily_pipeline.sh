@@ -191,8 +191,8 @@ echo "========================================" | tee -a "$LOGFILE"
 
 # Step 0: Git pull to get latest instructions/code
 echo "Step 0: Pulling latest changes from git..." | tee -a "$LOGFILE"
-if git diff --quiet && git diff --cached --quiet; then
-    git pull 2>&1 | tee -a "$LOGFILE" || echo "Git pull failed (continuing anyway)" | tee -a "$LOGFILE"
+if [ -z "$(git status --porcelain)" ]; then
+    git pull --ff-only 2>&1 | tee -a "$LOGFILE" || echo "Git pull failed (continuing anyway)" | tee -a "$LOGFILE"
 else
     echo "WARNING: git working tree is DIRTY; skipping git pull — the pipeline is" \
          "NOT self-updating. Commit or stash local changes to resume auto-update." \
@@ -381,6 +381,7 @@ echo "Step 4d5: Syncing review database from merah..." | tee -a "$LOGFILE"
 # Step 4d6: Import reviews into PostgreSQL before guidance/translation
 echo "Step 4d6: Importing reviews into PostgreSQL..." | tee -a "$LOGFILE"
 uv run import_reviews.py 2>&1 | tee -a "$LOGFILE"
+uv run grammar_workflow.py import-reviews 2>&1 | tee -a "$LOGFILE"
 
 # Step 4d6a: Reconcile AI translation freshness against current guidance rules
 TRANSLATION_GUIDANCE_FRESHNESS_ENABLED="${TRANSLATION_GUIDANCE_FRESHNESS_ENABLED:-1}"
@@ -1096,6 +1097,7 @@ AI_SYSTEMS_STATUS_EMITTED=1
 # Step 8b: Export lemma data for review interface
 echo "Step 8b: Exporting lemma data for review interface..." | tee -a "$LOGFILE"
 uv run export_for_review.py 2>&1 | tee -a "$LOGFILE"
+uv run grammar_workflow.py export 2>&1 | tee -a "$LOGFILE"
 uv run export_guidance_scan_db.py 2>&1 | tee -a "$LOGFILE"
 
 # Step 8c: Generate ToposText intake report for Brady review.
@@ -1216,6 +1218,7 @@ done
 run_rsync_logged exports/nodegoat/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/nodegoat/
 # Deploy review data snapshot
 run_rsync_logged review_data.sqlite stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/
+run_rsync_logged grammar_data.sqlite stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/
 # Deploy protected scan evidence database
 run_rsync_logged guidance_scan_results.db stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/db/
 # Deploy review CGI binaries from current source

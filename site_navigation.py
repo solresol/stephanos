@@ -30,6 +30,7 @@ MENU_SECTIONS: tuple[MenuSection, ...] = (
         (
             MenuItem("reference", "Reference Home", "index.html"),
             MenuItem("word_index", "Word Index", "word_index.html"),
+            MenuItem("grammar", "Grammar Parses", "public-cgi/grammar.cgi"),
             MenuItem("lemma_index", "Lemma Index", "lemma_index.html"),
             MenuItem("guidance", "Translation Guidance Rules", "translation_guidance.html"),
         ),
@@ -89,6 +90,7 @@ MENU_SECTIONS: tuple[MenuSection, ...] = (
         (
             MenuItem("review", "Translation Review", "cgi-bin/review.cgi", protected=True),
             MenuItem("final_review", "Final Workspace", "cgi-bin/final_review.cgi", protected=True),
+            MenuItem("grammar_review", "Grammar Review", "cgi-bin/grammar.cgi", protected=True),
             MenuItem("entity_review", "Entity Resolution", "cgi-bin/entities.cgi", protected=True),
             MenuItem("guidance_editor", "Guidance Editor", "cgi-bin/guidance.cgi", protected=True),
             MenuItem("guidance_impacts", "Guidance Rule Impacts", "cgi-bin/guidance_impacts.cgi", protected=True),

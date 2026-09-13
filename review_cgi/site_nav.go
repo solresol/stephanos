@@ -25,6 +25,7 @@ var siteMenuSections = []siteMenuSection{
 		Items: []siteMenuItem{
 			{Key: "reference", Label: "Reference Home", Href: "/index.html"},
 			{Key: "word_index", Label: "Word Index", Href: "/word_index.html"},
+			{Key: "grammar", Label: "Grammar Parses", Href: "/public-cgi/grammar.cgi"},
 			{Key: "lemma_index", Label: "Lemma Index", Href: "/lemma_index.html"},
 			{Key: "guidance", Label: "Translation Guidance Rules", Href: "/translation_guidance.html"},
 		},
@@ -73,6 +74,7 @@ var siteMenuSections = []siteMenuSection{
 		Items: []siteMenuItem{
 			{Key: "review", Label: "Translation Review", Href: "/cgi-bin/review.cgi", Protected: true},
 			{Key: "final_review", Label: "Final Workspace", Href: "/cgi-bin/final_review.cgi", Protected: true},
+			{Key: "grammar_review", Label: "Grammar Review", Href: "/cgi-bin/grammar.cgi", Protected: true},
 			{Key: "entity_review", Label: "Entity Resolution", Href: "/cgi-bin/entities.cgi", Protected: true},
 			{Key: "guidance_editor", Label: "Guidance Editor", Href: "/cgi-bin/guidance.cgi", Protected: true},
 			{Key: "guidance_impacts", Label: "Guidance Rule Impacts", Href: "/cgi-bin/guidance_impacts.cgi", Protected: true},

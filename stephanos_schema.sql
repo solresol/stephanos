@@ -2,10 +2,10 @@
 -- PostgreSQL database dump
 --
 
-\restrict kqOeMY689csLJz3fQHgQ0S8QQvrMXHhBfnn7nL2GUvvxaqFcG7doKz6PPt2qP7Y
+\restrict p2kyqohYtLbau44SJrz4hdPvxLRAatxU8PEE6wkWlNJckgiBK8tfT1Cyf7KhXda
 
--- Dumped from database version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
--- Dumped by pg_dump version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
+-- Dumped from database version 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
+-- Dumped by pg_dump version 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -17,6 +17,39 @@ SET check_function_bodies = false;
 SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
+
+--
+-- Name: grammar_analysis_identity(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.grammar_analysis_identity() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF NEW.analysis_key IS NULL THEN NEW.analysis_key := 'analysis:' || NEW.id; END IF;
+    IF NEW.parent_analysis_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM public.sentence_grammar_analyses p
+        WHERE p.id = NEW.parent_analysis_id AND p.sentence_id = NEW.sentence_id
+    ) THEN RAISE EXCEPTION 'Grammar parent must describe the same passage'; END IF;
+    RETURN NEW;
+END $$;
+
+
+--
+-- Name: grammar_review_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.grammar_review_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF NEW.decision = 'blessed' AND NOT EXISTS (
+        SELECT 1 FROM public.sentence_grammar_analyses a JOIN public.sentence_grammar_runs r ON r.id=a.grammar_run_id
+        WHERE a.id=NEW.analysis_id AND r.parser_kind='manual' AND a.structure_validated
+    ) THEN RAISE EXCEPTION 'Only a validated human revision can be blessed'; END IF;
+    RETURN NEW;
+END $$;
+
 
 --
 -- Name: validate_scholarly_analysis_snapshot(); Type: FUNCTION; Schema: public; Owner: -
@@ -947,6 +980,343 @@ CREATE VIEW public.effective_proper_nouns AS
 
 
 --
+-- Name: grammar_models; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.grammar_models (
+    id integer NOT NULL,
+    provider text NOT NULL,
+    model_slug text NOT NULL,
+    display_name text NOT NULL,
+    model_release_id integer,
+    first_observed_at timestamp with time zone NOT NULL,
+    notes text DEFAULT ''::text NOT NULL
+);
+
+
+--
+-- Name: lemma_sentence_sets; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_sentence_sets (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    text_kind text NOT NULL,
+    source_text_version_id integer,
+    human_translation_id integer,
+    translation_run_id integer,
+    segmentation_method text DEFAULT 'punctuation'::text NOT NULL,
+    segmentation_model text,
+    segmentation_version text DEFAULT 'v1'::text NOT NULL,
+    segmentation_status text DEFAULT 'completed'::text NOT NULL,
+    text_sha256 text NOT NULL,
+    sentence_count integer DEFAULT 0 NOT NULL,
+    input_tokens integer DEFAULT 0 NOT NULL,
+    output_tokens integer DEFAULT 0 NOT NULL,
+    response_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    notes text,
+    created_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT lemma_sentence_sets_counts_check CHECK (((sentence_count >= 0) AND (input_tokens >= 0) AND (output_tokens >= 0))),
+    CONSTRAINT lemma_sentence_sets_reference_check CHECK ((((text_kind = 'source_greek'::text) AND (source_text_version_id IS NOT NULL) AND (human_translation_id IS NULL) AND (translation_run_id IS NULL)) OR ((text_kind = 'human_translation'::text) AND (source_text_version_id IS NULL) AND (human_translation_id IS NOT NULL) AND (translation_run_id IS NULL)) OR ((text_kind = 'ai_translation'::text) AND (source_text_version_id IS NULL) AND (human_translation_id IS NULL) AND (translation_run_id IS NOT NULL)))),
+    CONSTRAINT lemma_sentence_sets_status_check CHECK ((segmentation_status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'manual'::text, 'blocked'::text]))),
+    CONSTRAINT lemma_sentence_sets_text_kind_check CHECK ((text_kind = ANY (ARRAY['source_greek'::text, 'human_translation'::text, 'ai_translation'::text])))
+);
+
+
+--
+-- Name: TABLE lemma_sentence_sets; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.lemma_sentence_sets IS 'Versioned sentence segmentation artifacts for Greek source text, approved human translations, and AI translation runs.';
+
+
+--
+-- Name: lemma_sentences; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_sentences (
+    id integer NOT NULL,
+    sentence_set_id integer NOT NULL,
+    sentence_number integer NOT NULL,
+    text text NOT NULL,
+    char_start integer,
+    char_end integer,
+    token_count integer DEFAULT 0 NOT NULL,
+    text_sha256 text,
+    metadata_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT lemma_sentences_position_check CHECK (((sentence_number > 0) AND (token_count >= 0) AND ((char_start IS NULL) OR (char_start >= 0)) AND ((char_end IS NULL) OR (char_end >= 0)) AND ((char_start IS NULL) OR (char_end IS NULL) OR (char_end >= char_start))))
+);
+
+
+--
+-- Name: lemma_source_text_versions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.lemma_source_text_versions (
+    id integer NOT NULL,
+    lemma_id integer NOT NULL,
+    source_document text NOT NULL,
+    source_variant text NOT NULL,
+    text_body text NOT NULL,
+    text_hash text NOT NULL,
+    parent_version_id integer,
+    is_current boolean DEFAULT false NOT NULL,
+    is_public_greek boolean DEFAULT false NOT NULL,
+    created_by_type text DEFAULT 'system'::text NOT NULL,
+    created_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    notes text,
+    CONSTRAINT lemma_source_text_versions_created_by_type_check CHECK ((created_by_type = ANY (ARRAY['ocr'::text, 'human'::text, 'import'::text, 'system'::text]))),
+    CONSTRAINT lemma_source_text_versions_public_source_policy_check CHECK ((is_public_greek = (source_document = ANY (ARRAY['meineke'::text, 'kiesling'::text])))),
+    CONSTRAINT lemma_source_text_versions_source_document_check CHECK ((source_document = ANY (ARRAY['billerbeck'::text, 'meineke'::text, 'kiesling'::text]))),
+    CONSTRAINT lemma_source_text_versions_source_variant_check CHECK ((source_variant = ANY (ARRAY['ocr'::text, 'manual'::text, 'csv_fallback'::text])))
+);
+
+
+--
+-- Name: llm_model_releases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.llm_model_releases (
+    id integer NOT NULL,
+    provider text NOT NULL,
+    model_slug text NOT NULL,
+    display_name text NOT NULL,
+    model_family text DEFAULT ''::text NOT NULL,
+    release_date date,
+    api_release_date date,
+    source_url text DEFAULT ''::text NOT NULL,
+    source_label text DEFAULT ''::text NOT NULL,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE llm_model_releases; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.llm_model_releases IS 'Model release and API availability dates used for translation-quality timeline reporting.';
+
+
+--
+-- Name: COLUMN llm_model_releases.release_date; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.llm_model_releases.release_date IS 'Public/model snapshot release date when distinguishable from API availability.';
+
+
+--
+-- Name: COLUMN llm_model_releases.api_release_date; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.llm_model_releases.api_release_date IS 'Date the model was listed as available through the API surface used by Stephanos.';
+
+
+--
+-- Name: sentence_grammar_analyses; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_analyses (
+    id integer NOT NULL,
+    sentence_id integer NOT NULL,
+    grammar_run_id integer NOT NULL,
+    status text DEFAULT 'completed'::text NOT NULL,
+    conllu text DEFAULT ''::text NOT NULL,
+    response_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    sentence_note text DEFAULT ''::text NOT NULL,
+    input_tokens integer DEFAULT 0 NOT NULL,
+    output_tokens integer DEFAULT 0 NOT NULL,
+    token_count integer DEFAULT 0 NOT NULL,
+    error_message text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    parent_analysis_id integer,
+    attempt_number integer DEFAULT 1 NOT NULL,
+    attempt_kind text DEFAULT 'initial'::text NOT NULL,
+    prompt_context_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    prompt_context_sha256 text,
+    acceptance_status text DEFAULT 'unreviewed'::text NOT NULL,
+    analysis_key text NOT NULL,
+    variant_number integer DEFAULT 1 NOT NULL,
+    variant_label text DEFAULT ''::text NOT NULL,
+    title text DEFAULT ''::text NOT NULL,
+    literal_translation text DEFAULT ''::text NOT NULL,
+    structure_validated boolean DEFAULT false NOT NULL,
+    CONSTRAINT sentence_grammar_analyses_acceptance_status_check CHECK ((acceptance_status = ANY (ARRAY['unreviewed'::text, 'provisionally_accepted'::text, 'accepted'::text, 'rejected'::text, 'superseded'::text, 'needs_review'::text]))),
+    CONSTRAINT sentence_grammar_analyses_attempt_check CHECK (((attempt_number > 0) AND (attempt_kind = ANY (ARRAY['initial'::text, 'retry'::text, 'human_retry'::text, 'model_retry'::text, 'manual'::text])) AND ((parent_analysis_id IS NULL) OR (parent_analysis_id <> id)))),
+    CONSTRAINT sentence_grammar_analyses_counts_check CHECK (((input_tokens >= 0) AND (output_tokens >= 0) AND (token_count >= 0))),
+    CONSTRAINT sentence_grammar_analyses_status_check CHECK ((status = ANY (ARRAY['completed'::text, 'failed'::text, 'blocked'::text, 'manual'::text]))),
+    CONSTRAINT sentence_grammar_analyses_variant_number_check CHECK ((variant_number > 0))
+);
+
+
+--
+-- Name: sentence_grammar_review_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_review_events (
+    id bigint NOT NULL,
+    event_key text NOT NULL,
+    analysis_id integer NOT NULL,
+    decision text NOT NULL,
+    reviewer text NOT NULL,
+    review_note text DEFAULT ''::text NOT NULL,
+    reviewed_at timestamp with time zone DEFAULT now() NOT NULL,
+    source_system text DEFAULT 'merah_grammar_review'::text NOT NULL,
+    CONSTRAINT sentence_grammar_review_events_decision_check CHECK ((decision = ANY (ARRAY['blessed'::text, 'rejected'::text, 'draft'::text, 'unreviewed'::text]))),
+    CONSTRAINT sentence_grammar_review_events_reviewer_check CHECK ((length(btrim(reviewer)) > 0))
+);
+
+
+--
+-- Name: sentence_grammar_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_runs (
+    id integer NOT NULL,
+    run_id text NOT NULL,
+    parser_kind text NOT NULL,
+    model text NOT NULL,
+    prompt_version text,
+    parser_version text,
+    annotation_scheme text,
+    status text DEFAULT 'running'::text NOT NULL,
+    input_tokens integer DEFAULT 0 NOT NULL,
+    output_tokens integer DEFAULT 0 NOT NULL,
+    processed_count integer DEFAULT 0 NOT NULL,
+    token_count integer DEFAULT 0 NOT NULL,
+    failure_count integer DEFAULT 0 NOT NULL,
+    response_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    notes text,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    completed_at timestamp with time zone,
+    grammar_model_id integer,
+    created_by text DEFAULT ''::text NOT NULL,
+    CONSTRAINT sentence_grammar_runs_counts_check CHECK (((input_tokens >= 0) AND (output_tokens >= 0) AND (processed_count >= 0) AND (token_count >= 0) AND (failure_count >= 0))),
+    CONSTRAINT sentence_grammar_runs_parser_kind_check CHECK ((parser_kind = ANY (ARRAY['llm'::text, 'udpipe'::text, 'trankit'::text, 'manual'::text, 'other'::text]))),
+    CONSTRAINT sentence_grammar_runs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text, 'dry_run'::text])))
+);
+
+
+--
+-- Name: grammar_analysis_catalog; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.grammar_analysis_catalog AS
+ SELECT a.id,
+    a.analysis_key,
+    a.sentence_id,
+    ss.lemma_id,
+    al.lemma AS headword,
+    ss.source_text_version_id,
+    sv.source_document,
+    sv.is_public_greek,
+    sv.is_current AS source_is_current,
+    s.text AS passage_text,
+    a.parent_analysis_id,
+    parent.analysis_key AS parent_key,
+    a.grammar_run_id,
+    a.variant_number,
+    a.variant_label,
+    a.attempt_number,
+    a.title,
+    a.literal_translation,
+    a.sentence_note,
+    a.structure_validated,
+    a.status,
+    a.acceptance_status,
+    a.created_at,
+    r.parser_kind,
+    r.model,
+    r.prompt_version,
+    r.created_by,
+    r.started_at AS run_started_at,
+    r.status AS run_status,
+    COALESCE(gm.display_name, r.model) AS model_display_name,
+    COALESCE(m.release_date, (gm.first_observed_at)::date, (min(r.started_at) OVER (PARTITION BY r.parser_kind, r.model))::date) AS model_rank_date,
+    (m.release_date IS NOT NULL) AS model_release_known,
+    COALESCE(e.decision, 'unreviewed'::text) AS human_decision,
+    COALESCE(e.reviewer, ''::text) AS reviewer,
+    e.reviewed_at,
+    COALESCE(e.review_note, ''::text) AS review_note
+   FROM (((((((((public.sentence_grammar_analyses a
+     JOIN public.lemma_sentences s ON ((s.id = a.sentence_id)))
+     JOIN public.lemma_sentence_sets ss ON ((ss.id = s.sentence_set_id)))
+     JOIN public.assembled_lemmas al ON ((al.id = ss.lemma_id)))
+     JOIN public.lemma_source_text_versions sv ON ((sv.id = ss.source_text_version_id)))
+     JOIN public.sentence_grammar_runs r ON ((r.id = a.grammar_run_id)))
+     LEFT JOIN public.grammar_models gm ON ((gm.id = r.grammar_model_id)))
+     LEFT JOIN public.llm_model_releases m ON ((m.id = gm.model_release_id)))
+     LEFT JOIN public.sentence_grammar_analyses parent ON ((parent.id = a.parent_analysis_id)))
+     LEFT JOIN LATERAL ( SELECT e_1.id,
+            e_1.event_key,
+            e_1.analysis_id,
+            e_1.decision,
+            e_1.reviewer,
+            e_1.review_note,
+            e_1.reviewed_at,
+            e_1.source_system
+           FROM public.sentence_grammar_review_events e_1
+          WHERE (e_1.analysis_id = a.id)
+          ORDER BY e_1.reviewed_at DESC, e_1.id DESC
+         LIMIT 1) e ON (true));
+
+
+--
+-- Name: effective_sentence_grammar; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.effective_sentence_grammar AS
+ SELECT DISTINCT ON (sentence_id) id,
+    analysis_key,
+    sentence_id,
+    lemma_id,
+    headword,
+    source_text_version_id,
+    source_document,
+    is_public_greek,
+    source_is_current,
+    passage_text,
+    parent_analysis_id,
+    parent_key,
+    grammar_run_id,
+    variant_number,
+    variant_label,
+    attempt_number,
+    title,
+    literal_translation,
+    sentence_note,
+    structure_validated,
+    status,
+    acceptance_status,
+    created_at,
+    parser_kind,
+    model,
+    prompt_version,
+    created_by,
+    run_started_at,
+    run_status,
+    model_display_name,
+    model_rank_date,
+    model_release_known,
+    human_decision,
+    reviewer,
+    reviewed_at,
+    review_note
+   FROM public.grammar_analysis_catalog
+  WHERE (structure_validated AND (status = ANY (ARRAY['completed'::text, 'manual'::text])) AND (run_status = 'completed'::text) AND (human_decision <> 'rejected'::text) AND ((human_decision = 'blessed'::text) OR ((parser_kind <> 'manual'::text) AND (acceptance_status <> ALL (ARRAY['rejected'::text, 'superseded'::text])))))
+  ORDER BY sentence_id, ((parser_kind = 'manual'::text) AND (human_decision = 'blessed'::text)) DESC,
+        CASE
+            WHEN (human_decision = 'blessed'::text) THEN reviewed_at
+            ELSE NULL::timestamp with time zone
+        END DESC NULLS LAST, model_rank_date DESC, run_started_at DESC, attempt_number DESC, variant_number, created_at DESC, id DESC;
+
+
+--
 -- Name: entity_change_events; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1097,6 +1467,26 @@ CREATE SEQUENCE public.etymologies_id_seq
 --
 
 ALTER SEQUENCE public.etymologies_id_seq OWNED BY public.etymologies.id;
+
+
+--
+-- Name: grammar_models_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.grammar_models_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: grammar_models_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.grammar_models_id_seq OWNED BY public.grammar_models.id;
 
 
 --
@@ -1581,44 +1971,6 @@ CREATE TABLE public.lemma_images (
 
 
 --
--- Name: lemma_sentence_sets; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.lemma_sentence_sets (
-    id integer NOT NULL,
-    lemma_id integer NOT NULL,
-    text_kind text NOT NULL,
-    source_text_version_id integer,
-    human_translation_id integer,
-    translation_run_id integer,
-    segmentation_method text DEFAULT 'punctuation'::text NOT NULL,
-    segmentation_model text,
-    segmentation_version text DEFAULT 'v1'::text NOT NULL,
-    segmentation_status text DEFAULT 'completed'::text NOT NULL,
-    text_sha256 text NOT NULL,
-    sentence_count integer DEFAULT 0 NOT NULL,
-    input_tokens integer DEFAULT 0 NOT NULL,
-    output_tokens integer DEFAULT 0 NOT NULL,
-    response_json jsonb DEFAULT '{}'::jsonb NOT NULL,
-    notes text,
-    created_by text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT lemma_sentence_sets_counts_check CHECK (((sentence_count >= 0) AND (input_tokens >= 0) AND (output_tokens >= 0))),
-    CONSTRAINT lemma_sentence_sets_reference_check CHECK ((((text_kind = 'source_greek'::text) AND (source_text_version_id IS NOT NULL) AND (human_translation_id IS NULL) AND (translation_run_id IS NULL)) OR ((text_kind = 'human_translation'::text) AND (source_text_version_id IS NULL) AND (human_translation_id IS NOT NULL) AND (translation_run_id IS NULL)) OR ((text_kind = 'ai_translation'::text) AND (source_text_version_id IS NULL) AND (human_translation_id IS NULL) AND (translation_run_id IS NOT NULL)))),
-    CONSTRAINT lemma_sentence_sets_status_check CHECK ((segmentation_status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'manual'::text, 'blocked'::text]))),
-    CONSTRAINT lemma_sentence_sets_text_kind_check CHECK ((text_kind = ANY (ARRAY['source_greek'::text, 'human_translation'::text, 'ai_translation'::text])))
-);
-
-
---
--- Name: TABLE lemma_sentence_sets; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.lemma_sentence_sets IS 'Versioned sentence segmentation artifacts for Greek source text, approved human translations, and AI translation runs.';
-
-
---
 -- Name: lemma_sentence_sets_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -1636,25 +1988,6 @@ CREATE SEQUENCE public.lemma_sentence_sets_id_seq
 --
 
 ALTER SEQUENCE public.lemma_sentence_sets_id_seq OWNED BY public.lemma_sentence_sets.id;
-
-
---
--- Name: lemma_sentences; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.lemma_sentences (
-    id integer NOT NULL,
-    sentence_set_id integer NOT NULL,
-    sentence_number integer NOT NULL,
-    text text NOT NULL,
-    char_start integer,
-    char_end integer,
-    token_count integer DEFAULT 0 NOT NULL,
-    text_sha256 text,
-    metadata_json jsonb DEFAULT '{}'::jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT lemma_sentences_position_check CHECK (((sentence_number > 0) AND (token_count >= 0) AND ((char_start IS NULL) OR (char_start >= 0)) AND ((char_end IS NULL) OR (char_end >= 0)) AND ((char_start IS NULL) OR (char_end IS NULL) OR (char_end >= char_start))))
-);
 
 
 --
@@ -1748,31 +2081,6 @@ ALTER SEQUENCE public.lemma_source_lines_id_seq OWNED BY public.lemma_source_lin
 
 
 --
--- Name: lemma_source_text_versions; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.lemma_source_text_versions (
-    id integer NOT NULL,
-    lemma_id integer NOT NULL,
-    source_document text NOT NULL,
-    source_variant text NOT NULL,
-    text_body text NOT NULL,
-    text_hash text NOT NULL,
-    parent_version_id integer,
-    is_current boolean DEFAULT false NOT NULL,
-    is_public_greek boolean DEFAULT false NOT NULL,
-    created_by_type text DEFAULT 'system'::text NOT NULL,
-    created_by text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    notes text,
-    CONSTRAINT lemma_source_text_versions_created_by_type_check CHECK ((created_by_type = ANY (ARRAY['ocr'::text, 'human'::text, 'import'::text, 'system'::text]))),
-    CONSTRAINT lemma_source_text_versions_public_source_policy_check CHECK ((is_public_greek = (source_document = ANY (ARRAY['meineke'::text, 'kiesling'::text])))),
-    CONSTRAINT lemma_source_text_versions_source_document_check CHECK ((source_document = ANY (ARRAY['billerbeck'::text, 'meineke'::text, 'kiesling'::text]))),
-    CONSTRAINT lemma_source_text_versions_source_variant_check CHECK ((source_variant = ANY (ARRAY['ocr'::text, 'manual'::text, 'csv_fallback'::text])))
-);
-
-
---
 -- Name: lemma_source_text_versions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -1790,47 +2098,6 @@ CREATE SEQUENCE public.lemma_source_text_versions_id_seq
 --
 
 ALTER SEQUENCE public.lemma_source_text_versions_id_seq OWNED BY public.lemma_source_text_versions.id;
-
-
---
--- Name: llm_model_releases; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.llm_model_releases (
-    id integer NOT NULL,
-    provider text NOT NULL,
-    model_slug text NOT NULL,
-    display_name text NOT NULL,
-    model_family text DEFAULT ''::text NOT NULL,
-    release_date date,
-    api_release_date date,
-    source_url text DEFAULT ''::text NOT NULL,
-    source_label text DEFAULT ''::text NOT NULL,
-    notes text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
--- Name: TABLE llm_model_releases; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.llm_model_releases IS 'Model release and API availability dates used for translation-quality timeline reporting.';
-
-
---
--- Name: COLUMN llm_model_releases.release_date; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.llm_model_releases.release_date IS 'Public/model snapshot release date when distinguishable from API availability.';
-
-
---
--- Name: COLUMN llm_model_releases.api_release_date; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.llm_model_releases.api_release_date IS 'Date the model was listed as available through the API surface used by Stephanos.';
 
 
 --
@@ -3445,36 +3712,6 @@ ALTER SEQUENCE public.sentence_alignment_sets_id_seq OWNED BY public.sentence_al
 
 
 --
--- Name: sentence_grammar_analyses; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.sentence_grammar_analyses (
-    id integer NOT NULL,
-    sentence_id integer NOT NULL,
-    grammar_run_id integer NOT NULL,
-    status text DEFAULT 'completed'::text NOT NULL,
-    conllu text DEFAULT ''::text NOT NULL,
-    response_json jsonb DEFAULT '{}'::jsonb NOT NULL,
-    sentence_note text DEFAULT ''::text NOT NULL,
-    input_tokens integer DEFAULT 0 NOT NULL,
-    output_tokens integer DEFAULT 0 NOT NULL,
-    token_count integer DEFAULT 0 NOT NULL,
-    error_message text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    parent_analysis_id integer,
-    attempt_number integer DEFAULT 1 NOT NULL,
-    attempt_kind text DEFAULT 'initial'::text NOT NULL,
-    prompt_context_json jsonb DEFAULT '{}'::jsonb NOT NULL,
-    prompt_context_sha256 text,
-    acceptance_status text DEFAULT 'unreviewed'::text NOT NULL,
-    CONSTRAINT sentence_grammar_analyses_acceptance_status_check CHECK ((acceptance_status = ANY (ARRAY['unreviewed'::text, 'provisionally_accepted'::text, 'accepted'::text, 'rejected'::text, 'superseded'::text, 'needs_review'::text]))),
-    CONSTRAINT sentence_grammar_analyses_attempt_check CHECK (((attempt_number > 0) AND (attempt_kind = ANY (ARRAY['initial'::text, 'retry'::text, 'human_retry'::text, 'model_retry'::text, 'manual'::text])) AND ((parent_analysis_id IS NULL) OR (parent_analysis_id <> id)))),
-    CONSTRAINT sentence_grammar_analyses_counts_check CHECK (((input_tokens >= 0) AND (output_tokens >= 0) AND (token_count >= 0))),
-    CONSTRAINT sentence_grammar_analyses_status_check CHECK ((status = ANY (ARRAY['completed'::text, 'failed'::text, 'blocked'::text, 'manual'::text])))
-);
-
-
---
 -- Name: sentence_grammar_analyses_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -3755,30 +3992,88 @@ ALTER SEQUENCE public.sentence_grammar_feedback_items_id_seq OWNED BY public.sen
 
 
 --
--- Name: sentence_grammar_runs; Type: TABLE; Schema: public; Owner: -
+-- Name: sentence_grammar_import_sources; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.sentence_grammar_runs (
+CREATE TABLE public.sentence_grammar_import_sources (
+    analysis_id integer NOT NULL,
+    file_path text NOT NULL,
+    file_sha256 text NOT NULL,
+    source_file_path text NOT NULL,
+    source_file_sha256 text NOT NULL,
+    kappa_review_row_id bigint,
+    source_jsonl_line integer,
+    excerpt_sha256 text NOT NULL,
+    normalization text DEFAULT 'NFC and collapsed whitespace'::text NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: sentence_grammar_notes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_notes (
     id integer NOT NULL,
-    run_id text NOT NULL,
-    parser_kind text NOT NULL,
-    model text NOT NULL,
-    prompt_version text,
-    parser_version text,
-    annotation_scheme text,
-    status text DEFAULT 'running'::text NOT NULL,
-    input_tokens integer DEFAULT 0 NOT NULL,
-    output_tokens integer DEFAULT 0 NOT NULL,
-    processed_count integer DEFAULT 0 NOT NULL,
-    token_count integer DEFAULT 0 NOT NULL,
-    failure_count integer DEFAULT 0 NOT NULL,
-    response_json jsonb DEFAULT '{}'::jsonb NOT NULL,
-    notes text,
-    started_at timestamp with time zone DEFAULT now() NOT NULL,
-    completed_at timestamp with time zone,
-    CONSTRAINT sentence_grammar_runs_counts_check CHECK (((input_tokens >= 0) AND (output_tokens >= 0) AND (processed_count >= 0) AND (token_count >= 0) AND (failure_count >= 0))),
-    CONSTRAINT sentence_grammar_runs_parser_kind_check CHECK ((parser_kind = ANY (ARRAY['llm'::text, 'udpipe'::text, 'trankit'::text, 'manual'::text, 'other'::text]))),
-    CONSTRAINT sentence_grammar_runs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text, 'dry_run'::text])))
+    analysis_id integer NOT NULL,
+    note_kind text NOT NULL,
+    note_order integer NOT NULL,
+    note_text text NOT NULL,
+    reference_url text DEFAULT ''::text NOT NULL,
+    CONSTRAINT sentence_grammar_notes_note_kind_check CHECK ((note_kind = ANY (ARRAY['observation'::text, 'uncertainty'::text, 'reference'::text, 'context'::text]))),
+    CONSTRAINT sentence_grammar_notes_note_order_check CHECK ((note_order > 0))
+);
+
+
+--
+-- Name: sentence_grammar_notes_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_grammar_notes_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_grammar_notes_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_grammar_notes_id_seq OWNED BY public.sentence_grammar_notes.id;
+
+
+--
+-- Name: sentence_grammar_review_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sentence_grammar_review_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sentence_grammar_review_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sentence_grammar_review_events_id_seq OWNED BY public.sentence_grammar_review_events.id;
+
+
+--
+-- Name: sentence_grammar_run_notes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_run_notes (
+    grammar_run_id integer NOT NULL,
+    note_order integer NOT NULL,
+    note_kind text NOT NULL,
+    note_text text NOT NULL,
+    CONSTRAINT sentence_grammar_run_notes_note_order_check CHECK ((note_order > 0))
 );
 
 
@@ -3800,6 +4095,19 @@ CREATE SEQUENCE public.sentence_grammar_runs_id_seq
 --
 
 ALTER SEQUENCE public.sentence_grammar_runs_id_seq OWNED BY public.sentence_grammar_runs.id;
+
+
+--
+-- Name: sentence_grammar_token_features; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sentence_grammar_token_features (
+    token_row_id integer NOT NULL,
+    feature_name text NOT NULL,
+    feature_value text NOT NULL,
+    CONSTRAINT sentence_grammar_token_features_feature_name_check CHECK ((feature_name ~ '^[A-Za-z][A-Za-z0-9_]*$'::text)),
+    CONSTRAINT sentence_grammar_token_features_feature_value_check CHECK ((length(feature_value) > 0))
+);
 
 
 --
@@ -3830,6 +4138,7 @@ CREATE TABLE public.sentence_grammar_tokens (
     is_multiword_token boolean DEFAULT false NOT NULL,
     is_empty_node boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    grammatical_role text DEFAULT ''::text NOT NULL,
     CONSTRAINT sentence_grammar_tokens_confidence_check CHECK ((confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text, 'manual'::text, 'unknown'::text]))),
     CONSTRAINT sentence_grammar_tokens_position_check CHECK (((token_order > 0) AND ((char_start IS NULL) OR (char_start >= 0)) AND ((char_end IS NULL) OR (char_end >= 0)) AND ((char_start IS NULL) OR (char_end IS NULL) OR (char_end >= char_start))))
 );
@@ -5578,6 +5887,13 @@ ALTER TABLE ONLY public.etymologies ALTER COLUMN id SET DEFAULT nextval('public.
 
 
 --
+-- Name: grammar_models id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.grammar_models ALTER COLUMN id SET DEFAULT nextval('public.grammar_models_id_seq'::regclass);
+
+
+--
 -- Name: html_files id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -5939,6 +6255,20 @@ ALTER TABLE ONLY public.sentence_grammar_evaluations ALTER COLUMN id SET DEFAULT
 --
 
 ALTER TABLE ONLY public.sentence_grammar_feedback_items ALTER COLUMN id SET DEFAULT nextval('public.sentence_grammar_feedback_items_id_seq'::regclass);
+
+
+--
+-- Name: sentence_grammar_notes id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_notes ALTER COLUMN id SET DEFAULT nextval('public.sentence_grammar_notes_id_seq'::regclass);
+
+
+--
+-- Name: sentence_grammar_review_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_review_events ALTER COLUMN id SET DEFAULT nextval('public.sentence_grammar_review_events_id_seq'::regclass);
 
 
 --
@@ -6322,6 +6652,22 @@ ALTER TABLE ONLY public.epubs
 
 ALTER TABLE ONLY public.etymologies
     ADD CONSTRAINT etymologies_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: grammar_models grammar_models_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.grammar_models
+    ADD CONSTRAINT grammar_models_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: grammar_models grammar_models_provider_model_slug_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.grammar_models
+    ADD CONSTRAINT grammar_models_provider_model_slug_key UNIQUE (provider, model_slug);
 
 
 --
@@ -7269,6 +7615,54 @@ ALTER TABLE ONLY public.sentence_grammar_feedback_items
 
 
 --
+-- Name: sentence_grammar_import_sources sentence_grammar_import_sources_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_import_sources
+    ADD CONSTRAINT sentence_grammar_import_sources_pkey PRIMARY KEY (analysis_id);
+
+
+--
+-- Name: sentence_grammar_notes sentence_grammar_notes_analysis_id_note_kind_note_order_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_notes
+    ADD CONSTRAINT sentence_grammar_notes_analysis_id_note_kind_note_order_key UNIQUE (analysis_id, note_kind, note_order);
+
+
+--
+-- Name: sentence_grammar_notes sentence_grammar_notes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_notes
+    ADD CONSTRAINT sentence_grammar_notes_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_grammar_review_events sentence_grammar_review_events_event_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_review_events
+    ADD CONSTRAINT sentence_grammar_review_events_event_key_key UNIQUE (event_key);
+
+
+--
+-- Name: sentence_grammar_review_events sentence_grammar_review_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_review_events
+    ADD CONSTRAINT sentence_grammar_review_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sentence_grammar_run_notes sentence_grammar_run_notes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_run_notes
+    ADD CONSTRAINT sentence_grammar_run_notes_pkey PRIMARY KEY (grammar_run_id, note_order);
+
+
+--
 -- Name: sentence_grammar_runs sentence_grammar_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7282,6 +7676,14 @@ ALTER TABLE ONLY public.sentence_grammar_runs
 
 ALTER TABLE ONLY public.sentence_grammar_runs
     ADD CONSTRAINT sentence_grammar_runs_run_id_key UNIQUE (run_id);
+
+
+--
+-- Name: sentence_grammar_token_features sentence_grammar_token_features_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_token_features
+    ADD CONSTRAINT sentence_grammar_token_features_pkey PRIMARY KEY (token_row_id, feature_name);
 
 
 --
@@ -8631,10 +9033,10 @@ CREATE INDEX sentence_grammar_analyses_run_idx ON public.sentence_grammar_analys
 
 
 --
--- Name: sentence_grammar_analyses_sentence_run_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: sentence_grammar_analyses_sentence_run_variant_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX sentence_grammar_analyses_sentence_run_idx ON public.sentence_grammar_analyses USING btree (sentence_id, grammar_run_id);
+CREATE UNIQUE INDEX sentence_grammar_analyses_sentence_run_variant_idx ON public.sentence_grammar_analyses USING btree (sentence_id, grammar_run_id, variant_number);
 
 
 --
@@ -8656,6 +9058,13 @@ CREATE UNIQUE INDEX sentence_grammar_analysis_feedback_context_feedback_idx ON p
 --
 
 CREATE UNIQUE INDEX sentence_grammar_analysis_feedback_context_rule_idx ON public.sentence_grammar_analysis_feedback_context USING btree (analysis_id, correction_rule_id) WHERE (correction_rule_id IS NOT NULL);
+
+
+--
+-- Name: sentence_grammar_analysis_key_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX sentence_grammar_analysis_key_idx ON public.sentence_grammar_analyses USING btree (analysis_key);
 
 
 --
@@ -8719,6 +9128,13 @@ CREATE INDEX sentence_grammar_feedback_items_reusable_idx ON public.sentence_gra
 --
 
 CREATE INDEX sentence_grammar_feedback_items_sentence_idx ON public.sentence_grammar_feedback_items USING btree (sentence_id, feedback_status, created_at DESC);
+
+
+--
+-- Name: sentence_grammar_review_events_analysis_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sentence_grammar_review_events_analysis_idx ON public.sentence_grammar_review_events USING btree (analysis_id, reviewed_at DESC, id DESC);
 
 
 --
@@ -9310,6 +9726,20 @@ CREATE INDEX vocabulary_signature_tests_run_family_idx ON public.vocabulary_sign
 
 
 --
+-- Name: sentence_grammar_analyses grammar_analysis_identity_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER grammar_analysis_identity_trigger BEFORE INSERT OR UPDATE ON public.sentence_grammar_analyses FOR EACH ROW EXECUTE FUNCTION public.grammar_analysis_identity();
+
+
+--
+-- Name: sentence_grammar_review_events grammar_review_guard_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER grammar_review_guard_trigger BEFORE INSERT OR UPDATE ON public.sentence_grammar_review_events FOR EACH ROW EXECUTE FUNCTION public.grammar_review_guard();
+
+
+--
 -- Name: scholarly_analysis_snapshots scholarly_analysis_snapshot_policy; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -9461,6 +9891,14 @@ ALTER TABLE ONLY public.entity_source_snapshots
 
 ALTER TABLE ONLY public.etymologies
     ADD CONSTRAINT etymologies_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id) ON DELETE CASCADE;
+
+
+--
+-- Name: grammar_models grammar_models_model_release_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.grammar_models
+    ADD CONSTRAINT grammar_models_model_release_id_fkey FOREIGN KEY (model_release_id) REFERENCES public.llm_model_releases(id);
 
 
 --
@@ -10600,6 +11038,62 @@ ALTER TABLE ONLY public.sentence_grammar_feedback_items
 
 
 --
+-- Name: sentence_grammar_import_sources sentence_grammar_import_sources_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_import_sources
+    ADD CONSTRAINT sentence_grammar_import_sources_analysis_id_fkey FOREIGN KEY (analysis_id) REFERENCES public.sentence_grammar_analyses(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_import_sources sentence_grammar_import_sources_kappa_review_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_import_sources
+    ADD CONSTRAINT sentence_grammar_import_sources_kappa_review_row_id_fkey FOREIGN KEY (kappa_review_row_id) REFERENCES public.kappa_review_rows(id);
+
+
+--
+-- Name: sentence_grammar_notes sentence_grammar_notes_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_notes
+    ADD CONSTRAINT sentence_grammar_notes_analysis_id_fkey FOREIGN KEY (analysis_id) REFERENCES public.sentence_grammar_analyses(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_review_events sentence_grammar_review_events_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_review_events
+    ADD CONSTRAINT sentence_grammar_review_events_analysis_id_fkey FOREIGN KEY (analysis_id) REFERENCES public.sentence_grammar_analyses(id);
+
+
+--
+-- Name: sentence_grammar_run_notes sentence_grammar_run_notes_grammar_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_run_notes
+    ADD CONSTRAINT sentence_grammar_run_notes_grammar_run_id_fkey FOREIGN KEY (grammar_run_id) REFERENCES public.sentence_grammar_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sentence_grammar_runs sentence_grammar_runs_grammar_model_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_runs
+    ADD CONSTRAINT sentence_grammar_runs_grammar_model_id_fkey FOREIGN KEY (grammar_model_id) REFERENCES public.grammar_models(id);
+
+
+--
+-- Name: sentence_grammar_token_features sentence_grammar_token_features_token_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sentence_grammar_token_features
+    ADD CONSTRAINT sentence_grammar_token_features_token_row_id_fkey FOREIGN KEY (token_row_id) REFERENCES public.sentence_grammar_tokens(id) ON DELETE CASCADE;
+
+
+--
 -- Name: sentence_grammar_tokens sentence_grammar_tokens_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11083,4 +11577,4 @@ ALTER TABLE ONLY public.vocabulary_signature_tests
 -- PostgreSQL database dump complete
 --
 
-\unrestrict kqOeMY689csLJz3fQHgQ0S8QQvrMXHhBfnn7nL2GUvvxaqFcG7doKz6PPt2qP7Y
+\unrestrict p2kyqohYtLbau44SJrz4hdPvxLRAatxU8PEE6wkWlNJckgiBK8tfT1Cyf7KhXda
