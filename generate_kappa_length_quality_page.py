@@ -21,6 +21,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import LeaveOneOut, cross_val_predict
 
 from kappa_quality_predictor import (
+    _source_surface_features,
     analyze_predictors,
     coverage_from_feature_rows,
     fetch_database_features,
@@ -30,6 +31,8 @@ from kappa_quality_predictor import (
     write_model_results,
     write_predictions,
 )
+from greek_source_length import greek_word_count
+from kappa_paper_analysis import render_paper_analysis, write_paper_artifacts
 from site_navigation import render_site_navigation, site_navigation_styles
 
 
@@ -91,7 +94,7 @@ def finite_float(value: object) -> float | None:
 
 
 def source_word_count(text: object) -> int:
-    return len(GREEK_TOKEN_RE.findall(str(text or "")))
+    return greek_word_count(text)
 
 
 def direct_quotation_count(text: object) -> int:
@@ -230,10 +233,7 @@ def load_database_rows(
                 "source_text": pair.get("source_text") or "",
                 "ai_translation_text": pair.get("ai_translation_text") or "",
                 "human_translation_text": pair.get("human_translation_text") or "",
-                "source_word_count": int(
-                    finite_float(pair.get("source_word_count"))
-                    or source_word_count(pair.get("source_text"))
-                ),
+                "source_word_count": source_word_count(pair.get("source_text")),
                 "human_word_count": int(finite_float(pair.get("human_word_count")) or 0),
                 "ai_word_count": int(finite_float(pair.get("ai_word_count")) or 0),
                 "profile_name": profile_name,
@@ -746,7 +746,7 @@ def render_quotation_analysis(
       <p><strong>No.</strong> In this cohort, entries with an explicit quotation scored lower, not higher. Their unadjusted four-metric mean was {primary['quote_mean'] * 100:.1f}% versus {primary['no_quote_mean'] * 100:.1f}% for entries without one.</p>
       <p>The raw difference is statistically significant under a two-sided Welch comparison: {_percentage_points(primary['raw_difference'])} (95% CI {_percentage_points(primary['raw_ci_95_low'])} to {_percentage_points(primary['raw_ci_95_high'])}; p={_p_value(primary['raw_p_value'])}; Cohen's d={primary['cohen_d']:.2f}). This is a descriptive group comparison, not evidence that quotation itself caused the lower score.</p>
       <p>Quotation entries were also much longer: {analysis['quote_length_mean']:.1f} versus {analysis['no_quote_length_mean']:.1f} Greek words on average. After a linear adjustment for source length, the quotation association was {_percentage_points(primary['adjusted_effect'])} (95% CI {_percentage_points(primary['ci_95_low'])} to {_percentage_points(primary['ci_95_high'])}; HC3 p={primary['p_value']:.3f}).</p>
-      <p>The incremental predictive value is weak. In leave-one-out cross-validation, adding the quotation flag to a linear length model changed R<sup>2</sup> from {primary['baseline_r2']:.3f} to {primary['quotation_r2']:.3f}, while mean absolute error stayed at {primary['baseline_mae'] * 100:.2f}% versus {primary['quotation_mae'] * 100:.2f}%. The small R<sup>2</sup> gain does not survive alternative log-length and quadratic-length specifications.</p>
+      <p>The incremental predictive value is weak. In leave-one-out cross-validation, adding the quotation flag to a linear length model changed R<sup>2</sup> from {primary['baseline_r2']:.3f} to {primary['quotation_r2']:.3f}, while mean absolute error changed from {primary['baseline_mae'] * 100:.2f} to {primary['quotation_mae'] * 100:.2f} score points. Alternative log-length and quadratic-length specifications give different estimates of the incremental benefit (below). This additive model assumes parallel slopes; the separate-line analysis also examines that assumption.</p>
     </div>
     <div class="metric-grid">
       <div class="metric"><span class="label">Entries with explicit quotation</span><span class="value">{analysis['quote_count']} / {analysis['row_count']}</span></div>
@@ -877,6 +877,7 @@ def render_page(
     profile_version: int,
     predictor_analysis: dict[str, Any] | None = None,
     predictor_coverage: dict[str, Any] | None = None,
+    paper_analysis: dict[str, Any] | None = None,
 ) -> str:
     review_ids = {int(row["lemma_id"]) for row in review_rows}
     quotation_analysis = analyze_quotation_quality(rows)
@@ -930,11 +931,12 @@ def render_page(
     .axis { fill: var(--muted); font-size: 13px; }
     .axis-title { fill: var(--ink); font-size: 15px; font-weight: 650; }
     .grid-line { stroke: var(--grid); stroke-width: 1; }
-    .trend { stroke: #405368; stroke-dasharray: 7 6; stroke-width: 2; }
+    .trend { stroke: var(--blue); stroke-width: 2; }
+    .trend.quotation { stroke: #a4482b; stroke-dasharray: 7 6; }
     .point { cursor: pointer; fill: var(--blue); opacity: 0.78; stroke: white; stroke-width: 1.4; }
     .point:hover, .point:focus { opacity: 1; stroke: var(--ink); stroke-width: 2.5; }
     .point.review { fill: var(--gold); opacity: 1; stroke: #6f4300; stroke-width: 2; }
-    .point.quotation { stroke: #7a3e9d; stroke-width: 3; }
+    .point.quotation { fill: #a4482b; stroke-width: 1.4; }
     .legend { align-items: center; color: var(--muted); display: flex; flex-wrap: wrap; font-size: 0.88rem; gap: 18px; margin: 8px 0; }
     .key { border-radius: 50%; display: inline-block; height: 11px; margin-right: 5px; width: 11px; }
     .key.all { background: var(--blue); }
@@ -963,6 +965,7 @@ def render_page(
   __NAV__
   <h1>Kappa entry length versus translation quality</h1>
   <p class="lede">All and only the 100 headwords in Gabe's frozen final Kappa review tracker are shown. Quality is reference similarity for <code>__PROFILE__</code> prompt v__VERSION__, not an expert judgment of correctness. Select a metric, search for a headword, or click a point.</p>
+  <p class="note">Greek length counts whitespace-delimited items containing a Greek letter, including one-letter words. Editorial brackets within a word do not split it.</p>
 
   <div class="metric-grid">
     <div class="metric"><span class="label">Official headwords</span><span class="value">100</span></div>
@@ -989,7 +992,7 @@ def render_page(
       <label class="check"><input id="review-only" type="checkbox"> Show only ten-entry review set</label>
       <span id="chart-status" class="chart-status" aria-live="polite"></span>
     </div>
-    <div class="legend"><span><i class="key all"></i>Official 100</span><span><i class="key review"></i>Decile-stratified review set</span><span><i class="key quotation"></i>Explicit quotation</span><span>Dashed line: ordinary least-squares fit</span></div>
+    <div class="legend"><span>Blue circles / solid line: quotation not present</span><span>Rust triangles / dashed line: quotation present</span><span>Larger points: decile-stratified review set</span></div>
     <svg id="chart" viewBox="0 0 1100 650" role="img" aria-labelledby="chart-title chart-description">
       <desc id="chart-description">Scatter plot of Greek source word count against translation reference-similarity score for the official 100 Kappa headwords.</desc>
     </svg>
@@ -997,6 +1000,8 @@ def render_page(
   </section>
 
   __QUOTATION_ANALYSIS__
+
+  __PAPER_ANALYSIS__
 
   __PREDICTOR_ANALYSIS__
 
@@ -1120,20 +1125,27 @@ function renderChart() {
   yTitle.setAttribute("transform", `rotate(-90 20 ${(plot.top + plot.bottom) / 2})`);
 
   const fit = linearRegression(rows, metric);
-  addSvg("line", {
-    x1: xScale(xMin),
-    y1: yScale(fit.intercept + fit.slope * xMin),
-    x2: xScale(xMax),
-    y2: yScale(fit.intercept + fit.slope * xMax),
-    class: "trend"
-  });
+  for (const quotation of [false, true]) {
+    const group = rows.filter(row => row.hasDirectQuotation === quotation);
+    const groupFit = linearRegression(group, metric);
+    const low = Math.min(...group.map(row => row.sourceWords));
+    const high = Math.max(...group.map(row => row.sourceWords));
+    addSvg("line", {
+      x1: xScale(low), y1: yScale(groupFit.intercept + groupFit.slope * low),
+      x2: xScale(high), y2: yScale(groupFit.intercept + groupFit.slope * high),
+      class: quotation ? "trend quotation" : "trend"
+    });
+  }
 
   for (const row of visible) {
-    const point = addSvg("circle", {
+    const px = xScale(row.sourceWords), py = yScale(row[metric]);
+    const radius = row.reviewDecile ? 7 : 5.2;
+    const point = addSvg(row.hasDirectQuotation ? "polygon" : "circle", {
+      ...(row.hasDirectQuotation ? {points: `${px},${py-radius} ${px-radius},${py+radius} ${px+radius},${py+radius}`} : {}),
       cx: xScale(row.sourceWords),
       cy: yScale(row[metric]),
       r: row.reviewDecile ? 7 : 5.2,
-      class: `point${row.reviewDecile ? " review" : ""}${row.hasDirectQuotation ? " quotation" : ""}`,
+      class: `point${row.hasDirectQuotation ? " quotation" : ""}`,
       tabindex: "0",
       role: "button",
       "aria-label": `${row.headword}, ${row.sourceWords} Greek words, ${metricLabels[metric]} ${(row[metric] * 100).toFixed(1)} percent`
@@ -1190,6 +1202,7 @@ renderChart();
             ),
         )
         .replace("__REVIEW_ROWS__", render_review_table(review_rows))
+        .replace("__PAPER_ANALYSIS__", render_paper_analysis(paper_analysis) if paper_analysis else "")
         .replace("__ALL_ROWS__", render_all_rows(rows, review_ids))
         .replace("__GENERATED__", esc(generated))
         .replace("__DATA__", data_json)
@@ -1282,11 +1295,20 @@ def generate(
             profile_version=profile_version,
         )
 
+    if predictor_rows is not None:
+        # Recompute source-derived features when reusing a historical snapshot.
+        predictor_rows = [{**row, **_source_surface_features(row["source_text"])} for row in predictor_rows]
     predictor_analysis = (
         analyze_predictors(predictor_rows) if predictor_rows is not None else None
     )
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    paper_analysis = None
+    if predictor_analysis is not None:
+        paper_analysis = write_paper_artifacts(
+            OUTPUT_DIR, predictor_rows, predictor_analysis["vocabulary_length_coefficients"],
+            profile_name=profile_name, profile_version=profile_version,
+        )
     write_csv(OUTPUT_CSV, rows, review_ids)
     write_csv(REVIEW_CSV, review_rows, review_ids)
     write_quotation_analysis_csv(QUOTATION_ANALYSIS_CSV, quotation_analysis)
@@ -1305,6 +1327,7 @@ def generate(
             profile_version=profile_version,
             predictor_analysis=predictor_analysis,
             predictor_coverage=predictor_coverage,
+            paper_analysis=paper_analysis,
         ),
         encoding="utf-8",
     )

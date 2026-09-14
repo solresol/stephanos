@@ -26,6 +26,8 @@ from sklearn.model_selection import GridSearchCV, KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from greek_source_length import greek_word_count
+
 DETECTOR_VERSION = "translation_guidance_scan_v4"
 RANDOM_STATE = 20260724
 DEFAULT_ALPHAS = (0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0)
@@ -210,11 +212,11 @@ def _finite_float(value: object) -> float | None:
 def _source_surface_features(text: object) -> dict[str, float]:
     source = str(text or "")
     tokens = GREEK_TOKEN_RE.findall(source)
-    word_count = max(len(tokens), 1)
+    word_count = max(greek_word_count(source), 1)
     sentence_count = max(len(SENTENCE_BOUNDARY_RE.findall(source)), 1)
     punctuation_count = sum(source.count(mark) for mark in (",", ".", ";", ";", "·", "·", ":"))
     quoted_words = sum(
-        len(GREEK_TOKEN_RE.findall(match.group(1)))
+        greek_word_count(match.group(1))
         for match in DIRECT_QUOTATION_RE.finditer(source)
     )
     quotation_count = len(DIRECT_QUOTATION_RE.findall(source))
@@ -227,7 +229,7 @@ def _source_surface_features(text: object) -> dict[str, float]:
         "log_source_characters": math.log1p(len(source)),
         "sentence_count": float(sentence_count),
         "mean_words_per_sentence": word_count / sentence_count,
-        "unique_token_ratio": len(set(normalized_tokens)) / word_count,
+        "unique_token_ratio": len(set(normalized_tokens)) / max(len(tokens), 1),
         "punctuation_per_100_words": punctuation_count * 100.0 / word_count,
         "bracketed_span_count": float(len(BRACKETED_SPAN_RE.findall(source))),
         "numeral_count": float(len(NUMERAL_RE.findall(source))),
@@ -1012,6 +1014,7 @@ def analyze_predictors(
             selected_alphas=[],
         )
     ]
+    vocabulary_folds = []
     for family, label, blocks in MODEL_FAMILIES:
         predictions = np.empty(observed.size, dtype=float)
         selected_alphas: list[float] = []
@@ -1042,6 +1045,10 @@ def analyze_predictors(
                 train_frame
             )
             feature_counts.append(int(transformed.shape[1]))
+            if family == "vocabulary_length":
+                fitted = search.best_estimator_
+                names = fitted.named_steps["features"].get_feature_names_out()
+                vocabulary_folds.append(dict(zip(names, fitted.named_steps["ridge"].coef_)))
         results.append(
             summarize(
                 family,
@@ -1078,6 +1085,11 @@ def analyze_predictors(
     baseline_mae = float(by_family["mean_baseline"]["cv_mae"])
     for result in results:
         result["mae_improvement_vs_mean"] = baseline_mae - float(result["cv_mae"])
+    vocabulary = fit_vocabulary_table(frame, observed, vocabulary_folds,
+                                     alphas=alphas, min_df=min_df,
+                                     max_vocab_features=max_vocab_features,
+                                     inner_splits=inner_splits, random_state=random_state)
+    vocabulary.update({key: by_family["vocabulary_length"][key] for key in ("cv_r2", "cv_mae", "cv_rmse")})
     return {
         "row_count": len(rows),
         "outcome_label": "Four-metric mean reference similarity",
@@ -1088,7 +1100,45 @@ def analyze_predictors(
         "best": best,
         "best_mae": best_mae,
         "comparisons": comparisons,
+        "vocabulary_length_coefficients": vocabulary,
     }
+
+
+def fit_vocabulary_table(frame, observed, fold_coefficients, *, alphas, min_df,
+                         max_vocab_features, inner_splits, random_state):
+    """Full-cohort descriptive refit; held-out prediction remains in the outer CV."""
+    search = GridSearchCV(
+        build_estimator(("vocabulary", "length"), min_df=min_df, max_vocab_features=max_vocab_features),
+        {"ridge__alpha": list(alphas)}, scoring="neg_mean_absolute_error",
+        cv=KFold(inner_splits, shuffle=True, random_state=random_state), n_jobs=1,
+    ).fit(frame, observed)
+    fitted = search.best_estimator_
+    transformer = fitted.named_steps["features"]
+    vectorizer = transformer.named_transformers_["vocabulary"]
+    matrix = vectorizer.transform(frame["source_text"])
+    terms = vectorizer.get_feature_names_out()
+    counts = dict(zip(terms, np.asarray((matrix > 0).sum(axis=0)).ravel()))
+    # Recover the most frequent accented spelling for display only. Model columns
+    # remain exactly the accent-normalized vectorizer outputs.
+    display = defaultdict(Counter)
+    tokenizer, preprocess = vectorizer.build_tokenizer(), vectorizer.build_preprocessor()
+    for source in frame["source_text"]:
+        tokens = tokenizer(source.lower())
+        for size in (1, 2):
+            for start in range(len(tokens) - size + 1):
+                original = " ".join(tokens[start:start+size])
+                display[preprocess(original)][original] += 1
+    output = []
+    for name, coefficient in zip(transformer.get_feature_names_out(), fitted.named_steps["ridge"].coef_):
+        if not name.startswith("vocabulary__"):
+            continue
+        term = name.removeprefix("vocabulary__")
+        available = [fold[name] for fold in fold_coefficients if name in fold]
+        output.append(dict(term=term, greek_form=display[term].most_common(1)[0][0] if display[term] else term,
+                           entry_count=int(counts[term]), effect_pp_per_0_1_tfidf=float(coefficient*10),
+                           negative_folds=int(sum(value < 0 for value in available)), available_folds=len(available)))
+    output.sort(key=lambda row: (row["effect_pp_per_0_1_tfidf"], row["term"]))
+    return dict(alpha=float(search.best_params_["ridge__alpha"]), terms=output)
 
 
 def write_model_results(path: Path, analysis: dict[str, Any]) -> None:
