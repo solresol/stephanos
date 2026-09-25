@@ -23,6 +23,18 @@ class ModelPricing:
 
 
 MODEL_PRICING = {
+    "gpt-6-astra": ModelPricing(
+        model="gpt-6-astra",
+        input_per_million=10.00,
+        output_per_million=50.00,
+        source_url="https://developers.openai.com/api/docs/models/gpt-6-astra",
+    ),
+    "gpt-6-luna": ModelPricing(
+        model="gpt-6-luna",
+        input_per_million=0.10,
+        output_per_million=0.50,
+        source_url="https://developers.openai.com/api/docs/models/gpt-6-luna",
+    ),
     "gpt-6-sol": ModelPricing(
         model="gpt-6-sol",
         input_per_million=2.00,

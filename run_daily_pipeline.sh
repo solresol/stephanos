@@ -532,7 +532,9 @@ fi
 # number of translations that can be published in one run.
 TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-20}"
 export TRANSLATION_ENQUEUE_LIMIT
-TRANSLATION_PUBLICATION_MODEL="${TRANSLATION_PUBLICATION_MODEL:-gpt-6-sol}"
+TRANSLATION_PUBLICATION_MODEL="${TRANSLATION_PUBLICATION_MODEL:-gpt-5.5}"
+TRANSLATION_PUBLICATION_API_MODE="${TRANSLATION_PUBLICATION_API_MODE:-chat_completions}"
+TRANSLATION_PUBLICATION_REASONING_EFFORT="${TRANSLATION_PUBLICATION_REASONING_EFFORT:-}"
 TRANSLATION_GUIDANCE_LOOKAHEAD_LIMIT="${TRANSLATION_GUIDANCE_LOOKAHEAD_LIMIT:-30}"
 TRANSLATION_GUIDANCE_QUEUE_PRIORITY="${TRANSLATION_GUIDANCE_QUEUE_PRIORITY:-20}"
 TRANSLATION_ENQUEUE_ORDER="${TRANSLATION_ENQUEUE_ORDER:-canonical}"
@@ -564,7 +566,7 @@ fi
 
 # Step 4d8: Process a bounded translation-guidance scan batch before translation
 TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT="${TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT:-3000}"
-TRANSLATION_GUIDANCE_SCAN_MODEL="${TRANSLATION_GUIDANCE_SCAN_MODEL:-gpt-5.4-mini}"
+TRANSLATION_GUIDANCE_SCAN_MODEL="${TRANSLATION_GUIDANCE_SCAN_MODEL:-gpt-6-luna}"
 TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT="${TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT:-2000000}"
 TRANSLATION_GUIDANCE_SCAN_GUIDANCE_AI_LIMIT="${TRANSLATION_GUIDANCE_SCAN_GUIDANCE_AI_LIMIT:-${TRANSLATION_GUIDANCE_SCAN_FORMULA_AI_LIMIT:-$TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT}}"
 TRANSLATION_GUIDANCE_SCAN_DELAY="${TRANSLATION_GUIDANCE_SCAN_DELAY:-0}"
@@ -573,9 +575,9 @@ TRANSLATION_GUIDANCE_SCAN_BATCH_WAIT="${TRANSLATION_GUIDANCE_SCAN_BATCH_WAIT:-1}
 TRANSLATION_GUIDANCE_SCAN_BATCH_POLL_INTERVAL="${TRANSLATION_GUIDANCE_SCAN_BATCH_POLL_INTERVAL:-30}"
 TRANSLATION_GUIDANCE_SCAN_BATCH_TIMEOUT="${TRANSLATION_GUIDANCE_SCAN_BATCH_TIMEOUT:-0}"
 case "$TRANSLATION_GUIDANCE_SCAN_MODEL" in
-    *-mini*) ;;
+    *-mini*|gpt-6-luna) ;;
     *)
-        echo "  ERROR: TRANSLATION_GUIDANCE_SCAN_MODEL must be a *-mini model, got ${TRANSLATION_GUIDANCE_SCAN_MODEL}" | tee -a "$LOGFILE"
+        echo "  ERROR: TRANSLATION_GUIDANCE_SCAN_MODEL must be a mini model or gpt-6-luna, got ${TRANSLATION_GUIDANCE_SCAN_MODEL}" | tee -a "$LOGFILE"
         TRANSLATION_GUIDANCE_SCAN_PROCESS_LIMIT=0
         ;;
 esac
@@ -680,8 +682,7 @@ if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
         --source-document preferred
         --limit "$TRANSLATION_ENQUEUE_LIMIT"
         --model "$TRANSLATION_PUBLICATION_MODEL"
-        --api-mode responses
-        --reasoning-effort medium
+        --api-mode "$TRANSLATION_PUBLICATION_API_MODE"
         --untranslated-only
         --missing-final
         --order "$TRANSLATION_ENQUEUE_ORDER"
@@ -691,6 +692,9 @@ if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
         --require-guidance-complete
         --guidance-queue-priority "$TRANSLATION_GUIDANCE_QUEUE_PRIORITY"
     )
+    if [ -n "$TRANSLATION_PUBLICATION_REASONING_EFFORT" ]; then
+        translation_enqueue_args+=(--reasoning-effort "$TRANSLATION_PUBLICATION_REASONING_EFFORT")
+    fi
     if [ -n "$TRANSLATION_ENQUEUE_LETTER" ]; then
         translation_enqueue_args+=(--letter "$TRANSLATION_ENQUEUE_LETTER")
     fi
@@ -700,12 +704,12 @@ if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
     "${translation_enqueue_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: enqueue step failed" | tee -a "$LOGFILE"
 fi
 
-# Keep the existing publication prompt profile, recording the chosen model on each
-# request/run. This lane is independent of the model-comparison experiments.
+# Keep the existing publication prompt profile, recording the chosen model and
+# API mode on each request/run. This lane is independent of the model-comparison experiments.
 if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
     echo "Step 5p: Translating unpublished passages with ${TRANSLATION_PUBLICATION_MODEL}..." | tee -a "$LOGFILE"
     uv run translate_lemmas.py \
-        --api-mode responses --model "$TRANSLATION_PUBLICATION_MODEL" --profile-prefix gpt-5.5 \
+        --api-mode "$TRANSLATION_PUBLICATION_API_MODE" --model "$TRANSLATION_PUBLICATION_MODEL" --profile-prefix gpt-5.5 \
         --request-limit "$TRANSLATION_ENQUEUE_LIMIT" \
         --run-limit "$TRANSLATION_ENQUEUE_LIMIT" \
         --daily-token-limit 100000 \

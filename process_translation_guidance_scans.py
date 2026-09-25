@@ -43,7 +43,7 @@ from translation_guidance_coverage import (
 )
 
 
-DEFAULT_MODEL = "gpt-5.4-mini"
+DEFAULT_MODEL = "gpt-6-luna"
 DEFAULT_DAILY_TOKEN_LIMIT = 2_000_000
 DEFAULT_GUIDANCE_AI_LIMIT = 2_000
 DETECTOR_VERSION = CURRENT_DETECTOR_VERSION
@@ -78,14 +78,18 @@ GREEK_ARTICLE_PATTERN = (
 )
 
 
-def ensure_mini_model(model: str) -> str:
+def ensure_scanner_model(model: str) -> str:
     normalized = (model or "").strip()
-    if "-mini" not in normalized.lower():
+    if normalized != "gpt-6-luna" and "-mini" not in normalized.lower():
         raise SystemExit(
-            "Translation guidance scans must use a mini model. "
-            f"Refusing model={model!r}; set --model to a *-mini model."
+            "Translation guidance scans must use gpt-6-luna or a mini model. "
+            f"Refusing model={model!r}."
         )
     return normalized
+
+
+def scanner_reasoning_effort(model: str) -> str | None:
+    return "low" if model == "gpt-6-luna" else None
 
 
 def sanitize_postgres_text(value: object) -> object:
@@ -348,7 +352,7 @@ def build_formula_chat_completion_body(
     preferred_translation: str,
     notes: str,
 ) -> dict:
-    return {
+    body = {
         "model": model,
         "response_format": {"type": "json_object"},
         "messages": build_formula_messages(
@@ -359,6 +363,9 @@ def build_formula_chat_completion_body(
             notes=notes,
         ),
     }
+    if effort := scanner_reasoning_effort(model):
+        body["reasoning_effort"] = effort
+    return body
 
 
 def response_tokens_used(body: dict) -> int:
@@ -549,7 +556,7 @@ def build_lexical_guidance_chat_completion_body(
     context_condition: str = "",
     lexical_prefilter: dict[str, object] | None = None,
 ) -> dict:
-    return {
+    body = {
         "model": model,
         "response_format": {"type": "json_object"},
         "messages": build_lexical_guidance_messages(
@@ -564,6 +571,9 @@ def build_lexical_guidance_chat_completion_body(
             lexical_prefilter=lexical_prefilter,
         ),
     }
+    if effort := scanner_reasoning_effort(model):
+        body["reasoning_effort"] = effort
+    return body
 
 
 def extract_lexical_guidance_result(
@@ -1633,7 +1643,7 @@ def main() -> None:
         help="Seconds to wait for a batch before returning; 0 waits until the Batch API reaches a terminal state",
     )
     args = parser.parse_args()
-    args.model = ensure_mini_model(args.model)
+    args.model = ensure_scanner_model(args.model)
 
     client = None
     guidance_ai_used = 0
