@@ -532,6 +532,7 @@ fi
 # number of translations that can be published in one run.
 TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-20}"
 export TRANSLATION_ENQUEUE_LIMIT
+TRANSLATION_PUBLICATION_MODEL="${TRANSLATION_PUBLICATION_MODEL:-gpt-6-sol}"
 TRANSLATION_GUIDANCE_LOOKAHEAD_LIMIT="${TRANSLATION_GUIDANCE_LOOKAHEAD_LIMIT:-30}"
 TRANSLATION_GUIDANCE_QUEUE_PRIORITY="${TRANSLATION_GUIDANCE_QUEUE_PRIORITY:-20}"
 TRANSLATION_ENQUEUE_ORDER="${TRANSLATION_ENQUEUE_ORDER:-canonical}"
@@ -678,7 +679,7 @@ if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
         --profile gpt-5.5
         --source-document preferred
         --limit "$TRANSLATION_ENQUEUE_LIMIT"
-        --model gpt-5.6-sol
+        --model "$TRANSLATION_PUBLICATION_MODEL"
         --api-mode responses
         --reasoning-effort medium
         --untranslated-only
@@ -699,12 +700,12 @@ if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
     "${translation_enqueue_args[@]}" 2>&1 | tee -a "$LOGFILE" || echo "  Warning: enqueue step failed" | tee -a "$LOGFILE"
 fi
 
-# Keep the existing publication prompt profile, recording the new model on each
+# Keep the existing publication prompt profile, recording the chosen model on each
 # request/run. This lane is independent of the model-comparison experiments.
 if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
-    echo "Step 5p: Translating unpublished passages with GPT-5.6-sol..." | tee -a "$LOGFILE"
+    echo "Step 5p: Translating unpublished passages with ${TRANSLATION_PUBLICATION_MODEL}..." | tee -a "$LOGFILE"
     uv run translate_lemmas.py \
-        --api-mode responses --model gpt-5.6-sol --profile-prefix gpt-5.5 \
+        --api-mode responses --model "$TRANSLATION_PUBLICATION_MODEL" --profile-prefix gpt-5.5 \
         --request-limit "$TRANSLATION_ENQUEUE_LIMIT" \
         --run-limit "$TRANSLATION_ENQUEUE_LIMIT" \
         --daily-token-limit 100000 \
