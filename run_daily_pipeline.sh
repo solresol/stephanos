@@ -1162,7 +1162,7 @@ run_rsync_logged reference_site/statistics/ stephanos@merah.cassia.ifost.org.au:
 # deleted only inside that scoped destination.
 run_optional_rsync_logged "protected site" --delete-after reference_site/protected/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/protected/
 # Deploy the remaining generated site without retransferring the two trees above.
-run_optional_rsync_logged "reference_site" --exclude=/statistics/ --exclude=/protected/ reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
+RSYNC_IO_TIMEOUT=180 run_optional_rsync_logged "reference_site" --exclude=/statistics/ --exclude=/protected/ reference_site/ stephanos@merah.cassia.ifost.org.au:/var/www/vhosts/stephanos.symmachus.org/htdocs/
 # Remove stale prompt-evaluation detail artifacts for excluded experiment lanes.
 ssh stephanos@merah.cassia.ifost.org.au "sh -c '\
 rm -f /var/www/vhosts/stephanos.symmachus.org/htdocs/statistics/prompts/gpt-5-5-v3-repeat*.html \
