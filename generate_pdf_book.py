@@ -930,8 +930,8 @@ The work originally contained information about place names, their etymologies,
 and the ethnic names (demonyms) of their inhabitants.
 
 The translations in this volume are based on the critical edition by
-Margarethe Billerbeck et al.\ (Berlin: De Gruyter, 2006–). The Greek text
-is not reproduced here due to copyright restrictions. Translations were
+August Meineke (Berlin: G.\ Reimer, 1849). The Greek text
+is not reproduced here. Translations were
 produced using a combination of AI-assisted translation and human review.
 
 \section*{Translation Statistics}
