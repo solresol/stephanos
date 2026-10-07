@@ -78,7 +78,7 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 
 	baselineKind := mapString(lemma.CanonicalVariantRef, "kind")
 	baselineID := mapString(lemma.CanonicalVariantRef, "id")
-	if strings.TrimSpace(baselineKind) == "" || strings.TrimSpace(baselineID) == "" {
+	if lemma.DisplayPolicyID == 0 && (strings.TrimSpace(baselineKind) == "" || strings.TrimSpace(baselineID) == "") {
 		baselineKind = "legacy_assembled"
 		baselineID = "translation"
 	}
@@ -120,7 +120,9 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 
 	if strings.TrimSpace(effectiveKind) == "" || strings.TrimSpace(effectiveID) == "" {
 		translationBlocked = true
-		if len(effectiveCanon) == 0 {
+		if len(effectiveCanon) == 0 && lemma.DisplayPolicyID != 0 {
+			translationBlockReason = "No eligible translation under the active display policy"
+		} else if len(effectiveCanon) == 0 {
 			translationBlockReason = "Canonical set cleared locally in SQLite (pending nightly import)"
 		} else if len(effectiveCanon) > 1 {
 			translationBlockReason = "Multiple canonical variants present; no primary set"

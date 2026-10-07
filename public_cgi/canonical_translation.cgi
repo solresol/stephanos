@@ -532,6 +532,9 @@ def compute_state(lemma: dict, actions: list[CanonicalAction]) -> dict:
     baseline_kind = (baseline_pointer.get("kind") or "legacy_assembled").strip() if isinstance(baseline_pointer, dict) else "legacy_assembled"
     baseline_id = str(baseline_pointer.get("id") or "translation").strip() if isinstance(baseline_pointer, dict) else "translation"
 
+    if lemma.get('display_policy_id'):
+        baseline_kind = baseline_pointer.get('kind', '')
+        baseline_id = str(baseline_pointer.get('id', ''))
     state = baseline_memberships(lemma)
     state = apply_actions(state, actions)
     memberships = list(state.values())
