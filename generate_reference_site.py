@@ -2222,6 +2222,7 @@ def search_ui_script() -> str:
                 <div class="site-search-hit-title"><a href="${escapeHtml(resultHref(siteRoot, entry.href))}">${escapeHtml(entry.title || '')}</a></div>
                 <div class="site-search-hit-meta">${escapeHtml(meta)}</div>
                 <div class="site-search-snippet">${escapeHtml(entry.snippet || '')}</div>
+                <div class="site-search-hit-meta">${escapeHtml(entry.translation_attribution || '')}</div>
             </div>`;
         }).join('');
         container.hidden = false;

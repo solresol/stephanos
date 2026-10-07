@@ -9,6 +9,8 @@ Creates an HTML page with:
 - Clustering for dense areas
 """
 import json
+import html as html_module
+import canonical_variants
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -26,14 +28,18 @@ def get_geocoded_places(cur):
             wikidata_place_qid, wikidata_place_label,
             latitude, longitude,
             pleiades_id,
-            COALESCE(reviewed_english_translation,
-                     corrected_english_translation,
-                     translation, '') as translation
+            ''::text as translation
         FROM assembled_lemmas
         WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+          AND NOT COALESCE(quarantined, false)
         ORDER BY lemma
     """)
-    return cur.fetchall()
+    rows = cur.fetchall()
+    places = []
+    for row in rows:
+        selected = canonical_variants.select_pointer_variant(cur, lemma_id=row[0]) or {}
+        places.append((*row[:7], selected.get('translation_text', ''), selected.get('display_attribution', '')))
+    return places
 
 
 def generate_map_html(places):
@@ -43,7 +49,7 @@ def generate_map_html(places):
     features = []
     for place in places:
         (lemma_id, lemma, qid, wd_label, lat, lon,
-         pleiades_id, translation) = place
+         pleiades_id, translation, attribution) = place
 
         # Truncate translation for popup
         short_trans = translation[:150] + "..." if len(translation) > 150 else translation
@@ -56,11 +62,12 @@ def generate_map_html(places):
             },
             "properties": {
                 "id": lemma_id,
-                "lemma": lemma,
+                "lemma": html_module.escape(lemma or ""),
                 "wikidata_qid": qid,
-                "wikidata_label": wd_label or "",
+                "wikidata_label": html_module.escape(wd_label or ""),
                 "pleiades_id": pleiades_id or "",
-                "translation": short_trans,
+                "translation": html_module.escape(short_trans),
+                "translation_attribution": html_module.escape(attribution),
             }
         }
         features.append(feature)
@@ -208,6 +215,7 @@ def generate_map_html(places):
 
                 if (p.translation) {{
                     popupContent += `<div class="popup-translation">${{p.translation}}</div>`;
+                    popupContent += `<div class="popup-label">${{p.translation_attribution}}</div>`;
                 }}
 
                 popupContent += '<div class="popup-links">';

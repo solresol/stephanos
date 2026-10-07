@@ -427,6 +427,7 @@ def build_english_documents(cur) -> list[dict]:
                 "entry_number": lemma.get("entry_number") or "",
                 "href": headword_page_filename(lemma_id),
                 "snippet": clean_snippet(text),
+                "translation_attribution": (lemma.get('presented_translations') or [{}])[0].get('display_attribution', ''),
                 "search_text": search_text,
             }
         )
