@@ -254,7 +254,11 @@ uv run manage_translation_display.py activate --policy-id 1 --apply --output tmp
 uv run manage_translation_display.py explain --lemma-id 2467
 ```
 
-Activation refuses any lost default or changed human selection. It does not call
+Activation refuses unacknowledged lost defaults or changed human selections.
+After inspecting the evidence, acknowledge a specific withheld entry with
+`--accept-withheld-lemma ID`. Re-activating version 1 requires
+`--accept-withheld-lemma 2467`: its only alternatives repeat wording awaiting
+revision. This exception does not permit replacing an approved human default. It does not call
 models, rewrite translation records, or approve external entries. The resolver
 feeds the website, PDF, CSV, nodegoat download and review snapshot. The review CGI
 uses exported eligibility, rank and tie-breaking evidence, applying only actions
@@ -293,3 +297,10 @@ Never mutate an active policy's ranking to silently change its historical meanin
 
 The original audit in this document describes the 7 October snapshot. It is retained
 as historical evidence; current activation counts are in the linked audit.
+
+
+AI revision requests also withhold machine/external copies with identical wording
+after markup/whitespace normalization. An independently approved human translation
+retains its authority and gets a review notice instead; it must be assessed directly
+to change that approval. This prevents a request aimed at an AI run from silently
+replacing a curator's approved translation. Direct human risk flags still block it.

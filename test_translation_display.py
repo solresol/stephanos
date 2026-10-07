@@ -65,7 +65,10 @@ class DisplayTests(unittest.TestCase):
         original = run(translation_text="Kapai. The *ethnonym* is Kapaios.", revision_pending=True)
         copied = external(translation_text="Kapai. The ethnonym is Kapaios.")
         distinct = external(id=9, translation_text="Kapai. The ethnic form is Kapaios.")
-        inherit_text_blocks([original, copied, distinct])
+        approved_human = human(translation_text=copied['translation_text'])
+        inherit_text_blocks([original, copied, distinct, approved_human])
+        self.assertTrue(self.evaluate(approved_human)['publishable'])
+        self.assertIn('independent human approval', approved_human['display_review_note'])
         self.assertFalse(self.evaluate(copied)['publishable'])
         self.assertTrue(self.evaluate(distinct)['publishable'])
 

@@ -114,7 +114,11 @@ def inherit_text_blocks(candidates):
     for c in candidates:
         source = blocked.get(normalized_translation(c.get('translation_text')))
         if source and not c.get('revision_pending'):
-            c['equivalent_text_blocked'] = source
+            if c['kind'] == 'human_translation':
+                c['display_review_note'] = ('Same wording as ' + source + ' awaiting revision; '
+                    'retain independent human approval pending a direct human-translation review.')
+            else:
+                c['equivalent_text_blocked'] = source
 
 
 def attribution(candidate):
@@ -137,6 +141,7 @@ def attribution(candidate):
 def evaluate_candidate(candidate, target, policy):
     """Pure eligibility/ranking function; an editorial preference never clears a block."""
     c = dict(candidate)
+    c.setdefault("display_review_note", "")
     c.update(exists=True, id=str(c['id']), publishable=False)
     assessment = c.get('assessment') or {}
     decision = assessment.get('decision', '')

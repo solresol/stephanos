@@ -136,6 +136,8 @@ def main():
     parser.add_argument('--policy-id', type=int)
     parser.add_argument('--lemma-id', type=int)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--accept-withheld-lemma', type=int, action='append', default=[],
+                        help='Explicitly acknowledge one audited lost default (repeat per lemma); human changes still refuse activation')
     parser.add_argument('--apply', action='store_true', help='Commit seed/activation/assessment; otherwise roll back')
     parser.add_argument('--kind', choices=list(display.ASSESSMENT_COLUMNS))
     parser.add_argument('--variant-id', type=int)
@@ -156,8 +158,11 @@ def main():
             if not args.policy_id:parser.error('--policy-id required')
             result=audit(cur,args.policy_id)
             if args.command=='activate':
-                if result['lost'] or result['human_changes']:
-                    raise RuntimeError('Activation refused: review translations lost or changed human selections in the audit first.')
+                accepted = set(args.accept_withheld_lemma)
+                unacknowledged = {r['lemma_id'] for r in result['lost']} - accepted
+                if unacknowledged or result['human_changes']:
+                    raise RuntimeError('Activation refused: review lost defaults and acknowledge each with --accept-withheld-lemma; changed human selections require resolution first.')
+                result['accepted_withheld_lemmas'] = sorted(accepted)
                 cur.execute("UPDATE translation_display_policies SET state='retired' WHERE purpose='scholarly' AND state='active'")
                 cur.execute("UPDATE translation_display_policies SET state='active',activated_at=now() WHERE id=%s",(args.policy_id,))
         elif args.command=='deactivate':

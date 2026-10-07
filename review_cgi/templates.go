@@ -1435,7 +1435,7 @@ const translationReviewTemplate = `<!DOCTYPE html>
                                             >Select</button>
                                         </td>
                                         <td style="border-top: 1px solid #e5edf5; padding: 8px;">
-                                            {{index . "kind"}}{{if index . "display_attribution"}}<div class="helper-text">{{index . "display_attribution"}}</div>{{end}}{{if index . "display_block_reason"}}<div class="helper-text">{{index . "display_block_reason"}}</div>{{end}}{{if index . "deprecated"}}<div class="helper-text">{{if index . "deprecation_note"}}{{index . "deprecation_note"}}{{else}}Legacy baseline retained for context.{{end}}</div>{{end}}
+                                            {{index . "kind"}}{{if index . "display_attribution"}}<div class="helper-text">{{index . "display_attribution"}}</div>{{end}}{{if index . "display_review_note"}}<div class="helper-text">{{index . "display_review_note"}}</div>{{end}}{{if index . "display_block_reason"}}<div class="helper-text">{{index . "display_block_reason"}}</div>{{end}}{{if index . "deprecated"}}<div class="helper-text">{{if index . "deprecation_note"}}{{index . "deprecation_note"}}{{else}}Legacy baseline retained for context.{{end}}</div>{{end}}
                                         </td>
                                         <td style="border-top: 1px solid #e5edf5; padding: 8px;">
                                             {{index . "status"}}

@@ -2857,7 +2857,7 @@ def export_lemmas():
                 variant['display_eligible'] = candidate is not None
                 variant['display_block_reason'] = excluded.get(key, 'Not eligible under the display policy') if not candidate else ''
                 if candidate:
-                    for field in ('display_attribution', 'display_reason', 'display_rank', 'display_order', 'alignment'):
+                    for field in ('display_attribution', 'display_reason', 'display_rank', 'display_order', 'alignment', 'display_review_note'):
                         variant[field] = candidate[field]
             pointer_variant = display_result['selected']
             display_memberships = [{'kind': v['kind'], 'id': v['id'], 'is_primary': v is pointer_variant}
