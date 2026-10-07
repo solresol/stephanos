@@ -291,5 +291,5 @@ For a new model or recipe, copy the rules into a new draft policy version and
 register exact model/profile identities, then audit and activate that version.
 Never mutate an active policy's ranking to silently change its historical meaning.
 
-The original audit below/above describes the 7 October snapshot. It is retained
+The original audit in this document describes the 7 October snapshot. It is retained
 as historical evidence; current activation counts are in the linked audit.

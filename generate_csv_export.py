@@ -4,7 +4,8 @@ Export processed + translated lemmas to CSV.
 
 Columns:
   lemma, entry_number, type, greek_text, translation, confidence,
-  ocr_generation, ocr_model, ocr_processed_at, meineke_id, billerbeck_id
+  ocr_generation, ocr_model, ocr_processed_at, meineke_id, billerbeck_id,
+  translation_kind, translation_id, translation_model, translation_attribution, display_policy_version
 
 Usage:
   uv run generate_csv_export.py --output exports/lemmas.csv

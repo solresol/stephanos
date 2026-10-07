@@ -526,6 +526,8 @@ def policy_memberships(lemma, actions):
 
 
 def compute_state(lemma: dict, actions: list[CanonicalAction]) -> dict:
+    if lemma.get("display_policy_id"):
+        actions = [a for a in actions if a.id > lemma.get("canonical_action_cursor", 0)]
     baseline_pointer = lemma.get("canonical_variant_ref") if isinstance(lemma.get("canonical_variant_ref"), dict) else {}
     baseline_kind = (baseline_pointer.get("kind") or "legacy_assembled").strip() if isinstance(baseline_pointer, dict) else "legacy_assembled"
     baseline_id = str(baseline_pointer.get("id") or "translation").strip() if isinstance(baseline_pointer, dict) else "translation"

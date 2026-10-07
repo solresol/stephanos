@@ -33,13 +33,13 @@ def generate_downloads_page():
     exports = [
         {
             'category': 'PDF Book',
-            'description': 'Publishable PDF edition with Greek text and English translations.',
+            'description': 'English translations with source attribution and indices.',
             'files': [
                 {
                     'path': 'reference_site/stephanos_ethnika_translations.pdf',
                     'url': 'stephanos_ethnika_translations.pdf',
                     'name': 'Ethnika Translations (PDF)',
-                    'description': 'Complete book with Greek text and English translations, formatted for printing',
+                    'description': 'English translations selected by the website display policy, with provenance labels and indices',
                 },
                 {
                     'path': 'reference_site/stephanos_ethnika_translations.tex',

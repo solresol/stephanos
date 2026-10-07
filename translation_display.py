@@ -49,11 +49,12 @@ def load_policy(cur, policy_id=None):
 
 
 def target_source(cur, lemma_id):
-    from source_documents import source_document_priority_sql
+    from source_documents import source_document_priority_sql, public_source_document_list_sql
     cur.execute(f"""
         SELECT s.id, s.lemma_id, s.source_document, s.text_hash, s.text_body
         FROM lemma_source_text_versions s JOIN assembled_lemmas a ON a.id = s.lemma_id
         WHERE s.lemma_id = %s AND s.is_current AND s.is_public_greek
+          AND s.source_document IN ({public_source_document_list_sql()})
           AND NOT COALESCE(a.quarantined, false) AND btrim(s.text_body) <> ''
         ORDER BY {source_document_priority_sql('s.source_document')}, s.id DESC LIMIT 1
     """, (lemma_id,))

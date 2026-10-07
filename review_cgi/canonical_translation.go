@@ -90,6 +90,15 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 			Message: fmt.Sprintf("failed to read canonical actions from SQLite: %v", err),
 		}
 	}
+	if lemma.DisplayPolicyID != 0 {
+		pending := []CanonicalAction{}
+		for _, action := range actions {
+			if action.ID > lemma.CanonicalActionCursor {
+				pending = append(pending, action)
+			}
+		}
+		actions = pending
+	}
 	effectiveCanon := DisplayMemberships(lemma, actions)
 	effectiveKind, effectiveID := ChooseEffectiveCanonicalRef(effectiveCanon)
 
