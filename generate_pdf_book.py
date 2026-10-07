@@ -594,12 +594,12 @@ def format_translation_for_latex(text, footnotes=None):
                     stanza_lines.append(render_translation_inline_latex(stripped))
                     continue
                 if stanza_lines:
-                    stanza_parts.append(r" \\ ".join(stanza_lines))
+                    stanza_parts.append(r" \\{} ".join(stanza_lines))
                     stanza_lines = []
                 stanza_parts.append(r"\vspace{0.5\baselineskip}")
 
             if stanza_lines:
-                stanza_parts.append(r" \\ ".join(stanza_lines))
+                stanza_parts.append(r" \\{} ".join(stanza_lines))
 
             verse_body = "\n".join(stanza_parts).strip()
             rendered_blocks.append(
@@ -1063,8 +1063,11 @@ def generate_pdf():
                 capture_output=True,
                 text=True
             )
-            # Continue even with warnings (overfull boxes, etc.)
-            # Only check if PDF exists at the end
+            if result.returncode:
+                error_log = Path('tmp/pdf-book-build-error.log')
+                error_log.parent.mkdir(exist_ok=True)
+                error_log.write_text(result.stdout + result.stderr, encoding='utf-8')
+                raise RuntimeError(f'LuaLaTeX failed on pass {pass_num}; see {error_log}')
 
         # Run makeindex for each index
         print("  Building indices...")
@@ -1085,6 +1088,12 @@ def generate_pdf():
             capture_output=True,
             text=True
         )
+
+        if result.returncode:
+            error_log = Path('tmp/pdf-book-build-error.log')
+            error_log.parent.mkdir(exist_ok=True)
+            error_log.write_text(result.stdout + result.stderr, encoding='utf-8')
+            raise RuntimeError(f'LuaLaTeX final pass failed; see {error_log}')
 
         # Copy PDF to output
         tmp_pdf = Path(tmpdir) / "book.pdf"
