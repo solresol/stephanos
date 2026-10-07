@@ -11080,6 +11080,169 @@ ALTER TABLE ONLY public.vocabulary_signature_tests
 
 
 --
+-- Name: external_translation_deliveries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.external_translation_deliveries (
+    id bigint NOT NULL,
+    snapshot_id bigint NOT NULL,
+    sha256 text NOT NULL,
+    source_bytes bytea NOT NULL,
+    credits_text text NOT NULL,
+    provenance jsonb NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT external_translation_deliveries_sha256_check CHECK ((sha256 ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: TABLE external_translation_deliveries; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.external_translation_deliveries IS 'Immutable external English deliveries, with original bytes and stated provenance; no approval or exact Greek input is inferred.';
+
+
+--
+-- Name: external_translation_deliveries_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.external_translation_deliveries ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.external_translation_deliveries_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: external_translation_entries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.external_translation_entries (
+    id bigint NOT NULL,
+    delivery_id bigint NOT NULL,
+    sequence integer NOT NULL,
+    work text NOT NULL,
+    paragraph_id text NOT NULL,
+    meineke_id text NOT NULL,
+    billerbeck_marker text,
+    cohort text NOT NULL,
+    entry_text text NOT NULL,
+    translation_text text NOT NULL,
+    raw_html text NOT NULL,
+    entity_tags jsonb NOT NULL,
+    lemma_id integer,
+    match_status text NOT NULL,
+    candidate_lemma_ids jsonb NOT NULL,
+    review_status text DEFAULT 'not_individually_verified'::text NOT NULL,
+    CONSTRAINT external_translation_entries_cohort_check CHECK ((cohort = ANY (ARRAY['reused_project_marker'::text, 'unmarked_reported_claude'::text]))),
+    CONSTRAINT external_translation_entries_review_status_check CHECK ((review_status = 'not_individually_verified'::text))
+);
+
+
+--
+-- Name: TABLE external_translation_entries; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.external_translation_entries IS 'Versioned external text and conservative canonical lemma links. Not read by approved canonical translation selectors.';
+
+
+--
+-- Name: external_translation_entries_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.external_translation_entries ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.external_translation_entries_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: external_translation_deliveries external_translation_deliveries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.external_translation_deliveries
+    ADD CONSTRAINT external_translation_deliveries_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: external_translation_deliveries external_translation_deliveries_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.external_translation_deliveries
+    ADD CONSTRAINT external_translation_deliveries_sha256_key UNIQUE (sha256);
+
+
+--
+-- Name: external_translation_deliveries external_translation_deliveries_snapshot_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.external_translation_deliveries
+    ADD CONSTRAINT external_translation_deliveries_snapshot_id_key UNIQUE (snapshot_id);
+
+
+--
+-- Name: external_translation_entries external_translation_entries_delivery_id_paragraph_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.external_translation_entries
+    ADD CONSTRAINT external_translation_entries_delivery_id_paragraph_id_key UNIQUE (delivery_id, paragraph_id);
+
+
+--
+-- Name: external_translation_entries external_translation_entries_delivery_id_sequence_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.external_translation_entries
+    ADD CONSTRAINT external_translation_entries_delivery_id_sequence_key UNIQUE (delivery_id, sequence);
+
+
+--
+-- Name: external_translation_entries external_translation_entries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.external_translation_entries
+    ADD CONSTRAINT external_translation_entries_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: external_translation_entries_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX external_translation_entries_lemma_idx ON public.external_translation_entries USING btree (lemma_id);
+
+
+--
+-- Name: external_translation_deliveries external_translation_deliveries_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.external_translation_deliveries
+    ADD CONSTRAINT external_translation_deliveries_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.entity_source_snapshots(id);
+
+
+--
+-- Name: external_translation_entries external_translation_entries_delivery_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.external_translation_entries
+    ADD CONSTRAINT external_translation_entries_delivery_id_fkey FOREIGN KEY (delivery_id) REFERENCES public.external_translation_deliveries(id);
+
+
+--
+-- Name: external_translation_entries external_translation_entries_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.external_translation_entries
+    ADD CONSTRAINT external_translation_entries_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
