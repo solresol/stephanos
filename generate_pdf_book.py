@@ -171,6 +171,7 @@ def normalize_pdf_source_index_label(label: str) -> str | None:
 
 def fetch_lemmas():
     """Fetch all lemmas with translations from PostgreSQL."""
+    import canonical_variants
     conn = get_pdf_db_connection()
     cur = conn.cursor()
 
@@ -193,9 +194,7 @@ def fetch_lemmas():
             wikidata_place_qid,
             wikidata_place_label
         FROM assembled_lemmas
-        WHERE translation IS NOT NULL
-           OR corrected_english_translation IS NOT NULL
-           OR reviewed_english_translation IS NOT NULL
+        WHERE NOT COALESCE(quarantined, false)
         ORDER BY
             CASE
                 WHEN lemma ~ '^[Αα]' THEN 1
@@ -230,21 +229,12 @@ def fetch_lemmas():
     rows = cur.fetchall()
     lemma_ids = [int(row[0]) for row in rows]
     footnotes_by_lemma = fetch_pdf_footnotes(cur, lemma_ids)
-    conn.close()
 
     lemmas = []
     for row in rows:
-        # Determine best translation (priority: reviewed > initial human > AI)
-        reviewed = row[7]
-        initial_human = row[6]
-        ai_translation = row[5]
-
-        best_translation = reviewed or initial_human or ai_translation
-        translation_source = (
-            'reviewed' if reviewed else
-            'human' if initial_human else
-            'ai'
-        )
+        selected = canonical_variants.select_pointer_variant(cur, lemma_id=row[0]) or {}
+        best_translation = selected.get('translation_text', '')
+        translation_source = {'human_translation': 'reviewed', 'external_translation': 'external'}.get(selected.get('kind'), 'ai')
 
         if best_translation:
             lemmas.append({
@@ -255,6 +245,7 @@ def fetch_lemmas():
                 'greek_text': row[4],
                 'translation': best_translation,
                 'translation_source': translation_source,
+                'display_attribution': selected.get('display_attribution', ''),
                 'version': row[8],
                 'meineke_id': row[9],
                 'billerbeck_id': row[10],
@@ -264,9 +255,13 @@ def fetch_lemmas():
                 'pleiades_id': row[13],
                 'wikidata_place_qid': row[14],
                 'wikidata_place_label': row[15],
-                'footnotes': footnotes_by_lemma.get(int(row[0]), []),
+                'footnotes': [n for n in footnotes_by_lemma.get(int(row[0]), [])
+                    if not n.get('translation_variant_kind') or
+                    (n['translation_variant_kind'], str(n.get('translation_variant_id'))) ==
+                    (selected.get('kind'), str(selected.get('id')))],
             })
 
+    conn.close()
     return lemmas
 
 
@@ -282,6 +277,7 @@ def fetch_pdf_footnotes(cur, lemma_ids):
         "generation_source",
         "review_status",
         "stale_at",
+        "translation_variant_kind", "translation_variant_id",
     ]
     if not all(pg_column_exists(cur, "lemma_commentary_entries", column) for column in required_columns):
         return {}
@@ -298,7 +294,8 @@ def fetch_pdf_footnotes(cur, lemma_ids):
             COALESCE(note_kind, '') AS note_kind,
             COALESCE(generation_source, '') AS generation_source,
             COALESCE(publication_status, '') AS publication_status,
-            COALESCE(confidence, '') AS confidence
+            COALESCE(confidence, '') AS confidence,
+            translation_variant_kind, translation_variant_id
         FROM lemma_commentary_entries
         WHERE lemma_id = ANY(%s)
           AND COALESCE(anchor_source, '') = 'translation'
@@ -321,6 +318,7 @@ def fetch_pdf_footnotes(cur, lemma_ids):
         generation_source,
         publication_status,
         confidence,
+        translation_variant_kind, translation_variant_id,
     ) in cur.fetchall():
         grouped[int(lemma_id)].append(
             {
@@ -333,6 +331,8 @@ def fetch_pdf_footnotes(cur, lemma_ids):
                 "generation_source": generation_source or "",
                 "publication_status": publication_status or "",
                 "confidence": confidence or "",
+                "translation_variant_kind": translation_variant_kind,
+                "translation_variant_id": translation_variant_id,
             }
         )
     return grouped
@@ -723,6 +723,7 @@ def generate_latex(
     reviewed_count = sum(1 for l in lemmas if l['translation_source'] == 'reviewed')
     human_count = sum(1 for l in lemmas if l['translation_source'] == 'human')
     ai_count = sum(1 for l in lemmas if l['translation_source'] == 'ai')
+    external_count = sum(1 for l in lemmas if l['translation_source'] == 'external')
     geocoded_count = sum(1 for l in lemmas if l['latitude'] is not None)
 
     # Build entries
@@ -746,6 +747,8 @@ def generate_latex(
                 lemma['translation'],
                 lemma.get('footnotes') or [],
             )
+            if lemma.get('display_attribution'):
+                translation += r'\par {\small\itshape ' + escape_latex(lemma['display_attribution']) + '}'
             lemma_id = lemma['id']
 
             # Type annotation
@@ -755,7 +758,8 @@ def generate_latex(
             source_text = {
                 'reviewed': r'\textsuperscript{\textcolor{darkgreen}{[R]}}',
                 'human': r'\textsuperscript{\textcolor{blue}{[H]}}',
-                'ai': r'\textsuperscript{\textcolor{orange}{[AI]}}'
+                'ai': r'\textsuperscript{\textcolor{orange}{[AI]}}',
+                'external': r'\textsuperscript{[Ext]}'
             }.get(lemma['translation_source'], '')
 
             # Parisinus indicator
@@ -929,10 +933,11 @@ This volume presents English translations of entries from the \textit{Ethnika}
 The work originally contained information about place names, their etymologies,
 and the ethnic names (demonyms) of their inhabitants.
 
-The translations in this volume are based on the critical edition by
-Margarethe Billerbeck et al.\ (Berlin: De Gruyter, 2006–). The Greek text
-is not reproduced here due to copyright restrictions. Translations were
-produced using a combination of AI-assisted translation and human review.
+Translations follow the website display policy and its current public Greek
+sources. Individual entries identify human, AI, and externally supplied
+translations. External translations retain their reported provenance; their
+exact Greek input and individual accuracy have not been verified. The Greek
+text is not reproduced in this volume.
 
 \section*{Translation Statistics}
 
@@ -941,6 +946,7 @@ Total entries: & ''' + f"{total:,}" + r''' \\
 Human-reviewed translations: & ''' + f"{reviewed_count:,}" + r''' \\
 Initial human translations: & ''' + f"{human_count:,}" + r''' \\
 AI translations: & ''' + f"{ai_count:,}" + r''' \\
+External translations: & ''' + f"{external_count:,}" + r''' \\
 Geocoded places: & ''' + f"{geocoded_count:,}" + r''' \\
 \end{tabular}
 
@@ -950,8 +956,8 @@ Each entry is marked with a superscript indicator showing the source of its tran
 
 \begin{itemize}
     \item \textsuperscript{\textcolor{darkgreen}{[R]}} — Human-reviewed and approved translation
-    \item \textsuperscript{\textcolor{blue}{[H]}} — Initial human translation (not yet reviewed)
-    \item \textsuperscript{\textcolor{orange}{[AI]}} — Machine translation (awaiting human review)
+    \item \textsuperscript{\textcolor{orange}{[AI]}} — AI translation; model and prompt recipe are identified
+    \item \textsuperscript{[Ext]} — External translation with reported provenance
     \item \textsuperscript{\textcolor{purple}{[P]}} — From the unabridged Parisinus Coislinianus 228 manuscript
 \end{itemize}
 

@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import canonical_variants
+import translation_display
 from db import get_connection
 from source_documents import PREFERRED_GREEK_SOURCE_DOCUMENTS, source_document_priority_sql
 from translation_guidance_coverage import (
@@ -2830,15 +2831,46 @@ def export_lemmas():
             variants.append(default_variant)
         variants = sort_translation_variants(variants)
 
-        pointer_variant = canonical_variants.select_pointer_variant(cur, lemma_id=lemma_id)
-        selected_translation = english_translation or ""
-        selected_variant_ref = {"kind": "legacy_assembled", "id": "translation"}
-        if pointer_variant and (pointer_variant.get("translation_text") or "").strip():
-            selected_translation = (pointer_variant.get("translation_text") or "").strip()
-            selected_variant_ref = {
-                "kind": pointer_variant.get("kind", ""),
-                "id": pointer_variant.get("id", ""),
-            }
+        display_result = translation_display.explain(cur, lemma_id=lemma_id)
+        display_policy_id = display_result['policy_id'] if display_result else None
+        canonical_action_cursor = 0
+        if display_result:
+            cur.execute("SELECT last_action_id FROM canonical_action_import_state WHERE source = 'merah_reviews'")
+            cursor_row = cur.fetchone()
+            canonical_action_cursor = cursor_row[0] if cursor_row else 0
+        if display_result:
+            for display_order, candidate in enumerate(sorted(display_result['eligible'], key=lambda c: c['sort_key'][1:])):
+                candidate['display_order'] = display_order
+            eligible = {(v['kind'], str(v['id'])): v for v in display_result['eligible']}
+            excluded = {(v['kind'], str(v['id'])): v['reason'] for v in display_result['excluded']}
+            existing = {(v['kind'], str(v['id'])) for v in variants}
+            for candidate in display_result['eligible']:
+                key = (candidate['kind'], str(candidate['id']))
+                if key not in existing:
+                    variants.append({'kind': candidate['kind'], 'id': candidate['id'],
+                                     'status': candidate['status'], 'text': candidate['translation_text'],
+                                     'preview': preview_text(candidate['translation_text']),
+                                     'label': candidate['display_attribution']})
+            for variant in variants:
+                key = (variant['kind'], str(variant['id']))
+                candidate = eligible.get(key)
+                variant['display_eligible'] = candidate is not None
+                variant['display_block_reason'] = excluded.get(key, 'Not eligible under the display policy') if not candidate else ''
+                if candidate:
+                    for field in ('display_attribution', 'display_reason', 'display_rank', 'display_order', 'alignment'):
+                        variant[field] = candidate[field]
+            pointer_variant = display_result['selected']
+            display_memberships = [{'kind': v['kind'], 'id': v['id'], 'is_primary': v is pointer_variant}
+                                   for v in display_result['eligible']
+                                   if v is pointer_variant or v['display_rank'] <= 1]
+        else:
+            pointer_variant = canonical_variants.select_pointer_variant(cur, lemma_id=lemma_id)
+            display_memberships = canonical_variants_by_lemma.get(lemma_id, [])
+        selected_translation = '' if display_result else (english_translation or '')
+        selected_variant_ref = {} if display_result else {'kind': 'legacy_assembled', 'id': 'translation'}
+        if pointer_variant:
+            selected_translation = (pointer_variant.get('translation_text') or '').strip()
+            selected_variant_ref = {'kind': pointer_variant['kind'], 'id': pointer_variant['id']}
 
         current_meineke = current_meineke_by_lemma.get(lemma_id, {})
         current_meineke_version_id = current_meineke.get("id")
@@ -2914,7 +2946,9 @@ def export_lemmas():
             "guidance_coverage": guidance_coverage,
             "guidance_hits": guidance_hits_by_lemma.get(lemma_id, []),
             "source_text_versions": source_versions_by_lemma.get(lemma_id, []),
-            "canonical_variants": canonical_variants_by_lemma.get(lemma_id, []),
+            "canonical_variants": display_memberships,
+            "display_policy_id": display_policy_id,
+            "canonical_action_cursor": canonical_action_cursor,
             "canonical_variant_ref": selected_variant_ref,
             "commentary_entries": commentary_by_lemma.get(lemma_id, []),
             "proper_nouns": proper_nouns_by_lemma.get(lemma_id, []),

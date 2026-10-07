@@ -999,6 +999,8 @@ def get_all_lemmas(cur):
                     'id', id,
                     'phrase_text', phrase_text,
                     'commentary_text', commentary_text,
+                    'translation_variant_kind', translation_variant_kind,
+                    'translation_variant_id', translation_variant_id,
                     'created_by', COALESCE(created_by, ''),
                     'created_at', created_at,
                     'publication_status', {("COALESCE(publication_status, '')" if has_publication_status else "''")},
@@ -1057,6 +1059,8 @@ def get_all_lemmas(cur):
                     "model": v.get("model", ""),
                     "profile_name": v.get("profile_name", ""),
                     "profile_version": v.get("profile_version"),
+                    "display_attribution": v.get("display_attribution", ""),
+                    "display_reason": v.get("display_reason", ""),
                 }
             )
 
@@ -1114,14 +1118,16 @@ def get_all_lemmas(cur):
             "ocr_model": ocr_model,
             "meineke_id": meineke_id or "",
             "billerbeck_id": billerbeck_id or "",
-            "translated": bool(translated),
+            "translated": bool(selected_translation_text),
             "image_references": images,
             "word_count": word_count,
             "proper_nouns": proper_nouns_by_lemma.get(lemma_id, []),
             "place_clusters": place_clusters_by_lemma.get(lemma_id, []),
             "etymologies": etymologies_by_lemma.get(lemma_id, []),
             "aliases_by_name": aliases_by_name,
-            "commentary_entries": commentary_by_lemma.get(lemma_id, []),
+            "commentary_entries": [n for n in commentary_by_lemma.get(lemma_id, [])
+                if not n.get('translation_variant_kind') or
+                (n['translation_variant_kind'], str(n.get('translation_variant_id'))) == (selected_kind, selected_id)],
             "translation_guidance_hits": translation_guidance_hits_by_lemma.get(lemma_id, []),
             "version": version or "epitome",
             "review_status": review_status or "not_reviewed",
@@ -1623,13 +1629,16 @@ def render_lemma_cards(lemmas):
                 presented[0].get("source_document") if isinstance(presented[0], dict) else ""
             ) or ""
             translation = render_translation_text(primary_text, source_document=primary_source_document)
+            attribution = presented[0].get("display_attribution", "")
+            if attribution:
+                translation += f"<p class='translation-attribution'>{html_module.escape(attribution)}</p>"
 
             if len(presented) > 1:
                 extra_rows = []
                 for v in presented[1:]:
                     if not isinstance(v, dict):
                         continue
-                    label = f"{v.get('kind', '')} {v.get('id', '')}".strip()
+                    label = v.get("display_attribution") or f"{v.get('kind', '')} {v.get('id', '')}".strip()
                     if v.get("is_primary"):
                         label = (label + " (primary)").strip()
                     text = (v.get("translation_text") or "").strip()

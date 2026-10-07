@@ -11736,6 +11736,445 @@ ALTER TABLE ONLY public.external_translation_entries
     ADD CONSTRAINT external_translation_entries_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id);
 
 
+
+-- Versioned translation display policy (8 October 2026).
+CREATE OR REPLACE FUNCTION public.validate_translation_display_assessment() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE actual_lemma integer;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'Assessments are immutable; supersede the current record';
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (to_jsonb(NEW) - 'is_current') IS DISTINCT FROM (to_jsonb(OLD) - 'is_current')
+           OR OLD.is_current = false OR NEW.is_current = true THEN
+            RAISE EXCEPTION 'Assessments are immutable; supersede the current record';
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF NEW.translation_run_id IS NOT NULL THEN
+        SELECT lemma_id INTO actual_lemma FROM translation_runs WHERE id = NEW.translation_run_id;
+    ELSIF NEW.human_translation_id IS NOT NULL THEN
+        SELECT lemma_id INTO actual_lemma FROM human_translations WHERE id = NEW.human_translation_id;
+    ELSE
+        SELECT lemma_id INTO actual_lemma FROM external_translation_entries WHERE id = NEW.external_translation_entry_id;
+    END IF;
+    IF actual_lemma IS DISTINCT FROM NEW.lemma_id THEN
+        RAISE EXCEPTION 'Display assessment variant does not belong to lemma %', NEW.lemma_id;
+    END IF;
+    IF NEW.target_source_version_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM lemma_source_text_versions WHERE id = NEW.target_source_version_id AND lemma_id = NEW.lemma_id
+    ) THEN
+        RAISE EXCEPTION 'Display assessment target source does not belong to lemma %', NEW.lemma_id;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+--
+-- Name: translation_display_assessments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_display_assessments (
+    id bigint NOT NULL,
+    lemma_id integer NOT NULL,
+    translation_run_id integer,
+    human_translation_id integer,
+    external_translation_entry_id bigint,
+    purpose text DEFAULT 'scholarly'::text NOT NULL,
+    decision text NOT NULL,
+    target_source_version_id integer,
+    alignment_state text DEFAULT 'unverified'::text NOT NULL,
+    reviewer text NOT NULL,
+    reason text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    is_current boolean DEFAULT true NOT NULL,
+    supersedes_id bigint,
+    CONSTRAINT translation_display_assessments_alignment_state_check CHECK ((alignment_state = ANY (ARRAY['unverified'::text, 'confirmed'::text, 'legacy_unlinked'::text]))),
+    CONSTRAINT translation_display_assessments_check CHECK ((num_nonnulls(translation_run_id, human_translation_id, external_translation_entry_id) = 1)),
+    CONSTRAINT translation_display_assessments_check1 CHECK (((alignment_state = 'unverified'::text) OR (target_source_version_id IS NOT NULL))),
+    CONSTRAINT translation_display_assessments_decision_check CHECK ((decision = ANY (ARRAY['allow'::text, 'endorse'::text, 'prefer'::text, 'exclude'::text]))),
+    CONSTRAINT translation_display_assessments_reason_check CHECK ((btrim(reason) <> ''::text)),
+    CONSTRAINT translation_display_assessments_reviewer_check CHECK ((btrim(reviewer) <> ''::text))
+);
+
+
+--
+-- Name: translation_display_assessments_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.translation_display_assessments ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.translation_display_assessments_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: translation_display_candidates; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.translation_display_candidates AS
+ SELECT 'translation_run'::text AS kind,
+    (tr.id)::bigint AS id,
+    tr.lemma_id,
+    tr.translation_text,
+    tr.status,
+    tr.source_text_version_id,
+    tr.model,
+    tr.profile_version_id,
+    p.name AS profile_name,
+    pv.version AS profile_version,
+    md5(pv.prompt_text) AS prompt_md5,
+    pv.uses_guidance_context,
+    tr.public_eligible,
+    tr.public_block_reason,
+    ''::text AS stage,
+    NULL::bigint AS delivery_id,
+    ''::text AS cohort,
+    ''::text AS match_status,
+    '{}'::jsonb AS provenance,
+    COALESCE(tr.reviewed_by, ''::text) AS author
+   FROM ((public.translation_runs tr
+     JOIN public.translation_prompt_profiles p ON ((p.id = tr.profile_id)))
+     JOIN public.translation_prompt_profile_versions pv ON ((pv.id = tr.profile_version_id)))
+UNION ALL
+ SELECT 'human_translation'::text AS kind,
+    (ht.id)::bigint AS id,
+    ht.lemma_id,
+    ht.translation_text,
+    ht.status,
+    ht.source_text_version_id,
+    ''::text AS model,
+    NULL::integer AS profile_version_id,
+    ''::text AS profile_name,
+    NULL::integer AS profile_version,
+    ''::text AS prompt_md5,
+    false AS uses_guidance_context,
+    true AS public_eligible,
+    ''::text AS public_block_reason,
+    ht.stage,
+    NULL::bigint AS delivery_id,
+    ''::text AS cohort,
+    ''::text AS match_status,
+    '{}'::jsonb AS provenance,
+    COALESCE(ht.reviewed_by, ht.created_by, ''::text) AS author
+   FROM public.human_translations ht
+UNION ALL
+ SELECT 'external_translation'::text AS kind,
+    e.id,
+    e.lemma_id,
+    e.translation_text,
+    e.review_status AS status,
+    NULL::integer AS source_text_version_id,
+    ''::text AS model,
+    NULL::integer AS profile_version_id,
+    ''::text AS profile_name,
+    NULL::integer AS profile_version,
+    ''::text AS prompt_md5,
+    false AS uses_guidance_context,
+    true AS public_eligible,
+    ''::text AS public_block_reason,
+    ''::text AS stage,
+    e.delivery_id,
+    e.cohort,
+    e.match_status,
+    d.provenance,
+    ''::text AS author
+   FROM (public.external_translation_entries e
+     JOIN public.external_translation_deliveries d ON ((d.id = e.delivery_id)));
+
+
+--
+-- Name: translation_display_policies; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_display_policies (
+    id bigint NOT NULL,
+    name text NOT NULL,
+    version integer NOT NULL,
+    purpose text DEFAULT 'scholarly'::text NOT NULL,
+    state text DEFAULT 'draft'::text NOT NULL,
+    baseline_choices jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_by text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    activated_at timestamp with time zone,
+    notes text DEFAULT ''::text NOT NULL,
+    CONSTRAINT translation_display_policies_state_check CHECK ((state = ANY (ARRAY['draft'::text, 'active'::text, 'retired'::text]))),
+    CONSTRAINT translation_display_policies_version_check CHECK ((version > 0))
+);
+
+
+--
+-- Name: translation_display_policies_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.translation_display_policies ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.translation_display_policies_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: translation_display_preferences; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_display_preferences (
+    id bigint NOT NULL,
+    policy_id bigint NOT NULL,
+    rank integer NOT NULL,
+    candidate_class text NOT NULL,
+    model_name text,
+    recipe_key text,
+    delivery_id bigint,
+    source_requirement text NOT NULL,
+    label text NOT NULL,
+    CONSTRAINT translation_display_preferences_candidate_class_check CHECK ((candidate_class = ANY (ARRAY['human_translation'::text, 'translation_run'::text, 'external_translation'::text]))),
+    CONSTRAINT translation_display_preferences_rank_check CHECK ((rank >= 10)),
+    CONSTRAINT translation_display_preferences_source_requirement_check CHECK ((source_requirement = ANY (ARRAY['aligned'::text, 'external_unverified'::text])))
+);
+
+
+--
+-- Name: translation_display_preferences_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.translation_display_preferences ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.translation_display_preferences_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: translation_display_profile_recipes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_display_profile_recipes (
+    policy_id bigint NOT NULL,
+    profile_version_id integer NOT NULL,
+    recipe_key text NOT NULL,
+    prompt_md5 text NOT NULL,
+    CONSTRAINT translation_display_profile_recipes_prompt_md5_check CHECK ((prompt_md5 ~ '^[0-9a-f]{32}$'::text)),
+    CONSTRAINT translation_display_profile_recipes_recipe_key_check CHECK ((recipe_key = ANY (ARRAY['gabe_v3'::text, 'earlier'::text])))
+);
+
+
+--
+-- Name: translation_models; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.translation_models (
+    model_name text NOT NULL,
+    provider text NOT NULL,
+    capability_class text NOT NULL,
+    CONSTRAINT translation_models_capability_class_check CHECK ((capability_class = ANY (ARRAY['frontier'::text, 'mini'::text])))
+);
+
+
+--
+-- Name: translation_display_assessments translation_display_assessments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_assessments
+    ADD CONSTRAINT translation_display_assessments_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_display_policies translation_display_policies_name_version_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_policies
+    ADD CONSTRAINT translation_display_policies_name_version_key UNIQUE (name, version);
+
+
+--
+-- Name: translation_display_policies translation_display_policies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_policies
+    ADD CONSTRAINT translation_display_policies_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_display_preferences translation_display_preferences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_preferences
+    ADD CONSTRAINT translation_display_preferences_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: translation_display_preferences translation_display_preferences_policy_id_rank_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_preferences
+    ADD CONSTRAINT translation_display_preferences_policy_id_rank_key UNIQUE (policy_id, rank);
+
+
+--
+-- Name: translation_display_profile_recipes translation_display_profile_recipes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_profile_recipes
+    ADD CONSTRAINT translation_display_profile_recipes_pkey PRIMARY KEY (policy_id, profile_version_id);
+
+
+--
+-- Name: translation_models translation_models_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_models
+    ADD CONSTRAINT translation_models_pkey PRIMARY KEY (model_name);
+
+
+--
+-- Name: translation_display_assessment_external_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_display_assessment_external_idx ON public.translation_display_assessments USING btree (external_translation_entry_id, purpose) WHERE is_current;
+
+
+--
+-- Name: translation_display_assessment_human_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_display_assessment_human_idx ON public.translation_display_assessments USING btree (human_translation_id, purpose) WHERE is_current;
+
+
+--
+-- Name: translation_display_assessment_lemma_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX translation_display_assessment_lemma_idx ON public.translation_display_assessments USING btree (lemma_id, purpose) WHERE is_current;
+
+
+--
+-- Name: translation_display_assessment_run_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_display_assessment_run_idx ON public.translation_display_assessments USING btree (translation_run_id, purpose) WHERE is_current;
+
+
+--
+-- Name: translation_display_one_active_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_display_one_active_idx ON public.translation_display_policies USING btree (purpose) WHERE (state = 'active'::text);
+
+
+--
+-- Name: translation_display_preferred_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX translation_display_preferred_idx ON public.translation_display_assessments USING btree (lemma_id, purpose) WHERE (is_current AND (decision = 'prefer'::text));
+
+
+--
+-- Name: translation_display_assessments translation_display_assessment_validate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER translation_display_assessment_validate BEFORE INSERT OR DELETE OR UPDATE ON public.translation_display_assessments FOR EACH ROW EXECUTE FUNCTION public.validate_translation_display_assessment();
+
+
+--
+-- Name: translation_display_assessments translation_display_assessmen_external_translation_entry_i_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_assessments
+    ADD CONSTRAINT translation_display_assessmen_external_translation_entry_i_fkey FOREIGN KEY (external_translation_entry_id) REFERENCES public.external_translation_entries(id);
+
+
+--
+-- Name: translation_display_assessments translation_display_assessments_human_translation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_assessments
+    ADD CONSTRAINT translation_display_assessments_human_translation_id_fkey FOREIGN KEY (human_translation_id) REFERENCES public.human_translations(id);
+
+
+--
+-- Name: translation_display_assessments translation_display_assessments_lemma_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_assessments
+    ADD CONSTRAINT translation_display_assessments_lemma_id_fkey FOREIGN KEY (lemma_id) REFERENCES public.assembled_lemmas(id);
+
+
+--
+-- Name: translation_display_assessments translation_display_assessments_supersedes_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_assessments
+    ADD CONSTRAINT translation_display_assessments_supersedes_id_fkey FOREIGN KEY (supersedes_id) REFERENCES public.translation_display_assessments(id);
+
+
+--
+-- Name: translation_display_assessments translation_display_assessments_target_source_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_assessments
+    ADD CONSTRAINT translation_display_assessments_target_source_version_id_fkey FOREIGN KEY (target_source_version_id) REFERENCES public.lemma_source_text_versions(id);
+
+
+--
+-- Name: translation_display_assessments translation_display_assessments_translation_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_assessments
+    ADD CONSTRAINT translation_display_assessments_translation_run_id_fkey FOREIGN KEY (translation_run_id) REFERENCES public.translation_runs(id);
+
+
+--
+-- Name: translation_display_preferences translation_display_preferences_delivery_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_preferences
+    ADD CONSTRAINT translation_display_preferences_delivery_id_fkey FOREIGN KEY (delivery_id) REFERENCES public.external_translation_deliveries(id);
+
+
+--
+-- Name: translation_display_preferences translation_display_preferences_model_name_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_preferences
+    ADD CONSTRAINT translation_display_preferences_model_name_fkey FOREIGN KEY (model_name) REFERENCES public.translation_models(model_name);
+
+
+--
+-- Name: translation_display_preferences translation_display_preferences_policy_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_preferences
+    ADD CONSTRAINT translation_display_preferences_policy_id_fkey FOREIGN KEY (policy_id) REFERENCES public.translation_display_policies(id);
+
+
+--
+-- Name: translation_display_profile_recipes translation_display_profile_recipes_policy_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_profile_recipes
+    ADD CONSTRAINT translation_display_profile_recipes_policy_id_fkey FOREIGN KEY (policy_id) REFERENCES public.translation_display_policies(id);
+
+
+--
+-- Name: translation_display_profile_recipes translation_display_profile_recipes_profile_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.translation_display_profile_recipes
+    ADD CONSTRAINT translation_display_profile_recipes_profile_version_id_fkey FOREIGN KEY (profile_version_id) REFERENCES public.translation_prompt_profile_versions(id);
+
+
 --
 -- PostgreSQL database dump complete
 --

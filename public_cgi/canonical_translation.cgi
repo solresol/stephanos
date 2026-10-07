@@ -344,6 +344,10 @@ def is_publishable_local(lemma: dict, v: dict) -> bool:
     kind = (v.get("kind") or "").strip()
     status = (v.get("status") or "").strip()
 
+    if v.get("display_eligible") is False:
+        return False
+    if kind == "external_translation":
+        return v.get("display_eligible") is True and bool((v.get("text") or "").strip())
     if kind == "translation_run":
         if status != "approved":
             return False
@@ -409,6 +413,8 @@ def select_presented_variants_local(lemma: dict, memberships: list[dict]) -> lis
                 "source_document": (v.get("source_document") or "").strip(),
                 "source_text_version_id": str(v.get("source_text_version_id") or "").strip(),
                 "translation_text": text,
+                "display_attribution": v.get("display_attribution", ""),
+                "display_reason": v.get("display_reason", ""),
             }
         )
     candidates.sort(key=membership_sort_key)
@@ -492,6 +498,33 @@ def select_fallback_variant_local(lemma: dict) -> dict | None:
     return None
 
 
+def policy_memberships(lemma, actions):
+    state = {}
+    for v in lemma.get('translation_variants', []):
+        if v.get('display_eligible') is True:
+            state[variant_key(v['kind'], str(v['id']))] = dict(v)
+    for a in actions:
+        if a.id <= lemma.get('canonical_action_cursor', 0):
+            continue
+        key = variant_key(a.variant_kind, a.variant_id)
+        if a.action == 'set_primary' and key in state:
+            for v in state.values():
+                if v['display_rank'] == 0: v['display_rank'] = 1
+            state[key]['display_rank'] = 0
+        elif a.action == 'add' and key in state:
+            state[key]['display_rank'] = min(1, state[key]['display_rank'])
+        elif a.action == 'remove':
+            state.pop(key, None)
+        elif a.action == 'clear_primary':
+            for v in state.values():
+                if v['display_rank'] == 0: v['display_rank'] = 1
+        elif a.action == 'clear_all':
+            state.clear()
+    ordered = sorted(state.values(), key=lambda v: (v['display_rank'], v['display_order']))
+    return [dict(kind=v['kind'], id=str(v['id']), is_primary=i == 0)
+            for i, v in enumerate(ordered) if i == 0 or v['display_rank'] <= 1]
+
+
 def compute_state(lemma: dict, actions: list[CanonicalAction]) -> dict:
     baseline_pointer = lemma.get("canonical_variant_ref") if isinstance(lemma.get("canonical_variant_ref"), dict) else {}
     baseline_kind = (baseline_pointer.get("kind") or "legacy_assembled").strip() if isinstance(baseline_pointer, dict) else "legacy_assembled"
@@ -501,13 +534,15 @@ def compute_state(lemma: dict, actions: list[CanonicalAction]) -> dict:
     state = apply_actions(state, actions)
     memberships = list(state.values())
     memberships.sort(key=membership_sort_key)
+    if lemma.get('display_policy_id'):
+        memberships = policy_memberships(lemma, actions)
 
     presented = select_presented_variants_local(lemma, memberships)
     selected = None
     if presented:
         primary = next((v for v in presented if v.get("is_primary")), None)
         selected = primary or presented[0]
-    else:
+    elif not lemma.get("display_policy_id"):
         selected = select_fallback_variant_local(lemma)
 
     blocked = selected is None
@@ -523,6 +558,8 @@ def compute_state(lemma: dict, actions: list[CanonicalAction]) -> dict:
         "lemma": lemma.get("lemma") or "",
         "canonical_pointer": {"kind": baseline_kind, "id": baseline_id},
         "canonical_memberships": memberships,
+        "display_attribution": (selected or {}).get('display_attribution', ''),
+        "display_reason": (selected or {}).get('display_reason', ''),
         "presented_variants": [
             {
                 "kind": v.get("kind", ""),

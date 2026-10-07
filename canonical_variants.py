@@ -71,7 +71,7 @@ def _risk_block_status(cur, *, lemma_id: int, variant_kind: str, variant_id: str
     return True, summary or risk_code or "Blocked by risk gating"
 
 
-def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -> dict[str, Any]:
+def resolve_variant_legacy(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -> dict[str, Any]:
     """
     Resolve a translation variant reference to its publishability + text.
 
@@ -339,7 +339,7 @@ def _fetch_active_canonical_memberships(cur, *, lemma_id: int) -> list[dict[str,
     return memberships
 
 
-def resolve_fallback_variant(cur, *, lemma_id: int) -> dict[str, Any] | None:
+def resolve_fallback_variant_legacy(cur, *, lemma_id: int) -> dict[str, Any] | None:
     best: dict[str, Any] | None = None
 
     if table_exists(cur, "human_translations"):
@@ -357,7 +357,7 @@ def resolve_fallback_variant(cur, *, lemma_id: int) -> dict[str, Any] | None:
         )
         row = cur.fetchone()
         if row:
-            candidate = resolve_variant(cur, lemma_id=lemma_id, variant_kind="human_translation", variant_id=row[0])
+            candidate = resolve_variant_legacy(cur, lemma_id=lemma_id, variant_kind="human_translation", variant_id=row[0])
             if candidate.get("publishable"):
                 best = {**candidate, "sort_ts": row[1]}
 
@@ -388,7 +388,7 @@ def resolve_fallback_variant(cur, *, lemma_id: int) -> dict[str, Any] | None:
         )
         row = cur.fetchone()
         if row:
-            candidate = resolve_variant(cur, lemma_id=lemma_id, variant_kind="translation_run", variant_id=row[0])
+            candidate = resolve_variant_legacy(cur, lemma_id=lemma_id, variant_kind="translation_run", variant_id=row[0])
             if candidate.get("publishable"):
                 if best is None:
                     best = {**candidate, "sort_ts": row[1]}
@@ -404,7 +404,7 @@ def resolve_fallback_variant(cur, *, lemma_id: int) -> dict[str, Any] | None:
     return best
 
 
-def select_presented_variants(
+def select_presented_variants_legacy(
     cur,
     *,
     lemma_id: int,
@@ -426,7 +426,7 @@ def select_presented_variants(
     memberships = _fetch_active_canonical_memberships(cur, lemma_id=lemma_id) if has_memberships else []
     canonical_candidates: list[dict[str, Any]] = []
     for membership in memberships:
-        candidate = resolve_variant(
+        candidate = resolve_variant_legacy(
             cur,
             lemma_id=lemma_id,
             variant_kind=membership["kind"],
@@ -471,30 +471,41 @@ def select_presented_variants(
             return [primary or canonical_candidates[0]]
         return canonical_candidates
 
-    fallback = resolve_fallback_variant(cur, lemma_id=lemma_id)
+    fallback = resolve_fallback_variant_legacy(cur, lemma_id=lemma_id)
     if not fallback:
         return []
     return [fallback]
 
 
-def select_pointer_variant(cur, *, lemma_id: int) -> dict[str, Any] | None:
-    """
-    Select a single presentable variant for a lemma.
+def resolve_variant(cur, *, lemma_id: int, variant_kind: str, variant_id: str) -> dict[str, Any]:
+    import translation_display
+    policy = translation_display.load_policy(cur)
+    if policy:
+        for candidate in translation_display.fetch_candidates(cur, lemma_id):
+            if candidate['kind'] == variant_kind and str(candidate['id']) == str(variant_id):
+                return translation_display.evaluate_candidate(
+                    candidate, translation_display.target_source(cur, lemma_id), policy)
+        return {'exists': False, 'publishable': False, 'block_reason': 'Variant not available for display'}
+    return resolve_variant_legacy(cur, lemma_id=lemma_id, variant_kind=variant_kind, variant_id=variant_id)
 
-    Uses canonical primary when present; otherwise deterministic canonical fallback; otherwise fallback policy.
-    """
-    presented = select_presented_variants(cur, lemma_id=lemma_id, ux_mode="single")
-    if not presented:
-        return None
-    choice = presented[0]
-    return {
-        "kind": choice.get("kind", ""),
-        "id": str(choice.get("id", "") or ""),
-        "translation_text": choice.get("translation_text", ""),
-        "status": choice.get("status", ""),
-        "source_document": choice.get("source_document", ""),
-        "source_text_version_id": choice.get("source_text_version_id", ""),
-        "model": choice.get("model", ""),
-        "profile_name": choice.get("profile_name", ""),
-        "profile_version": choice.get("profile_version"),
-    }
+
+def select_presented_variants(cur, *, lemma_id: int, ux_mode: str = 'multi') -> list[dict[str, Any]]:
+    import translation_display
+    selected = translation_display.presented(cur, lemma_id=lemma_id, ux_mode=ux_mode)
+    if selected is not None:
+        return selected
+    return select_presented_variants_legacy(cur, lemma_id=lemma_id, ux_mode=ux_mode)
+
+
+def resolve_fallback_variant(cur, *, lemma_id: int) -> dict[str, Any] | None:
+    import translation_display
+    selected = translation_display.presented(cur, lemma_id=lemma_id)
+    if selected is not None:
+        return selected[0] if selected else None
+    return resolve_fallback_variant_legacy(cur, lemma_id=lemma_id)
+
+
+def select_pointer_variant(cur, *, lemma_id: int) -> dict[str, Any] | None:
+    """Return the shared display choice, retaining its provenance and policy reason."""
+    presented = select_presented_variants(cur, lemma_id=lemma_id, ux_mode='single')
+    return dict(presented[0]) if presented else None

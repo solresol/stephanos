@@ -14,6 +14,7 @@ from pathlib import Path
 
 from db import get_connection
 import canonical_variants
+import translation_display
 from import_translation_guidance_spreadsheets import (
     comparable_state as guidance_comparable_state,
     default_lifecycle_stage as default_guidance_lifecycle_stage,
@@ -1498,6 +1499,9 @@ def set_primary_canonical_variant(
     The partial unique index on active primaries is immediate, so the old
     primary must be cleared before inserting/updating the new primary.
     """
+    if translation_display.editorial_action(pg_cur, lemma_id=lemma_id, action='set_primary',
+            kind=variant_kind, variant_id=variant_id, reviewer=updated_by):
+        return
     pg_cur.execute(
         """
         UPDATE lemma_canonical_variants
@@ -1594,6 +1598,11 @@ def import_canonical_actions(sqlite_cur, pg_cur) -> tuple[int, int, int, int]:
                     f"  REJECT canonical action id={action_id} lemma={lemma_id} action={action} kind={kind} id={vid}: {reason}"
                 )
                 continue
+
+        if translation_display.editorial_action(pg_cur, lemma_id=lemma_id, action=action,
+                kind=kind, variant_id=vid, reviewer=reviewer, reason=row['notes'] or ''):
+            applied += 1
+            continue
 
         if action == "add":
             pg_cur.execute(

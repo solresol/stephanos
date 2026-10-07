@@ -1,6 +1,8 @@
 # Translation display preferences
 
-Proposal and production audit, 7 October 2026. The ranking below is not active.
+Implemented 8 October 2026, following the approved 7 October proposal.
+Policy `scholarly_default` version 1 is activated through the audited management CLI.
+See [the activation audit](audits/2026-10-08-translation-display.md).
 
 ## Operational changes made separately
 
@@ -91,13 +93,14 @@ profile-version/recipe, source alignment, review state, purpose and text.
 Compatibility with `canonical_variants` can use the existing `(kind, id)` shape,
 adding `external_translation` as a new kind when external display is enabled.
 
-Four small tables provide the editable policy and editorial evidence:
+Five tables provide the versioned policy and editorial evidence:
 
 | Table | Main columns and purpose |
 | --- | --- |
-| `translation_models` | `id`, `provider`, `model_name`, `capability_class`; exact identifiers, including explicitly recorded aliases; no lexical version sorting |
+| `translation_models` | `model_name` primary key, `provider`, `capability_class`; exact identifiers, including explicitly recorded aliases; no lexical version sorting |
 | `translation_display_policies` | `id`, `name`, `version`, `state` (draft/active/retired), `created_by`, `created_at`, `notes`; one active policy per display purpose |
-| `translation_display_preferences` | `policy_id`, `rank`, `candidate_class`, optional `model_id`, optional `recipe_key`, `required_review`, `source_requirement`, `purpose`; ordered typed rules, not SQL stored in JSON |
+| `translation_display_preferences` | `policy_id`, `rank`, `candidate_class`, optional `model_name`, optional `recipe_key`, optional `delivery_id`, `source_requirement`; ordered typed rules, not SQL stored in JSON |
+| `translation_display_profile_recipes` | `policy_id`, `profile_version_id`, `recipe_key`, `prompt_md5`; explicit profile allowlist and frozen prompt identity |
 | `translation_display_assessments` | exactly one FK to a run, human translation or external entry; `decision` (allow/endorse/prefer/exclude), `target_source_version_id`, `alignment_state`, `reviewer`, `reason`, timestamps and supersession link |
 
 `recipe_key` is explicit metadata/mapping for a prompt profile version, not a
@@ -236,3 +239,57 @@ checked-in schema baselines. Strict preflight failed on exactly those two
 tables, seven indexes and three foreign keys. Their existing definitions were
 copied into an additive migration and the baselines; the updated strict
 preflight passes. No live schema or imported data was altered for this repair.
+
+## Operating the implemented policy
+
+Run these commands in the production checkout with its existing database configuration.
+The additive migration `migrations/20261008_translation_display_policy.sql` must be
+run as the schema owner: some older candidate tables are owned by `gregb`.
+Only the new tables/view/sequences receive pipeline-role grants.
+
+```sh
+uv run manage_translation_display.py seed --apply
+uv run manage_translation_display.py audit --policy-id 1 --output tmp/display-audit.json
+uv run manage_translation_display.py activate --policy-id 1 --apply --output tmp/display-activation.json
+uv run manage_translation_display.py explain --lemma-id 2467
+```
+
+Activation refuses any lost default or changed human selection. It does not call
+models, rewrite translation records, or approve external entries. The resolver
+feeds the website, PDF, CSV, nodegoat download and review snapshot. The review CGI
+uses exported eligibility, rank and tie-breaking evidence, applying only actions
+newer than the snapshot's imported-action cursor. Reference-site counts now mean
+entries with a displayed translation; AI generation progress remains separate.
+
+Explicit editorial selection can use the existing authenticated review controls
+or `canonical_translation_service.py set`. Add means endorse; set-primary means
+prefer; remove means exclude; clear-primary retains an endorsement; clear-all
+excludes all currently eligible candidates. These decisions are recorded with
+reviewer, reason and immutable supersession history. Review changes on merah are
+imported by the next daily pipeline. CLI operations act directly on PostgreSQL.
+A new reviewed human correction should either be final or explicitly preferred;
+there is no inferred parent-child relationship between unrelated human records.
+
+```sh
+uv run manage_translation_display.py assess --lemma-id 2467 \
+  --kind external_translation --variant-id 1582 --decision prefer \
+  --reviewer gregb --reason 'Reviewed for display against the current entry' --apply
+```
+
+The example changes display preference, not external provenance or source
+verification. `--alignment confirmed --target-source-id ID` is reserved for an
+actual source-alignment review. Exclusion can be reversed with `--decision allow`.
+The existing frozen allowance for unlinked approved humans is retained when
+changing their display decision. No new unlinked human gets that allowance
+implicitly. Every decision still passes the eligibility gates.
+
+To revert selection, run `uv run manage_translation_display.py deactivate --apply`,
+then regenerate and deploy the same site, book, CSV and review snapshot. This
+restores the legacy resolver without deleting candidates, policy or assessments.
+A database-only deactivation does not replace already published static files.
+For a new model or recipe, copy the rules into a new draft policy version and
+register exact model/profile identities, then audit and activate that version.
+Never mutate an active policy's ranking to silently change its historical meaning.
+
+The original audit below/above describes the 7 October snapshot. It is retained
+as historical evidence; current activation counts are in the linked audit.

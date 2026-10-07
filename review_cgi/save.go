@@ -687,20 +687,23 @@ func main() {
 	}
 	canonicalAction = strings.TrimSpace(strings.ToLower(canonicalAction))
 
-	err = SaveTranslationVariantReview(
-		db,
-		lemmaID,
-		variantKind,
-		variantID,
-		variantStatus,
-		sourceTextVersionID,
-		false,
-		notes,
-		remoteUser,
-	)
-	if err != nil {
-		showErrorAndExit(fmt.Sprintf("Failed to save translation variant review: %v", err), returnView)
-		return
+	if variantKind != "external_translation" {
+		err = SaveTranslationVariantReview(
+			db,
+			lemmaID,
+			variantKind,
+			variantID,
+			variantStatus,
+			sourceTextVersionID,
+			false,
+			notes,
+			remoteUser,
+		)
+		if err != nil {
+			showErrorAndExit(fmt.Sprintf("Failed to save translation variant review: %v", err), returnView)
+			return
+		}
+
 	}
 
 	// Insert append-only canonical action log row.
@@ -709,7 +712,17 @@ func main() {
 	}
 	if canonicalAction == "add" || canonicalAction == "set_primary" {
 		// Only queue canonical add/primary actions for approved variants.
-		if variantStatus != "approved" {
+		if variantKind == "external_translation" {
+			allowed := false
+			for _, v := range currentLemma.TranslationVariants {
+				if mapStringValue(v, "kind") == variantKind && mapStringValue(v, "id") == variantID && mapStringValue(v, "display_eligible") == "true" {
+					allowed = true
+				}
+			}
+			if !allowed {
+				canonicalAction = ""
+			}
+		} else if variantStatus != "approved" {
 			canonicalAction = ""
 		}
 	}

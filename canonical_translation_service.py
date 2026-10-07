@@ -15,6 +15,7 @@ from pathlib import Path
 
 from db import get_connection
 import canonical_variants
+import translation_display
 from source_documents import source_document_priority_sql
 
 
@@ -126,6 +127,8 @@ def resolve_canonical(cur, lemma_id: int, lemma_text: str) -> dict:
         "translation_blocked": bool(not selected),
         "translation_block_reason": "No publishable translation variant found" if not selected else "",
         "notes": notes,
+        "display_attribution": (selected or {}).get("display_attribution", ""),
+        "display_reason": (selected or {}).get("display_reason", ""),
     }
 
 
@@ -295,6 +298,12 @@ def command_set(cur, args) -> dict:
 
     if not table_exists(cur, "lemma_canonical_variants"):
         raise RuntimeError("lemma_canonical_variants table is required to set canonical variants")
+
+    if translation_display.editorial_action(cur, lemma_id=lemma_id, action='set_primary',
+            kind=variant_kind, variant_id=variant_id, reviewer=args.updated_by, reason=args.notes):
+        result = resolve_canonical(cur, lemma_id, lemma_text)
+        result['set_pointer'] = {'kind': variant_kind, 'id': str(variant_id)}
+        return result
 
     set_primary_membership(
         cur,

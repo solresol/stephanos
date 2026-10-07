@@ -90,8 +90,7 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 			Message: fmt.Sprintf("failed to read canonical actions from SQLite: %v", err),
 		}
 	}
-	baselineCanon := baselineCanonicalMemberships(lemma)
-	effectiveCanon := ApplyCanonicalActions(baselineCanon, actions)
+	effectiveCanon := DisplayMemberships(lemma, actions)
 	effectiveKind, effectiveID := ChooseEffectiveCanonicalRef(effectiveCanon)
 
 	canonicalSource := "review_snapshot"
@@ -129,7 +128,7 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 		} else if strings.TrimSpace(translationText) == "" {
 			translationBlocked = true
 			translationBlockReason = "Selected canonical variant has empty translation text"
-		} else if strings.TrimSpace(selectedStatus) != "" && selectedStatus != "approved" {
+		} else if strings.TrimSpace(selectedStatus) != "" && selectedStatus != "approved" && effectiveKind != "external_translation" {
 			translationBlocked = true
 			translationBlockReason = fmt.Sprintf("Selected canonical variant status is %s", selectedStatus)
 		} else if reason := variantWithholdReason(lemma, effectiveKind, effectiveID); reason != "" {
@@ -180,6 +179,12 @@ func handleGet(w http.ResponseWriter, r *http.Request) error {
 		"canonical_memberships":    canonicalMemberships,
 	}
 
+	for _, variant := range lemma.TranslationVariants {
+		if mapString(variant, "kind") == effectiveKind && mapString(variant, "id") == effectiveID {
+			result["display_attribution"] = mapString(variant, "display_attribution")
+			result["display_reason"] = mapString(variant, "display_reason")
+		}
+	}
 	if len(actions) > 0 {
 		last := actions[len(actions)-1]
 		result["sqlite_canonical_actions_applied"] = len(actions)
@@ -284,12 +289,18 @@ func resolveVariant(lemma *Lemma, kind string, id string) (bool, string, string,
 // Other lanes (human_translation, legacy_assembled) are already covered by the
 // status / risk-gating checks at the call site.
 func variantWithholdReason(lemma *Lemma, kind string, id string) string {
-	if kind != "translation_run" {
-		return ""
-	}
 	for _, variant := range lemma.TranslationVariants {
 		if mapString(variant, "kind") != kind || mapString(variant, "id") != id {
 			continue
+		}
+		if mapString(variant, "display_eligible") == "false" {
+			return "Display policy: " + mapString(variant, "display_block_reason")
+		}
+		if kind == "external_translation" && mapString(variant, "display_eligible") != "true" {
+			return "External translation has no display eligibility evidence"
+		}
+		if kind != "translation_run" {
+			return ""
 		}
 		switch mapString(variant, "guidance_freshness_state") {
 		case "potentially_outdated", "needs_review", "outdated":
