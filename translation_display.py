@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import time
+import html
+import re
+import unicodedata
 
 _POLICIES: dict = {}
 ASSESSMENT_COLUMNS = {
@@ -90,7 +93,28 @@ def fetch_candidates(cur, lemma_id):
                 assessments[(kind, assessment[column])] = assessment
     for candidate in candidates:
         candidate['assessment'] = assessments.get((candidate['kind'], candidate['id']), {})
+    inherit_text_blocks(candidates)
     return candidates
+
+
+def normalized_translation(text):
+    text = html.unescape(re.sub(r'<[^>]+>', '', text or ''))
+    text = re.sub(r'[*_`]', '', text)
+    return ' '.join(unicodedata.normalize('NFKC', text).split())
+
+
+def inherit_text_blocks(candidates):
+    """A formatting-only copy must not bypass an unresolved text revision."""
+    blocked = {}
+    for c in candidates:
+        if c.get('revision_pending'):
+            key = normalized_translation(c.get('translation_text'))
+            if key:
+                blocked[key] = f"{c['kind']} {c['id']}"
+    for c in candidates:
+        source = blocked.get(normalized_translation(c.get('translation_text')))
+        if source and not c.get('revision_pending'):
+            c['equivalent_text_blocked'] = source
 
 
 def attribution(candidate):
@@ -131,6 +155,8 @@ def evaluate_candidate(candidate, target, policy):
         return reject('Translation blocked by source/risk review')
     if c.get('revision_pending'):
         return reject('Unresolved scholarly revision request for this translation')
+    if c.get('equivalent_text_blocked'):
+        return reject('Same wording as blocked ' + c['equivalent_text_blocked'] + ' after formatting normalization')
     kind = c['kind']
     if kind in ('translation_run', 'human_translation') and c.get('status') != 'approved':
         return reject('Translation status is ' + str(c.get('status')))

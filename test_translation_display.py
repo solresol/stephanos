@@ -1,6 +1,6 @@
 import copy
 import unittest
-from translation_display import evaluate_candidate
+from translation_display import evaluate_candidate, inherit_text_blocks
 
 TARGET = dict(id=10, source_document='meineke', text_hash='same')
 POLICY = dict(id=1, version=1, baseline_choices={}, recipes={3:dict(recipe_key='gabe_v3',prompt_md5='hash')}, rules=[
@@ -61,6 +61,14 @@ class DisplayTests(unittest.TestCase):
         policy=copy.deepcopy(POLICY);policy['baseline_choices']={'2':{'kind':'translation_run','id':'9'}}
         choices=[self.evaluate(run(id=i),policy=policy) for i in (1,9,20)]
         self.assertEqual(sorted(choices,key=lambda c:c['sort_key'])[0]['id'],'9')
+    def test_formatting_only_copy_cannot_bypass_open_revision(self):
+        original = run(translation_text="Kapai. The *ethnonym* is Kapaios.", revision_pending=True)
+        copied = external(translation_text="Kapai. The ethnonym is Kapaios.")
+        distinct = external(id=9, translation_text="Kapai. The ethnic form is Kapaios.")
+        inherit_text_blocks([original, copied, distinct])
+        self.assertFalse(self.evaluate(copied)['publishable'])
+        self.assertTrue(self.evaluate(distinct)['publishable'])
+
     def test_bad_first_candidate_does_not_hide_eligible_fallback(self):
         choices=[self.evaluate(run(id=1,revision_pending=True)),self.evaluate(run(id=2,model='gpt-5.5'))]
         self.assertEqual([c['id'] for c in choices if c['publishable']],['2'])
