@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
+import contextlib
+import io
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from fetch_topostext_html import (
     FetchError,
@@ -82,6 +86,29 @@ class FetchToposTextHtmlTests(unittest.TestCase):
             sha256_bytes(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         )
+
+    def test_fetch_failure_does_not_touch_database_or_prior_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "snapshots"
+            prior_snapshot = output_dir / "prior" / "E411StephanusByzGreek.html"
+            prior_snapshot.parent.mkdir(parents=True)
+            prior_snapshot.write_bytes(VALID_HTML)
+            fake_db = Mock()
+            error_output = io.StringIO()
+            with (
+                patch("fetch_topostext_html.fetch_content", side_effect=FetchError("shared_link_not_found")),
+                patch("fetch_topostext_html.write_snapshot_files") as write_snapshot,
+                patch.dict(sys.modules, {"db": fake_db}),
+                contextlib.redirect_stderr(error_output),
+            ):
+                exit_code = main(["--output-dir", str(output_dir)])
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("shared_link_not_found", error_output.getvalue())
+            fake_db.get_connection.assert_not_called()
+            write_snapshot.assert_not_called()
+            self.assertEqual(prior_snapshot.read_bytes(), VALID_HTML)
+            self.assertEqual(list(output_dir.iterdir()), [prior_snapshot.parent])
 
     def test_snapshot_file_exists_resolves_relative_paths(self):
         with tempfile.TemporaryDirectory() as temp_dir:
