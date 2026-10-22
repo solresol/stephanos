@@ -38,10 +38,25 @@ class HerodianRemovalTests(unittest.TestCase):
         self.assertIn('headword_123.html',html)
         self.assertIn('letter_alpha.html',html)
         self.assertIn('protected/image_7.html',html)
+        self.assertEqual(site.entity_editor_href(123,'proper nouns',entity_id=7),'/cgi-bin/entities.cgi?entity_id=7#proper-nouns')
+        self.assertEqual(site.entity_editor_href(123,'place cluster',place_cluster_id=8),'/cgi-bin/entities.cgi?place_cluster_id=8#place-cluster')
         self.assertNotIn('Herodian overlaps',html)
         self.assertNotIn('overlap-section',html)
         self.assertFalse(hasattr(site,'get_herodian_connection'))
         self.assertFalse(hasattr(site,'fetch_herodian_overlaps_by_lemma'))
+
+    def test_renderer_has_no_undefined_global_helpers(self):
+        import builtins, symtable
+        table=symtable.symtable((ROOT/'generate_reference_site.py').read_text(),'renderer','exec')
+        available=set(table.get_identifiers())|set(dir(builtins))|{'__file__','__name__'}
+        unknown=set()
+        def visit(scope):
+            for symbol in scope.get_symbols():
+                if symbol.is_global() and symbol.is_referenced() and symbol.get_name() not in available:
+                    unknown.add(symbol.get_name())
+            for child in scope.get_children():visit(child)
+        visit(table)
+        self.assertEqual(unknown,set())
 
     def test_full_reference_build_has_only_primary_connection_and_other_output(self):
         calls=[]

@@ -66,6 +66,7 @@ _CITE_CREF_RE = re.compile(r"\bC\s*\d")
 _GREEK_CHAR_RE = re.compile(r"[\u0370-\u03FF\u1F00-\u1FFF]")
 _LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
 _DIGIT_RE = re.compile(r"\d")
+_SAFE_REF_RE = re.compile(r"[^0-9A-Za-z._-]+")
 
 
 PUBLIC_SOURCE_SCRUB_PATTERNS = (
