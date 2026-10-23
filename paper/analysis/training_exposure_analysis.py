@@ -3,7 +3,7 @@
 
 The --snapshot operation is read-only. Analysis thereafter uses frozen inputs,
 never calls a model, and never changes reference translations or benchmark rows.
-Run with uv run; see the generated README for the recorded invocation.
+Run with uv run; see paper/analysis/README.md for the required frozen inputs.
 """
 from __future__ import annotations
 

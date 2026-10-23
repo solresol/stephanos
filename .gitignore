@@ -8,6 +8,8 @@ topostext_pipeline.lock
 daily_pipeline.lock
 __pycache__/
 *.pyc
+.venv/
+.pytest_cache/
 *~
 .DS_Store
 config.py
@@ -26,6 +28,7 @@ data/topostext_snapshots/
 data/pauly/
 .secrets/
 tmp/
+/scratch/
 output/
 .playwright-cli/
 

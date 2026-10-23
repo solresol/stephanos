@@ -83,6 +83,37 @@ summaries, paired contrasts, Batch API provenance, token counts, and actual
 standard-versus-Batch cost calculations under
 `paper/build/benchmark_analysis/guidance_ablation_*`.
 
+## Historical translation dates and training-exposure candidates
+
+`training_exposure_analysis.py` preserves the exploratory comparison of dated
+translation records and paired benchmark scores. Dated records establish that
+translations existed; they do not establish that a model trained on them. The
+analysis reports that its frozen benchmark has no unexposed comparison group.
+
+The script requires five frozen inputs in its `--output` directory:
+
+- `database_snapshot.json`;
+- `approved_reference_translations.csv`;
+- `llm_outputs_v1_v2_v3.csv`;
+- `model_prompt_cell_summary.csv`; and
+- `early_cron_messages.json`, an independently prepared JSON list of dated
+  cron-mail records with `id`, `date`, and `body` fields.
+
+Run against those existing inputs without database or model calls:
+
+```sh
+uv run paper/analysis/training_exposure_analysis.py \
+  --output paper/build/training_exposure_audit
+```
+
+To refresh the database snapshot and copy the three CSV inputs from an existing
+frozen release, add `--snapshot --release /path/to/frozen-release` and set
+`DB_HOST=raksasa DB_USER=stephanos`. That mode uses a read-only database
+transaction and then runs the analysis. It does not collect cron mail: prepare
+`early_cron_messages.json` in the output directory before either invocation.
+Keep raw mail, snapshots, and generated audit results in the ignored output
+directory.
+
 ## Figure contract
 
 - **Question:** how does reference-based translation similarity change with
