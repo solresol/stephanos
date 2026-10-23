@@ -4,7 +4,8 @@ Export processed + translated lemmas to CSV.
 
 Columns:
   lemma, entry_number, type, greek_text, translation, confidence,
-  ocr_generation, ocr_model, ocr_processed_at, meineke_id, billerbeck_id
+  ocr_generation, ocr_model, ocr_processed_at, meineke_id, billerbeck_id,
+  translation_kind, translation_id, translation_model, translation_attribution, display_policy_version
 
 Usage:
   uv run generate_csv_export.py --output exports/lemmas.csv
@@ -14,6 +15,7 @@ import csv
 from pathlib import Path
 
 import canonical_variants
+import translation_display
 from db import get_connection
 
 
@@ -47,6 +49,8 @@ def fetch_translated_rows(cur):
         translation = (pointer or {}).get("translation_text", "").strip()
         if not translation:
             continue
+        if pointer.get("display_policy_id"):
+            greek_text = translation_display.target_source(cur, lemma_id)["text_body"]
         rows.append(
             (
                 lemma,
@@ -60,6 +64,8 @@ def fetch_translated_rows(cur):
                 ocr_model,
                 meineke_id,
                 billerbeck_id,
+                pointer.get("kind", ""), pointer.get("id", ""), pointer.get("model", ""),
+                pointer.get("display_attribution", ""), pointer.get("display_policy_version", ""),
             )
         )
     return rows
@@ -97,9 +103,11 @@ def main():
                 "ocr_processed_at",
                 "meineke_id",
                 "billerbeck_id",
+                "translation_kind", "translation_id", "translation_model",
+                "translation_attribution", "display_policy_version",
             ]
         )
-        for lemma, entry_number, lemma_type, greek_text, translation, confidence, ocr_processed_at, ocr_generation, ocr_model, meineke_id, billerbeck_id in rows:
+        for lemma, entry_number, lemma_type, greek_text, translation, confidence, ocr_processed_at, ocr_generation, ocr_model, meineke_id, billerbeck_id, *provenance in rows:
             writer.writerow(
                 [
                     (lemma or "").strip(),
@@ -113,6 +121,7 @@ def main():
                     ocr_processed_at or "",
                     meineke_id or "",
                     billerbeck_id or "",
+                    *provenance,
                 ]
             )
 

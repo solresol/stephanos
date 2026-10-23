@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -399,6 +400,8 @@ type PlaceClusterReview struct {
 
 // Lemma represents a single lemma entry from the JSON export
 type Lemma struct {
+	DisplayPolicyID               int                      `json:"display_policy_id"`
+	CanonicalActionCursor         int                      `json:"canonical_action_cursor"`
 	ID                            int                      `json:"id"`
 	Lemma                         string                   `json:"lemma"`
 	EntryNumber                   int                      `json:"entry_number"`
@@ -2989,4 +2992,81 @@ func GetLetterNavigation(data *LemmaData) []LetterNav {
 	}
 
 	return nav
+}
+
+// DisplayMemberships applies only review actions not already represented by the
+// PostgreSQL snapshot, then reranks eligible candidates using the exported policy.
+func DisplayMemberships(lemma *Lemma, actions []CanonicalAction) []CanonicalMembership {
+	if lemma.DisplayPolicyID == 0 {
+		return ApplyCanonicalActions(baselineCanonicalMemberships(lemma), actions)
+	}
+	type candidate struct {
+		membership  CanonicalMembership
+		rank, order int
+	}
+	state := map[string]candidate{}
+	for _, v := range lemma.TranslationVariants {
+		if mapStringValue(v, "display_eligible") != "true" {
+			continue
+		}
+		kind, id := mapStringValue(v, "kind"), mapStringValue(v, "id")
+		rank, _ := strconv.Atoi(mapStringValue(v, "display_rank"))
+		order, _ := strconv.Atoi(mapStringValue(v, "display_order"))
+		state[canonicalKey(kind, id)] = candidate{CanonicalMembership{Kind: kind, ID: id}, rank, order}
+	}
+	for _, a := range actions {
+		if a.ID <= lemma.CanonicalActionCursor {
+			continue
+		}
+		key := canonicalKey(a.VariantKind, a.VariantID)
+		c, exists := state[key]
+		switch a.Action {
+		case "set_primary":
+			if !exists {
+				continue
+			}
+			for k, old := range state {
+				if old.rank == 0 {
+					old.rank = 1
+					state[k] = old
+				}
+			}
+			c.rank = 0
+			state[key] = c
+		case "add":
+			if exists && c.rank > 1 {
+				c.rank = 1
+				state[key] = c
+			}
+		case "remove":
+			delete(state, key)
+		case "clear_primary":
+			for k, old := range state {
+				if old.rank == 0 {
+					old.rank = 1
+					state[k] = old
+				}
+			}
+		case "clear_all":
+			state = map[string]candidate{}
+		}
+	}
+	candidates := []candidate{}
+	for _, c := range state {
+		candidates = append(candidates, c)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].rank != candidates[j].rank {
+			return candidates[i].rank < candidates[j].rank
+		}
+		return candidates[i].order < candidates[j].order
+	})
+	result := []CanonicalMembership{}
+	for i, c := range candidates {
+		if i == 0 || c.rank <= 1 {
+			c.membership.IsPrimary = i == 0
+			result = append(result, c.membership)
+		}
+	}
+	return result
 }

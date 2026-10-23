@@ -1,5 +1,6 @@
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("DB_HOST", "localhost")
 os.environ.setdefault("DB_NAME", "stephanos")
@@ -19,7 +20,8 @@ class RecordingCursor:
 
 
 class CanonicalPrimaryMembershipTest(unittest.TestCase):
-    def test_import_review_primary_set_clears_existing_primary_first(self):
+    @patch("translation_display.load_policy", return_value=None)
+    def test_import_review_primary_set_clears_existing_primary_first(self, _policy):
         cur = RecordingCursor()
 
         set_primary_canonical_variant(

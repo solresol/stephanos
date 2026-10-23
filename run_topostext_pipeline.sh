@@ -38,8 +38,18 @@ else
 fi
 
 echo "Step 1: Fetching Brady's Dropbox ToposText HTML snapshot..." | tee -a "$LOGFILE"
-fetch_output="$(uv run fetch_topostext_html.py --output-dir data/topostext_snapshots 2>&1)"
-printf '%s\n' "$fetch_output" | tee -a "$LOGFILE"
+# Guard the assignment so set -e cannot discard a failed fetch's diagnostics.
+if fetch_output="$(uv run fetch_topostext_html.py --output-dir data/topostext_snapshots 2>&1)"; then
+    printf '%s\n' "$fetch_output" | tee -a "$LOGFILE"
+else
+    fetch_exit=$?
+    {
+        printf '%s\n' "$fetch_output"
+        printf 'ToposText fetch failed (exit status %s); aborting before import.\n' "$fetch_exit"
+    } | tee -a "$LOGFILE" >&2 || true
+    # Even a logging failure must not replace the original fetch exit status.
+    exit "$fetch_exit"
+fi
 fetch_status="$(printf '%s\n' "$fetch_output" | awk -F= '$1 == "status" { print $2; exit }')"
 if [ -z "$fetch_status" ]; then
     echo "Could not determine ToposText fetch status; aborting" | tee -a "$LOGFILE" >&2

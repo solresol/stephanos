@@ -14,6 +14,7 @@ from datetime import datetime
 from collections import defaultdict
 
 import canonical_variants
+import translation_display
 import db
 
 
@@ -165,7 +166,8 @@ def export_entries(conn, output_dir):
         writer.writerow([
             'id', 'headword', 'headword_latin', 'entry_number', 'billerbeck_id',
             'meineke_id', 'type', 'version', 'volume_label',
-            'greek_text', 'translation', 'word_count', 'confidence'
+            'greek_text', 'translation', 'word_count', 'confidence',
+            'translation_kind', 'translation_id', 'translation_attribution'
         ])
 
         count = 0
@@ -184,10 +186,11 @@ def export_entries(conn, output_dir):
                 row[5],  # type
                 row[6],  # version
                 row[7],  # volume_label
-                row[8],  # greek_text
+                translation_display.target_source(cur, row[0])['text_body'] if pointer.get('display_policy_id') else row[8],
                 translation,
                 row[9],  # word_count
                 row[10], # confidence
+                pointer.get('kind', ''), pointer.get('id', ''), pointer.get('display_attribution', ''),
             ])
             count += 1
 

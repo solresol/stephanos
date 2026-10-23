@@ -1009,8 +1009,7 @@ func loadPageData(db *sql.DB, data *LemmaData, params url.Values) (*PageData, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to read canonical actions: %w", err)
 	}
-	baselineCanon := baselineCanonicalMemberships(currentLemma)
-	effectiveCanon := ApplyCanonicalActions(baselineCanon, canonicalActions)
+	effectiveCanon := DisplayMemberships(currentLemma, canonicalActions)
 	AnnotateTranslationVariants(currentLemma, effectiveCanon)
 	effectiveKind, effectiveID := ChooseEffectiveCanonicalRef(effectiveCanon)
 	if effectiveKind != "" && effectiveID != "" {
