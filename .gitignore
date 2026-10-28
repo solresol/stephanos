@@ -26,6 +26,7 @@ review_data.sqlite
 guidance_scan_results.db
 data/topostext_snapshots/
 data/pauly/
+data/brady_englished_ethnika/
 .secrets/
 tmp/
 /scratch/
