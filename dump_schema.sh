@@ -54,6 +54,10 @@ find_pg_dump() {
   return 1
 }
 
+DATABASE_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DATABASE_ENV="$(uv run --directory "$DATABASE_SCRIPT_DIR" "$DATABASE_SCRIPT_DIR/database_endpoint.py" --shell)"
+eval "$DATABASE_ENV"
+
 output_file="stephanos_schema.sql"
 db_name="${DB_NAME:-${PGDATABASE:-stephanos}}"
 db_host="${DB_HOST:-${PGHOST:-}}"
@@ -99,6 +103,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+DB_HOST="$db_host" DB_PORT="$db_port" DB_NAME="$db_name" DB_USER="$db_user" \
+  uv run --directory "$DATABASE_SCRIPT_DIR" "$DATABASE_SCRIPT_DIR/database_endpoint.py" >/dev/null
+
 pg_dump_bin="$(find_pg_dump || true)"
 if [[ -z "$pg_dump_bin" ]]; then
   echo "Could not find pg_dump in PATH or /Applications/Postgres*." >&2
@@ -135,6 +142,8 @@ if rg -q "server version mismatch" "$err_file"; then
 
   if [[ -n "$fallback_host" ]]; then
     remote_cmd=(pg_dump --schema-only --no-owner --no-privileges)
+    [[ -z "$db_host" ]] || remote_cmd+=(-h "$db_host")
+    remote_cmd+=(-p "$db_port")
     if [[ -n "$db_user" ]]; then
       remote_cmd+=(-U "$db_user")
     fi

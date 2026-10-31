@@ -24,6 +24,11 @@ if command -v flock >/dev/null 2>&1; then
     fi
 fi
 
+# Resolve once before any database work or failure-backup trap. Never source secrets.
+DATABASE_ENV="$(uv run database_endpoint.py --shell)"
+eval "$DATABASE_ENV"
+uv run database_endpoint.py
+
 DATE=$(date +%Y%m%d)
 STEPHANOS_SITE_URL="${STEPHANOS_SITE_URL:-https://stephanos.symmachus.org}"
 AI_SYSTEMS_FEED_PATH="${AI_SYSTEMS_FEED_PATH:-reference_site/ai-systems.xml}"
@@ -175,6 +180,8 @@ dump_postgres_backup() {
   fi
 
   local remote_cmd=(pg_dump)
+  [[ -z "$db_host" ]] || remote_cmd+=("-h" "$db_host")
+  remote_cmd+=("-p" "$db_port")
   if [[ -n "$db_user" ]]; then
     remote_cmd+=("-U" "$db_user")
   fi
@@ -228,7 +235,7 @@ uv run analyze_vocabulary_signatures.py --ensure-schema-only 2>&1 | tee -a "$LOG
 	    fi
 	    SCHEMA_DB_USER="${SCHEMA_DB_USER:-${DB_USER:-stephanos}}"
 	    SCHEMA_DB_NAME="${SCHEMA_DB_NAME:-${DB_NAME:-stephanos}}"
-	    SCHEMA_DB_PORT="${SCHEMA_DB_PORT:-${DB_PORT:-5432}}"
+	    SCHEMA_DB_PORT="${SCHEMA_DB_PORT:-${DB_PORT:-${PGPORT:-5432}}}"
 	    SCHEMA_SSH_HOST="${SCHEMA_SSH_HOST:-stephanos@raksasa}"
 	    SCHEMA_PREFLIGHT_DIR="${SCHEMA_PREFLIGHT_DIR:-tmp/schema_preflight}"
 	    SCHEMA_LIVE_SQL="${SCHEMA_PREFLIGHT_DIR}/stephanos_schema.live.sql"

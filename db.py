@@ -7,19 +7,9 @@ import socket
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from database_settings import resolve
 
 LOCAL_DB_HOSTS = {"localhost", "127.0.0.1", "::1"}
-
-
-def _load_setting(config_value, env_names, default=None):
-    """Use config value first, then environment variables, then default."""
-    if config_value not in (None, ""):
-        return config_value
-    for env_name in env_names:
-        env_value = os.environ.get(env_name)
-        if env_value not in (None, ""):
-            return env_value
-    return default
 
 
 try:
@@ -33,10 +23,15 @@ except ImportError:
     CONFIG_DB_NAME = None
     CONFIG_DB_USER = None
 
-DB_HOST = _load_setting(CONFIG_DB_HOST, ("DB_HOST", "PGHOST"))
-DB_PORT = int(_load_setting(CONFIG_DB_PORT, ("DB_PORT", "PGPORT"), default=5432))
-DB_NAME = _load_setting(CONFIG_DB_NAME, ("DB_NAME", "PGDATABASE"), default="stephanos")
-DB_USER = _load_setting(CONFIG_DB_USER, ("DB_USER", "PGUSER"), default="stephanos")
+_settings = resolve(dict(zip(
+    ("DB_HOST", "DB_PORT", "DB_NAME", "DB_USER"),
+    (CONFIG_DB_HOST, CONFIG_DB_PORT, CONFIG_DB_NAME, CONFIG_DB_USER),
+)))
+DB_HOST = _settings["DB_HOST"]
+DB_PORT = _settings["DB_PORT"]
+DB_NAME = _settings["DB_NAME"]
+DB_USER = _settings["DB_USER"]
+DB_EXPECTED_SERVER_MAJOR = _settings["DB_EXPECTED_SERVER_MAJOR"]
 
 if not DB_HOST:
     raise RuntimeError(
@@ -58,10 +53,18 @@ if (
 def get_connection(dict_cursor=False):
     """Get a PostgreSQL database connection."""
     cursor_factory = RealDictCursor if dict_cursor else None
-    return psycopg2.connect(
+    connection = psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
         database=DB_NAME,
         user=DB_USER,
         cursor_factory=cursor_factory
     )
+    # libpq exposes these without issuing SQL or starting a transaction.
+    if ((connection.info.dbname, connection.info.user, connection.info.port) !=
+            (DB_NAME, DB_USER, DB_PORT) or
+            (DB_EXPECTED_SERVER_MAJOR and
+             connection.server_version // 10000 != DB_EXPECTED_SERVER_MAJOR)):
+        connection.close()
+        raise RuntimeError("Database endpoint identity does not match configured target")
+    return connection

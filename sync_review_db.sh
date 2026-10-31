@@ -2,7 +2,8 @@
 # Sync review database from merah to raksasa
 # This script pulls the SQLite database containing human review data
 
-set -e
+set -euo pipefail
+umask 077
 
 REVIEW_DIR="$HOME/stephanos/review_data"
 REMOTE_DB="/var/www/vhosts/stephanos.symmachus.org/db/reviews.db"
@@ -31,9 +32,15 @@ fi
 REMOTE_SIZE=$(ssh stephanos@merah.cassia.ifost.org.au "ls -lh $REMOTE_DB | awk '{print \$5}'")
 log "Remote database size: $REMOTE_SIZE"
 
-# Pull database from merah
-log "Pulling database from merah..."
-scp stephanos@merah.cassia.ifost.org.au:"$REMOTE_DB" "$LOCAL_DB"
+# Online backup includes committed WAL data while the remote CGI keeps accepting reviews.
+# Keep the last local intake file intact unless a complete checked snapshot arrives.
+log "Pulling consistent online snapshot from merah..."
+SNAPSHOT=$(mktemp "$REVIEW_DIR/.reviews-snapshot.XXXXXX")
+trap 'rm -f "$SNAPSHOT"' EXIT
+ssh -o BatchMode=yes stephanos@merah.cassia.ifost.org.au \
+    "python3 - '$REMOTE_DB'" < "$(dirname "$0")/snapshot_review_sqlite.py" > "$SNAPSHOT"
+sqlite3 "$SNAPSHOT" 'PRAGMA quick_check;' | grep -qx ok
+mv "$SNAPSHOT" "$LOCAL_DB"
 
 if [ $? -eq 0 ]; then
     LOCAL_SIZE=$(ls -lh "$LOCAL_DB" | awk '{print $5}')
