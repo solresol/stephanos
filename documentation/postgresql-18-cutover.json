@@ -1,0 +1,93 @@
+{
+  "application": "Stephanos",
+  "status": "production_routed_acceptance_pending",
+  "observed_at": "2026-11-01T00:48:27.995260+00:00",
+  "cutover_at": "2026-11-01T00:46:38.779921+00:00",
+  "routing_published_at": "2026-11-01T00:43:31.937731+00:00",
+  "writer_release_at": "2026-11-01T00:46:38.799693+00:00",
+  "writer_hold_seconds": 1703.176,
+  "scheduled_acceptance": {
+    "status": "pending",
+    "first_verified_write_at": null,
+    "due_at": "2026-11-01T09:00:00Z",
+    "first_observation_at": "2026-11-01T09:05:00Z",
+    "checker": "/var/backups/postgresql/stephanos-cutover-20261031T231000Z/read-only-acceptance-check.py"
+  },
+  "handover_diagnostic": {
+    "initial_probe_failed": true,
+    "cause": "Administrator-only temp_file_limit incorrectly included in diagnostic PGOPTIONS",
+    "resolved": "Handover-only ordinary-role-safe probes; no privilege change, repeated copy or restore",
+    "original_failure_record": "/var/backups/postgresql/stephanos-cutover-20261031T231000Z/handover-resume-20261101T004500Z/initial-controller-status.json"
+  },
+  "backup_compatibility": {
+    "status": "separate_backup_owner_policy_pending",
+    "closed_source_currently_causes_daily_backup_error": true,
+    "backup_script": "/etc/backups/dbbackups.sh",
+    "no_global_name_only_exclusion": "Would omit the active same-name PG18 database too",
+    "exclusions_or_job_changed_by_this_task": false
+  },
+  "source": {
+    "cluster": "16/main",
+    "database": "stephanos",
+    "oid": "297561087",
+    "port": 5432,
+    "allow_connections": false
+  },
+  "successor": {
+    "cluster": "18/main",
+    "database": "stephanos",
+    "oid": "728719207",
+    "port": 5433,
+    "role": "stephanos",
+    "authentication": "existing local peer"
+  },
+  "validated": {
+    "tables": 154,
+    "sequences": 104,
+    "indexes": 450,
+    "views": 5,
+    "all_table_fingerprints_match": true,
+    "all_sequences_match": true,
+    "raw_schema_hashes_equal": false,
+    "semantic_schema_comparison": "35 catalog-verified NOT NULL constraint names only; all other SQL tokens/ownership/ACLs identical",
+    "selected_application_tests_passed": 15,
+    "csv_bytes": 3221785,
+    "csv_sha256": "9ade0170d537dd5d2bd0ab14edd5608e0e84f5c0bbfdbf09c943ffb5f562ff90"
+  },
+  "source_backup": {
+    "path": "/var/backups/postgresql/stephanos-cutover-20261031T231000Z/final-consistent-pg16-source.dump",
+    "bytes": 1014093721,
+    "sha256": "a2e79744bd3da1f4329efd09c17985e2b8ebab25cc2a4a0c18edde5ad30198a7",
+    "seconds": 88.788,
+    "source_port": 5432,
+    "source_database": "stephanos_frozen_20261031t231000z",
+    "original_source": {
+      "name": "stephanos",
+      "oid": "297561087",
+      "owner": "stephanos",
+      "acl": [
+        "=Tc/stephanos",
+        "stephanos=CTc/stephanos",
+        "herodian=c/stephanos"
+      ],
+      "encoding": "UTF8",
+      "collate": "en_US.UTF-8",
+      "ctype": "en_US.UTF-8",
+      "connection_limit": -1,
+      "bytes": 6229081111
+    }
+  },
+  "destination_backup": {
+    "path": "/var/backups/postgresql/stephanos-cutover-20261031T231000Z/independent-pg18-destination.dump",
+    "bytes": 1016207284,
+    "sha256": "7c45103cf51b853e3f89e8dc3b603fae3a96379eb59384c51cf806a3afdd93fe",
+    "seconds": 90.025,
+    "source_port": 5433,
+    "source_database": "stephanos_rehearsal_cutover_20261031t231000z",
+    "restore_seconds": 280.099,
+    "full_restore_verified": true
+  },
+  "runtime_revision": "66abbcb61bde35af3975a299db587cfb79b65ac4",
+  "stale_candidate": "stephanos_stale_20261014_preserved_20261031",
+  "untracked_brady_preserved": true
+}

@@ -1,9 +1,12 @@
 # Production database configuration
 
-Verified on Raksasa, 31 October 2026. The fresh PG18 cutover is prepared; until
-the cutover evidence records activation, PostgreSQL **16 / 5432** remains the
-authoritative `stephanos` database. The database and application role are both
-`stephanos`, running as Unix account `stephanos`.
+Verified on Raksasa, **1 November 2026**. Production is PostgreSQL **18 / 5433**,
+database and application role **`stephanos`**, running as Unix account `stephanos`.
+Routing was published at **00:43:31 UTC**, verified at **00:46:38 UTC**, and the
+original writer schedule was restored. The original PG16/5432 database is retained
+with **`ALLOW_CONNECTIONS=false`** by explicit approval; this blocks legacy readers,
+writers and maintenance connections. Ordinary 09:00 UTC pipeline acceptance remains
+pending. Detailed verified cutover records are being added below.
 
 ## Installed configuration and precedence
 
@@ -25,7 +28,7 @@ version before SQL. Environment overrides allow isolated tests and intentional
 remote clients to select their own endpoint. Udara's existing localhost guard
 remains in place.
 
-The prepared PG18 profile uses Unix socket `/var/run/postgresql`, port **5433**,
+The installed PG18 profile uses Unix socket `/var/run/postgresql`, port **5433**,
 database/user **stephanos**, and expected major version **18**. Existing peer
 authentication is sufficient for the service account. No password, HBA, role,
 listener or cluster restart change is required. `/home/stephanos/.pgpass` exists
@@ -62,25 +65,61 @@ processing or publication batch is needed for migration validation.
 
 ## Backup, validation and rollback
 
-The isolated rehearsal at
-`/var/backups/postgresql/stephanos-rehearsal-20261031T092200Z` restored all 154
-tables and 104 sequences, compared ordered row fingerprints and CSV output, and
-passed 15 application tests. Raw schema hashes differ because PG18 names 35
-existing NOT NULL constraints; the narrowly catalog-verified semantic comparison
-retains this raw mismatch and checks every other SQL token, owner and ACL.
-The source subsequently advanced, so that rehearsal is not the final cutover copy.
+The final source was frozen behind the verified database-scoped connection gate;
+existing sessions drained naturally. The full PG18 copy and independent destination
+backup restore matched all **154 tables, 104 sequences, 450 indexes and five views**,
+ownership and ACLs. Fifteen selected application tests passed. CSV output was
+byte-identical (**3,221,785 bytes**, SHA-256
+`9ade0170d537dd5d2bd0ab14edd5608e0e84f5c0bbfdbf09c943ffb5f562ff90`).
 
-Final cutover must hold known writers, take a fresh independent source backup,
-restore/validate a new PG18 database, preserve the old PG18 candidate under a
-historical name, and keep the production name `stephanos`. Preserve PG16 recovery,
-all rehearsal copies, untracked Brady content and existing review receipt ledgers.
-Record the final source/destination identities, hashes, tests and profile activation
-in a separate private evidence directory. Verify a destination backup by full
-restore before declaring backup acceptance complete.
+Raw schema hashes remain different: PG18 names 35 existing NOT NULL constraints.
+The catalog-verified comparison checked all 1,559 statements and found every other
+SQL token, owner and ACL identical. This is a documented representation difference,
+not a claim that the raw hashes matched. The destination backup's PG18-to-PG18
+restore had exact normalized schema equality. No reindex or collation metadata
+refresh was substituted for these checks.
 
-Before any PG18 write, rollback can restore the original connection profile and
-source read-only setting and release the writer hold. After PG18 accepts writes,
-rollback requires reconciliation of those writes, sequence positions and review
-receipts; changing the port alone would lose work. Resume the unchanged schedule
-and verify the next normal daily pipeline rather than running a duplicate paid
-batch. A working read-only connection is not scheduled-write acceptance.
+Private execution, preserved copies and independently restore-tested backups:
+`/var/backups/postgresql/stephanos-cutover-20261031T231000Z/`.
+
+- Fresh source archive: `final-consistent-pg16-source.dump`, 1,014,093,721 bytes,
+  SHA-256 `a2e79744bd3da1f4329efd09c17985e2b8ebab25cc2a4a0c18edde5ad30198a7`.
+- Independent destination archive: `independent-pg18-destination.dump`, 1,016,207,284
+  bytes, SHA-256 `7c45103cf51b853e3f89e8dc3b603fae3a96379eb59384c51cf806a3afdd93fe`.
+- Original PG16 `stephanos` remains OID `297561087`, with connections blocked.
+  Its owner, ACLs, connection limit and pre-existing settings are preserved.
+- Canonical PG18 `stephanos` is OID `728719207`. The previous repaired candidate,
+  OID `297561087` on PG18, is preserved as
+  `stephanos_stale_20261014_preserved_20261031`. Internal frozen/rehearsal/verification
+  copies remain recorded separately; they are not application authorities.
+
+The final diagnostic probe initially passed an administrator-only `temp_file_limit`
+option to the ordinary role. Handover-only recovery used ordinary-role-safe probes;
+no privilege change or repeated copy/restore was needed. Routing was published at
+00:43:31 UTC and verified at 00:46:38 UTC. The exact cron was restored, locks released,
+and total writer hold was **28 minutes 23 seconds**. No extra paid work, publication,
+cluster restart, HBA/credential change or untracked Brady edit occurred.
+
+**Backup follow-up:** the installed machine-wide backup currently treats a closed
+database as an error and withholds offsite upload. A separate backup owner is
+preparing retirement-policy compatibility; this task did not change backup policy,
+exclusions or schedules. Existing restore-tested independent archives are retained.
+Never add a global name-only exclusion for `stephanos`: PG18's active database has
+the same name. Do not automatically reopen the source to make backups pass.
+
+Ordinary scheduled acceptance is **pending**: next pipeline is **1 November 2026,
+09:00 UTC** (20:00 Sydney); first observation around **09:05 UTC**. Run only:
+
+```sh
+sudo python3 /var/backups/postgresql/stephanos-cutover-20261031T231000Z/read-only-acceptance-check.py
+```
+
+The checker never starts processing or publication. A running job remains pending;
+wait for its natural completion. Acceptance needs unchanged native PG18 routing,
+the PG16 gate and schedule intact, ordinary committed-write evidence, a completion
+marker, healthy indexes/collation and matching local/public CSV hashes. A successful
+read-only connection alone is not scheduled-write acceptance.
+
+After PG18 writes, rollback requires reconciling new data, sequence positions and
+review receipts before changing routing or deliberately reopening PG16. Retain the
+original settings and all copies/backups. See [cutover metadata](documentation/postgresql-18-cutover.json).
