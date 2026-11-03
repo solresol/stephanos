@@ -53,6 +53,21 @@ Udara automations `stephanos-scholarly-entry-review` and `stephanos-logs` are no
 proof of current consumer state; off-host writers need explicit reconciliation.
 The previously retired dedicated Dropbox and nodegoat schedules stay retired.
 
+The shared scholarly ledger and scholarly-verifier skill commands explicitly set
+`DB_PORT=5433` and `DB_EXPECTED_SERVER_MAJOR=18`, alongside their existing
+`DB_HOST=raksasa DB_USER=stephanos`. This avoids a missing per-user profile or
+inherited `PGPORT=5432` selecting the closed legacy database. The common adapter
+checks the actual database, role, port and server major before returning a
+connection. Installing these instructions on Raksasa does not establish that an
+off-host automation has updated its checkout or execution overrides; its current
+configuration and next ordinary run still need independent verification.
+The `raksasa` hostname selects TCP and requires existing authentication that covers
+port 5433. On 3 November, an identity-only TCP probe as Raksasa's `stephanos`
+account failed with `fe_sendauth: no password supplied`; the production peer-socket
+probe succeeded. This does not establish another host/account's credential state.
+Verify the actual caller's existing authentication before accepting its routing
+handover; never fall back to the closed PG16 copy or change credentials implicitly.
+
 Merah's CGI accepts human review events into
 `/var/www/vhosts/stephanos.symmachus.org/db/reviews.db` (SQLite). `sync_review_db.sh`
 uses existing service-account SSH and SQLite's online backup API, validates the

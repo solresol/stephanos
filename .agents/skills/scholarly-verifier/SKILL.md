@@ -9,7 +9,7 @@ The automation supplies an earlier `snapshot_id` and a running verifier
 `run_id`. Read the complete evidence and specialist findings:
 
 ```bash
-DB_HOST=raksasa DB_USER=stephanos uv run scholarly_workflow.py \
+DB_HOST=raksasa DB_PORT=5433 DB_USER=stephanos DB_EXPECTED_SERVER_MAJOR=18 uv run scholarly_workflow.py \
   verification-dossier --snapshot-id SNAPSHOT_ID
 ```
 
@@ -38,7 +38,7 @@ between epitomisation and ordinary corruption is an acceptable result.
 Record exactly one verdict for every `finding_id`:
 
 ```bash
-DB_HOST=raksasa DB_USER=stephanos uv run scholarly_workflow.py record-verdict \
+DB_HOST=raksasa DB_PORT=5433 DB_USER=stephanos DB_EXPECTED_SERVER_MAJOR=18 uv run scholarly_workflow.py record-verdict \
   --run-id RUN_ID \
   --finding-id FINDING_ID \
   --verdict accepted \
@@ -59,7 +59,7 @@ When one or more findings require a changed translation, first record those
 verdicts and then create a relational revision request:
 
 ```bash
-DB_HOST=raksasa DB_USER=stephanos uv run scholarly_workflow.py request-revision \
+DB_HOST=raksasa DB_PORT=5433 DB_USER=stephanos DB_EXPECTED_SERVER_MAJOR=18 uv run scholarly_workflow.py request-revision \
   --run-id RUN_ID \
   --finding-id FINDING_ID \
   --requested-change 'Specific bounded correction for the existing translator.'
@@ -68,7 +68,7 @@ DB_HOST=raksasa DB_USER=stephanos uv run scholarly_workflow.py request-revision 
 Finish only after every finding has a verdict:
 
 ```bash
-DB_HOST=raksasa DB_USER=stephanos uv run scholarly_workflow.py \
+DB_HOST=raksasa DB_PORT=5433 DB_USER=stephanos DB_EXPECTED_SERVER_MAJOR=18 uv run scholarly_workflow.py \
   complete-verification \
   --run-id RUN_ID \
   --overall-verdict accepted \
