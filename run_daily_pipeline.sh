@@ -12,15 +12,72 @@ cd "$(dirname "$0")"
 
 # Log file
 LOGFILE="pipeline.log"
+PIPELINE_STAGE=lock
+SLACK_ENABLED=0
+SLACK_OUTPUT=""
+
+report_slack() {
+  timeout 10s python3 ./cron_slack.py "$1" "$SLACK_RUN_ID" "$SLACK_STARTED_AT" "$PIPELINE_STAGE" "$2"
+}
+
+finish_slack_report() {
+  local exit_status="$1"
+  local status=failed
+  local delivery_failed=0
+  [[ "$SLACK_ENABLED" == 1 ]] || return 0
+  if [[ "$exit_status" == 0 ]]; then status=succeeded; fi
+  if ! report_slack "$status" "$exit_status"; then delivery_failed=1; fi
+
+  if [[ -n "$SLACK_OUTPUT" ]]; then
+    local saved_output=tmp/cron-output.latest.log
+    if ! mv -f -- "$SLACK_OUTPUT" "$saved_output"; then
+      saved_output="$SLACK_OUTPUT"
+      delivery_failed=1
+    fi
+    if (( exit_status != 0 || delivery_failed )); then
+      printf 'Stephanos run %s: stage=%s exit=%s Slack delivery failed=%s. See %s and %s.\n' \
+        "$SLACK_RUN_ID" "$PIPELINE_STAGE" "$exit_status" "$delivery_failed" "$LOGFILE" "$saved_output" >&8
+    fi
+  fi
+  return 0
+}
+
+if [[ "${STEPHANOS_CRON_SLACK:-0}" == 1 && -f "$HOME/.config/stephanos/slack-webhook" ]]; then
+    SLACK_ENABLED=1
+    SLACK_STARTED_AT=$(date +%s)
+    SLACK_RUN_ID="stephanos-daily-$SLACK_STARTED_AT-$$"
+fi
 
 # Single-instance lock: exit early if another daily pipeline run holds the lock.
 # Guarded so manual runs on hosts without flock (e.g. macOS) still proceed.
 LOCKFILE="${PIPELINE_LOCKFILE:-daily_pipeline.lock}"
 if command -v flock >/dev/null 2>&1; then
     exec 9>"$LOCKFILE"
-    if ! flock -n 9; then
-        echo "Daily pipeline already running; exiting at $(date)" | tee -a "$LOGFILE"
+    lock_status=0
+    flock -n -E 75 9 || lock_status=$?
+    if (( lock_status == 75 )); then
+        skip_message="Daily pipeline already running; exiting at $(date)"
+        if [[ "$SLACK_ENABLED" == 1 ]] && report_slack skipped 0; then
+            echo "$skip_message" >> "$LOGFILE"
+        else
+            echo "$skip_message" | tee -a "$LOGFILE"
+        fi
         exit 0
+    elif (( lock_status != 0 )); then
+        echo "Daily pipeline could not acquire $LOCKFILE (exit $lock_status)." >&2
+        if [[ "$SLACK_ENABLED" == 1 ]]; then
+            report_slack failed "$lock_status" || true
+        fi
+        exit "$lock_status"
+    fi
+fi
+
+PIPELINE_STAGE=database-routing
+if [[ "$SLACK_ENABLED" == 1 ]]; then
+    trap 'finish_slack_report "$?"' EXIT
+    if report_slack started 0 && mkdir -p tmp && SLACK_OUTPUT=$(mktemp tmp/cron-output.XXXXXX); then
+        exec 8>&2
+        exec >>"$SLACK_OUTPUT" 2>&1
     fi
 fi
 
@@ -95,6 +152,7 @@ pipeline_exit_report() {
     dump_postgres_backup "backups/stephanos_${DATE}.sql.gz" 2>&1 | tee -a "$LOGFILE" \
       || echo "  Warning: fallback PostgreSQL backup failed" | tee -a "$LOGFILE"
   fi
+  finish_slack_report "$exit_status"
   exit "$exit_status"
 }
 
@@ -196,6 +254,7 @@ echo "========================================" | tee -a "$LOGFILE"
 echo "Pipeline run: $(date)" | tee -a "$LOGFILE"
 echo "========================================" | tee -a "$LOGFILE"
 
+PIPELINE_STAGE=git-pull
 # Step 0: Git pull to get latest instructions/code
 echo "Step 0: Pulling latest changes from git..." | tee -a "$LOGFILE"
 if [ -z "$(git status --porcelain)" ]; then
@@ -208,6 +267,7 @@ else
     git status --short | tee -a "$LOGFILE"
 fi
 
+PIPELINE_STAGE=schema-preflight
 # Step 0a0: Ensure low-priority AI footnote schema before strict preflight
 echo "Step 0a0: Ensuring AI footnote schema..." | tee -a "$LOGFILE"
 uv run detect_footnotes.py --ensure-schema --limit 0 2>&1 | tee -a "$LOGFILE"
@@ -267,6 +327,7 @@ else
     echo "Step 0a: Schema preflight skipped (SCHEMA_PREFLIGHT=0)" | tee -a "$LOGFILE"
 fi
 
+PIPELINE_STAGE=process-data
 # Step 1: Retire finished Billerbeck OCR ingestion steps
 echo "Step 1: Skipping Billerbeck EPUB ingestion (OCR corpus complete)." | tee -a "$LOGFILE"
 
@@ -979,6 +1040,7 @@ uv run refresh_legacy_canonical_fields.py 2>&1 | tee -a "$LOGFILE" || echo "  Wa
 echo "Step 5l: Syncing with nodegoat..." | tee -a "$LOGFILE"
 uv run sync_nodegoat.py --push --catch-up --limit 20 2>&1 | tee -a "$LOGFILE" || echo "  Warning: nodegoat sync failed" | tee -a "$LOGFILE"
 
+PIPELINE_STAGE=generate-site
 # Step 7: Generate reference website
 echo "Step 7: Generating reference website..." | tee -a "$LOGFILE"
 uv run generate_reference_site.py 2>&1 | tee -a "$LOGFILE"
@@ -1159,6 +1221,7 @@ if [ "$TOPOSTEXT_INTAKE_REPORT" -gt 0 ]; then
         2>&1 | tee -a "$LOGFILE" || echo "  Warning: ToposText authority status page generation failed" | tee -a "$LOGFILE"
 fi
 
+PIPELINE_STAGE=deploy
 # Step 9: Deploy to merah
 echo "Step 9: Deploying to merah..." | tee -a "$LOGFILE"
 # Publish the comparatively small statistics tree first. The full generated site
@@ -1236,6 +1299,7 @@ run_rsync_logged guidance_scan_results.db stephanos@merah.cassia.ifost.org.au:/v
 # Deploy review CGI binaries from current source
 run_review_cgi_deploy_logged || echo "  Warning: review CGI deploy failed or timed out" | tee -a "$LOGFILE"
 
+PIPELINE_STAGE=backup
 # Step 10: Backup databases with rolling history
 echo "Step 10: Backing up databases..." | tee -a "$LOGFILE"
 
@@ -1253,5 +1317,6 @@ ssh stephanos@merah.cassia.ifost.org.au "bash ~/stephanos/backup_review_db.sh" 2
 echo "  Cleaning up old local backups (keeping last 7 days)..." | tee -a "$LOGFILE"
 find backups -name "stephanos_*.sql.gz" -mtime +7 -delete 2>&1 | tee -a "$LOGFILE" || echo "  Warning: Failed to cleanup old local backups" | tee -a "$LOGFILE"
 
+PIPELINE_STAGE=complete
 echo "Pipeline complete: $(date)" | tee -a "$LOGFILE"
 echo "" | tee -a "$LOGFILE"
