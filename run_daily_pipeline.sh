@@ -15,6 +15,21 @@ LOGFILE="pipeline.log"
 PIPELINE_STAGE=lock
 SLACK_ENABLED=0
 SLACK_OUTPUT=""
+WATCHDOG_STARTED_AT=""
+
+write_watchdog_state() {
+  local state_file
+  mkdir -p tmp || return 1
+  state_file=$(mktemp tmp/watchdog-run.XXXXXX) || return 1
+  printf '%s %s\n' "$WATCHDOG_STARTED_AT" "$1" > "$state_file" \
+    && mv -f -- "$state_file" tmp/watchdog-run
+}
+
+record_watchdog_state() {
+  if [[ -n "$WATCHDOG_STARTED_AT" ]] && ! write_watchdog_state "$1"; then
+    echo "Stephanos watchdog state could not be recorded." >&2
+  fi
+}
 
 report_slack() {
   timeout 10s python3 ./cron_slack.py "$1" "$SLACK_RUN_ID" "$SLACK_STARTED_AT" "$PIPELINE_STAGE" "$2"
@@ -24,6 +39,7 @@ finish_slack_report() {
   local exit_status="$1"
   local status=failed
   local delivery_failed=0
+  record_watchdog_state "$exit_status"
   [[ "$SLACK_ENABLED" == 1 ]] || return 0
   if [[ "$exit_status" == 0 ]]; then status=succeeded; fi
   if ! report_slack "$status" "$exit_status"; then delivery_failed=1; fi
@@ -73,8 +89,12 @@ if command -v flock >/dev/null 2>&1; then
 fi
 
 PIPELINE_STAGE=database-routing
-if [[ "$SLACK_ENABLED" == 1 ]]; then
+if [[ "${STEPHANOS_CRON_SLACK:-0}" == 1 ]]; then
+    WATCHDOG_STARTED_AT=$(date +%s)
     trap 'finish_slack_report "$?"' EXIT
+    record_watchdog_state running
+fi
+if [[ "$SLACK_ENABLED" == 1 ]]; then
     if report_slack started 0 && mkdir -p tmp && SLACK_OUTPUT=$(mktemp tmp/cron-output.XXXXXX); then
         exec 8>&2
         exec >>"$SLACK_OUTPUT" 2>&1
