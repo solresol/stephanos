@@ -8,13 +8,15 @@ import email.utils
 import html
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from xml.etree.ElementTree import Element, SubElement, tostring
 from zoneinfo import ZoneInfo
 
 import db
 from generate_pipeline_progress import estimate_completion, get_progress_stats
+from daily_token_usage import load_daily_usage, render_usage
+import publication_budget
 
 
 LOCAL_TZ = ZoneInfo("Australia/Sydney")
@@ -119,6 +121,7 @@ def render_report(
     exit_status: int,
     schema_status: dict[str, object],
     tasks: list[TaskSummary],
+    token_usage: dict | None = None,
 ) -> str:
     label = status_label(exit_status, schema_status)
     lines = [
@@ -134,6 +137,8 @@ def render_report(
             f"({task.pct:.1f}%), pending {task.pending:,}, "
             f"7d rate {task.rate_7d:,}, ETA {task.eta}"
         )
+    if token_usage is not None:
+        lines.append(render_usage(token_usage))
     return "\n".join(lines)
 
 
@@ -173,6 +178,7 @@ def build_payload(
     tasks: list[TaskSummary],
     report: str,
     site_url: str,
+    token_usage: dict | None = None,
 ) -> dict[str, object]:
     label = status_label(exit_status, schema_status)
     return {
@@ -183,6 +189,7 @@ def build_payload(
         "rss_url": site_url.rstrip("/") + "/ai-systems.xml",
         "pipeline_url": site_url.rstrip("/") + "/pipeline.html",
         "report": report,
+        "token_usage": token_usage,
         "tasks": [
             {
                 "key": task.key,
@@ -206,6 +213,10 @@ def main() -> int:
     parser.add_argument("--site-url", default=DEFAULT_SITE_URL)
     parser.add_argument("--schema-report-file", type=Path, default=DEFAULT_SCHEMA_REPORT)
     parser.add_argument("--pipeline-exit-status", type=int, default=0)
+    parser.add_argument("--publication-target", type=int, default=50)
+    parser.add_argument("--publication-daily-token-limit", type=int, default=100000)
+    parser.add_argument("--guidance-daily-token-limit", type=int, default=2000000)
+    parser.add_argument("--usage-date", type=date.fromisoformat, help="Usage calendar day in Australia/Sydney (default: today)")
     parser.add_argument("--status-report", action="store_true", help="Print the short report to stdout")
     args = parser.parse_args()
 
@@ -213,9 +224,30 @@ def main() -> int:
     conn = db.get_connection()
     try:
         stats = get_progress_stats(conn)
+        try:
+            token_usage = load_daily_usage(
+                conn, day=args.usage_date or generated_at.date(), through=generated_at,
+            )
+            if args.usage_date is None:
+                token_usage["previous_day"] = load_daily_usage(
+                    conn, day=generated_at.date() - timedelta(days=1), through=generated_at,
+                )
+            with conn.cursor() as budget_cursor:
+                token_usage["publication_budget"] = publication_budget.report_status(budget_cursor, generated_at)
+        except Exception:
+            # Do not hide the operational status if optional telemetry fails,
+            # or print SQL/connection details in the public feed.
+            conn.rollback()
+            token_usage = {"status": "unavailable"}
     finally:
         conn.close()
 
+    token_usage["configured_controls"] = {
+        "publication_target_per_run": args.publication_target,
+        "publication_translation_token_threshold": args.publication_daily_token_limit,
+        "guidance_token_threshold": args.guidance_daily_token_limit,
+        "note": "Legacy token thresholds are preflight checks, not provider quotas. Normal Sol publication additionally reserves a fixed USD1/day and USD30/month budget before Batch submission.",
+    }
     schema_status = load_schema_status(args.schema_report_file)
     tasks = summarize_tasks(stats)
     report = render_report(
@@ -223,6 +255,7 @@ def main() -> int:
         exit_status=args.pipeline_exit_status,
         schema_status=schema_status,
         tasks=tasks,
+        token_usage=token_usage,
     )
     label = status_label(args.pipeline_exit_status, schema_status)
     feed = rss_feed(generated_at=generated_at, site_url=args.site_url, report=report, label=label)
@@ -231,6 +264,7 @@ def main() -> int:
         exit_status=args.pipeline_exit_status,
         schema_status=schema_status,
         tasks=tasks,
+        token_usage=token_usage,
         report=report,
         site_url=args.site_url,
     )

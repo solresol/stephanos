@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from openai import OpenAI
 from psycopg2.extras import Json
 
+import publication_budget
 from api_keys import load_api_key
 from db import get_connection
 from openai_batch_utils import (
@@ -1285,6 +1286,16 @@ def submit_translation_batch(
         request_has_approved_human_translation,
         _kappa_headword,
     ) in requests:
+        is_publication = publication_budget.is_normal_publication(profile_name, model_name, requested_runs, request_created_by)
+        if is_publication and not getattr(args, "publication_budget", False):
+            raise publication_budget.BudgetBlocked("Sol publication requires --publication-budget; not submitting")
+        if getattr(args, "publication_budget", False) and (
+            not is_publication or api_mode != API_MODE_RESPONSES or requested_runs != 1
+            or is_human_evaluation_request(request_created_by)
+        ):
+            print(f"Request {request_id}: not the normal single-run publication lane; skipped")
+            continue
+
         if args.run_limit is not None and total_runs >= args.run_limit:
             break
         if tokens_today >= args.daily_token_limit:
@@ -1441,41 +1452,46 @@ def submit_translation_batch(
                 transport="openai_batch",
                 custom_id=custom_id,
             )
-            records.append(
-                {
-                    "custom_id": custom_id,
-                    "method": request_payload["method"],
-                    "url": request_payload["url"],
-                    "body": request_payload["body"],
-                }
-            )
-            insert_batch_item(
-                cur,
-                batch_job_id=job_id,
-                custom_id=custom_id,
-                purpose="translation",
-                local_id=request_id,
-                metadata={
-                    "request_id": request_id,
-                    "lemma_id": lemma_id,
-                    "profile_id": profile_id,
-                    "profile_version_id": profile_version_id,
-                    "profile_version_number": profile_version_number,
-                    "source_text_version_id": source_text_version_id,
-                    "source_document": source_document,
-                    "requested_runs": requested_runs,
-                    "run_index": run_index,
-                    "model": model_name,
-                    "temperature": temperature,
-                    "top_p": top_p,
-                    "api_mode": normalize_api_mode(api_mode),
-                    "reasoning_effort": reasoning_effort,
-                    "prompt_uses_guidance_context": bool(prompt_uses_guidance_context),
-                    "guidance_context": guidance_context,
-                    "source_passage_context": source_passage_context,
-                    "request_payload": request_payload,
-                },
-            )
+            metadata = {
+                "request_id": request_id,
+                "lemma_id": lemma_id,
+                "profile_id": profile_id,
+                "profile_version_id": profile_version_id,
+                "profile_version_number": profile_version_number,
+                "source_text_version_id": source_text_version_id,
+                "source_document": source_document,
+                "requested_runs": requested_runs,
+                "run_index": run_index,
+                "model": model_name,
+                "temperature": temperature,
+                "top_p": top_p,
+                "api_mode": normalize_api_mode(api_mode),
+                "reasoning_effort": reasoning_effort,
+                "prompt_uses_guidance_context": bool(prompt_uses_guidance_context),
+                "guidance_context": guidance_context,
+                "source_passage_context": source_passage_context,
+                "request_payload": request_payload,
+            }
+            if getattr(args, "publication_budget", False):
+                try:
+                    body, quote = publication_budget.quote_request(
+                        client, request_payload["body"], now=datetime.now(timezone.utc),
+                    )
+                    request_payload["body"] = body
+                    publication_budget.reserve_item(
+                        cur, job_id=job_id, custom_id=custom_id, request_id=request_id,
+                        metadata=metadata, quote=quote, body=body,
+                    )
+                except publication_budget.BudgetBlocked as exc:
+                    mark_request_pending(cur, request_id, str(exc))
+                    conn.commit()
+                    print(f"Request {request_id}: {exc}")
+                    continue
+            else:
+                insert_batch_item(cur, batch_job_id=job_id, custom_id=custom_id,
+                                  purpose="translation", local_id=request_id, metadata=metadata)
+            records.append({"custom_id": custom_id, "method": request_payload["method"],
+                            "url": request_payload["url"], "body": request_payload["body"]})
             batch_model = model_name if batch_model is None else batch_model
             total_runs += 1
         conn.commit()
@@ -1506,11 +1522,13 @@ def submit_translation_batch(
             (job_id,),
         )
         for (request_id,) in cur.fetchall():
-            mark_request_pending(
-                cur,
-                int(request_id),
-                f"Batch API submission failed: {type(exc).__name__}: {exc}",
-            )
+            if not getattr(args, "publication_budget", False):
+                mark_request_pending(
+                    cur, int(request_id),
+                    f"Batch API submission failed: {type(exc).__name__}: {exc}",
+                )
+        if getattr(args, "publication_budget", False):
+            print("Publication Batch submission outcome uncertain; reservations held, automatic resubmission blocked")
         mark_batch_job_error(
             cur,
             job_id=job_id,
@@ -1581,8 +1599,16 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                 items[custom_id]["status"] = "failed"
                 continue
             body = response.get("body") or {}
+            breached_budget = bool(metadata.get("publication_budget")) and publication_budget.response_breaches_quote(body, metadata["publication_budget"])
+            if breached_budget:
+                publication_budget.record_breach(cur, custom_id)
+                conn.commit()
             try:
+                if breached_budget:
+                    raise publication_budget.BudgetBlocked("Provider usage/pricing exceeded verified reservation; unpublished pending reconciliation")
                 api_mode = normalize_api_mode(metadata.get("api_mode"))
+                if metadata.get("publication_budget"):
+                    publication_budget.require_complete_response(body)
                 translation, usage = extract_translation_from_response_body(body, api_mode=api_mode)
                 tokens_used = int(usage.get("total_tokens", 0))
                 requested_runs = int(metadata["requested_runs"] or 0)
@@ -1640,10 +1666,13 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                 processed += 1
             except Exception as exc:
                 conn.rollback()
+                failed_usage = token_usage_from_body(body) if metadata.get("publication_budget") else {}
                 mark_batch_item(
                     cur,
                     custom_id=custom_id,
                     status="failed",
+                    tokens_used=int(failed_usage.get("total_tokens", 0)),
+                    response_json=body if metadata.get("publication_budget") else None,
                     error_json={"message": f"{type(exc).__name__}: {exc}"},
                 )
                 insert_run(
@@ -1656,7 +1685,10 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
                     run_index=int(metadata["run_index"]),
                     **runtime_fields_from_batch_metadata(metadata),
                     translation_text="",
-                    tokens_used=0,
+                    tokens_used=int(failed_usage.get("total_tokens", 0)),
+                    input_tokens=int(failed_usage.get("input_tokens", 0)),
+                    output_tokens=int(failed_usage.get("output_tokens", 0)),
+                    reasoning_tokens=int(failed_usage.get("reasoning_tokens", 0)),
                     status="failed",
                     error_message=f"{type(exc).__name__}: {exc}",
                     request_payload=metadata.get("request_payload"),
@@ -1765,6 +1797,9 @@ def collect_translation_batch(conn, cur, client: OpenAI, *, job_id: int) -> tupl
             )
         conn.commit()
 
+    if any(item["metadata"].get("publication_budget") for item in items.values()):
+        publication_budget.close_reservations(cur, job_id)
+        conn.commit()
     print(f"Collected translation batch job {job_id}: completed={processed} failed={failed} expired={expired}")
     return processed, failed, expired
 
@@ -1820,6 +1855,7 @@ def main():
     parser = argparse.ArgumentParser(description="Queue-driven translation worker.")
     parser.add_argument("--request-limit", type=int, help="Max queued requests to inspect this run")
     parser.add_argument("--run-limit", type=int, help="Max generated runs in this invocation")
+    parser.add_argument("--publication-budget", action="store_true", help="Enforce approved Sol publication USD1/day and USD30/month reservation limits")
     parser.add_argument("--daily-token-limit", type=int, default=DEFAULT_DAILY_TOKEN_LIMIT)
     parser.add_argument("--delay", type=float, default=1.0)
     parser.add_argument(
@@ -1874,6 +1910,11 @@ def main():
     )
     parser.add_argument("--no-source-passage-context", action="store_true", help="Do not add resolved external source passages to prompts")
     args = parser.parse_args()
+    if args.publication_budget and not (
+        args.batch and args.api_mode == API_MODE_RESPONSES
+        and args.model == publication_budget.MODEL and args.profile_prefix == "gpt-5.5"
+    ):
+        parser.error("Publication budget requires Batch Responses, exact model gpt-6.1-sol and profile gpt-5.5")
 
     conn = get_connection()
     cur = conn.cursor()
@@ -1906,7 +1947,7 @@ def main():
     if args.batch:
         ensure_openai_batch_tables(cur)
         conn.commit()
-        client = OpenAI(api_key=load_api_key())
+        client = OpenAI(api_key=load_api_key(), max_retries=0) if args.publication_budget else OpenAI(api_key=load_api_key())
         active_batches = recover_translation_batches(conn, cur, client, args=args)
         if active_batches > 0 and not args.allow_parallel_batches:
             print(f"{active_batches} translation Batch API job(s) still active; not submitting duplicates.")
@@ -1971,6 +2012,9 @@ def main():
                 collect_translation_batch(conn, cur, client, job_id=job_id)
         conn.close()
         return
+
+    if any(publication_budget.is_normal_publication(row[10], row[4], row[2], row[3]) for row in requests):
+        raise publication_budget.BudgetBlocked("Sol publication must use its budgeted Batch worker")
 
     total_runs = 0
     total_tokens_run = 0

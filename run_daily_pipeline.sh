@@ -154,6 +154,9 @@ emit_ai_systems_status_report() {
     --site-url "$STEPHANOS_SITE_URL" \
     --schema-report-file "$schema_report" \
     --pipeline-exit-status "$exit_status" \
+    --publication-target "${TRANSLATION_ENQUEUE_LIMIT:-50}" \
+    --publication-daily-token-limit "${TRANSLATION_PUBLICATION_DAILY_TOKEN_LIMIT:-100000}" \
+    --guidance-daily-token-limit "${TRANSLATION_GUIDANCE_SCAN_DAILY_TOKEN_LIMIT:-2000000}" \
     --status-report
 }
 
@@ -618,12 +621,14 @@ fi
 # Stage guidance for the normal publication lane before the bounded scan. A
 # modest lookahead keeps tomorrow's candidates warm without broadening the
 # number of translations that can be published in one run.
-TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-20}"
+TRANSLATION_ENQUEUE_LIMIT="${TRANSLATION_ENQUEUE_LIMIT:-50}"
+# Batch checks this shared translation threshold before submission, not as a hard reservation.
+TRANSLATION_PUBLICATION_DAILY_TOKEN_LIMIT="${TRANSLATION_PUBLICATION_DAILY_TOKEN_LIMIT:-100000}"
 export TRANSLATION_ENQUEUE_LIMIT
 TRANSLATION_PUBLICATION_MODEL="${TRANSLATION_PUBLICATION_MODEL:-gpt-6.1-sol}"
 TRANSLATION_PUBLICATION_API_MODE="${TRANSLATION_PUBLICATION_API_MODE:-responses}"
 TRANSLATION_PUBLICATION_REASONING_EFFORT="${TRANSLATION_PUBLICATION_REASONING_EFFORT:-medium}"
-TRANSLATION_GUIDANCE_LOOKAHEAD_LIMIT="${TRANSLATION_GUIDANCE_LOOKAHEAD_LIMIT:-30}"
+TRANSLATION_GUIDANCE_LOOKAHEAD_LIMIT="${TRANSLATION_GUIDANCE_LOOKAHEAD_LIMIT:-75}"
 TRANSLATION_GUIDANCE_QUEUE_PRIORITY="${TRANSLATION_GUIDANCE_QUEUE_PRIORITY:-20}"
 TRANSLATION_ENQUEUE_ORDER="${TRANSLATION_ENQUEUE_ORDER:-canonical}"
 TRANSLATION_ENQUEUE_PRIORITY="${TRANSLATION_ENQUEUE_PRIORITY:-20}"
@@ -800,7 +805,8 @@ if [ "$TRANSLATION_ENQUEUE_LIMIT" -gt 0 ]; then
         --api-mode "$TRANSLATION_PUBLICATION_API_MODE" --model "$TRANSLATION_PUBLICATION_MODEL" --profile-prefix gpt-5.5 \
         --request-limit "$TRANSLATION_ENQUEUE_LIMIT" \
         --run-limit "$TRANSLATION_ENQUEUE_LIMIT" \
-        --daily-token-limit 100000 \
+        --daily-token-limit "$TRANSLATION_PUBLICATION_DAILY_TOKEN_LIMIT" \
+        --publication-budget \
         --batch --batch-wait --batch-poll-interval 30 \
         2>&1 | tee -a "$LOGFILE"
 fi

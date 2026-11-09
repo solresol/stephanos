@@ -10,12 +10,27 @@ from datetime import datetime, timezone
 from http.client import HTTPException, HTTPSConnection
 from pathlib import Path
 
+from daily_token_usage import format_usage_summary
+
 WEBHOOK_FILE = Path.home() / ".config/stephanos/slack-webhook"
 WEBHOOK_PATTERN = re.compile(r"https://hooks\.slack\.com(/services/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+)")
 SETUP_MESSAGE = "Stephanos Slack setup test. No pipeline ran."
 
 
-def build_message(status, run_id, started_at, stage, exit_code):
+def fresh_usage_summary(path, started_at):
+    """Do not present a prior run's feed as today's usage after an early failure."""
+    try:
+        payload = json.loads(path.read_text())
+        generated = datetime.fromisoformat(payload["generated_at"])
+        if generated.tzinfo is None or not started_at <= generated.timestamp() <= time.time() + 60:
+            return None
+        usage = payload.get("token_usage")
+        return format_usage_summary(usage) if isinstance(usage, dict) else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def build_message(status, run_id, started_at, stage, exit_code, usage_path=None):
     reported_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     elapsed = max(0, int(time.time()) - started_at)
     lines = [
@@ -25,6 +40,9 @@ def build_message(status, run_id, started_at, stage, exit_code):
     ]
     if status == "succeeded":
         lines.append("Published AI systems status: https://stephanos.symmachus.org/ai-systems.json")
+    if status in {"succeeded", "failed"}:
+        summary = fresh_usage_summary(usage_path or Path("reference_site/ai-systems.json"), started_at)
+        lines.append(summary or "Daily token usage unavailable for this run; no zero total inferred.")
     return "\n".join(lines)
 
 
